@@ -1,0 +1,22 @@
+.env
+.runtime/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Generated simulation and model artifacts
+data/
+outputs/
+checkpoints/
+models/
+*.mp4
+
+# Isaac Sim caches
+cache/
+logs/
+docker/
+
+# Editors and OS files
+.DS_Store
+.idea/
+.vscode/

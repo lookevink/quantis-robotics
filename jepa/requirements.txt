@@ -1,0 +1,4 @@
+numpy>=1.21,<3
+pillow>=10.0,<13
+torch>=2.4
+transformers==5.15.0
