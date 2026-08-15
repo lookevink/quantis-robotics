@@ -16,7 +16,7 @@ The Lambda A10 image initially exposed only CUDA libraries. Bootstrap installs t
 
 ```text
 Isaac Sim 5.0.0
-  ├─ Franka + rack/module scene
+  ├─ Franka + module-proxy scene
   ├─ RGB capture (Replicator)
   ├─ action + robot state (JSONL)
   └─ scripted / motion-planning controller
