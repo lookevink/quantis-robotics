@@ -115,10 +115,11 @@ case "${command}" in
     current_rules="$(api GET /firewall-rulesets/global)"
     body="$(printf '%s' "${current_rules}" | jq -c --arg source "${source_cidr}" --argjson signal "${signal_port}" --argjson stream "${stream_port}" '
       .data.rules
-      | (if any(.protocol == "tcp" and .port_range == [$signal,$signal] and .source_network == $source)
-         then . else . + [{protocol:"tcp",port_range:[$signal,$signal],source_network:$source,description:"Quantis Isaac Sim WebRTC signaling"}] end)
-      | (if any(.protocol == "udp" and .port_range == [$stream,$stream] and .source_network == $source)
-         then . else . + [{protocol:"udp",port_range:[$stream,$stream],source_network:$source,description:"Quantis Isaac Sim WebRTC media"}] end)
+      | map(select(.description != "Quantis Isaac Sim WebRTC signaling" and .description != "Quantis Isaac Sim WebRTC media"))
+      | . + [
+          {protocol:"tcp",port_range:[$signal,$signal],source_network:$source,description:"Quantis Isaac Sim WebRTC signaling"},
+          {protocol:"udp",port_range:[$stream,$stream],source_network:$source,description:"Quantis Isaac Sim WebRTC media"}
+        ]
       | {rules:.}'
     )"
     api PATCH /firewall-rulesets/global "${body}" | jq --arg source "${source_cidr}" --argjson signal "${signal_port}" --argjson stream "${stream_port}" \
