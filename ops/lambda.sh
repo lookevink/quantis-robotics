@@ -17,6 +17,8 @@ region="${LAMBDA_REGION:-us-west-1}"
 key_name="${LAMBDA_SSH_KEY_NAME:-quantis-robotics-mac}"
 instance_name="${LAMBDA_INSTANCE_NAME:-quantis-isaac-sim}"
 private_key="${LAMBDA_SSH_PRIVATE_KEY:-${HOME}/.ssh/github_signing_ed25519}"
+signal_port="${ISAAC_SIGNAL_PORT:-49100}"
+stream_port="${ISAAC_STREAM_PORT:-47998}"
 ssh_options=(-o StrictHostKeyChecking=accept-new)
 
 die() {
@@ -111,16 +113,16 @@ case "${command}" in
   firewall-webrtc)
     source_cidr="${WEBRTC_SOURCE_CIDR:-$(curl --fail --silent --show-error https://api.ipify.org)/32}"
     current_rules="$(api GET /firewall-rulesets/global)"
-    body="$(printf '%s' "${current_rules}" | jq -c --arg source "${source_cidr}" '
+    body="$(printf '%s' "${current_rules}" | jq -c --arg source "${source_cidr}" --argjson signal "${signal_port}" --argjson stream "${stream_port}" '
       .data.rules
-      | (if any(.protocol == "tcp" and .port_range == [49100,49100] and .source_network == $source)
-         then . else . + [{protocol:"tcp",port_range:[49100,49100],source_network:$source,description:"Quantis Isaac Sim WebRTC signaling"}] end)
-      | (if any(.protocol == "udp" and .port_range == [47998,47998] and .source_network == $source)
-         then . else . + [{protocol:"udp",port_range:[47998,47998],source_network:$source,description:"Quantis Isaac Sim WebRTC media"}] end)
+      | (if any(.protocol == "tcp" and .port_range == [$signal,$signal] and .source_network == $source)
+         then . else . + [{protocol:"tcp",port_range:[$signal,$signal],source_network:$source,description:"Quantis Isaac Sim WebRTC signaling"}] end)
+      | (if any(.protocol == "udp" and .port_range == [$stream,$stream] and .source_network == $source)
+         then . else . + [{protocol:"udp",port_range:[$stream,$stream],source_network:$source,description:"Quantis Isaac Sim WebRTC media"}] end)
       | {rules:.}'
     )"
-    api PATCH /firewall-rulesets/global "${body}" | jq --arg source "${source_cidr}" \
-      '.data | {id,source:$source,webrtc_rules:[.rules[] | select(.source_network == $source and (.port_range == [49100,49100] or .port_range == [47998,47998]))]}'
+    api PATCH /firewall-rulesets/global "${body}" | jq --arg source "${source_cidr}" --argjson signal "${signal_port}" --argjson stream "${stream_port}" \
+      '.data | {id,source:$source,webrtc_rules:[.rules[] | select(.source_network == $source and (.port_range == [$signal,$signal] or .port_range == [$stream,$stream]))]}'
     ;;
   ssh)
     require_private_key

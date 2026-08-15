@@ -2,14 +2,14 @@
 
 ## What can be loaded immediately
 
-The bootstrap loads the official Hugging Face `facebook/vjepa2-vitl-fpc64-256` encoder. It converts a 64-frame observation window into a normalized latent vector. For the first demo, use that vector to select a stage and measure progress toward prerecorded goal-image windows:
+The bootstrap loads the official Hugging Face `facebook/vjepa2-vitl-fpc64-256` encoder and verifies that it converts a 64-frame observation window into a normalized latent vector. The control worker below is the next milestone, not part of the current embedding smoke test. It will use that vector to select a stage and measure progress toward prerecorded goal-image windows:
 
 1. `approach handle`
 2. `grasped handle`
 3. `module extracted`
 4. `module in service bin`
 
-The resulting stage/subgoal is executed by Isaac Sim's motion generation controller. This is an online visual feedback loop, not open-loop playback.
+The intended resulting stage/subgoal is executed by Isaac Sim's motion generation controller as an online visual feedback loop, not open-loop playback.
 
 ## Why V-JEPA 2-AC is not the first step
 

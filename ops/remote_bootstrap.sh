@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=isaac_common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/isaac_common.sh"
+
 if ! command -v nvidia-smi >/dev/null 2>&1; then
   printf 'error: nvidia-smi is unavailable; use a Lambda GPU image\n' >&2
   exit 1
@@ -48,7 +51,6 @@ if ! sudo docker run --rm --gpus all ubuntu:24.04 nvidia-smi >/dev/null 2>&1; th
   exit 1
 fi
 
-isaac_home="${HOME}/docker/isaac-sim"
 mkdir -p \
   "${isaac_home}/cache/kit" \
   "${isaac_home}/cache/ov" \
@@ -62,21 +64,14 @@ mkdir -p \
 
 sudo chown -R "${USER}:${USER}" "${isaac_home}" "${HOME}/quantis-robotics/data"
 
-image="nvcr.io/nvidia/isaac-sim:${ISAAC_SIM_VERSION:-5.0.0}"
-sudo docker pull "${image}"
+sudo docker pull "${isaac_image}"
 sudo docker run --rm --entrypoint bash --gpus all --network=host \
   -e ACCEPT_EULA=Y \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
   -e PYTHONDONTWRITEBYTECODE=1 \
-  -v "${isaac_home}/cache/kit:/isaac-sim/kit/cache:rw" \
-  -v "${isaac_home}/cache/ov:/root/.cache/ov:rw" \
-  -v "${isaac_home}/cache/pip:/root/.cache/pip:rw" \
-  -v "${isaac_home}/cache/glcache:/root/.cache/nvidia/GLCache:rw" \
-  -v "${isaac_home}/cache/computecache:/root/.nv/ComputeCache:rw" \
-  -v "${isaac_home}/logs:/root/.nvidia-omniverse/logs:rw" \
-  -v "${isaac_home}/data:/root/.local/share/ov/data:rw" \
+  "${isaac_mounts[@]}" \
   -v "${HOME}/quantis-robotics:/workspace:rw" \
-  "${image}" \
+  "${isaac_image}" \
   -lc './python.sh /workspace/sim/runtime_smoke.py'
 
 printf 'Remote bootstrap complete. If group membership changed, reconnect SSH before starting Isaac Sim.\n'

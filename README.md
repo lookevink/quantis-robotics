@@ -25,13 +25,13 @@ Isaac Sim 5.0.0
 episode dataset: frames + actions + state + manifest
               │
               ▼
-frozen V-JEPA 2 encoder → goal-progress/stage model
+frozen V-JEPA 2 encoder → goal-progress/stage model (next milestone)
               │
               ▼
 high-level subgoal → Isaac motion controller
 ```
 
-For the first demo, JEPA estimates visual state and progress while Isaac executes motion. Action-conditioned world-model planning is a second integration seam after capture and closed-loop control are working.
+The current bootstrap proves simulation, capture, and JEPA inference. Closing the loop from JEPA output back into Isaac control is the next milestone. Action-conditioned world-model planning comes after that simpler stage/subgoal loop works.
 
 ## 1. Lambda instance
 
@@ -75,7 +75,7 @@ Streaming server started.
 
 ## 3. Stream the UI
 
-Isaac Sim uses TCP `49100` for WebRTC signaling and UDP `47998` for media. `firewall-webrtc` adds both to Lambda's global rules, restricted to your current public IP. Override it with `WEBRTC_SOURCE_CIDR` if needed. The container uses host networking; Docker bridge port publishing is not sufficient for Isaac WebRTC.
+Isaac Sim uses TCP `49100` for WebRTC signaling and UDP `47998` for media. `firewall-webrtc` adds both to Lambda's **account-wide global ruleset**, restricted to your current public IP. Lambda cannot attach a per-instance ruleset after an instance has launched. Override the source with `WEBRTC_SOURCE_CIDR` if needed. The container uses host networking; Docker bridge port publishing is not sufficient for Isaac WebRTC.
 
 Install the [Isaac Sim WebRTC Streaming Client](https://docs.isaacsim.omniverse.nvidia.com/5.0.0/installation/manual_livestream_clients.html) on the local workstation and connect to the Lambda instance's public IP printed by `./ops/lambda.sh ip`.
 
@@ -89,13 +89,13 @@ Run the standalone capture smoke test inside the container:
 ./ops/lambda.sh capture-smoke
 ```
 
-It creates an episode under `/workspace/data/episodes` containing:
+It creates a pipeline-test episode under `/workspace/data/episodes` containing:
 
 - `rgb/`: ordered PNG camera frames;
 - `steps.jsonl`: timestamped action and state records;
 - `episode.json`: schema, task, robot, cameras, and outcome metadata.
 
-For JEPA control data, every frame must be synchronized with the action that caused the transition and the robot state. The WebRTC video is intentionally not recorded or used as the dataset because it is compressed, latency-shifted, and lacks synchronized actions.
+The smoke test moves a module proxy while Franka is visible; its synthetic action/state labels are **not robot training data**. For JEPA control data, replace that motion with commands applied to Franka and record its joints/end effector at every step. The WebRTC video is intentionally not recorded or used as the dataset because it is compressed, latency-shifted, and lacks synchronized actions.
 
 ## 5. Load JEPA
 
@@ -107,7 +107,7 @@ The fastest meaningful path is offline embedding and goal-progress scoring:
 ./ops/lambda.sh jepa-embed <episode-id>
 ```
 
-This uses the official `facebook/vjepa2-vitl-fpc64-256` checkpoint. For online control, keep the model in a separate process and exchange the latest frame window plus subgoal with the simulator. See [`docs/control-loop.md`](docs/control-loop.md).
+This uses the official `facebook/vjepa2-vitl-fpc64-256` checkpoint and proves GPU inference on simulated observations. It does **not** yet drive Franka. For online control, keep the model in a separate process and exchange the latest frame window plus subgoal with the simulator. See [`docs/control-loop.md`](docs/control-loop.md) for the planned interface and safety boundary.
 
 ## Validation
 
