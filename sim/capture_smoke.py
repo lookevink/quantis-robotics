@@ -31,7 +31,7 @@ from isaacsim.core.utils.stage import add_reference_to_stage
 from isaacsim.storage.native import get_assets_root_path
 from pxr import Gf, Sdf, UsdGeom
 
-sys.path.insert(0, "/workspace")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sim.episode import EpisodeWriter
 
 
