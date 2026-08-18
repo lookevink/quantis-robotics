@@ -15,7 +15,9 @@ from pathlib import Path
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--output", type=Path, required=True)
-parser.add_argument("--frames", type=int, default=32)
+# 64 frames matches the V-JEPA 2 clip length the embedder reads, so a capture
+# feeds the encoder without repeated frames. See jepa/embed_episode.py.
+parser.add_argument("--frames", type=int, default=64)
 args, _ = parser.parse_known_args()
 
 from isaacsim import SimulationApp
