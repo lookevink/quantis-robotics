@@ -9,7 +9,9 @@ actual 7D end-effector-plus-gripper command when the task controller lands.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -126,7 +128,19 @@ def main() -> None:
     print(f"Wrote episode: {episode_dir}")
 
 
+exit_code = 0
 try:
     main()
-finally:
-    simulation_app.close()
+except BaseException:
+    traceback.print_exc()
+    exit_code = 1
+
+# SimulationApp.close() terminates the process itself with status 0, so a
+# failure reported after it is lost. Flush by hand (os._exit and Kit's own
+# teardown both skip it) and report a failure before Kit can mask it, leaving
+# the graceful shutdown for the success path.
+sys.stdout.flush()
+sys.stderr.flush()
+if exit_code:
+    os._exit(exit_code)
+simulation_app.close()
