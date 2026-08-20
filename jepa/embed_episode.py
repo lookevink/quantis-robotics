@@ -5,19 +5,31 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
-import torch
-from PIL import Image
-from transformers import AutoModel, AutoVideoProcessor
+
+if TYPE_CHECKING:
+    import torch
 
 
 DEFAULT_MODEL = "facebook/vjepa2-vitl-fpc64-256"
 
+# The default checkpoint reads a 64-frame clip; keep capture and embedding aligned.
+DEFAULT_FRAMES = 64
+
 
 def sample_paths(paths: list[Path], frames: int) -> list[Path]:
+    """Pick `frames` evenly spaced frames, refusing to invent any."""
     if not paths:
         raise ValueError("episode contains no PNG frames")
+    if len(paths) < frames:
+        raise ValueError(
+            f"episode has {len(paths)} frames but {frames} were requested; "
+            "upsampling would repeat frames and flatten the motion the encoder "
+            f"reads. Capture at least {frames} frames, or pass "
+            f"--frames {len(paths)} to embed the shorter clip as captured."
+        )
     indices = np.linspace(0, len(paths) - 1, num=frames).round().astype(int)
     return [paths[index] for index in indices]
 
@@ -31,29 +43,53 @@ def pool_features(features: torch.Tensor) -> torch.Tensor:
     return features.mean(dim=tuple(range(1, features.ndim - 1)))
 
 
-def embed_episode(
-    episode_dir: Path,
-    *,
-    model_id: str,
-    frame_count: int,
-) -> np.ndarray:
-    frame_paths = sample_paths(sorted((episode_dir / "rgb").rglob("*.png")), frame_count)
-    images = [Image.open(path).convert("RGB") for path in frame_paths]
-    video = torch.stack(
-        [torch.from_numpy(np.asarray(image).copy()).permute(2, 0, 1) for image in images]
-    )
-    processor = AutoVideoProcessor.from_pretrained(model_id)
-    model = AutoModel.from_pretrained(model_id)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device).eval()
+def resolve_device() -> torch.device:
+    """Prefer CUDA on the Lambda host, Metal on an Apple workstation."""
+    import torch
 
-    inputs = processor(video, return_tensors="pt")
-    inputs = {key: value.to(device) for key, value in inputs.items()}
-    with torch.inference_mode():
-        features = model.get_vision_features(**inputs)
-        embedding = pool_features(features)
-        embedding = torch.nn.functional.normalize(embedding, dim=-1)
-    return embedding[0].cpu().numpy()
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+class Encoder:
+    """A loaded V-JEPA 2 encoder. Construct once, embed many episodes."""
+
+    def __init__(self, model_id: str = DEFAULT_MODEL) -> None:
+        from transformers import AutoModel, AutoVideoProcessor
+
+        self.model_id = model_id
+        self.processor = AutoVideoProcessor.from_pretrained(model_id)
+        self.model = AutoModel.from_pretrained(model_id)
+        self.device = resolve_device()
+        self.model.to(self.device).eval()
+
+    def embed(
+        self, episode_dir: Path, *, frame_count: int = DEFAULT_FRAMES
+    ) -> np.ndarray:
+        import torch
+        from PIL import Image
+
+        frame_paths = sample_paths(
+            sorted((episode_dir / "rgb").rglob("*.png")), frame_count
+        )
+        images = [Image.open(path).convert("RGB") for path in frame_paths]
+        video = torch.stack(
+            [
+                torch.from_numpy(np.asarray(image).copy()).permute(2, 0, 1)
+                for image in images
+            ]
+        )
+
+        inputs = self.processor(video, return_tensors="pt")
+        inputs = {key: value.to(self.device) for key, value in inputs.items()}
+        with torch.inference_mode():
+            features = self.model.get_vision_features(**inputs)
+            embedding = pool_features(features)
+            embedding = torch.nn.functional.normalize(embedding, dim=-1)
+        return embedding[0].cpu().numpy()
 
 
 def main() -> None:
@@ -61,23 +97,25 @@ def main() -> None:
     parser.add_argument("episode", type=Path)
     parser.add_argument("--goal", type=Path)
     parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--frames", type=int, default=64)
+    parser.add_argument("--frames", type=int, default=DEFAULT_FRAMES)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
-    embedding = embed_episode(args.episode, model_id=args.model, frame_count=args.frames)
+    encoder = Encoder(args.model)
+    embedding = encoder.embed(args.episode, frame_count=args.frames)
     output = args.output or args.episode / "vjepa2_embedding.npy"
     np.save(output, embedding)
 
     result: dict[str, object] = {
         "episode": str(args.episode),
         "model": args.model,
+        "device": str(encoder.device),
         "frames": args.frames,
         "embedding": str(output),
         "dimensions": int(embedding.shape[0]),
     }
     if args.goal:
-        goal = embed_episode(args.goal, model_id=args.model, frame_count=args.frames)
+        goal = encoder.embed(args.goal, frame_count=args.frames)
         result["goal"] = str(args.goal)
         result["cosine_similarity"] = float(np.dot(embedding, goal))
     print(json.dumps(result, indent=2))
