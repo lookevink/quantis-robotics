@@ -95,14 +95,15 @@ Without those items, keep the claim explicitly to a simulation proof of concept.
 
 ## Cloud setup and rough cost shape
 
-Current Isaac Sim 6 requirements call for an RTX-capable GPU and at least 16 GB VRAM; NVIDIA explicitly says A100 and H100 GPUs are unsupported for Isaac Sim because they lack RT cores. The container is Linux-only. On Lambda, an RTX A6000/A10/RTX 6000-class instance is appropriate for simulation and rendering; an H100 or A100 can be used separately for JEPA training.
+Current Isaac Sim 6 requirements call for an RTX-capable GPU and at least 16 GB VRAM; NVIDIA explicitly says A100 and H100 GPUs are unsupported for Isaac Sim because they lack RT cores. The container is Linux-only. On AWS, a `g6.2xlarge` (L4) or `g5.2xlarge` (A10G) provides an RTX-capable 24 GB GPU, 8 vCPUs, and the minimum 32 GB RAM. An H100 or A100 instance can be used separately for JEPA training, but not for simulation rendering.
 
-Lambda's current single-GPU list includes A6000 at $1.09/GPU-hour, A10 at $1.29, A100 40 GB at $1.99, H100 PCIe at $3.29, and H100 SXM at $4.29, before tax. Availability is first-come. A disciplined proof of concept should spend hundreds to low thousands of dollars in GPU time; asset preparation and integration time will dominate. Verify the exact Lambda image driver against Isaac Sim's current required driver before renting.
+Use an EBS-backed EC2 instance so it can be stopped between sessions. Stopping ends compute charges but retains the instance ID and EBS data; EBS volumes, snapshots, and an attached Elastic IP continue to incur their own charges. A disciplined proof of concept should spend hundreds to low thousands of dollars in GPU time; asset preparation and integration time will dominate. Resolve the current AWS Deep Learning Base GPU AMI through its public SSM parameter rather than pinning a stale AMI ID.
 
 Sources:
 
 - [Isaac Sim system requirements](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/requirements.html)
-- [Lambda GPU instances and pricing](https://lambda.ai/instances)
+- [AWS Deep Learning Base GPU AMI](https://docs.aws.amazon.com/dlami/latest/devguide/aws-deep-learning-x86-base-gpu-ami-ubuntu-24-04.html)
+- [EC2 stop/start behavior and billing](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/how-ec2-instance-stop-start-works.html)
 
 ## Recommended sequence
 

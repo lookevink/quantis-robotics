@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 isaac_home="${HOME}/docker/isaac-sim"
+asset_home="${QUANTIS_ASSET_HOME:-${HOME}/quantis-assets}"
 isaac_version="${ISAAC_SIM_VERSION:-5.0.0}"
 isaac_image="nvcr.io/nvidia/isaac-sim:${isaac_version}"
 
@@ -13,4 +14,5 @@ isaac_mounts=(
   -v "${isaac_home}/logs:/root/.nvidia-omniverse/logs:rw"
   -v "${isaac_home}/data:/root/.local/share/ov/data:rw"
   -v "${isaac_home}/documents:/root/Documents:rw"
+  -v "${asset_home}:/assets:rw"
 )

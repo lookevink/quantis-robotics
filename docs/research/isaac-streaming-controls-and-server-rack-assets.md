@@ -57,7 +57,7 @@ NVIDIA publishes a purpose-built **Data Center Assets Pack** containing 33 OpenU
 - [NVIDIA downloadable OpenUSD asset packs](https://docs.omniverse.nvidia.com/usd/latest/usd_content_samples/downloadable_packs.html#data-center-assets-pack)
 - [Direct Data Center Assets Pack download](https://d4i3qtqj3r0z5.cloudfront.net/Datacenter_NVD%4010012.zip)
 
-The download endpoint was reachable at the research date. Download and unzip the complete pack on the Lambda volume, then preserve its directory structure: USD files commonly reference sibling geometry, textures, and MDL materials by relative path.
+The download endpoint was reachable at the research date. Download and unzip the complete pack on the EC2 instance's EBS volume, then preserve its directory structure: USD files commonly reference sibling geometry, textures, and MDL materials by relative path.
 
 ### Assets already in the Isaac Sim 5.0 catalog
 

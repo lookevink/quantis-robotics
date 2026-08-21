@@ -90,7 +90,7 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
 
 ## Milestones
 
-1. Capture smoke test succeeds on Lambda.
+1. Capture smoke test succeeds on AWS EC2.
 2. Scripted Franka task produces synchronized successful and failed episodes.
 3. Frozen V-JEPA embeddings distinguish the four task stages.
 4. Stage predictions close the loop with Isaac's motion controller.

@@ -44,7 +44,7 @@ def pool_features(features: torch.Tensor) -> torch.Tensor:
 
 
 def resolve_device() -> torch.device:
-    """Prefer CUDA on the Lambda host, Metal on an Apple workstation."""
+    """Prefer CUDA on the GPU host, Metal on an Apple workstation."""
     import torch
 
     if torch.cuda.is_available():
