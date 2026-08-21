@@ -58,6 +58,7 @@ class AwsLifecycleTests(unittest.TestCase):
                 "AWS_INSTANCE_ID": "i-0123456789abcdef0",
                 "AWS_SECURITY_GROUP_ID": "sg-0123456789abcdef0",
                 "AWS_SSH_PRIVATE_KEY": str(private_key),
+                "ENV_FILE": str(temp_path / "test.env"),
                 "FAKE_AWS_ACCOUNT": account,
                 "FAKE_AWS_LOG": str(log_path),
                 "FAKE_AWS_STATE": state,
@@ -119,6 +120,12 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ISAAC_SIGNAL_PORT=50100", calls)
         self.assertIn("ISAAC_STREAM_PORT=48998", calls)
         self.assertIn("DOWNLOAD_PHYSICALAI_DATASET=0", calls)
+
+    def test_isaac_status_queries_the_remote_container(self):
+        result, calls = self.run_command("isaac-status")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/isaac_container.sh status", calls)
 
 
 if __name__ == "__main__":

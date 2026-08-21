@@ -1,6 +1,6 @@
 # Isaac Sim streaming controls and data-center assets
 
-Research date: 2026-08-16. The deployed simulator is Isaac Sim 5.0.0.
+Research date: 2026-08-16. Deployment updated 2026-08-20 to Isaac Sim 6.0.1; the 5.0 links below preserve the APIs against which this research was originally checked.
 
 ## Short answer
 

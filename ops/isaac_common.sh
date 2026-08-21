@@ -2,17 +2,15 @@
 
 isaac_home="${HOME}/docker/isaac-sim"
 asset_home="${QUANTIS_ASSET_HOME:-${HOME}/quantis-assets}"
-isaac_version="${ISAAC_SIM_VERSION:-5.0.0}"
+isaac_version="${ISAAC_SIM_VERSION:-6.0.1}"
 isaac_image="nvcr.io/nvidia/isaac-sim:${isaac_version}"
 
 isaac_mounts=(
-  -v "${isaac_home}/cache/kit:/isaac-sim/kit/cache:rw"
-  -v "${isaac_home}/cache/ov:/root/.cache/ov:rw"
-  -v "${isaac_home}/cache/pip:/root/.cache/pip:rw"
-  -v "${isaac_home}/cache/glcache:/root/.cache/nvidia/GLCache:rw"
-  -v "${isaac_home}/cache/computecache:/root/.nv/ComputeCache:rw"
-  -v "${isaac_home}/logs:/root/.nvidia-omniverse/logs:rw"
-  -v "${isaac_home}/data:/root/.local/share/ov/data:rw"
-  -v "${isaac_home}/documents:/root/Documents:rw"
-  -v "${asset_home}:/assets:rw"
+  -v "${isaac_home}/cache/main:/isaac-sim/.cache:rw"
+  -v "${isaac_home}/cache/computecache:/isaac-sim/.nv/ComputeCache:rw"
+  -v "${isaac_home}/logs:/isaac-sim/.nvidia-omniverse/logs:rw"
+  -v "${isaac_home}/config:/isaac-sim/.nvidia-omniverse/config:rw"
+  -v "${isaac_home}/data:/isaac-sim/.local/share/ov/data:rw"
+  -v "${isaac_home}/pkg:/isaac-sim/.local/share/ov/pkg:rw"
+  -v "${asset_home}:/assets:ro"
 )

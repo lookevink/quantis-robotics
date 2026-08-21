@@ -8,14 +8,14 @@ The first embodiment is the **Franka Panda** because:
 - NVIDIA's PhysicalAI single-arm dataset uses Franka with RGB, state, and 7D/8D actions.
 - Meta's V-JEPA 2-AC robot experiments use Franka/DROID trajectories.
 
-The NVIDIA Physical AI Hugging Face collection is training data, not a catalog of drop-in robot USD assets. This project uses Isaac Sim's built-in Franka asset and downloads [`nvidia/PhysicalAI-Robotics-Manipulation-SingleArm`](https://huggingface.co/datasets/nvidia/PhysicalAI-Robotics-Manipulation-SingleArm) as a compatible reference dataset.
+The NVIDIA Physical AI Hugging Face collection is training data, not a catalog of drop-in robot USD assets. This project uses Isaac Sim's built-in Franka asset and can optionally download [`nvidia/PhysicalAI-Robotics-Manipulation-SingleArm`](https://huggingface.co/datasets/nvidia/PhysicalAI-Robotics-Manipulation-SingleArm) as a compatible reference dataset.
 
-The simulator remains pinned to the rendered-frame-tested Isaac Sim `5.0.0` container. Do not change the image tag without rerunning the runtime and capture smoke tests.
+The simulator is pinned to the rendered-frame-tested Isaac Sim `6.0.1` container. AWS's current DLAMI driver is compatible with Isaac 6; Isaac 5.0 crashes on its newer CUDA 13/595 driver stack. Do not change the image tag without rerunning the compatibility, runtime, and capture smoke tests.
 
 ## Current architecture
 
 ```text
-Isaac Sim 5.0.0
+Isaac Sim 6.0.1
   ├─ Franka + module-proxy scene
   ├─ RGB capture (Replicator)
   ├─ action + robot state (JSONL)
@@ -42,7 +42,7 @@ Prerequisites:
 - An SSH keypair authorized by the instance.
 - `aws`, `curl`, and `rsync` locally.
 
-Use a `g6.2xlarge` (L4, 24 GB VRAM) or `g5.2xlarge` (A10G, 24 GB VRAM) with at least 250 GB of gp3 EBS storage. Both provide the 8 vCPUs and 32 GB RAM that meet Isaac Sim's minimum host requirements. Use AWS's **Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 24.04)**; resolve the current AMI instead of hard-coding an ID:
+Use a `g6.2xlarge` (L4, 24 GB VRAM) or `g5.2xlarge` (A10G, 24 GB VRAM). Both provide the 8 vCPUs and 32 GB RAM that meet Isaac Sim's minimum host requirements. A practical split is a 200 GB root volume for the DLAMI and container images plus a separate 250 GB gp3 data volume mounted at `/mnt/quantis-assets`. Use AWS's **Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 24.04)**; resolve the current AMI instead of hard-coding an ID:
 
 ```bash
 aws --profile quantis --region us-east-1 ssm get-parameter \
@@ -67,26 +67,27 @@ The idempotent bootstrap starts the instance, restricts SSH and WebRTC ingress t
 ```bash
 ./ops/aws.sh bootstrap
 ./ops/aws.sh up
+./ops/aws.sh isaac-status
 ./ops/aws.sh isaac-logs
 ```
 
-Bootstrap stores persistent content under `~/quantis-assets`, which is mounted inside the container at `/assets`:
+Bootstrap stores persistent content under `QUANTIS_ASSET_HOME` (configured as `/mnt/quantis-assets` for a separate EBS volume), which is mounted read-only inside the container at `/assets`:
 
 - `/assets/datacenter`: the complete NVIDIA data-center asset pack;
 - `/assets/datacenter/usd-assets.txt`: an inventory of the pack's USD stages and components;
-- `/assets/datasets/PhysicalAI-Robotics-Manipulation-SingleArm`: the 15.3 GB LeRobot-format reference dataset;
+- `/assets/datasets/PhysicalAI-Robotics-Manipulation-SingleArm`: the optional 15.3 GB LeRobot-format reference dataset;
 - the Franka Panda robot itself comes from Isaac Sim's built-in asset catalog at `Robots/FrankaRobotics/FrankaPanda/franka.usd`.
 
 ### Cable/cord asset gap
 
-Neither downloaded pack supplies the task-ready power cord and matching receptacle needed for the plug-in demo. `/assets/cable` is reserved for that custom asset. For the first JEPA-controlled demo, use a vendor CAD/mesh pair for the connector and socket, convert them to USD, and author accurate collision geometry and insertion tolerances. Keep the connector rigid and represent the trailing cable as either a short articulated chain or a visually updated curve at first. Full flexible-cable contact is a separate physics milestone; Isaac Sim 5.0's deformable schema is beta and would make policy debugging substantially harder.
+Neither downloaded pack supplies the task-ready power cord and matching receptacle needed for the plug-in demo. `/assets/cable` is reserved for that custom asset. For the first JEPA-controlled demo, use a vendor CAD/mesh pair for the connector and socket, convert them to USD, and author accurate collision geometry and insertion tolerances. Keep the connector rigid and represent the trailing cable as either a short articulated chain or a visually updated curve at first. Full flexible-cable contact is a separate physics milestone and would make policy debugging substantially harder.
 
 Bootstrap provisions and mounts the assets; it does not yet compose the data-center pack, Franka, connector, and socket into one task stage. That scene and its insertion controller are the next implementation milestone.
 
-Set `DOWNLOAD_PHYSICALAI_DATASET=0` in local `.env` to skip the reference dataset. The AWS wrapper forwards this and the Isaac version/port settings to the remote scripts. Wait for this final streaming log line:
+The PhysicalAI reference dataset is opt-in because it is training data rather than a simulator asset. Set `DOWNLOAD_PHYSICALAI_DATASET=1` in local `.env` when it is needed; authenticate Hugging Face on the remote host first to avoid anonymous API limits. For the collection's 136,000+ small files, `HF_DOWNLOAD_MAX_WORKERS` controls download concurrency and defaults to `32`. The AWS wrapper forwards these and the Isaac version/port settings to the remote scripts. The stream is ready when the status command reports:
 
 ```text
-Streaming server started.
+running healthy
 ```
 
 For normal sessions after the first bootstrap:
@@ -103,7 +104,7 @@ For normal sessions after the first bootstrap:
 
 Isaac Sim uses TCP `49100` for WebRTC signaling and UDP `47998` for media. `firewall-webrtc` replaces only the Quantis-managed rules in the instance's EC2 security group and restricts SSH and both streaming ports to your current public IP. Override the source with `WEBRTC_SOURCE_CIDR` if needed. The stream has no authentication or encryption, so do not open it to `0.0.0.0/0`. The container uses host networking; Docker bridge port publishing is not sufficient for Isaac WebRTC.
 
-Install the [Isaac Sim WebRTC Streaming Client](https://docs.isaacsim.omniverse.nvidia.com/5.0.0/installation/manual_livestream_clients.html) on the local workstation and connect to the EC2 public IP printed by `./ops/aws.sh ip`.
+Install the [Isaac Sim WebRTC Streaming Client](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/manual_livestream_clients.html) on the local workstation and connect to the EC2 public IP printed by `./ops/aws.sh ip`.
 
 Streaming is only remote display/control. It is **not** the training-data capture path.
 

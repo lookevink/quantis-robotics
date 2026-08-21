@@ -9,6 +9,7 @@ signal_port="${ISAAC_SIGNAL_PORT:-49100}"
 stream_port="${ISAAC_STREAM_PORT:-47998}"
 
 docker_args=(
+  --user 1234:1234
   --gpus all
   --network=host
   -e ACCEPT_EULA=Y
@@ -28,7 +29,7 @@ case "${1:-help}" in
       -e "ISAACSIM_HOST=${public_ip}" \
       --entrypoint bash \
       "${isaac_image}" \
-      -lc "./runheadless.sh -v --/exts/omni.kit.livestream.app/primaryStream/publicIp=${public_ip} --/exts/omni.kit.livestream.app/primaryStream/signalPort=${signal_port} --/exts/omni.kit.livestream.app/primaryStream/streamPort=${stream_port}"
+      -lc "./runheadless.sh --/exts/omni.kit.livestream.app/primaryStream/publicIp=${public_ip} --/exts/omni.kit.livestream.app/primaryStream/signalPort=${signal_port} --/exts/omni.kit.livestream.app/primaryStream/streamPort=${stream_port}"
     printf 'Isaac Sim starting at %s (TCP %s, UDP %s)\n' "${public_ip}" "${signal_port}" "${stream_port}"
     ;;
   stop)
@@ -36,6 +37,11 @@ case "${1:-help}" in
     ;;
   logs)
     sudo docker logs -f "${container_name}"
+    ;;
+  status)
+    sudo docker inspect --format \
+      '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' \
+      "${container_name}"
     ;;
   capture-smoke)
     sudo docker run --rm "${docker_args[@]}" \
@@ -45,6 +51,6 @@ case "${1:-help}" in
     sudo chown -R "${USER}:${USER}" "${repo_dir}/data"
     ;;
   help|*)
-    printf 'usage: %s {start|stop|logs|capture-smoke}\n' "$0"
+    printf 'usage: %s {start|stop|status|logs|capture-smoke}\n' "$0"
     ;;
 esac

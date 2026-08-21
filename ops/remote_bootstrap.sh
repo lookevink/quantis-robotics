@@ -60,21 +60,24 @@ configure_host_firewall() {
 
 prepare_persistent_directories() {
   mkdir -p \
-    "${isaac_home}/cache/kit" \
-    "${isaac_home}/cache/ov" \
-    "${isaac_home}/cache/pip" \
-    "${isaac_home}/cache/glcache" \
+    "${isaac_home}/cache/main" \
     "${isaac_home}/cache/computecache" \
+    "${isaac_home}/config" \
     "${isaac_home}/data" \
     "${isaac_home}/logs" \
-    "${isaac_home}/documents" \
+    "${isaac_home}/pkg" \
     "${asset_home}/archives" \
     "${asset_home}/datacenter" \
     "${asset_home}/datasets" \
     "${asset_home}/cable" \
     "${HOME}/quantis-robotics/data/episodes"
 
-  sudo chown -R "${USER}:${USER}" "${isaac_home}" "${asset_home}" "${HOME}/quantis-robotics/data"
+  # Isaac Sim 6 runs as UID/GID 1234. Keep its caches writable across runs,
+  # while leaving downloaded assets under the host user's ownership.
+  sudo chown -R 1234:1234 "${isaac_home}"
+  sudo chown -R "${USER}:${USER}" "${asset_home}"
+  sudo chown -R "${USER}:1234" "${HOME}/quantis-robotics/data"
+  sudo chmod -R g+rwX "${HOME}/quantis-robotics/data"
 }
 
 download_assets() {
@@ -97,7 +100,7 @@ download_assets() {
       | sort > "${asset_home}/datacenter/usd-assets.txt"
   fi
 
-  if [[ "${DOWNLOAD_PHYSICALAI_DATASET:-1}" == "1" ]]; then
+  if [[ "${DOWNLOAD_PHYSICALAI_DATASET:-0}" == "1" ]]; then
     if [[ ! -x "${hf_venv}/bin/hf" ]]; then
       python3 -m venv "${hf_venv}"
       "${hf_venv}/bin/pip" install --quiet --upgrade huggingface_hub
@@ -105,13 +108,14 @@ download_assets() {
     "${hf_venv}/bin/hf" download \
       nvidia/PhysicalAI-Robotics-Manipulation-SingleArm \
       --repo-type dataset \
+      --max-workers "${HF_DOWNLOAD_MAX_WORKERS:-32}" \
       --local-dir "${asset_home}/datasets/PhysicalAI-Robotics-Manipulation-SingleArm"
   fi
 }
 
 verify_isaac_runtime() {
   sudo docker pull "${isaac_image}"
-  sudo docker run --rm --entrypoint bash --gpus all --network=host \
+  sudo docker run --rm --entrypoint bash --user 1234:1234 --gpus all --network=host \
     -e ACCEPT_EULA=Y \
     -e NVIDIA_DRIVER_CAPABILITIES=all \
     -e PYTHONDONTWRITEBYTECODE=1 \

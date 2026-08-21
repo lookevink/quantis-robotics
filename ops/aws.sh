@@ -153,6 +153,7 @@ remote_with_config() {
     ISAAC_SIGNAL_PORT \
     ISAAC_STREAM_PORT \
     DOWNLOAD_PHYSICALAI_DATASET \
+    HF_DOWNLOAD_MAX_WORKERS \
     QUANTIS_ASSET_HOME; do
     if declare -p "${name}" >/dev/null 2>&1; then
       printf -v assignment '%q' "${name}=${!name}"
@@ -221,7 +222,7 @@ Commands:
   up                             Start, secure, sync, and start Isaac Sim
   down                           Stop the EC2 instance
   ssh | sync | remote-bootstrap
-  isaac-start | isaac-stop | isaac-logs
+  isaac-start | isaac-stop | isaac-status | isaac-logs
   capture-smoke | jepa-embed [episode-name]
 EOF
   exit 0
@@ -272,6 +273,9 @@ case "${command}" in
   isaac-logs)
     require_private_key
     remote_with_config 'bash ~/quantis-robotics/ops/isaac_container.sh logs'
+    ;;
+  isaac-status)
+    remote_with_config 'bash ~/quantis-robotics/ops/isaac_container.sh status'
     ;;
   capture-smoke)
     remote_with_config 'bash ~/quantis-robotics/ops/isaac_container.sh capture-smoke'
