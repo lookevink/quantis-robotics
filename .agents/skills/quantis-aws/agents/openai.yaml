@@ -1,0 +1,4 @@
+interface:
+  display_name: "Quantis AWS"
+  short_description: "Use the project AWS account safely"
+  default_prompt: "Use $quantis-aws to run this AWS task in the Quantis account."

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly PROFILE="quantis"
+readonly EXPECTED_ACCOUNT="686410906008"
+
+if ! command -v aws >/dev/null 2>&1; then
+  echo "AWS CLI is not installed or not on PATH." >&2
+  exit 127
+fi
+
+actual_account="$(AWS_PROFILE="${PROFILE}" aws sts get-caller-identity \
+  --query Account --output text)"
+
+if [[ "${actual_account}" != "${EXPECTED_ACCOUNT}" ]]; then
+  echo "Refusing AWS command: profile '${PROFILE}' resolved to account '${actual_account}', expected '${EXPECTED_ACCOUNT}'." >&2
+  exit 1
+fi
+
+exec env AWS_PROFILE="${PROFILE}" aws "$@"
