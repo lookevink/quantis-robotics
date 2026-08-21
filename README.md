@@ -73,6 +73,7 @@ The idempotent bootstrap starts the instance, restricts SSH and WebRTC ingress t
 Bootstrap stores persistent content under `~/quantis-assets`, which is mounted inside the container at `/assets`:
 
 - `/assets/datacenter`: the complete NVIDIA data-center asset pack;
+- `/assets/datacenter/usd-assets.txt`: an inventory of the pack's USD stages and components;
 - `/assets/datasets/PhysicalAI-Robotics-Manipulation-SingleArm`: the 15.3 GB LeRobot-format reference dataset;
 - the Franka Panda robot itself comes from Isaac Sim's built-in asset catalog at `Robots/FrankaRobotics/FrankaPanda/franka.usd`.
 
@@ -80,7 +81,9 @@ Bootstrap stores persistent content under `~/quantis-assets`, which is mounted i
 
 Neither downloaded pack supplies the task-ready power cord and matching receptacle needed for the plug-in demo. `/assets/cable` is reserved for that custom asset. For the first JEPA-controlled demo, use a vendor CAD/mesh pair for the connector and socket, convert them to USD, and author accurate collision geometry and insertion tolerances. Keep the connector rigid and represent the trailing cable as either a short articulated chain or a visually updated curve at first. Full flexible-cable contact is a separate physics milestone; Isaac Sim 5.0's deformable schema is beta and would make policy debugging substantially harder.
 
-Set `DOWNLOAD_PHYSICALAI_DATASET=0` on the remote host when invoking `remote_bootstrap.sh` to skip the reference dataset. Wait for this final streaming log line:
+Bootstrap provisions and mounts the assets; it does not yet compose the data-center pack, Franka, connector, and socket into one task stage. That scene and its insertion controller are the next implementation milestone.
+
+Set `DOWNLOAD_PHYSICALAI_DATASET=0` in local `.env` to skip the reference dataset. The AWS wrapper forwards this and the Isaac version/port settings to the remote scripts. Wait for this final streaming log line:
 
 ```text
 Streaming server started.

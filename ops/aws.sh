@@ -144,6 +144,24 @@ remote() {
   ssh "${ssh_options[@]}" "${ssh_user}@$(instance_ip)" "$@"
 }
 
+remote_with_config() {
+  local remote_command="env"
+  local name
+  local assignment
+  for name in \
+    ISAAC_SIM_VERSION \
+    ISAAC_SIGNAL_PORT \
+    ISAAC_STREAM_PORT \
+    DOWNLOAD_PHYSICALAI_DATASET \
+    QUANTIS_ASSET_HOME; do
+    if declare -p "${name}" >/dev/null 2>&1; then
+      printf -v assignment '%q' "${name}=${!name}"
+      remote_command+=" ${assignment}"
+    fi
+  done
+  remote "${remote_command} $1"
+}
+
 sync_repo() {
   require_private_key
   local remote_shell
@@ -155,18 +173,41 @@ sync_repo() {
     "${repo_root}/" "${ssh_user}@$(instance_ip):~/quantis-robotics/"
 }
 
-bootstrap() {
+prepare_remote_host() {
   ensure_running
   configure_firewall
   sync_repo
-  remote 'bash ~/quantis-robotics/ops/remote_bootstrap.sh'
+}
+
+bootstrap() {
+  prepare_remote_host
+  remote_with_config 'bash ~/quantis-robotics/ops/remote_bootstrap.sh'
 }
 
 up() {
-  ensure_running
-  configure_firewall
-  sync_repo
-  remote 'bash ~/quantis-robotics/ops/isaac_container.sh start'
+  prepare_remote_host
+  remote_with_config 'bash ~/quantis-robotics/ops/isaac_container.sh start'
+}
+
+stop_instance() {
+  local state
+  state="$(instance_state)"
+  case "${state}" in
+    stopped)
+      printf 'Instance %s is already stopped.\n' "${instance_id}"
+      ;;
+    stopping)
+      aws_cli ec2 wait instance-stopped --instance-ids "${instance_id}"
+      ;;
+    running|pending)
+      aws_cli ec2 stop-instances --instance-ids "${instance_id}" >/dev/null
+      aws_cli ec2 wait instance-stopped --instance-ids "${instance_id}"
+      printf 'Instance %s is stopped; EBS storage still incurs charges.\n' "${instance_id}"
+      ;;
+    *)
+      die "instance ${instance_id} is ${state} and cannot be stopped"
+      ;;
+  esac
 }
 
 command="${1:-help}"
@@ -194,18 +235,7 @@ case "${command}" in
     ensure_running
     ;;
   stop|down)
-    state="$(instance_state)"
-    if [[ "${state}" == "stopped" ]]; then
-      printf 'Instance %s is already stopped.\n' "${instance_id}"
-    elif [[ "${state}" == "stopping" ]]; then
-      aws_cli ec2 wait instance-stopped --instance-ids "${instance_id}"
-    elif [[ "${state}" == "running" || "${state}" == "pending" ]]; then
-      aws_cli ec2 stop-instances --instance-ids "${instance_id}" >/dev/null
-      aws_cli ec2 wait instance-stopped --instance-ids "${instance_id}"
-      printf 'Instance %s is stopped; EBS storage still incurs charges.\n' "${instance_id}"
-    else
-      die "instance ${instance_id} is ${state} and cannot be stopped"
-    fi
+    stop_instance
     ;;
   status)
     aws_cli ec2 describe-instances --instance-ids "${instance_id}" \
@@ -225,7 +255,7 @@ case "${command}" in
     sync_repo
     ;;
   remote-bootstrap)
-    remote 'bash ~/quantis-robotics/ops/remote_bootstrap.sh'
+    remote_with_config 'bash ~/quantis-robotics/ops/remote_bootstrap.sh'
     ;;
   bootstrap)
     bootstrap
@@ -234,18 +264,17 @@ case "${command}" in
     up
     ;;
   isaac-start)
-    remote 'bash ~/quantis-robotics/ops/isaac_container.sh start'
+    remote_with_config 'bash ~/quantis-robotics/ops/isaac_container.sh start'
     ;;
   isaac-stop)
-    remote 'bash ~/quantis-robotics/ops/isaac_container.sh stop'
+    remote_with_config 'bash ~/quantis-robotics/ops/isaac_container.sh stop'
     ;;
   isaac-logs)
     require_private_key
-    exec ssh "${ssh_options[@]}" "${ssh_user}@$(instance_ip)" \
-      'bash ~/quantis-robotics/ops/isaac_container.sh logs'
+    remote_with_config 'bash ~/quantis-robotics/ops/isaac_container.sh logs'
     ;;
   capture-smoke)
-    remote 'bash ~/quantis-robotics/ops/isaac_container.sh capture-smoke'
+    remote_with_config 'bash ~/quantis-robotics/ops/isaac_container.sh capture-smoke'
     ;;
   jepa-embed)
     episode_name="${2:-latest}"
