@@ -89,9 +89,6 @@ download_assets() {
     mv "${datacenter_zip}.part" "${datacenter_zip}"
     unzip -tq "${datacenter_zip}" >/dev/null
     unzip -q -o "${datacenter_zip}" -d "${asset_home}/datacenter"
-    find "${asset_home}/datacenter" -type f \
-      \( -iname '*.usd' -o -iname '*.usda' -o -iname '*.usdc' \) \
-      | sort > "${asset_home}/datacenter/usd-assets.txt"
     touch "${datacenter_marker}"
   fi
   if [[ ! -f "${asset_home}/datacenter/usd-assets.txt" ]]; then
