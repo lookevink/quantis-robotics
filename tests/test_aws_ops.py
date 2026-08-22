@@ -16,6 +16,7 @@ class AwsLifecycleTests(unittest.TestCase):
     def run_command(
         self,
         command: str,
+        arguments: tuple[str, ...] = (),
         state: str = "running",
         account: str = "686410906008",
         extra_env: Optional[dict[str, str]] = None,
@@ -70,7 +71,7 @@ class AwsLifecycleTests(unittest.TestCase):
                 **(extra_env or {}),
             }
             result = subprocess.run(
-                [str(AWS_SCRIPT), command],
+                [str(AWS_SCRIPT), command, *arguments],
                 cwd=REPO_ROOT,
                 env=env,
                 text=True,
@@ -157,6 +158,18 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("record_demo", calls)
         self.assertIn("ops/encode_demo_recording.sh", calls)
         self.assertRegex(calls, r"demo-[0-9]{8}T[0-9]{6}Z")
+
+    def test_jepa_embed_forwards_recording_and_camera(self):
+        result, calls = self.run_command(
+            "jepa-embed",
+            arguments=("demo-20260822T040027Z", "wrist"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "ops/jepa_embed.sh 'demo-20260822T040027Z' 'wrist'",
+            calls,
+        )
 
     def test_remote_bootstrap_installs_python_server_client(self):
         bootstrap = REMOTE_BOOTSTRAP.read_text()

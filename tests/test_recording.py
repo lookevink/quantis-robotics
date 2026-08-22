@@ -46,6 +46,7 @@ class RecordingWriterTest(unittest.TestCase):
             for path in frame_paths.values():
                 path.touch()
 
+            self.assertEqual(writer.frame_count, 0)
             writer.add_step(
                 RecordingSnapshot(
                     phase=RecordingLabel(RecordingMoment.MOTION, Phase.READY),
@@ -55,6 +56,7 @@ class RecordingWriterTest(unittest.TestCase):
                     plug_attached=False,
                 )
             )
+            self.assertEqual(writer.frame_count, 1)
             output = writer.finish()
 
             manifest = json.loads((output / "manifest.json").read_text())

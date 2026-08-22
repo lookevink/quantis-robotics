@@ -22,7 +22,7 @@ Isaac Sim 6.0.1
   └─ scripted / motion-planning controller
               │
               ▼
-episode dataset: frames + actions + state + manifest
+recording dataset: per-camera frames + actions + state + manifest
               │
               ▼
 frozen V-JEPA 2 encoder → goal-progress/stage model (next milestone)
@@ -100,6 +100,14 @@ For normal sessions after the first bootstrap:
 
 `down` stops the EC2 host and waits until it is fully stopped. Compute billing then stops, while EBS volumes and snapshots continue to incur storage charges. The EBS data and instance ID survive. Unless the instance has an Elastic IP, its public IP changes on the next start; `aws.sh` discovers the new address automatically and refreshes the security-group rules.
 
+### GPU capacity after a stop
+
+Stopping an On-Demand GPU instance releases its physical GPU capacity even though its EBS volumes and instance configuration persist. A later `./ops/aws.sh up` can therefore fail with `InsufficientInstanceCapacity` when the instance's type is temporarily unavailable in its Availability Zone. This is not an IAM, profile, quota, or data-loss error.
+
+Keep the instance stopped and retry the same `./ops/aws.sh up` command every 15 minutes. The wrapper always verifies the `quantis` profile against AWS account `686410906008`, starts only the configured instance ID, discovers its new public IP, refreshes the managed firewall rules, and starts Isaac Sim. Stop retrying when `./ops/aws.sh isaac-status` reports `running healthy`.
+
+Do not automatically change the instance type, Availability Zone, volumes, or security rules as part of the retry. If capacity remains unavailable, explicitly choose between temporarily changing the stopped instance to the compatible `g5.2xlarge`, migrating a replacement into another Availability Zone, or purchasing an On-Demand Capacity Reservation. A Capacity Reservation avoids this restart gap but incurs charges while the capacity is held.
+
 ## 3. Stream the UI
 
 Isaac Sim uses TCP `49100` for WebRTC signaling and UDP `47998` for media. `firewall-webrtc` replaces only the Quantis-managed rules in the instance's EC2 security group and restricts SSH and both streaming ports to your current public IP. Override the source with `WEBRTC_SOURCE_CIDR` if needed. The stream has no authentication or encryption, so do not open it to `0.0.0.0/0`. The container uses host networking; Docker bridge port publishing is not sufficient for Isaac WebRTC.
@@ -152,15 +160,33 @@ The smoke test moves a module proxy while Franka is visible; its synthetic actio
 
 ## 6. Load JEPA
 
-The fastest meaningful path is offline embedding and goal-progress scoring:
+Recordings contain exactly 64 synchronized frames per camera (holding the final
+pose when the scripted motion produces fewer samples), matching the default
+observation window of the frozen V-JEPA 2 encoder. Embed the wrist point of view
+from the latest recording with:
 
 ```bash
-./ops/aws.sh jepa-embed
-# Or select an episode explicitly:
-./ops/aws.sh jepa-embed <episode-id>
+./ops/aws.sh jepa-embed latest wrist
+# Or select a recording and camera explicitly:
+./ops/aws.sh jepa-embed demo-<UTC timestamp> presentation
 ```
 
-This uses the official `facebook/vjepa2-vitl-fpc64-256` checkpoint and proves GPU inference on simulated observations. It does **not** yet drive Franka. For online control, keep the model in a separate process and exchange the latest frame window plus subgoal with the simulator. See [`docs/control-loop.md`](docs/control-loop.md) for the planned interface and safety boundary.
+`latest` prefers the newest timestamped demo recording and falls back to the
+legacy capture-smoke episodes. The command uses the official
+`facebook/vjepa2-vitl-fpc64-256` checkpoint, automatically selects CUDA, Apple
+Metal, or CPU, and stores the normalized embedding beside the persistent source
+as `<camera>_vjepa2_embedding.npy`. The first AWS run downloads the Python and
+model dependencies; subsequent runs reuse the EBS-backed virtual environment and
+Hugging Face cache.
+
+The live AWS proof used recording `demo-20260822T194745Z`: 64 wrist frames became
+a normalized 1,024-dimensional `float32` embedding on CUDA at
+`/home/ubuntu/docker/isaac-sim/data/quantis/recordings/demo-20260822T194745Z/wrist_vjepa2_embedding.npy`.
+This wires the real arm POV into JEPA perception, but it does **not** yet drive
+Franka. The next slice labels goal/stage reference windows, scores the current
+embedding against them, and sends only a bounded high-level subgoal to Isaac's
+motion controller. See [`docs/control-loop.md`](docs/control-loop.md) for that
+interface and its safety boundary.
 
 ## Validation
 

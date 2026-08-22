@@ -98,6 +98,10 @@ class RecordingWriter:
             (self.output_dir / camera).mkdir()
         self._steps: list[RecordingStep] = []
 
+    @property
+    def frame_count(self) -> int:
+        return len(self._steps)
+
     def frame_paths(self) -> dict[str, Path]:
         index = len(self._steps)
         return {

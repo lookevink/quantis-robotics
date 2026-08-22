@@ -63,6 +63,7 @@ for camera_row in "${camera_rows[@]}"; do
   }
   video_names+=("${video_name}")
 done
+sudo chown -R "${USER}:${USER}" "${recording_dir}"
 
 printf 'Recording encoded successfully.\n'
 printf 'Host output directory: %s\n' "${recording_dir}"

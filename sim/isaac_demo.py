@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+from jepa.contract import DEFAULT_FRAMES
 from sim.demo_sequence import Phase, PlugAction
 from sim.isaac_demo_camera import DemoRecorder, capture_cameras, configure_wrist_camera
 from sim.isaac_demo_kinematics import preflight_report, solve_waypoints
@@ -345,6 +346,15 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
                     "settle_error_m": settle_error,
                 }
             )
+        if recorder is not None:
+            while recorder.frame_count < DEFAULT_FRAMES:
+                await recorder.capture(
+                    _recording_snapshot(
+                        RecordingLabel(RecordingMoment.COMPLETE, Phase.RELEASE),
+                        current,
+                        attachment,
+                    )
+                )
         completed = True
     finally:
         if completed:

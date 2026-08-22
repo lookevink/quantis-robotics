@@ -3,6 +3,8 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 env_file="${ENV_FILE:-${repo_root}/.env}"
+# shellcheck source=ops/shell_helpers.sh
+source "${repo_root}/ops/shell_helpers.sh"
 
 if [[ -f "${env_file}" ]]; then
   set -a
@@ -248,7 +250,7 @@ Commands:
   ssh | sync | remote-bootstrap
   isaac-start | isaac-stop | isaac-status | isaac-logs
   demo-reset | demo-preflight | demo-run | demo-capture | demo-record
-  capture-smoke | jepa-embed [episode-name]
+  capture-smoke | jepa-embed [source-name] [camera]
 EOF
   exit 0
 fi
@@ -323,9 +325,12 @@ case "${command}" in
     remote_with_config 'bash ~/quantis-robotics/ops/isaac_container.sh capture-smoke'
     ;;
   jepa-embed)
-    episode_name="${2:-latest}"
-    [[ "${episode_name}" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid episode name"
-    remote "bash ~/quantis-robotics/ops/jepa_embed.sh '${episode_name}'"
+    source_name="${2:-latest}"
+    camera_name="${3:-wrist}"
+    is_safe_identifier "${source_name}" || die "invalid JEPA source name"
+    is_safe_identifier "${camera_name}" || die "invalid JEPA camera name"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_embed.sh '${source_name}' '${camera_name}'"
     ;;
   *)
     die "unknown command: ${command} (run $0 help)"

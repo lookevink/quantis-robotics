@@ -2,12 +2,21 @@
 
 ## What can be loaded immediately
 
-The bootstrap loads the official Hugging Face `facebook/vjepa2-vitl-fpc64-256` encoder and verifies that it converts a 64-frame observation window into a normalized latent vector. The control worker below is the next milestone, not part of the current embedding smoke test. It will use that vector to select a stage and measure progress toward prerecorded goal-image windows:
+The AWS workflow now loads the official Hugging Face
+`facebook/vjepa2-vitl-fpc64-256` encoder and converts either recorded wrist or
+presentation-camera observations into a normalized latent vector. Demo capture
+guarantees the model's 64-frame input window, keeps both views synchronized with
+robot state, and stores the embedding beside the persistent recording. The live
+CUDA proof produced a 1,024-dimensional wrist-camera vector from
+`demo-20260822T194745Z`.
 
-1. `approach handle`
-2. `grasped handle`
-3. `module extracted`
-4. `module in service bin`
+The control worker below is the next milestone. It will use that vector to select
+a stage and measure progress toward prerecorded goal-image windows:
+
+1. `approach cable`
+2. `grasped cable`
+3. `aligned with socket`
+4. `plug seated`
 
 The intended resulting stage/subgoal is executed by Isaac Sim's motion generation controller as an online visual feedback loop, not open-loop playback.
 
@@ -90,9 +99,14 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
 
 ## Milestones
 
-1. Capture smoke test succeeds on AWS EC2.
-2. Scripted Franka task produces synchronized successful and failed episodes.
-3. Frozen V-JEPA embeddings distinguish the four task stages.
-4. Stage predictions close the loop with Isaac's motion controller.
-5. V-JEPA 2-AC is evaluated offline against held-out simulated trajectories.
-6. Only then allow the action-conditioned planner to propose bounded simulated actions.
+1. [x] Capture smoke test succeeds on AWS EC2.
+2. [x] Scripted Franka success run produces 64 synchronized wrist and
+   presentation-camera observations with robot state.
+3. [x] Frozen V-JEPA encodes a real wrist-camera run on the AWS GPU and persists
+   its normalized latent vector.
+4. [ ] Record goal windows and failed/perturbed runs for the four task stages.
+5. [ ] Train and validate a stage/progress head over frozen V-JEPA embeddings.
+6. [ ] Close stage predictions around Isaac's bounded motion controller.
+7. [ ] Evaluate V-JEPA 2-AC offline against held-out simulated trajectories.
+8. [ ] Only then allow the action-conditioned planner to propose bounded
+   simulated actions.

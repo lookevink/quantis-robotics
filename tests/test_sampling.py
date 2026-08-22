@@ -1,9 +1,19 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
-from jepa.embed_episode import DEFAULT_FRAMES, pool_features, sample_paths
+from jepa.embed_episode import (
+    DEFAULT_FRAMES,
+    ObservationSource,
+    pool_features,
+    sample_paths,
+)
 
 try:
     import torch
@@ -38,6 +48,112 @@ class SamplePathsTest(unittest.TestCase):
     def test_allows_a_short_clip_when_asked_for_explicitly(self) -> None:
         short = frames(32)
         self.assertEqual(sample_paths(short, 32), short)
+
+
+class ObservationFramesTest(unittest.TestCase):
+    def test_script_entrypoint_resolves_repository_package(self) -> None:
+        script = Path(__file__).parents[1] / "jepa" / "embed_episode.py"
+
+        result = subprocess.run(
+            [sys.executable, str(script), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_resolves_legacy_episode_rgb_frames(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir)
+            rgb = source / "rgb"
+            rgb.mkdir()
+            expected = [rgb / "frame_000000.png", rgb / "frame_000001.png"]
+            for path in reversed(expected):
+                path.touch()
+
+            self.assertEqual(ObservationSource.open(source).frame_paths(), expected)
+
+    def test_selects_a_camera_from_a_demo_recording(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir)
+            (source / "manifest.json").write_text(
+                json.dumps({"cameras": ["presentation", "wrist"]})
+            )
+            presentation = source / "presentation"
+            wrist = source / "wrist"
+            presentation.mkdir()
+            wrist.mkdir()
+            (presentation / "frame_000000.png").touch()
+            expected = [wrist / "frame_000000.png", wrist / "frame_000001.png"]
+            for path in reversed(expected):
+                path.touch()
+
+            self.assertEqual(
+                ObservationSource.open(source).frame_paths("wrist"), expected
+            )
+
+            with self.assertRaisesRegex(ValueError, "available cameras"):
+                ObservationSource.open(source).frame_paths("overhead")
+
+    def test_names_recording_embeddings_for_the_selected_camera(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir)
+            (source / "manifest.json").write_text(
+                json.dumps({"cameras": ["presentation", "wrist"]})
+            )
+
+            self.assertEqual(
+                ObservationSource.open(source).default_embedding_path("wrist"),
+                source / "wrist_vjepa2_embedding.npy",
+            )
+
+    def test_preserves_the_legacy_episode_embedding_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir)
+
+            self.assertEqual(
+                ObservationSource.open(source).default_embedding_path("wrist"),
+                source / "vjepa2_embedding.npy",
+            )
+
+
+class JepaShellTest(unittest.TestCase):
+    def test_latest_falls_back_when_recordings_directory_is_absent(self) -> None:
+        repo_root = Path(__file__).parents[1]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir)
+            remote_repo = home / "quantis-robotics"
+            (remote_repo / "ops").mkdir(parents=True)
+            (remote_repo / "data" / "episodes" / "legacy-episode").mkdir(
+                parents=True
+            )
+            (remote_repo / "ops" / "shell_helpers.sh").symlink_to(
+                repo_root / "ops" / "shell_helpers.sh"
+            )
+            fake_python = home / ".venvs" / "quantis-jepa" / "bin" / "python"
+            fake_python.parent.mkdir(parents=True)
+            fake_python.write_text(
+                "#!/usr/bin/env bash\n"
+                "if [[ \"${1:-}\" == '-m' ]]; then exit 0; fi\n"
+                "printf '%s\\n' \"$*\"\n"
+            )
+            fake_python.chmod(0o755)
+
+            result = subprocess.run(
+                [str(repo_root / "ops" / "jepa_embed.sh"), "latest", "wrist"],
+                capture_output=True,
+                text=True,
+                check=False,
+                env={**os.environ, "HOME": str(home)},
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(
+                str(remote_repo / "data" / "episodes" / "legacy-episode"),
+                result.stdout,
+            )
+            self.assertIn("--camera wrist", result.stdout)
 
 
 @unittest.skipIf(torch is None, "torch is not installed")

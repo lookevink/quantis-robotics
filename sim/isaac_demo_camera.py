@@ -90,6 +90,10 @@ class DemoRecorder:
         return self._writer.output_dir
 
     @property
+    def frame_count(self) -> int:
+        return self._writer.frame_count
+
+    @property
     def video_paths(self) -> dict[str, Path]:
         return {
             camera: self.output_dir / f"{camera}.mp4"
