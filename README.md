@@ -108,7 +108,24 @@ Install the [Isaac Sim WebRTC Streaming Client](https://docs.isaacsim.omniverse.
 
 Streaming is only remote display/control. It is **not** the training-data capture path.
 
-## 4. Capture training data
+## 4. Run the deterministic plug-in demo
+
+With `isaacsim.code_editor.python_server` enabled in the live Isaac session, the AWS wrapper can preflight and execute the arm sequence through the server's loopback-only port:
+
+```bash
+./ops/aws.sh demo-reset
+./ops/aws.sh demo-preflight
+./ops/aws.sh demo-run
+./ops/aws.sh demo-capture
+```
+
+The ordered sequence is `ready → pre-grasp → grasp → pre-insertion → insert → release`. Preflight solves all six poses before physics advances. The executor interpolates Isaac articulation positions, keeps the placeholder plug kinematic, carries it with the hand after grasp, and pauses on the final pose. It exports the result beside the reusable scene as `datacenter_demo_sequence_result.usda`; `demo-reset` reopens the clean starting stage.
+
+This is deliberately a deterministic coordinate/constraint demo. Plug collision is disabled while attached, and the final seating position is enforced geometrically. It does **not** yet model grasp force, insertion force, deformable cable dynamics, or collision-aware path planning. Those belong in the later force/contact-control milestone.
+
+`demo-capture` renders 640×480 RGB verification frames from `/World/ShotCam` and the arm-mounted `/World/Franka_R/panda_hand/WristCamera` into Isaac's persistent data directory at `/isaac-sim/.local/share/ov/data/quantis/captures`.
+
+## 5. Capture training data
 
 Run the standalone capture smoke test inside the container:
 
@@ -124,7 +141,7 @@ It creates a pipeline-test episode under `/workspace/data/episodes` containing:
 
 The smoke test moves a module proxy while Franka is visible; its synthetic action/state labels are **not robot training data**. For JEPA control data, replace that motion with commands applied to Franka and record its joints/end effector at every step. The WebRTC video is intentionally not recorded or used as the dataset because it is compressed, latency-shifted, and lacks synchronized actions.
 
-## 5. Load JEPA
+## 6. Load JEPA
 
 The fastest meaningful path is offline embedding and goal-progress scoring:
 

@@ -211,6 +211,25 @@ stop_instance() {
   esac
 }
 
+isaac_python() {
+  local code="$1"
+  local timeout_seconds="${2:-60}"
+  local quoted_code
+  local remote_command
+  printf -v quoted_code '%q' "${code}"
+  printf -v remote_command \
+    "printf '%%s\\n' %s | timeout %q nc -q 3 127.0.0.1 8226" \
+    "${quoted_code}" "${timeout_seconds}"
+  remote "${remote_command}"
+}
+
+demo_python() {
+  local expression="$1"
+  local timeout_seconds="${2:-60}"
+  sync_repo
+  isaac_python "import sys,json,importlib; sys.path.insert(0,'/workspace') if '/workspace' not in sys.path else None; importlib.invalidate_caches(); import sim.isaac_demo as demo; importlib.reload(demo); print(json.dumps(${expression},indent=2))" "${timeout_seconds}"
+}
+
 command="${1:-help}"
 if [[ "${command}" == "help" ]]; then
   cat <<'EOF'
@@ -223,6 +242,7 @@ Commands:
   down                           Stop the EC2 instance
   ssh | sync | remote-bootstrap
   isaac-start | isaac-stop | isaac-status | isaac-logs
+  demo-reset | demo-preflight | demo-run | demo-capture
   capture-smoke | jepa-embed [episode-name]
 EOF
   exit 0
@@ -276,6 +296,18 @@ case "${command}" in
     ;;
   isaac-status)
     remote_with_config 'bash ~/quantis-robotics/ops/isaac_container.sh status'
+    ;;
+  demo-preflight)
+    demo_python 'demo.preflight_report()'
+    ;;
+  demo-reset)
+    demo_python 'await demo.reset_demo()' 120
+    ;;
+  demo-run)
+    demo_python 'await demo.run_demo()' 300
+    ;;
+  demo-capture)
+    demo_python 'await demo.capture_cameras()' 180
     ;;
   capture-smoke)
     remote_with_config 'bash ~/quantis-robotics/ops/isaac_container.sh capture-smoke'

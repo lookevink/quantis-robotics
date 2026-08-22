@@ -9,6 +9,7 @@ from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AWS_SCRIPT = REPO_ROOT / "ops" / "aws.sh"
+REMOTE_BOOTSTRAP = REPO_ROOT / "ops" / "remote_bootstrap.sh"
 
 
 class AwsLifecycleTests(unittest.TestCase):
@@ -126,6 +127,17 @@ class AwsLifecycleTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ops/isaac_container.sh status", calls)
+
+    def test_demo_run_syncs_and_calls_the_loopback_python_server(self):
+        result, calls = self.run_command("demo-run")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("rsync ", calls)
+        self.assertIn("127.0.0.1 8226", calls)
+        self.assertIn("run_demo", calls)
+
+    def test_remote_bootstrap_installs_python_server_client(self):
+        self.assertIn("netcat-openbsd", REMOTE_BOOTSTRAP.read_text())
 
 
 if __name__ == "__main__":

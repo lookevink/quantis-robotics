@@ -5,7 +5,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/isaac_common.sh"
 
 install_host_dependencies() {
-  local required_packages=(ca-certificates curl gnupg python3-venv unzip)
+  local required_packages=(ca-certificates curl gnupg netcat-openbsd python3-venv unzip)
   local missing_packages=()
   local package
 
