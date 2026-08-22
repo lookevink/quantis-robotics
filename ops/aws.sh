@@ -216,18 +216,23 @@ isaac_python() {
   local timeout_seconds="${2:-60}"
   local quoted_code
   local remote_command
+  local response
   printf -v quoted_code '%q' "${code}"
   printf -v remote_command \
     "printf '%%s\\n' %s | timeout %q nc -q 3 127.0.0.1 8226" \
     "${quoted_code}" "${timeout_seconds}"
-  remote "${remote_command}"
+  response="$(remote "${remote_command}")"
+  printf '%s\n' "${response}"
+  if grep -Eq '"status"[[:space:]]*:[[:space:]]*"error"' <<<"${response}"; then
+    return 1
+  fi
 }
 
 demo_python() {
   local expression="$1"
   local timeout_seconds="${2:-60}"
   sync_repo
-  isaac_python "import sys,json,importlib; sys.path.insert(0,'/workspace') if '/workspace' not in sys.path else None; importlib.invalidate_caches(); import sim.isaac_demo as demo; importlib.reload(demo); print(json.dumps(${expression},indent=2))" "${timeout_seconds}"
+  isaac_python "import sys,json,importlib; sys.path.insert(0,'/workspace') if '/workspace' not in sys.path else None; importlib.invalidate_caches(); import sim.recording as recording, sim.isaac_demo_scene as scene, sim.isaac_demo_camera as camera, sim.isaac_demo_kinematics as kinematics, sim.isaac_demo as demo; importlib.reload(recording); importlib.reload(scene); importlib.reload(camera); importlib.reload(kinematics); importlib.reload(demo); print(json.dumps(${expression},indent=2))" "${timeout_seconds}"
 }
 
 command="${1:-help}"
@@ -242,7 +247,7 @@ Commands:
   down                           Stop the EC2 instance
   ssh | sync | remote-bootstrap
   isaac-start | isaac-stop | isaac-status | isaac-logs
-  demo-reset | demo-preflight | demo-run | demo-capture
+  demo-reset | demo-preflight | demo-run | demo-capture | demo-record
   capture-smoke | jepa-embed [episode-name]
 EOF
   exit 0
@@ -308,6 +313,11 @@ case "${command}" in
     ;;
   demo-capture)
     demo_python 'await demo.capture_cameras()' 180
+    ;;
+  demo-record)
+    recording_id="demo-$(date -u +%Y%m%dT%H%M%SZ)"
+    demo_python "await demo.record_demo('${recording_id}')" 900
+    remote "bash ~/quantis-robotics/ops/encode_demo_recording.sh '${recording_id}'"
     ;;
   capture-smoke)
     remote_with_config 'bash ~/quantis-robotics/ops/isaac_container.sh capture-smoke'

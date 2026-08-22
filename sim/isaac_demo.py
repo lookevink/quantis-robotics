@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 
 from sim.demo_sequence import Phase, PlugAction
-from sim.isaac_demo_camera import capture_cameras, configure_wrist_camera
+from sim.isaac_demo_camera import DemoRecorder, capture_cameras, configure_wrist_camera
 from sim.isaac_demo_kinematics import preflight_report, solve_waypoints
 from sim.isaac_demo_scene import (
     PLUG_PATH,
@@ -18,6 +18,7 @@ from sim.isaac_demo_scene import (
     STAGE_PATH,
     world_pose,
 )
+from sim.recording import RecordingLabel, RecordingMoment, RecordingSnapshot
 
 
 @dataclass(frozen=True)
@@ -158,12 +159,29 @@ def _smoothstep(progress: float) -> float:
     return progress * progress * (3.0 - 2.0 * progress)
 
 
+def _recording_snapshot(
+    phase: RecordingLabel,
+    command: JointCommand,
+    attachment: PlugAttachment,
+) -> RecordingSnapshot:
+    return RecordingSnapshot(
+        phase=phase,
+        arm_positions=command.arm_positions,
+        gripper_width_m=command.gripper_width_m,
+        plug_position=world_pose(attachment.prim)[0],
+        plug_attached=attachment.attached,
+    )
+
+
 async def _move_targets(
     actuators: Actuators,
     start: JointCommand,
     end: JointCommand,
     duration_seconds: float,
     attachment: PlugAttachment,
+    *,
+    phase: RecordingLabel,
+    recorder: DemoRecorder | None,
 ) -> None:
     import omni.kit.app
     import omni.usd
@@ -182,14 +200,19 @@ async def _move_targets(
             + (end.gripper_width_m - start.gripper_width_m) * blend,
         )
         actuators.apply(command)
-        attachment.follow(world_pose(hand)[0])
         await app.next_update_async()
+        attachment.follow(world_pose(hand)[0])
+        if recorder is not None:
+            await recorder.capture(_recording_snapshot(phase, command, attachment))
 
 
 async def _settle_at_target(
     target_hand_position: np.ndarray,
     attachment: PlugAttachment,
+    command: JointCommand,
     *,
+    phase: RecordingLabel,
+    recorder: DemoRecorder | None,
     max_updates: int = 4,
     tolerance_m: float = 0.012,
 ) -> float:
@@ -204,12 +227,14 @@ async def _settle_at_target(
         hand_position, _ = world_pose(hand)
         error = float(np.linalg.norm(hand_position - target_hand_position))
         attachment.follow(hand_position)
+        if recorder is not None:
+            await recorder.capture(_recording_snapshot(phase, command, attachment))
         if error <= tolerance_m:
             return error
     return error
 
 
-async def run_demo() -> dict[str, Any]:
+async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
     """Execute the preflighted sequence and export its final visual state."""
 
     import omni.kit.app
@@ -235,6 +260,12 @@ async def run_demo() -> dict[str, Any]:
     completed = False
     try:
         await omni.kit.app.get_app().next_update_async()
+        if recorder is not None:
+            await recorder.capture(
+                _recording_snapshot(
+                    RecordingLabel(RecordingMoment.INITIAL), current, attachment
+                )
+            )
         for result in solved:
             waypoint = result.waypoint
             motion_width = (
@@ -247,10 +278,24 @@ async def run_demo() -> dict[str, Any]:
                 np.max(np.abs(np.rad2deg(target.arm_positions - current.arm_positions)))
             )
             duration = min(4.0, max(0.8, max_delta / 45.0))
-            await _move_targets(actuators, current, target, duration, attachment)
+            await _move_targets(
+                actuators,
+                current,
+                target,
+                duration,
+                attachment,
+                phase=RecordingLabel(RecordingMoment.MOTION, waypoint.phase),
+                recorder=recorder,
+            )
             current = target
 
-            settle_error = await _settle_at_target(result.hand_position, attachment)
+            settle_error = await _settle_at_target(
+                result.hand_position,
+                attachment,
+                current,
+                phase=RecordingLabel(RecordingMoment.SETTLE, waypoint.phase),
+                recorder=recorder,
+            )
             if settle_error > 0.012:
                 raise RuntimeError(
                     f"arm failed to settle at {waypoint.phase.value}: "
@@ -259,13 +304,37 @@ async def run_demo() -> dict[str, Any]:
 
             if waypoint.plug_action == PlugAction.ATTACH:
                 closed = JointCommand(current.arm_positions, waypoint.gripper_width_m)
-                await _move_targets(actuators, current, closed, 0.6, attachment)
+                await _move_targets(
+                    actuators,
+                    current,
+                    closed,
+                    0.6,
+                    attachment,
+                    phase=RecordingLabel(RecordingMoment.CLOSE, Phase.GRASP),
+                    recorder=recorder,
+                )
                 current = closed
                 hand = stage.GetPrimAtPath(f"{ROBOT_PATH}/panda_hand")
                 attachment.attach(world_pose(hand)[0])
+                if recorder is not None:
+                    await recorder.capture(
+                        _recording_snapshot(
+                            RecordingLabel(RecordingMoment.ATTACHED, Phase.GRASP),
+                            current,
+                            attachment,
+                        )
+                    )
             elif waypoint.plug_action == PlugAction.DETACH:
                 socket_position, _ = world_pose(stage.GetPrimAtPath(SOCKET_PATH))
                 attachment.detach_at(socket_position)
+                if recorder is not None:
+                    await recorder.capture(
+                        _recording_snapshot(
+                            RecordingLabel(RecordingMoment.COMPLETE, Phase.RELEASE),
+                            current,
+                            attachment,
+                        )
+                    )
 
             phase_reports.append(
                 {
@@ -290,4 +359,26 @@ async def run_demo() -> dict[str, Any]:
         "result_stage": result_stage,
         "phases": phase_reports,
         "plug_position": world_pose(attachment.prim)[0].round(6).tolist(),
+    }
+
+
+async def record_demo(recording_id: str) -> dict[str, Any]:
+    """Reset, run, and capture the demo from both cameras."""
+
+    await reset_demo()
+    recorder = DemoRecorder(recording_id)
+    try:
+        await recorder.initialize()
+        result = await run_demo(recorder=recorder)
+    except Exception:
+        recorder.abort()
+        raise
+    output_dir = recorder.finish()
+    return {
+        **result,
+        "recording_id": recording_id,
+        "output_directory": str(output_dir),
+        "videos": {
+            camera: str(path) for camera, path in recorder.video_paths.items()
+        },
     }

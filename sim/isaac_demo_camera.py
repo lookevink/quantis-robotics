@@ -12,6 +12,14 @@ from sim.isaac_demo_scene import (
     WRIST_CAMERA_PATH,
     matrix_to_wxyz,
 )
+from sim.recording import RecordingSnapshot, RecordingWriter
+
+
+RECORDING_ROOT = "/isaac-sim/.local/share/ov/data/quantis/recordings"
+CAMERA_SPECS = (
+    ("presentation", PRESENTATION_CAMERA_PATH),
+    ("wrist", WRIST_CAMERA_PATH),
+)
 
 
 def _look_at_rotation(eye: np.ndarray, target: np.ndarray, up: np.ndarray) -> np.ndarray:
@@ -55,6 +63,82 @@ def configure_wrist_camera() -> dict[str, Any]:
     }
 
 
+class DemoRecorder:
+    """Capture both demo cameras and synchronized robot state per update."""
+
+    def __init__(self, recording_id: str, *, fps: int = 8) -> None:
+        import omni.replicator.core as rep
+
+        self._rep = rep
+        self._writer = RecordingWriter(
+            Path(RECORDING_ROOT),
+            recording_id=recording_id,
+            fps=fps,
+            cameras=tuple(label for label, _ in CAMERA_SPECS),
+        )
+        self._render_products: dict[str, Any] = {}
+        self._annotators: dict[str, Any] = {}
+        for label, camera_path in CAMERA_SPECS:
+            render_product = rep.create.render_product(camera_path, (640, 480))
+            annotator = rep.AnnotatorRegistry.get_annotator("rgb")
+            annotator.attach([render_product])
+            self._render_products[label] = render_product
+            self._annotators[label] = annotator
+
+    @property
+    def output_dir(self) -> Path:
+        return self._writer.output_dir
+
+    @property
+    def video_paths(self) -> dict[str, Path]:
+        return {
+            camera: self.output_dir / f"{camera}.mp4"
+            for camera in self._writer.cameras
+        }
+
+    async def initialize(self) -> None:
+        """Warm Replicator before Isaac creates the physics articulation view."""
+
+        await self._rep.orchestrator.step_async(
+            rt_subframes=1,
+            pause_timeline=True,
+            delta_time=0.0,
+        )
+
+    async def capture(self, snapshot: RecordingSnapshot) -> None:
+        import omni.kit.app
+        from PIL import Image
+
+        # The render products capture while the timeline is playing. A normal
+        # Kit update keeps the physics view intact and advances their RGB data;
+        # invoking Replicator's explicit step here would take over the timeline.
+        await omni.kit.app.get_app().next_update_async()
+        frame_paths = self._writer.frame_paths()
+        for label, annotator in self._annotators.items():
+            pixels = annotator.get_data()
+            if pixels.size == 0:
+                raise RuntimeError(f"camera produced an empty frame: {label}")
+            Image.fromarray(pixels[:, :, :3]).save(frame_paths[label])
+        self._writer.add_step(snapshot)
+
+    def finish(self) -> Path:
+        self._close()
+        return self._writer.finish()
+
+    def abort(self) -> None:
+        """Release render products after a failed run without masking its error."""
+
+        self._close()
+
+    def _close(self) -> None:
+        for label, annotator in self._annotators.items():
+            render_product = self._render_products[label]
+            annotator.detach([render_product])
+            render_product.destroy()
+        self._annotators.clear()
+        self._render_products.clear()
+
+
 async def capture_cameras(
     output_dir: str = "/isaac-sim/.local/share/ov/data/quantis/captures",
 ) -> dict[str, Any]:
@@ -70,10 +154,7 @@ async def capture_cameras(
     destination.mkdir(parents=True, exist_ok=True)
     captures = {}
 
-    for label, camera_path in (
-        ("presentation", PRESENTATION_CAMERA_PATH),
-        ("wrist", WRIST_CAMERA_PATH),
-    ):
+    for label, camera_path in CAMERA_SPECS:
         if not stage.GetPrimAtPath(camera_path).IsValid():
             raise RuntimeError(f"camera prim is missing: {camera_path}")
         render_product = rep.create.render_product(camera_path, (640, 480))

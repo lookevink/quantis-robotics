@@ -117,6 +117,7 @@ With `isaacsim.code_editor.python_server` enabled in the live Isaac session, the
 ./ops/aws.sh demo-preflight
 ./ops/aws.sh demo-run
 ./ops/aws.sh demo-capture
+./ops/aws.sh demo-record
 ```
 
 The ordered sequence is `ready → pre-grasp → grasp → pre-insertion → insert → release`. Preflight solves all six poses before physics advances. The executor interpolates Isaac articulation positions, keeps the placeholder plug kinematic, carries it with the hand after grasp, and pauses on the final pose. It exports the result beside the reusable scene as `datacenter_demo_sequence_result.usda`; `demo-reset` reopens the clean starting stage.
@@ -124,6 +125,14 @@ The ordered sequence is `ready → pre-grasp → grasp → pre-insertion → ins
 This is deliberately a deterministic coordinate/constraint demo. Plug collision is disabled while attached, and the final seating position is enforced geometrically. It does **not** yet model grasp force, insertion force, deformable cable dynamics, or collision-aware path planning. Those belong in the later force/contact-control milestone.
 
 `demo-capture` renders 640×480 RGB verification frames from `/World/ShotCam` and the arm-mounted `/World/Franka_R/panda_hand/WristCamera` into Isaac's persistent data directory at `/isaac-sim/.local/share/ov/data/quantis/captures`.
+
+`demo-record` resets and runs the complete sequence while synchronously recording both cameras at 640×480 and 8 FPS. It then encodes `presentation.mp4` and `wrist.mp4` on the EC2 host. Each timestamped directory also keeps the lossless PNG streams, `steps.jsonl` robot/plug state, and `manifest.json` under:
+
+```text
+/home/ubuntu/docker/isaac-sim/data/quantis/recordings/demo-<UTC timestamp>
+```
+
+The same directory is visible inside Isaac Sim at `/isaac-sim/.local/share/ov/data/quantis/recordings/demo-<UTC timestamp>`. This is on the persistent EBS-backed Isaac data mount, so recordings survive container and instance restarts.
 
 ## 5. Capture training data
 

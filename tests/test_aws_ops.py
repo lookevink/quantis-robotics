@@ -49,6 +49,9 @@ class AwsLifecycleTests(unittest.TestCase):
                 fake_command.write_text(
                     "#!/usr/bin/env bash\n"
                     "printf '%s %s\\n' \"$(basename \"$0\")\" \"$*\" >> \"${FAKE_AWS_LOG}\"\n"
+                    "if [[ \"$(basename \"$0\")\" == ssh && -n \"${FAKE_SSH_RESPONSE:-}\" ]]; then\n"
+                    "  printf '%s\\n' \"${FAKE_SSH_RESPONSE}\"\n"
+                    "fi\n"
                 )
                 fake_command.chmod(0o755)
             fake_curl = temp_path / "curl"
@@ -136,8 +139,29 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("127.0.0.1 8226", calls)
         self.assertIn("run_demo", calls)
 
+    def test_demo_run_propagates_python_server_errors(self):
+        result, _ = self.run_command(
+            "demo-run",
+            extra_env={
+                "FAKE_SSH_RESPONSE": '{"status":"error","evalue":"bad motion"}'
+            },
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("bad motion", result.stdout)
+
+    def test_demo_record_captures_then_encodes_the_same_recording(self):
+        result, calls = self.run_command("demo-record")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("record_demo", calls)
+        self.assertIn("ops/encode_demo_recording.sh", calls)
+        self.assertRegex(calls, r"demo-[0-9]{8}T[0-9]{6}Z")
+
     def test_remote_bootstrap_installs_python_server_client(self):
-        self.assertIn("netcat-openbsd", REMOTE_BOOTSTRAP.read_text())
+        bootstrap = REMOTE_BOOTSTRAP.read_text()
+        self.assertIn("netcat-openbsd", bootstrap)
+        self.assertIn("ffmpeg", bootstrap)
 
 
 if __name__ == "__main__":
