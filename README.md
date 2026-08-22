@@ -134,7 +134,13 @@ This is deliberately a deterministic coordinate/constraint demo. Plug collision 
 
 `demo-capture` renders 640×480 RGB verification frames from `/World/ShotCam` and the arm-mounted `/World/Franka_R/panda_hand/WristCamera` into Isaac's persistent data directory at `/isaac-sim/.local/share/ov/data/quantis/captures`.
 
-`demo-record` resets and runs the complete sequence while synchronously recording both cameras at 640×480 and 8 FPS. It then encodes `presentation.mp4` and `wrist.mp4` on the EC2 host. Each timestamped directory also keeps the lossless PNG streams, `steps.jsonl` robot/plug state, and `manifest.json` under:
+`demo-record` resets and runs the complete sequence while recording both cameras
+at 640×480 and 8 FPS. Long captures run as a simulator background job; the AWS
+wrapper polls its atomic result file and encodes only after successful completion,
+so an idle Python-server socket cannot strand the MP4 step. It then encodes
+`presentation.mp4` and `wrist.mp4` on the EC2 host. Each timestamped directory
+also keeps the lossless PNG streams, stage labels, `steps.jsonl` robot/plug state,
+and `manifest.json` under:
 
 ```text
 /home/ubuntu/docker/isaac-sim/data/quantis/recordings/demo-<UTC timestamp>
@@ -160,9 +166,10 @@ The smoke test moves a module proxy while Franka is visible; its synthetic actio
 
 ## 6. Load JEPA
 
-Recordings contain exactly 64 synchronized frames per camera (holding the final
-pose when the scripted motion produces fewer samples), matching the default
-observation window of the frozen V-JEPA 2 encoder. Embed the wrist point of view
+Stage recordings contain at least 64 real synchronized observations for each of
+`approaching_cable`, `cable_grasped`, `aligned_with_socket`, and `plug_seated`.
+The simulator holds each landmark and renders new frames until the count is met;
+it never copies PNGs to fill a window. Embed one whole-run wrist point of view
 from the latest recording with:
 
 ```bash
@@ -179,14 +186,39 @@ as `<camera>_vjepa2_embedding.npy`. The first AWS run downloads the Python and
 model dependencies; subsequent runs reuse the EBS-backed virtual environment and
 Hugging Face cache.
 
-The live AWS proof used recording `demo-20260822T194745Z`: 64 wrist frames became
+The first live AWS proof used recording `demo-20260822T194745Z`: 64 wrist frames became
 a normalized 1,024-dimensional `float32` embedding on CUDA at
 `/home/ubuntu/docker/isaac-sim/data/quantis/recordings/demo-20260822T194745Z/wrist_vjepa2_embedding.npy`.
-This wires the real arm POV into JEPA perception, but it does **not** yet drive
-Franka. The next slice labels goal/stage reference windows, scores the current
-embedding against them, and sends only a bounded high-level subgoal to Isaac's
-motion controller. See [`docs/control-loop.md`](docs/control-loop.md) for that
-interface and its safety boundary.
+### Stage similarity demo
+
+Build or reuse the four cached wrist-camera embeddings for a recording:
+
+```bash
+./ops/aws.sh jepa-stage-embed demo-<UTC timestamp> wrist
+```
+
+Evaluate a completely separate query run against a reference run:
+
+```bash
+./ops/aws.sh jepa-stage-report REFERENCE_RECORDING QUERY_RECORDING wrist
+```
+
+The report command creates missing embeddings, reuses unchanged `.npy` files on
+later runs, prints the cosine score for every stage pair, and persists
+`jepa/wrist/stage_report.json` beside the query recording. On AWS, reference
+`demo-20260822T214233Z` and held-out query `demo-20260822T215537Z` classified all
+four deterministic stages correctly. The minimum winning margin was `0.0083`,
+so this is a plumbing and nominal-separation result—not a robustness claim.
+
+`jepa.stage_gate.StageGate` implements the controller-side safety contract: it
+rejects stale observation IDs, pauses on unknown/unexpected/low-confidence
+predictions, and requires repeated confirmation before advancing.
+`python -m jepa.online_worker` is the separate JSONL prediction process; it keeps
+the encoder loaded and assigns a fresh monotonic ID to every 64-frame request.
+The worker-to-Isaac transport and live controller call site are intentionally not
+connected. A perturbed/misaligned evaluation must pass before enabling that
+connection. See [`docs/control-loop.md`](docs/control-loop.md) for the process
+boundary and remaining acceptance gates.
 
 ## Validation
 

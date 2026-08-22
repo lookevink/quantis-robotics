@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from jepa.contract import ObservationStage
 from sim.isaac_demo_scene import (
     PRESENTATION_CAMERA_PATH,
     WRIST_CAMERA_PATH,
@@ -16,6 +17,7 @@ from sim.recording import RecordingSnapshot, RecordingWriter
 
 
 RECORDING_ROOT = "/isaac-sim/.local/share/ov/data/quantis/recordings"
+RECORDING_JOB_ROOT = "/isaac-sim/.local/share/ov/data/quantis/recording_jobs"
 CAMERA_SPECS = (
     ("presentation", PRESENTATION_CAMERA_PATH),
     ("wrist", WRIST_CAMERA_PATH),
@@ -93,6 +95,9 @@ class DemoRecorder:
     def frame_count(self) -> int:
         return self._writer.frame_count
 
+    def stage_frame_count(self, stage: ObservationStage) -> int:
+        return self._writer.stage_frame_count(stage)
+
     @property
     def video_paths(self) -> dict[str, Path]:
         return {
@@ -122,7 +127,9 @@ class DemoRecorder:
             pixels = annotator.get_data()
             if pixels.size == 0:
                 raise RuntimeError(f"camera produced an empty frame: {label}")
-            Image.fromarray(pixels[:, :, :3]).save(frame_paths[label])
+            Image.fromarray(pixels[:, :, :3]).save(
+                frame_paths[label], compress_level=1
+            )
         self._writer.add_step(snapshot)
 
     def finish(self) -> Path:

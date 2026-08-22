@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from jepa.contract import ObservationStage
 from sim.demo_sequence import Phase
 from sim.recording import (
     RECORDING_SCHEMA,
@@ -47,9 +48,13 @@ class RecordingWriterTest(unittest.TestCase):
                 path.touch()
 
             self.assertEqual(writer.frame_count, 0)
+            self.assertEqual(
+                writer.stage_frame_count(ObservationStage.APPROACHING_CABLE), 0
+            )
             writer.add_step(
                 RecordingSnapshot(
                     phase=RecordingLabel(RecordingMoment.MOTION, Phase.READY),
+                    stage=ObservationStage.APPROACHING_CABLE,
                     arm_positions=[0.1, 0.2],
                     gripper_width_m=0.07,
                     plug_position=[-0.02, -0.25, 1.32],
@@ -57,6 +62,9 @@ class RecordingWriterTest(unittest.TestCase):
                 )
             )
             self.assertEqual(writer.frame_count, 1)
+            self.assertEqual(
+                writer.stage_frame_count(ObservationStage.APPROACHING_CABLE), 1
+            )
             output = writer.finish()
 
             manifest = json.loads((output / "manifest.json").read_text())
@@ -64,6 +72,9 @@ class RecordingWriterTest(unittest.TestCase):
             self.assertEqual(manifest["schema"], RECORDING_SCHEMA)
             self.assertEqual(manifest["fps"], 8)
             self.assertEqual(manifest["frames"], 1)
+            self.assertEqual(
+                manifest["stage_frames"], {"approaching_cable": 1}
+            )
             self.assertEqual(
                 manifest["videos"],
                 {
@@ -81,6 +92,7 @@ class RecordingWriterTest(unittest.TestCase):
                 },
             )
             self.assertEqual(step["phase"], "ready")
+            self.assertEqual(step["stage"], "approaching_cable")
             self.assertFalse(step["plug_attached"])
 
     def test_rejects_an_unsafe_recording_id(self) -> None:

@@ -234,7 +234,7 @@ demo_python() {
   local expression="$1"
   local timeout_seconds="${2:-60}"
   sync_repo
-  isaac_python "import sys,json,importlib; sys.path.insert(0,'/workspace') if '/workspace' not in sys.path else None; importlib.invalidate_caches(); import sim.recording as recording, sim.isaac_demo_scene as scene, sim.isaac_demo_camera as camera, sim.isaac_demo_kinematics as kinematics, sim.isaac_demo as demo; importlib.reload(recording); importlib.reload(scene); importlib.reload(camera); importlib.reload(kinematics); importlib.reload(demo); print(json.dumps(${expression},indent=2))" "${timeout_seconds}"
+  isaac_python "import sys,json,importlib; sys.path.insert(0,'/workspace') if '/workspace' not in sys.path else None; importlib.invalidate_caches(); import jepa.contract as contract; importlib.reload(contract); import sim.recording as recording; importlib.reload(recording); import sim.recording_jobs as recording_jobs, sim.isaac_demo_scene as scene, sim.isaac_demo_camera as camera, sim.isaac_demo_kinematics as kinematics, sim.isaac_demo as demo; importlib.reload(recording_jobs); importlib.reload(scene); importlib.reload(camera); importlib.reload(kinematics); importlib.reload(demo); print(json.dumps(${expression},indent=2))" "${timeout_seconds}"
 }
 
 command="${1:-help}"
@@ -251,6 +251,8 @@ Commands:
   isaac-start | isaac-stop | isaac-status | isaac-logs
   demo-reset | demo-preflight | demo-run | demo-capture | demo-record
   capture-smoke | jepa-embed [source-name] [camera]
+  jepa-stage-embed [recording-name] [camera]
+  jepa-stage-report REFERENCE QUERY [camera]
 EOF
   exit 0
 fi
@@ -318,7 +320,8 @@ case "${command}" in
     ;;
   demo-record)
     recording_id="demo-$(date -u +%Y%m%dT%H%M%SZ)"
-    demo_python "await demo.record_demo('${recording_id}')" 900
+    demo_python "demo.start_recording('${recording_id}')"
+    remote "bash ~/quantis-robotics/ops/wait_demo_recording.sh '${recording_id}'"
     remote "bash ~/quantis-robotics/ops/encode_demo_recording.sh '${recording_id}'"
     ;;
   capture-smoke)
@@ -331,6 +334,24 @@ case "${command}" in
     is_safe_identifier "${camera_name}" || die "invalid JEPA camera name"
     sync_repo
     remote "bash ~/quantis-robotics/ops/jepa_embed.sh '${source_name}' '${camera_name}'"
+    ;;
+  jepa-stage-embed)
+    recording_name="${2:-latest}"
+    camera_name="${3:-wrist}"
+    is_safe_identifier "${recording_name}" || die "invalid recording name"
+    is_safe_identifier "${camera_name}" || die "invalid JEPA camera name"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_stages.sh embed '${recording_name}' '${camera_name}'"
+    ;;
+  jepa-stage-report)
+    reference_name="${2:-}"
+    query_name="${3:-}"
+    camera_name="${4:-wrist}"
+    is_safe_identifier "${reference_name}" || die "invalid reference recording name"
+    is_safe_identifier "${query_name}" || die "invalid query recording name"
+    is_safe_identifier "${camera_name}" || die "invalid JEPA camera name"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_stages.sh report '${reference_name}' '${query_name}' '${camera_name}'"
     ;;
   *)
     die "unknown command: ${command} (run $0 help)"

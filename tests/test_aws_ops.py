@@ -138,6 +138,7 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("rsync ", calls)
         self.assertIn("127.0.0.1 8226", calls)
+        self.assertIn("jepa.contract", calls)
         self.assertIn("run_demo", calls)
 
     def test_demo_run_propagates_python_server_errors(self):
@@ -155,7 +156,8 @@ class AwsLifecycleTests(unittest.TestCase):
         result, calls = self.run_command("demo-record")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("record_demo", calls)
+        self.assertIn("start_recording", calls)
+        self.assertIn("ops/wait_demo_recording.sh", calls)
         self.assertIn("ops/encode_demo_recording.sh", calls)
         self.assertRegex(calls, r"demo-[0-9]{8}T[0-9]{6}Z")
 
@@ -168,6 +170,30 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(
             "ops/jepa_embed.sh 'demo-20260822T040027Z' 'wrist'",
+            calls,
+        )
+
+    def test_jepa_stage_embed_forwards_recording_and_camera(self):
+        result, calls = self.run_command(
+            "jepa-stage-embed",
+            arguments=("demo-reference", "wrist"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "ops/jepa_stages.sh embed 'demo-reference' 'wrist'",
+            calls,
+        )
+
+    def test_jepa_stage_report_forwards_reference_query_and_camera(self):
+        result, calls = self.run_command(
+            "jepa-stage-report",
+            arguments=("demo-reference", "demo-held-out", "wrist"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "ops/jepa_stages.sh report 'demo-reference' 'demo-held-out' 'wrist'",
             calls,
         )
 

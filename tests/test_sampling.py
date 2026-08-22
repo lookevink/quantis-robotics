@@ -10,10 +10,10 @@ from pathlib import Path
 
 from jepa.embed_episode import (
     DEFAULT_FRAMES,
-    ObservationSource,
     pool_features,
     sample_paths,
 )
+from jepa.observation_source import ObservationSource
 
 try:
     import torch
@@ -52,10 +52,11 @@ class SamplePathsTest(unittest.TestCase):
 
 class ObservationFramesTest(unittest.TestCase):
     def test_script_entrypoint_resolves_repository_package(self) -> None:
-        script = Path(__file__).parents[1] / "jepa" / "embed_episode.py"
+        repo_root = Path(__file__).parents[1]
 
         result = subprocess.run(
-            [sys.executable, str(script), "--help"],
+            [sys.executable, "-m", "jepa.embed_episode", "--help"],
+            cwd=repo_root,
             capture_output=True,
             text=True,
             check=False,
@@ -131,11 +132,14 @@ class JepaShellTest(unittest.TestCase):
             (remote_repo / "ops" / "shell_helpers.sh").symlink_to(
                 repo_root / "ops" / "shell_helpers.sh"
             )
+            (remote_repo / "ops" / "jepa_common.sh").symlink_to(
+                repo_root / "ops" / "jepa_common.sh"
+            )
             fake_python = home / ".venvs" / "quantis-jepa" / "bin" / "python"
             fake_python.parent.mkdir(parents=True)
             fake_python.write_text(
                 "#!/usr/bin/env bash\n"
-                "if [[ \"${1:-}\" == '-m' ]]; then exit 0; fi\n"
+                "if [[ \"${1:-}\" == '-m' && \"${2:-}\" == 'pip' ]]; then exit 0; fi\n"
                 "printf '%s\\n' \"$*\"\n"
             )
             fake_python.chmod(0o755)

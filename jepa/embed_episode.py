@@ -3,61 +3,20 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import json
 from pathlib import Path
-import sys
 from typing import TYPE_CHECKING
 
 import numpy as np
 
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 from jepa.contract import DEFAULT_FRAMES
+from jepa.observation_source import ObservationSource
 
 if TYPE_CHECKING:
     import torch
 
 
 DEFAULT_MODEL = "facebook/vjepa2-vitl-fpc64-256"
-
-
-@dataclass(frozen=True)
-class ObservationSource:
-    """A demo recording or legacy capture episode and its frame layout."""
-
-    path: Path
-    cameras: tuple[str, ...] | None
-
-    @classmethod
-    def open(cls, path: Path) -> ObservationSource:
-        manifest_path = path / "manifest.json"
-        if not manifest_path.is_file():
-            return cls(path, None)
-
-        manifest = json.loads(manifest_path.read_text())
-        cameras = manifest.get("cameras", [])
-        if not isinstance(cameras, list) or not all(
-            isinstance(camera, str) for camera in cameras
-        ):
-            raise ValueError("recording manifest cameras must be a list of names")
-        return cls(path, tuple(cameras))
-
-    def frame_paths(self, camera: str = "wrist") -> list[Path]:
-        if self.cameras is not None:
-            if camera not in self.cameras:
-                raise ValueError(
-                    f"recording has no {camera!r} camera; "
-                    f"available cameras: {list(self.cameras)}"
-                )
-            return sorted((self.path / camera).glob("frame_*.png"))
-        return sorted((self.path / "rgb").rglob("*.png"))
-
-    def default_embedding_path(self, camera: str) -> Path:
-        if self.cameras is not None:
-            return self.path / f"{camera}_vjepa2_embedding.npy"
-        return self.path / "vjepa2_embedding.npy"
 
 
 def sample_paths(paths: list[Path], frames: int) -> list[Path]:
@@ -114,10 +73,15 @@ class Encoder:
         camera: str = "wrist",
         frame_count: int = DEFAULT_FRAMES,
     ) -> np.ndarray:
+        frame_paths = sample_paths(source.frame_paths(camera), frame_count)
+        return self.embed_paths(frame_paths)
+
+    def embed_paths(self, frame_paths: list[Path]) -> np.ndarray:
+        """Embed one already-selected ordered observation window."""
+
         import torch
         from PIL import Image
 
-        frame_paths = sample_paths(source.frame_paths(camera), frame_count)
         images = [Image.open(path).convert("RGB") for path in frame_paths]
         video = torch.stack(
             [

@@ -4,6 +4,8 @@ set -euo pipefail
 repo_dir="${HOME}/quantis-robotics"
 # shellcheck source=ops/shell_helpers.sh
 source "${repo_dir}/ops/shell_helpers.sh"
+# shellcheck source=ops/jepa_common.sh
+source "${repo_dir}/ops/jepa_common.sh"
 venv_dir="${HOME}/.venvs/quantis-jepa"
 source_name="${1:-latest}"
 camera_name="${2:-wrist}"
@@ -19,12 +21,7 @@ is_safe_identifier "${camera_name}" || {
   exit 1
 }
 
-if [[ ! -x "${venv_dir}/bin/python" ]]; then
-  python3 -m venv --system-site-packages "${venv_dir}"
-fi
-
-"${venv_dir}/bin/python" -m pip install --disable-pip-version-check \
-  -r "${repo_dir}/jepa/requirements.txt"
+ensure_jepa_environment "${repo_dir}" "${venv_dir}"
 
 if [[ "${source_name}" == "latest" ]]; then
   source_dir=""
@@ -51,5 +48,6 @@ if [[ "${source_dir}" == "${recordings_dir}/"* ]]; then
   sudo chown -R "${USER}:${USER}" "${source_dir}"
 fi
 
-exec "${venv_dir}/bin/python" "${repo_dir}/jepa/embed_episode.py" \
+cd "${repo_dir}"
+exec "${venv_dir}/bin/python" -m jepa.embed_episode \
   "${source_dir}" --camera "${camera_name}"

@@ -9,11 +9,19 @@ from enum import Enum
 from pathlib import Path
 from typing import Sequence
 
+from jepa.contract import ObservationStage
 from sim.demo_sequence import Phase
 
 
 RECORDING_SCHEMA = "quantis.demo_recording.v1"
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def validate_recording_id(recording_id: str) -> None:
+    if not _SAFE_NAME.fullmatch(recording_id):
+        raise ValueError(
+            "recording_id must contain only letters, numbers, dot, dash, or underscore"
+        )
 
 
 class RecordingMoment(str, Enum):
@@ -49,6 +57,7 @@ class RecordingLabel:
 @dataclass(frozen=True)
 class RecordingSnapshot:
     phase: RecordingLabel
+    stage: ObservationStage
     arm_positions: Sequence[float]
     gripper_width_m: float
     plug_position: Sequence[float]
@@ -60,6 +69,7 @@ class RecordingStep:
     index: int
     timestamp_seconds: float
     phase: str
+    stage: str
     frames: dict[str, str]
     arm_positions: list[float]
     gripper_width_m: float
@@ -78,10 +88,7 @@ class RecordingWriter:
         fps: int,
         cameras: Sequence[str],
     ) -> None:
-        if not _SAFE_NAME.fullmatch(recording_id):
-            raise ValueError(
-                "recording_id must contain only letters, numbers, dot, dash, or underscore"
-            )
+        validate_recording_id(recording_id)
         if fps <= 0:
             raise ValueError("fps must be positive")
         if not cameras or len(set(cameras)) != len(cameras):
@@ -97,10 +104,14 @@ class RecordingWriter:
         for camera in self.cameras:
             (self.output_dir / camera).mkdir()
         self._steps: list[RecordingStep] = []
+        self._stage_frame_counts = {stage: 0 for stage in ObservationStage}
 
     @property
     def frame_count(self) -> int:
         return len(self._steps)
+
+    def stage_frame_count(self, stage: ObservationStage) -> int:
+        return self._stage_frame_counts[stage]
 
     def frame_paths(self) -> dict[str, Path]:
         index = len(self._steps)
@@ -120,6 +131,7 @@ class RecordingWriter:
                 index=index,
                 timestamp_seconds=index / self.fps,
                 phase=snapshot.phase.value,
+                stage=snapshot.stage.value,
                 frames={
                     camera: path.relative_to(self.output_dir).as_posix()
                     for camera, path in frames.items()
@@ -130,6 +142,7 @@ class RecordingWriter:
                 plug_attached=bool(snapshot.plug_attached),
             )
         )
+        self._stage_frame_counts[snapshot.stage] += 1
 
     def finish(self) -> Path:
         if not self._steps:
@@ -140,11 +153,18 @@ class RecordingWriter:
                 output.write(json.dumps(asdict(step), separators=(",", ":")))
                 output.write("\n")
 
+        stage_frames = {
+            stage.value: count
+            for stage, count in self._stage_frame_counts.items()
+            if count
+        }
+
         manifest = {
             "schema": RECORDING_SCHEMA,
             "recording_id": self.recording_id,
             "fps": self.fps,
             "frames": len(self._steps),
+            "stage_frames": stage_frames,
             "cameras": list(self.cameras),
             "videos": {camera: f"{camera}.mp4" for camera in self.cameras},
         }

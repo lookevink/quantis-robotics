@@ -10,13 +10,19 @@ robot state, and stores the embedding beside the persistent recording. The live
 CUDA proof produced a 1,024-dimensional wrist-camera vector from
 `demo-20260822T194745Z`.
 
-The control worker below is the next milestone. It will use that vector to select
-a stage and measure progress toward prerecorded goal-image windows:
+The offline stage pipeline now uses that vector to select a stage and measure
+progress toward prerecorded goal-image windows:
 
 1. `approach cable`
 2. `grasped cable`
 3. `aligned with socket`
 4. `plug seated`
+
+Two complete deterministic AWS runs produced 4/4 correct held-out wrist-camera
+stage predictions. Their winning cosine margins ranged from `0.0083` to `0.0341`.
+The result proves nominal separation and caching, but the small margins do not
+justify online advancement until camera/geometry perturbations and failure cases
+are evaluated.
 
 The intended resulting stage/subgoal is executed by Isaac Sim's motion generation controller as an online visual feedback loop, not open-loop playback.
 
@@ -65,11 +71,19 @@ The first interface should return a discrete subgoal and confidence:
 ```json
 {
   "observation_id": 1234,
-  "subgoal": "module_extracted",
-  "confidence": 0.87,
-  "goal_similarity": 0.74
+  "stage": "cable_grasped",
+  "similarity": 0.99,
+  "margin": 0.02
 }
 ```
+
+The implemented `StageGate` consumes this contract, rejects stale IDs, pauses on
+unknown or unexpected stages, and requires consecutive confident observations.
+The standalone `jepa.online_worker` process consumes JSONL requests containing
+64 ordered frame paths, keeps V-JEPA loaded, and emits this response with a fresh
+monotonic observation ID. The worker-to-Isaac transport and controller call site
+remain deliberately unwired until perturbed evaluation establishes usable
+thresholds.
 
 Later, the action-conditioned interface can return a bounded 7D command:
 
@@ -87,12 +101,14 @@ Later, the action-conditioned interface can return a bounded 7D command:
 
 ## Dataset contract
 
-Each episode contains:
+Each stage recording contains:
 
 - ordered RGB frames at a fixed capture rate;
 - one 7D action per transition;
 - joint/end-effector state sampled at the same point;
 - task and camera metadata;
+- one observable-stage label per synchronized step;
+- at least 64 newly rendered observations for each stage;
 - success/failure outcome.
 
 WebRTC is only for viewing. Capture directly from Replicator and the controller because WebRTC compression and network latency break action/frame alignment.
@@ -100,13 +116,15 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
 ## Milestones
 
 1. [x] Capture smoke test succeeds on AWS EC2.
-2. [x] Scripted Franka success run produces 64 synchronized wrist and
-   presentation-camera observations with robot state.
+2. [x] Scripted Franka success runs produce at least 64 synchronized wrist and
+   presentation-camera observations per observable stage with robot state.
 3. [x] Frozen V-JEPA encodes a real wrist-camera run on the AWS GPU and persists
    its normalized latent vector.
-4. [ ] Record goal windows and failed/perturbed runs for the four task stages.
-5. [ ] Train and validate a stage/progress head over frozen V-JEPA embeddings.
-6. [ ] Close stage predictions around Isaac's bounded motion controller.
-7. [ ] Evaluate V-JEPA 2-AC offline against held-out simulated trajectories.
-8. [ ] Only then allow the action-conditioned planner to propose bounded
+4. [x] Cache four stage windows and classify a separate deterministic run with
+   frozen V-JEPA cosine centroids.
+5. [x] Implement the stale/unknown/confidence/consecutive-confirmation gate.
+6. [ ] Record failed and camera/geometry-perturbed runs and calibrate thresholds.
+7. [ ] Close validated stage predictions around Isaac's bounded motion controller.
+8. [ ] Evaluate V-JEPA 2-AC offline against held-out simulated trajectories.
+9. [ ] Only then allow the action-conditioned planner to propose bounded
    simulated actions.

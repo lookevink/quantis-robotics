@@ -8,9 +8,14 @@ from typing import Any
 
 import numpy as np
 
-from jepa.contract import DEFAULT_FRAMES
+from jepa.contract import DEFAULT_FRAMES, ObservationStage
 from sim.demo_sequence import Phase, PlugAction
-from sim.isaac_demo_camera import DemoRecorder, capture_cameras, configure_wrist_camera
+from sim.isaac_demo_camera import (
+    RECORDING_JOB_ROOT,
+    DemoRecorder,
+    capture_cameras,
+    configure_wrist_camera,
+)
 from sim.isaac_demo_kinematics import preflight_report, solve_waypoints
 from sim.isaac_demo_scene import (
     PLUG_PATH,
@@ -19,7 +24,15 @@ from sim.isaac_demo_scene import (
     STAGE_PATH,
     world_pose,
 )
-from sim.recording import RecordingLabel, RecordingMoment, RecordingSnapshot
+from sim.recording import (
+    RecordingLabel,
+    RecordingMoment,
+    RecordingSnapshot,
+)
+from sim.recording_jobs import RecordingJobManager
+
+
+_RECORDING_JOBS = RecordingJobManager(RECORDING_JOB_ROOT)
 
 
 @dataclass(frozen=True)
@@ -162,11 +175,13 @@ def _smoothstep(progress: float) -> float:
 
 def _recording_snapshot(
     phase: RecordingLabel,
+    stage: ObservationStage,
     command: JointCommand,
     attachment: PlugAttachment,
 ) -> RecordingSnapshot:
     return RecordingSnapshot(
         phase=phase,
+        stage=stage,
         arm_positions=command.arm_positions,
         gripper_width_m=command.gripper_width_m,
         plug_position=world_pose(attachment.prim)[0],
@@ -182,6 +197,7 @@ async def _move_targets(
     attachment: PlugAttachment,
     *,
     phase: RecordingLabel,
+    stage: ObservationStage,
     recorder: DemoRecorder | None,
 ) -> None:
     import omni.kit.app
@@ -204,7 +220,9 @@ async def _move_targets(
         await app.next_update_async()
         attachment.follow(world_pose(hand)[0])
         if recorder is not None:
-            await recorder.capture(_recording_snapshot(phase, command, attachment))
+            await recorder.capture(
+                _recording_snapshot(phase, stage, command, attachment)
+            )
 
 
 async def _settle_at_target(
@@ -213,6 +231,7 @@ async def _settle_at_target(
     command: JointCommand,
     *,
     phase: RecordingLabel,
+    stage: ObservationStage,
     recorder: DemoRecorder | None,
     max_updates: int = 4,
     tolerance_m: float = 0.012,
@@ -229,10 +248,22 @@ async def _settle_at_target(
         error = float(np.linalg.norm(hand_position - target_hand_position))
         attachment.follow(hand_position)
         if recorder is not None:
-            await recorder.capture(_recording_snapshot(phase, command, attachment))
+            await recorder.capture(
+                _recording_snapshot(phase, stage, command, attachment)
+            )
         if error <= tolerance_m:
             return error
     return error
+
+
+async def _fill_stage_observations(
+    recorder: DemoRecorder | None,
+    snapshot: RecordingSnapshot,
+) -> None:
+    if recorder is None:
+        return
+    while recorder.stage_frame_count(snapshot.stage) < DEFAULT_FRAMES:
+        await recorder.capture(snapshot)
 
 
 async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
@@ -254,6 +285,7 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
         SimulationManager.initialize_physics()
     actuators = _create_actuators(stage, Articulation(ROBOT_PATH))
     current = actuators.current_command()
+    observation_stage = ObservationStage.APPROACHING_CABLE
 
     timeline = omni.timeline.get_timeline_interface()
     timeline.play()
@@ -264,7 +296,10 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
         if recorder is not None:
             await recorder.capture(
                 _recording_snapshot(
-                    RecordingLabel(RecordingMoment.INITIAL), current, attachment
+                    RecordingLabel(RecordingMoment.INITIAL),
+                    observation_stage,
+                    current,
+                    attachment,
                 )
             )
         for result in solved:
@@ -286,6 +321,7 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
                 duration,
                 attachment,
                 phase=RecordingLabel(RecordingMoment.MOTION, waypoint.phase),
+                stage=observation_stage,
                 recorder=recorder,
             )
             current = target
@@ -295,12 +331,55 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
                 attachment,
                 current,
                 phase=RecordingLabel(RecordingMoment.SETTLE, waypoint.phase),
+                stage=observation_stage,
                 recorder=recorder,
             )
             if settle_error > 0.012:
                 raise RuntimeError(
                     f"arm failed to settle at {waypoint.phase.value}: "
                     f"{settle_error:.4f} m hand error"
+                )
+
+            if waypoint.phase == Phase.GRASP:
+                await _fill_stage_observations(
+                    recorder,
+                    _recording_snapshot(
+                        RecordingLabel(RecordingMoment.SETTLE, Phase.GRASP),
+                        observation_stage,
+                        current,
+                        attachment,
+                    ),
+                )
+            elif waypoint.phase == Phase.PRE_INSERTION:
+                await _fill_stage_observations(
+                    recorder,
+                    _recording_snapshot(
+                        RecordingLabel(RecordingMoment.SETTLE, Phase.PRE_INSERTION),
+                        observation_stage,
+                        current,
+                        attachment,
+                    ),
+                )
+                observation_stage = ObservationStage.ALIGNED_WITH_SOCKET
+                await _fill_stage_observations(
+                    recorder,
+                    _recording_snapshot(
+                        RecordingLabel(RecordingMoment.SETTLE, Phase.PRE_INSERTION),
+                        observation_stage,
+                        current,
+                        attachment,
+                    ),
+                )
+            elif waypoint.phase == Phase.INSERT:
+                observation_stage = ObservationStage.PLUG_SEATED
+                await _fill_stage_observations(
+                    recorder,
+                    _recording_snapshot(
+                        RecordingLabel(RecordingMoment.SETTLE, Phase.INSERT),
+                        observation_stage,
+                        current,
+                        attachment,
+                    ),
                 )
 
             if waypoint.plug_action == PlugAction.ATTACH:
@@ -312,15 +391,18 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
                     0.6,
                     attachment,
                     phase=RecordingLabel(RecordingMoment.CLOSE, Phase.GRASP),
+                    stage=observation_stage,
                     recorder=recorder,
                 )
                 current = closed
                 hand = stage.GetPrimAtPath(f"{ROBOT_PATH}/panda_hand")
                 attachment.attach(world_pose(hand)[0])
+                observation_stage = ObservationStage.CABLE_GRASPED
                 if recorder is not None:
                     await recorder.capture(
                         _recording_snapshot(
                             RecordingLabel(RecordingMoment.ATTACHED, Phase.GRASP),
+                            observation_stage,
                             current,
                             attachment,
                         )
@@ -332,6 +414,7 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
                     await recorder.capture(
                         _recording_snapshot(
                             RecordingLabel(RecordingMoment.COMPLETE, Phase.RELEASE),
+                            observation_stage,
                             current,
                             attachment,
                         )
@@ -346,15 +429,6 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
                     "settle_error_m": settle_error,
                 }
             )
-        if recorder is not None:
-            while recorder.frame_count < DEFAULT_FRAMES:
-                await recorder.capture(
-                    _recording_snapshot(
-                        RecordingLabel(RecordingMoment.COMPLETE, Phase.RELEASE),
-                        current,
-                        attachment,
-                    )
-                )
         completed = True
     finally:
         if completed:
@@ -392,3 +466,9 @@ async def record_demo(recording_id: str) -> dict[str, Any]:
             camera: str(path) for camera, path in recorder.video_paths.items()
         },
     }
+
+
+def start_recording(recording_id: str) -> dict[str, Any]:
+    """Start a long recording without holding the Python server connection."""
+
+    return _RECORDING_JOBS.start(recording_id, record_demo)
