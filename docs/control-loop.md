@@ -56,20 +56,36 @@ one-frame/three-action rollout. The released model failed on both camera views.
 
 A lightweight adapter can now calibrate only the action encoder's weight matrix
 while the DINOv3 encoder, predictor, and zero-action bias remain frozen. It is
-small enough to train beside Isaac on the L4 and persists on EBS. On held-out
-`trajectory-20260823T041000Z`, the base wrist model scored a 10% recorded-action
-win rate and `-0.002089` mean improvement over zero; the adapter improved this
-to 50% and `+0.000173`. The required held-out win rate is 75%, so the
-worker-to-controller boundary remains unwired. Collect diverse action-rich
-Isaac trajectories and adapt the action-conditioned predictor before
-implementing CEM or sending any sampled action to the articulation.
+small enough to train beside Isaac on the L4 and persists on EBS. The first
+nominal held-out run improved from a 10% base-model win rate to 50% after
+adaptation, which was still below the gate. The later whole-seed domain
+experiment described below reaches 97.5% across two unseen seeds. The
+worker-to-controller boundary nevertheless remains unwired until candidate
+search and safety checks are validated in simulation.
 
-### Reproducible adaptation proof
+### Reproducible domain adaptation proof
 
-The current adapter was trained from
-`trajectory-20260823T034710Z` with 30 native rollouts, 100 optimizer steps,
-batch size 2, learning rate `1e-3`, seed 234, contrastive weight 1.0, and margin
-`1e-3`. Only the action encoder weight matrix was trainable: 7,168 parameters.
+Run the complete capture, split, adaptation, evaluation, aggregation, and
+backup workflow with:
+
+```bash
+./ops/aws.sh jepa-wm-milestone 4 2 500 1400
+```
+
+The command records four training seeds (`1400`–`1403`) and two complete
+held-out seeds (`11400`, `11401`). Each recording has 69 synchronized 512x512
+wrist frames: 17 segments centered on a seeded offset from the IK-verified ready
+pose, two excitations per arm joint, alternating gripper targets, explicit
+stationary/failed-grasp/recovery outcomes, and seeded wrist-camera, plug/socket,
+receptacle-scale, and lighting variants. Actual simulation timestamps verify an
+exact 0.25-second interval between every sample. No trajectory contributes
+frames to both sides of the split.
+
+Experiment `domain-20260823T113209Z-1400` fitted only the 7,168 action-encoder
+weights for 500 optimizer steps over 264 native one-frame/three-action
+rollouts. Batch size was 2, learning rate `1e-3`, optimization seed 234,
+contrastive weight 1.0, and margin `1e-3`. It took 338 seconds to train and
+peaked at 7.772 GiB allocated by the JEPA process while Isaac remained running.
 Its checkpoint and JSON training report are stored together at:
 
 ```text
@@ -77,25 +93,32 @@ Its checkpoint and JSON training report are stored together at:
 /home/ubuntu/docker/jepa-wm/checkpoints/quantis_isaac_wrist_action_adapter.pth.json
 ```
 
-`trajectory-20260823T041000Z` was captured afterward and never used for
-optimization. Its base and adapted reports are under that recording's
-`jepa_wm/` directory. Both the live artifacts and a recovery copy are preserved
-by `./ops/aws.sh backup-state`; see the persistence inventory in the README.
+Forty rollouts from each held-out seed were scored. Seed `11400` passed at 97.5%
+wins and `+0.0010193158` mean improvement over zero; seed `11401` also passed at
+97.5% and `+0.0010888389`. The aggregate was 78/80 wins (`97.5%`) and
+`+0.0010540774`, so both individual and aggregate gates passed. The persisted
+summary is:
 
-### Next domain-data milestone
+```text
+/home/ubuntu/docker/jepa-wm/checkpoints/experiments/domain-20260823T113209Z-1400.json
+```
 
-1. Generate bounded exploratory Franka trajectories that excite translation,
-   rotation, and gripper dimensions instead of repeating only the nominal cable
-   sequence.
-2. Vary camera pose, lighting, rack/module geometry, initial arm pose, and task
-   outcomes; include stationary, failed, and recovery segments.
-3. Split whole scene/geometry seeds between training and validation so adjacent
-   frames from one deterministic run never cross the boundary.
-4. Re-evaluate the 7,168-parameter adapter first. If it remains below the gate,
-   adapt the predictor's action-conditioning blocks while keeping DINOv3 frozen.
-5. Require positive mean improvement and at least a 75% held-out
-   recorded-action win rate. Only then implement candidate-action search and
-   connect its bounded first action to the simulator controller.
+Both the live artifacts and a checksum-verified recovery copy are preserved by
+`./ops/aws.sh backup-state`; see the persistence inventory in the README.
+
+### Next control milestone
+
+1. Add bounded candidate generation and CEM refinement over the JEPA-WM
+   three-action horizon.
+2. Score candidates against explicit subgoal latents and verify that the
+   selected first action improves a held-out simulated scene more often than
+   zero, random, and scripted baselines.
+3. Reject stale observations and enforce workspace, velocity, joint, collision,
+   and force limits before an action reaches the articulation.
+4. Apply only the first bounded action, observe again, and replan. Pause on low
+   confidence or contradictory stage/goal evidence.
+5. Add stationary, failed-contact, recovery, and broader geometry variants
+   before treating the offline gate as evidence beyond this narrow Isaac domain.
 
 ## Recommended process boundary
 
@@ -179,7 +202,8 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
    simulated trajectory; the first recorded-action-versus-zero gate failed.
 9. [x] Match the native DROID base-frame and one-frame/three-action contract,
    and validate a persistent frozen-backbone action adapter on a held-out run.
-10. [ ] Collect varied Isaac dynamics data and reach at least a 75% held-out
+10. [x] Collect varied Isaac dynamics data and reach at least a 75% held-out
     recorded-action win rate with positive mean improvement over zero.
-11. [ ] Only then allow the action-conditioned planner to propose bounded
-   simulated actions.
+11. [ ] Allow the action-conditioned planner to propose bounded candidate
+   actions, validate them against baselines, and execute only through the
+   simulator safety gate.

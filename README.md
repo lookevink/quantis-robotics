@@ -36,10 +36,10 @@ planner → safety gate → Isaac motion controller (next milestone)
 
 The bootstrap proves the simulation, capture, stage-recognition, and base
 JEPA-WM runtimes. The separate offline workflow additionally proves native
-three-action rollouts and persistent lightweight action adaptation. It does not
-yet let JEPA command the arm. The held-out action gate still fails, so the next
-milestone is to collect diverse Isaac trajectories and adapt the
-action-conditioned predictor before candidate-action planning is enabled.
+three-action rollouts and persistent lightweight action adaptation. A
+whole-seed domain experiment now clears the offline held-out action gate. It
+still does not let JEPA command the arm: the next milestone is bounded
+candidate-action search and simulated closed-loop validation.
 
 ## 1. AWS EC2 instance
 
@@ -157,8 +157,8 @@ an unmounted asset-volume directory from being mistaken for a recovery copy on
 the deletable root disk.
 
 `LAST_BACKUP_UTC` records the most recent verified copy time. The snapshot
-verified at `2026-08-23T04:42:24Z` is 8,189,717,453 bytes and includes the
-reusable/result stages, all 15 synchronized recording directories,
+verified at `2026-08-23T12:08:44Z` is 8,785,968,897 bytes and includes the
+reusable/result stages, all 43 synchronized recording directories,
 base/adapted evaluation reports, DINOv3 and JEPA-WM checkpoints, and the Isaac
 action adapter. Source code is preserved separately in this Git repository.
 Bootstrap does not restore this backup automatically; after replacing or
@@ -356,30 +356,61 @@ persists the overlay on the EBS-backed model volume:
 ./ops/aws.sh jepa-wm-eval-adapted trajectory-<held-out timestamp> wrist 0 20 1
 ```
 
-The adapter improved the same held-out run to a positive `0.000173` mean and a
-50% win rate while preserving the base model's zero-action prediction. This is
-a real repeatable signal, but it is below the 75% held-out acceptance gate. The
-exact run used training recording `trajectory-20260823T034710Z`, 100 optimizer
-steps, batch size 2, learning rate `1e-3`, seed 234, and 30 native rollouts. The
-adapter and training report remain available at:
+The first adapter improved the same held-out run to a positive `0.000173` mean
+and a 50% win rate while preserving the base model's zero-action prediction.
+That diagnostic remained below the 75% acceptance gate. The original run used
+training recording `trajectory-20260823T034710Z`, 100 optimizer steps, batch
+size 2, learning rate `1e-3`, seed 234, and 30 native rollouts.
+
+### Reproduce the domain-data milestone
+
+The milestone command records deterministic, bounded wrist-camera exploration
+data, splits complete seeds between training and evaluation, fits one adapter
+over all training recordings, evaluates each unseen seed, aggregates the real
+per-rollout outcomes, and refreshes the recovery-volume backup:
+
+```bash
+./ops/aws.sh jepa-wm-milestone 4 2 500 1400
+```
+
+Each seed produces 69 synchronized 512x512 wrist frames centered on a seeded
+offset from the IK-verified ready pose. Its 17 segments excite every Franka arm
+joint twice and include stationary, failed-grasp, and recovery outcomes. The
+capture varies the wrist-camera offset, plug/socket offset, receptacle scale,
+and light exposure. Each adjacent sample is verified against actual simulation
+time at exactly 0.25 seconds. Seeds `1400` through `1403` are training-only;
+seeds `11400` and `11401` are held out as complete runs. This prevents adjacent
+frames from one trajectory leaking across the split.
+
+Experiment `domain-20260823T113209Z-1400` trained the 7,168-parameter action
+adapter on 264 native three-action rollouts for 500 steps. On 80 unseen
+rollouts, recorded actions beat zero actions 78 times (`97.5%`) with positive
+mean energy improvement (`+0.0010540774`). Both held-out seeds passed
+individually: seed `11400` scored `97.5%` and `+0.0010193158`; seed `11401`
+scored `97.5%` and `+0.0010888389`. This clears the repository's offline gate
+of positive mean improvement and at least 75% wins.
+
+The current adapter and training report are available at:
 
 ```text
 /home/ubuntu/docker/jepa-wm/checkpoints/quantis_isaac_wrist_action_adapter.pth
 /home/ubuntu/docker/jepa-wm/checkpoints/quantis_isaac_wrist_action_adapter.pth.json
 ```
 
-The untouched held-out recording and its reports are:
+The aggregate experiment report and held-out evidence are available at:
 
 ```text
-/home/ubuntu/docker/isaac-sim/data/quantis/recordings/trajectory-20260823T041000Z
-  jepa_wm/wrist_rollout_eval_000000_020.json
-  jepa_wm/wrist_adapted_rollout_eval_000000_020.json
+/home/ubuntu/docker/jepa-wm/checkpoints/experiments/domain-20260823T113209Z-1400.json
+/home/ubuntu/docker/isaac-sim/data/quantis/recordings/domain-20260823T113209Z-1400-held-00/jepa_wm/wrist_adapted_rollout_eval_000000_040.json
+/home/ubuntu/docker/isaac-sim/data/quantis/recordings/domain-20260823T113209Z-1400-held-01/jepa_wm/wrist_adapted_rollout_eval_000000_040.json
 ```
 
-The adapter is not connected to the arm. The next model milestone is
-action-rich, camera/geometry-diverse Isaac data followed by broader
-action-conditioned predictor adaptation. Only after that held-out gate passes
-should CEM candidate selection or controller wiring begin.
+The adapter is not connected to the arm. Passing this offline comparison says
+the model distinguishes the recorded domain actions from doing nothing; it
+does not show that the model can choose a novel action or recover from contact
+errors. The next milestone is bounded CEM candidate selection in simulation,
+with workspace, velocity, collision, and force gates around every proposed
+first action before any controller wiring is enabled.
 
 ## Validation
 

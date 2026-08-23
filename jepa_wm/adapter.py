@@ -2,49 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
 
+from jepa_wm.adapter_metadata import ActionAdapterMetadata
 from jepa_wm.contract import MODEL_ID
 
 
 ADAPTER_SCHEMA = "quantis.jepa_wm_action_adapter.v1"
-
-
-@dataclass(frozen=True)
-class ActionAdapterMetadata:
-    base_model: str
-    source_revision: str
-    camera: str
-    training_recordings: tuple[str, ...]
-    training_steps: int
-
-    def __post_init__(self) -> None:
-        if not self.base_model or not self.source_revision or not self.camera:
-            raise ValueError("adapter metadata fields must be non-empty")
-        if not self.training_recordings or self.training_steps <= 0:
-            raise ValueError("adapter training data and steps must be non-empty")
-
-    @classmethod
-    def from_dict(cls, payload: Any) -> ActionAdapterMetadata:
-        if not isinstance(payload, dict):
-            raise ValueError("adapter metadata must be an object")
-        try:
-            return cls(
-                base_model=str(payload["base_model"]),
-                source_revision=str(payload["source_revision"]),
-                camera=str(payload["camera"]),
-                training_recordings=tuple(payload["training_recordings"]),
-                training_steps=int(payload["training_steps"]),
-            )
-        except (KeyError, TypeError, ValueError) as error:
-            raise ValueError("adapter metadata is incomplete") from error
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
 
 
 def _action_encoder(model: Any) -> torch.nn.Module:

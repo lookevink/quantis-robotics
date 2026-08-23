@@ -335,6 +335,24 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/encode_demo_recording.sh", calls)
         self.assertRegex(calls, r"trajectory-[0-9]{8}T[0-9]{6}Z")
 
+    def test_demo_record_exploration_forwards_seed_and_dataset_split(self):
+        result, calls = self.run_command(
+            "demo-record-exploration",
+            arguments=("domain-20260823-train-00", "1200", "train"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("start_exploration_recording", calls)
+        self.assertIn("domain-20260823-train-00", calls)
+        self.assertIn("1200", calls)
+        self.assertIn("train", calls)
+        self.assertIn(
+            "ops/wait_demo_recording.sh 'domain-20260823-train-00'",
+            calls,
+        )
+        self.assertIn("ServerAliveInterval=15", calls)
+        self.assertNotIn("ops/encode_demo_recording.sh", calls)
+
     def test_demo_dashboard_records_scores_and_renders_one_recording(self):
         result, calls = self.run_command(
             "demo-dashboard",
@@ -440,6 +458,18 @@ class AwsLifecycleTests(unittest.TestCase):
             calls,
         )
 
+    def test_jepa_wm_adapt_set_forwards_multiple_training_recordings(self):
+        result, calls = self.run_command(
+            "jepa-wm-adapt-set",
+            arguments=("domain-train-00,domain-train-01", "wrist", "500"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "ops/jepa_wm.sh adapt-set 'domain-train-00,domain-train-01' 'wrist' '500'",
+            calls,
+        )
+
     def test_jepa_wm_eval_adapted_selects_the_persistent_adapter(self):
         result, calls = self.run_command(
             "jepa-wm-eval-adapted",
@@ -451,6 +481,40 @@ class AwsLifecycleTests(unittest.TestCase):
             "ops/jepa_wm.sh evaluate 'demo-held-out' 'wrist' '0' '20' '1' 'adapted'",
             calls,
         )
+
+    def test_jepa_wm_summarize_forwards_the_whole_experiment(self):
+        result, calls = self.run_command(
+            "jepa-wm-summarize",
+            arguments=(
+                "domain-proof",
+                "domain-train-00,domain-train-01",
+                "domain-held-00,domain-held-01",
+                "wrist",
+                "40",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/jepa_wm.sh summarize", calls)
+        self.assertIn("domain-proof", calls)
+        self.assertIn("domain-train-00,domain-train-01", calls)
+        self.assertIn("domain-held-00,domain-held-01", calls)
+
+    def test_jepa_wm_milestone_runs_seeded_train_and_held_out_workflow(self):
+        result, calls = self.run_command(
+            "jepa-wm-milestone",
+            arguments=("2", "2", "10", "1200"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls.count("start_exploration_recording"), 4)
+        for seed in (1200, 1201, 11200, 11201):
+            self.assertIn(str(seed), calls)
+        self.assertIn("ops/jepa_wm.sh adapt-set", calls)
+        self.assertEqual(calls.count("ops/jepa_wm.sh evaluate"), 2)
+        self.assertIn("ops/jepa_wm.sh summarize", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+        self.assertIn("Experiment ID:", result.stdout)
 
     def test_remote_bootstrap_installs_python_server_client(self):
         bootstrap = REMOTE_BOOTSTRAP.read_text()

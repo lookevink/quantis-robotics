@@ -205,27 +205,80 @@ evaluate_recording() {
   "${venv_dir}/bin/python" "${arguments[@]}"
 }
 
-adapt_recording() {
-  local recording_name="$1"
+adapt_recording_set() {
+  local recording_list="$1"
   local camera_name="$2"
   local training_steps="$3"
-  is_safe_identifier "${recording_name}" || die "invalid recording name"
+  is_safe_identifier_list "${recording_list}" || die "invalid recording list"
   is_safe_identifier "${camera_name}" || die "invalid camera name"
   require_positive_integer "training steps" "${training_steps}" || exit 1
-  local recording="${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}"
-  [[ -f "${recording}/manifest.json" ]] \
-    || die "recording does not exist: ${recording_name}"
+  local -a recording_names
+  local -a recording_arguments
+  local recording_name
+  local recording
+  IFS=',' read -r -a recording_names <<<"${recording_list}"
+  for recording_name in "${recording_names[@]}"; do
+    recording="${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}"
+    [[ -f "${recording}/manifest.json" ]] \
+      || die "recording does not exist: ${recording_name}"
+    recording_arguments+=(--recording "${recording}")
+  done
   require_runtime
-  sudo chown -R "${USER}:${USER}" "${recording}"
+  for recording_name in "${recording_names[@]}"; do
+    sudo chown -R "${USER}:${USER}" \
+      "${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}"
+  done
   local adapter="${checkpoint_dir}/quantis_isaac_${camera_name}_action_adapter.pth"
   cd "${repo_dir}"
   "${venv_dir}/bin/python" -m jepa_wm.adapt_recording \
     --source "${source_dir}" \
     --checkpoint "${jepa_checkpoint}" \
-    --recording "${recording}" \
+    "${recording_arguments[@]}" \
     --output "${adapter}" \
     --camera "${camera_name}" \
     --steps "${training_steps}"
+}
+
+summarize_experiment() {
+  local experiment_id="$1"
+  local training_list="$2"
+  local held_out_list="$3"
+  local camera_name="$4"
+  local rollout_count="$5"
+  is_safe_identifier "${experiment_id}" || die "invalid experiment name"
+  is_safe_identifier_list "${training_list}" || die "invalid training list"
+  is_safe_identifier_list "${held_out_list}" || die "invalid held-out list"
+  is_safe_identifier "${camera_name}" || die "invalid camera name"
+  require_positive_integer "rollout count" "${rollout_count}" || exit 1
+  require_runtime
+
+  local -a training_names
+  local -a held_out_names
+  local -a arguments
+  local recording_name
+  local report_name
+  local report
+  IFS=',' read -r -a training_names <<<"${training_list}"
+  IFS=',' read -r -a held_out_names <<<"${held_out_list}"
+  for recording_name in "${training_names[@]}"; do
+    arguments+=(
+      --training-recording
+      "${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}"
+    )
+  done
+  printf -v report_name '%s_adapted_rollout_eval_000000_%03d.json' \
+    "${camera_name}" "${rollout_count}"
+  for recording_name in "${held_out_names[@]}"; do
+    report="${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}/jepa_wm/${report_name}"
+    [[ -f "${report}" ]] || die "held-out report does not exist: ${report}"
+    arguments+=(--held-out-report "${report}")
+  done
+  local output="${checkpoint_dir}/experiments/${experiment_id}.json"
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.experiment \
+    --experiment-id "${experiment_id}" \
+    "${arguments[@]}" \
+    --output "${output}"
 }
 
 case "${1:-}" in
@@ -243,9 +296,16 @@ case "${1:-}" in
       "${2:-}" "${3:-wrist}" "${4:-0}" "${5:-8}" "${6:-1}" "${7:-base}"
     ;;
   adapt)
-    adapt_recording "${2:-}" "${3:-wrist}" "${4:-100}"
+    adapt_recording_set "${2:-}" "${3:-wrist}" "${4:-100}"
+    ;;
+  adapt-set)
+    adapt_recording_set "${2:-}" "${3:-wrist}" "${4:-500}"
+    ;;
+  summarize)
+    summarize_experiment \
+      "${2:-}" "${3:-}" "${4:-}" "${5:-wrist}" "${6:-40}"
     ;;
   *)
-    die "expected install, smoke, status, evaluate, or adapt"
+    die "expected install, smoke, status, evaluate, adapt, adapt-set, or summarize"
     ;;
 esac

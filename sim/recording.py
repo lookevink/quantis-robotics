@@ -7,7 +7,7 @@ import re
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from jepa.contract import ObservationStage
 from jepa_wm.action import ACTION_RECORDING_CONTRACT, DroidPose, action_between
@@ -66,6 +66,7 @@ class RecordingSnapshot:
     plug_position: Sequence[float]
     plug_attached: bool
     end_effector_pose: DroidPose
+    simulation_time_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,7 @@ class RecordingStep:
     plug_attached: bool
     end_effector_pose: list[float]
     action_from_previous: list[float] | None
+    simulation_time_seconds: float | None
 
 
 class RecordingWriter:
@@ -93,6 +95,7 @@ class RecordingWriter:
         recording_id: str,
         fps: int,
         camera_resolutions: Mapping[str, tuple[int, int]],
+        metadata: Mapping[str, Any] | None = None,
     ) -> None:
         validate_recording_id(recording_id)
         if fps <= 0:
@@ -106,6 +109,7 @@ class RecordingWriter:
         self.recording_id = recording_id
         self.fps = int(fps)
         self.camera_resolutions = dict(camera_resolutions)
+        self.metadata = dict(metadata or {})
         self.cameras = tuple(self.camera_resolutions)
         if any(
             width <= 0 or height <= 0
@@ -166,6 +170,7 @@ class RecordingWriter:
                 action_from_previous=(
                     list(action.values) if action is not None else None
                 ),
+                simulation_time_seconds=snapshot.simulation_time_seconds,
             )
         )
         self._previous_end_effector_pose = end_effector_pose
@@ -199,6 +204,8 @@ class RecordingWriter:
             "videos": {camera: f"{camera}.mp4" for camera in self.cameras},
             "action": ACTION_RECORDING_CONTRACT.to_dict(),
         }
+        if self.metadata:
+            manifest["metadata"] = self.metadata
         (self.output_dir / "manifest.json").write_text(
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
         )

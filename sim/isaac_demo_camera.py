@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -20,6 +20,7 @@ from sim.recording import RecordingSnapshot, RecordingWriter
 RECORDING_ROOT = "/isaac-sim/.local/share/ov/data/quantis/recordings"
 RECORDING_JOB_ROOT = "/isaac-sim/.local/share/ov/data/quantis/recording_jobs"
 DEMO_RESOLUTION = (1920, 1080)
+JEPA_WM_RESOLUTION = (512, 512)
 DEMO_FPS = 12
 
 
@@ -34,6 +35,7 @@ CAMERA_SPECS = (
     CameraSpec("presentation", PRESENTATION_CAMERA_PATH, DEMO_RESOLUTION),
     CameraSpec("wrist", WRIST_CAMERA_PATH, DEMO_RESOLUTION),
 )
+JEPA_WM_CAMERA_SPECS = (CameraSpec("wrist", WRIST_CAMERA_PATH, JEPA_WM_RESOLUTION),)
 
 
 def _look_at_rotation(
@@ -77,7 +79,9 @@ async def _wait_for_rgb(
     raise RuntimeError(f"cameras did not produce complete RGB frames: {last_shapes}")
 
 
-def configure_wrist_camera() -> dict[str, Any]:
+def configure_wrist_camera(
+    translation_offset: Sequence[float] = (0.0, 0.0, 0.0),
+) -> dict[str, Any]:
     """Mount the wrist camera above and beside the arm, aimed at the gripper."""
 
     import omni.usd
@@ -88,7 +92,10 @@ def configure_wrist_camera() -> dict[str, Any]:
     if not camera.IsValid():
         raise RuntimeError(f"camera prim is missing: {WRIST_CAMERA_PATH}")
 
-    translation = np.array([0.16, 0.08, -0.20], dtype=np.float64)
+    offset = np.asarray(translation_offset, dtype=np.float64)
+    if offset.shape != (3,) or not np.all(np.isfinite(offset)):
+        raise ValueError("wrist camera offset must contain three finite values")
+    translation = np.array([0.16, 0.08, -0.20], dtype=np.float64) + offset
     gripper_center = np.array([0.0, 0.0, 0.10], dtype=np.float64)
     orientation = matrix_to_wxyz(
         _look_at_rotation(translation, gripper_center, np.array([1.0, 0.0, 0.0]))
@@ -115,6 +122,8 @@ class DemoRecorder:
         *,
         fps: int = DEMO_FPS,
         minimum_stage_frames: int = DEFAULT_FRAMES,
+        camera_specs: tuple[CameraSpec, ...] = CAMERA_SPECS,
+        metadata: Mapping[str, Any] | None = None,
     ) -> None:
         import omni.replicator.core as rep
 
@@ -126,11 +135,12 @@ class DemoRecorder:
             Path(RECORDING_ROOT),
             recording_id=recording_id,
             fps=fps,
-            camera_resolutions={spec.label: spec.resolution for spec in CAMERA_SPECS},
+            camera_resolutions={spec.label: spec.resolution for spec in camera_specs},
+            metadata=metadata,
         )
         self._render_products: dict[str, Any] = {}
         self._annotators: dict[str, Any] = {}
-        for spec in CAMERA_SPECS:
+        for spec in camera_specs:
             render_product = rep.create.render_product(spec.path, spec.resolution)
             annotator = rep.AnnotatorRegistry.get_annotator("rgb")
             annotator.attach([render_product])

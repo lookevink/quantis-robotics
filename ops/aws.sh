@@ -22,7 +22,12 @@ ssh_user="${AWS_SSH_USER:-ubuntu}"
 security_group_id="${AWS_SECURITY_GROUP_ID:-}"
 signal_port="${ISAAC_SIGNAL_PORT:-49100}"
 stream_port="${ISAAC_STREAM_PORT:-47998}"
-ssh_options=(-o StrictHostKeyChecking=accept-new)
+ssh_transport_options=(
+  -o StrictHostKeyChecking=accept-new
+  -o ServerAliveInterval=15
+  -o ServerAliveCountMax=4
+)
+ssh_options=("${ssh_transport_options[@]}")
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -101,7 +106,10 @@ ensure_running() {
 
 require_private_key() {
   [[ -f "${private_key}" ]] || die "SSH private key does not exist: ${private_key}"
-  ssh_options=(-i "${private_key}" -o StrictHostKeyChecking=accept-new)
+  ssh_options=(
+    -i "${private_key}"
+    "${ssh_transport_options[@]}"
+  )
 }
 
 resolve_security_group() {
@@ -168,8 +176,13 @@ remote_with_config() {
 
 sync_repo() {
   require_private_key
-  local remote_shell
-  printf -v remote_shell 'ssh -i %q -o StrictHostKeyChecking=accept-new' "${private_key}"
+  local option
+  local quoted_option
+  local remote_shell="ssh"
+  for option in "${ssh_options[@]}"; do
+    printf -v quoted_option '%q' "${option}"
+    remote_shell+=" ${quoted_option}"
+  done
   rsync -az --delete \
     --exclude .git --exclude .env --exclude .runtime --exclude .agents \
     --exclude data --exclude outputs \
@@ -235,7 +248,40 @@ demo_python() {
   local expression="$1"
   local timeout_seconds="${2:-60}"
   sync_repo
-  isaac_python "import sys,json,importlib; sys.path.insert(0,'/workspace') if '/workspace' not in sys.path else None; importlib.invalidate_caches(); import jepa.contract as contract, jepa_wm.action as wm_action; importlib.reload(contract); importlib.reload(wm_action); import sim.recording as recording; importlib.reload(recording); import sim.recording_jobs as recording_jobs, sim.isaac_demo_scene as scene, sim.isaac_demo_camera as camera, sim.isaac_demo_kinematics as kinematics, sim.isaac_demo as demo; importlib.reload(recording_jobs); importlib.reload(scene); importlib.reload(camera); importlib.reload(kinematics); importlib.reload(demo); print(json.dumps(${expression},indent=2))" "${timeout_seconds}"
+  isaac_python "import sys,json,importlib; sys.path.insert(0,'/workspace') if '/workspace' not in sys.path else None; importlib.invalidate_caches(); import jepa.contract as contract, jepa_wm.action as wm_action; importlib.reload(contract); importlib.reload(wm_action); import sim.recording as recording; importlib.reload(recording); import sim.recording_jobs as recording_jobs, sim.exploration as exploration, sim.isaac_demo_scene as scene, sim.isaac_demo_camera as camera, sim.isaac_demo_kinematics as kinematics; importlib.reload(recording_jobs); importlib.reload(exploration); importlib.reload(scene); importlib.reload(camera); importlib.reload(kinematics); import sim.isaac_demo_runtime as runtime; importlib.reload(runtime); import sim.isaac_exploration as isaac_exploration; importlib.reload(isaac_exploration); import sim.isaac_demo as demo; importlib.reload(demo); print(json.dumps(${expression},indent=2))" "${timeout_seconds}"
+}
+
+wait_recording_job() {
+  local recording_id="$1"
+  local timeout_seconds="${DEMO_RECORDING_TIMEOUT_SECONDS:-2400}"
+  local deadline=$((SECONDS + timeout_seconds))
+  local response
+  local status
+  if remote "DEMO_RECORDING_TIMEOUT_SECONDS='${timeout_seconds}' bash ~/quantis-robotics/ops/wait_demo_recording.sh '${recording_id}'"; then
+    return
+  fi
+  printf 'Recording wait disconnected; reconnecting to job %s.\n' \
+    "${recording_id}" >&2
+  while (( SECONDS < deadline )); do
+    response="$(remote "job=~/docker/isaac-sim/data/quantis/recording_jobs/'${recording_id}'.json; test ! -f \"\${job}\" || cat \"\${job}\"")"
+    if [[ -n "${response}" ]]; then
+      printf '%s\n' "${response}"
+      status="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])' \
+        <<<"${response}")"
+      [[ "${status}" == "complete" ]]
+      return
+    fi
+    sleep 5
+  done
+  die "recording job timed out: ${recording_id}"
+}
+
+record_exploration_job() {
+  local recording_id="$1"
+  local exploration_seed="$2"
+  local dataset_split="$3"
+  demo_python "demo.start_exploration_recording('${recording_id}',${exploration_seed},'${dataset_split}')"
+  wait_recording_job "${recording_id}"
 }
 
 command="${1:-help}"
@@ -252,6 +298,7 @@ Commands:
   isaac-start | isaac-stop | isaac-status | isaac-logs
   demo-reset | demo-preflight | demo-run | demo-capture | demo-record
   demo-record-actions             Capture a short 4 FPS JEPA-WM trajectory
+  demo-record-exploration RECORDING SEED train|held_out
   demo-dashboard REFERENCE [primary-camera] [jepa-camera]
   capture-smoke | jepa-embed [source-name] [camera]
   jepa-stage-embed [recording-name] [camera]
@@ -259,6 +306,9 @@ Commands:
   jepa-wm-install | jepa-wm-smoke | jepa-wm-status
   jepa-wm-eval RECORDING [camera] [start-index] [count] [stride]
   jepa-wm-adapt RECORDING [camera] [steps]
+  jepa-wm-adapt-set RECORDING[,RECORDING...] [camera] [steps]
+  jepa-wm-summarize EXPERIMENT TRAINING_CSV HELD_OUT_CSV [camera] [count]
+  jepa-wm-milestone [train-count] [held-out-count] [steps] [base-seed]
   jepa-wm-eval-adapted RECORDING [camera] [start-index] [count] [stride]
 EOF
   exit 0
@@ -332,15 +382,26 @@ case "${command}" in
   demo-record)
     recording_id="demo-$(date -u +%Y%m%dT%H%M%SZ)"
     demo_python "demo.start_recording('${recording_id}')"
-    remote "bash ~/quantis-robotics/ops/wait_demo_recording.sh '${recording_id}'"
+    wait_recording_job "${recording_id}"
     remote "bash ~/quantis-robotics/ops/encode_demo_recording.sh '${recording_id}'"
     ;;
   demo-record-actions)
     recording_id="trajectory-$(date -u +%Y%m%dT%H%M%SZ)"
     demo_python "demo.start_action_recording('${recording_id}')"
-    remote "bash ~/quantis-robotics/ops/wait_demo_recording.sh '${recording_id}'"
+    wait_recording_job "${recording_id}"
     remote "bash ~/quantis-robotics/ops/encode_demo_recording.sh '${recording_id}'"
     printf 'Recording ID: %s\n' "${recording_id}"
+    ;;
+  demo-record-exploration)
+    recording_id="${2:-}"
+    exploration_seed="${3:-}"
+    dataset_split="${4:-}"
+    is_safe_identifier "${recording_id}" || die "invalid recording name"
+    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+    [[ "${dataset_split}" == "train" || "${dataset_split}" == "held_out" ]] \
+      || die "dataset split must be train or held_out"
+    record_exploration_job \
+      "${recording_id}" "${exploration_seed}" "${dataset_split}"
     ;;
   demo-dashboard)
     reference_name="${2:-}"
@@ -351,7 +412,7 @@ case "${command}" in
     is_safe_identifier "${jepa_camera}" || die "invalid JEPA camera name"
     recording_id="demo-$(date -u +%Y%m%dT%H%M%SZ)"
     demo_python "demo.start_recording('${recording_id}')"
-    remote "DEMO_RECORDING_TIMEOUT_SECONDS=2400 bash ~/quantis-robotics/ops/wait_demo_recording.sh '${recording_id}'"
+    DEMO_RECORDING_TIMEOUT_SECONDS=2400 wait_recording_job "${recording_id}"
     remote "bash ~/quantis-robotics/ops/encode_demo_recording.sh '${recording_id}'"
     remote "bash ~/quantis-robotics/ops/jepa_stages.sh report '${reference_name}' '${recording_id}' '${jepa_camera}'"
     remote "bash ~/quantis-robotics/ops/render_demo_dashboard.sh '${recording_id}' '${primary_camera}' '${jepa_camera}'"
@@ -422,6 +483,37 @@ case "${command}" in
     require_positive_integer "training steps" "${training_steps}" || exit 1
     sync_repo
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh adapt '${recording_name}' '${camera_name}' '${training_steps}'"
+    ;;
+  jepa-wm-adapt-set)
+    recording_names="${2:-}"
+    camera_name="${3:-wrist}"
+    training_steps="${4:-500}"
+    is_safe_identifier_list "${recording_names}" \
+      || die "invalid training recording list"
+    is_safe_identifier "${camera_name}" || die "invalid camera name"
+    require_positive_integer "training steps" "${training_steps}" || exit 1
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh adapt-set '${recording_names}' '${camera_name}' '${training_steps}'"
+    ;;
+  jepa-wm-summarize)
+    experiment_id="${2:-}"
+    training_recordings="${3:-}"
+    held_out_recordings="${4:-}"
+    camera_name="${5:-wrist}"
+    rollout_count="${6:-40}"
+    is_safe_identifier "${experiment_id}" || die "invalid experiment name"
+    is_safe_identifier_list "${training_recordings}" \
+      || die "invalid training recording list"
+    is_safe_identifier_list "${held_out_recordings}" \
+      || die "invalid held-out recording list"
+    is_safe_identifier "${camera_name}" || die "invalid camera name"
+    require_positive_integer "rollout count" "${rollout_count}" || exit 1
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh summarize '${experiment_id}' '${training_recordings}' '${held_out_recordings}' '${camera_name}' '${rollout_count}'"
+    ;;
+  jepa-wm-milestone)
+    exec bash "${repo_root}/ops/jepa_wm_milestone.sh" \
+      "${2:-4}" "${3:-2}" "${4:-500}" "${5:-1200}"
     ;;
   *)
     die "unknown command: ${command} (run $0 help)"

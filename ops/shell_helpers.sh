@@ -4,6 +4,18 @@ is_safe_identifier() {
   [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
 }
 
+is_safe_identifier_list() {
+  local remainder="$1"
+  local identifier
+  [[ -n "${remainder}" ]] || return 1
+  while [[ "${remainder}" == *,* ]]; do
+    identifier="${remainder%%,*}"
+    is_safe_identifier "${identifier}" || return 1
+    remainder="${remainder#*,}"
+  done
+  is_safe_identifier "${remainder}"
+}
+
 require_nonnegative_integer() {
   local name="$1"
   local value="$2"

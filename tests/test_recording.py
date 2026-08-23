@@ -48,6 +48,11 @@ class RecordingWriterTest(unittest.TestCase):
                     "presentation": (1920, 1080),
                     "wrist": (1920, 1080),
                 },
+                metadata={
+                    "dataset": "jepa_wm_domain",
+                    "split": "train",
+                    "seed": 1200,
+                },
             )
             frame_paths = writer.frame_paths()
             for path in frame_paths.values():
@@ -66,6 +71,7 @@ class RecordingWriterTest(unittest.TestCase):
                     plug_position=[-0.02, -0.25, 1.32],
                     plug_attached=False,
                     end_effector_pose=DroidPose((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.125)),
+                    simulation_time_seconds=1.0,
                 )
             )
             for path in writer.frame_paths().values():
@@ -79,6 +85,7 @@ class RecordingWriterTest(unittest.TestCase):
                     plug_position=[-0.02, -0.25, 1.32],
                     plug_attached=False,
                     end_effector_pose=DroidPose((0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.625)),
+                    simulation_time_seconds=1.125,
                 )
             )
             self.assertEqual(writer.frame_count, 2)
@@ -93,9 +100,21 @@ class RecordingWriterTest(unittest.TestCase):
                 for line in (output / "steps.jsonl").read_text().splitlines()
             ]
             step = steps[0]
+            self.assertEqual(
+                [step["simulation_time_seconds"] for step in steps],
+                [1.0, 1.125],
+            )
             self.assertEqual(manifest["schema"], RECORDING_SCHEMA)
             self.assertEqual(manifest["fps"], 8)
             self.assertEqual(manifest["frames"], 2)
+            self.assertEqual(
+                manifest["metadata"],
+                {
+                    "dataset": "jepa_wm_domain",
+                    "split": "train",
+                    "seed": 1200,
+                },
+            )
             self.assertEqual(
                 manifest["resolutions"],
                 {

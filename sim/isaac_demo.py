@@ -2,23 +2,32 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from math import ceil
 from typing import Any
 
 import numpy as np
 
 from jepa.contract import ObservationStage
-from jepa_wm.action import DROID_FPS, DroidPose
+from jepa_wm.action import DROID_FPS
 from sim.demo_sequence import Phase, PlugAction
+from sim.exploration import DatasetSplit
 from sim.isaac_demo_camera import (
     DEMO_FPS,
     RECORDING_JOB_ROOT,
     DemoRecorder,
     capture_cameras,
-    configure_wrist_camera,
 )
 from sim.isaac_demo_kinematics import preflight_report, solve_waypoints
+from sim.isaac_demo_runtime import (
+    Actuators,
+    JointCommand,
+    PlugAttachment,
+    create_actuators,
+    move_joint_command,
+    prepare_plug,
+    recording_snapshot,
+    reset_stage,
+)
 from sim.isaac_demo_scene import (
     PLUG_PATH,
     ROBOT_PATH,
@@ -37,212 +46,10 @@ from sim.recording_jobs import RecordingJobManager
 _RECORDING_JOBS = RecordingJobManager(RECORDING_JOB_ROOT)
 
 
-@dataclass(frozen=True)
-class JointCommand:
-    arm_positions: np.ndarray
-    gripper_width_m: float
-
-
-@dataclass
-class Actuators:
-    articulation: Any
-    arm_attributes: list[Any]
-    finger_attributes: list[Any]
-
-    def current_command(self) -> JointCommand:
-        arm = np.deg2rad(
-            np.array(
-                [attribute.Get() for attribute in self.arm_attributes], dtype=np.float64
-            )
-        )
-        width = float(self.finger_attributes[0].Get()) * 2.0
-        return JointCommand(arm, width)
-
-    def apply(self, command: JointCommand) -> None:
-        for attribute, target_degrees in zip(
-            self.arm_attributes, np.rad2deg(command.arm_positions)
-        ):
-            attribute.Set(float(target_degrees))
-        finger_position = command.gripper_width_m / 2.0
-        for attribute in self.finger_attributes:
-            attribute.Set(finger_position)
-
-        self.articulation.set_dof_positions(
-            positions=command.arm_positions, dof_indices=np.arange(7)
-        )
-        self.articulation.set_dof_positions(
-            positions=np.array([finger_position, finger_position]),
-            dof_indices=np.array([7, 8]),
-        )
-
-
-@dataclass
-class PlugAttachment:
-    prim: Any
-    hand_prim: Any
-    collision_attributes: list[Any]
-    hand_to_plug_offset: np.ndarray | None = None
-
-    @property
-    def attached(self) -> bool:
-        return self.hand_to_plug_offset is not None
-
-    def follow(self, hand_position: np.ndarray) -> None:
-        if not self.attached:
-            return
-        from pxr import Gf
-
-        translate = self.prim.GetAttribute("xformOp:translate")
-        if not translate.IsValid():
-            raise RuntimeError(f"{PLUG_PATH} has no xformOp:translate attribute")
-        translate.Set(Gf.Vec3d(*(hand_position + self.hand_to_plug_offset)))
-
-    def attach(self, hand_position: np.ndarray) -> None:
-        for attribute in self.collision_attributes:
-            attribute.Set(False)
-        plug_position, _ = world_pose(self.prim)
-        self.hand_to_plug_offset = plug_position - hand_position
-
-    def detach_at(self, position: np.ndarray) -> None:
-        from pxr import Gf
-
-        self.hand_to_plug_offset = None
-        self.prim.GetAttribute("xformOp:translate").Set(Gf.Vec3d(*position))
-
-
 async def reset_demo() -> dict[str, Any]:
     """Stop physics and reopen the saved reusable starting stage."""
 
-    import omni.timeline
-    import omni.usd
-
-    omni.timeline.get_timeline_interface().stop()
-    success, error = await omni.usd.get_context().open_stage_async(STAGE_PATH)
-    if not success:
-        raise RuntimeError(f"failed to open {STAGE_PATH}: {error}")
-    stage = omni.usd.get_context().get_stage()
-    # The Sdf layer registry can retain unsaved edits when reopening the same
-    # identifier. Reload explicitly so reset always means the on-disk source.
-    stage.GetRootLayer().Reload()
-    stage.SetEditTarget(stage.GetSessionLayer())
-    return {
-        "status": "ready",
-        "stage": STAGE_PATH,
-        "wrist_camera": configure_wrist_camera(),
-    }
-
-
-def _find_joint(stage: Any, name: str) -> Any:
-    for prim in stage.Traverse():
-        if prim.GetName() == name:
-            return prim
-    raise RuntimeError(f"joint prim is missing: {name}")
-
-
-def _create_actuators(stage: Any, articulation: Any) -> Actuators:
-    from pxr import UsdPhysics
-
-    arm_attributes = []
-    for index in range(1, 8):
-        joint = _find_joint(stage, f"panda_joint{index}")
-        arm_attributes.append(
-            UsdPhysics.DriveAPI.Get(joint, "angular").GetTargetPositionAttr()
-        )
-
-    # Finger joint 2 is a PhysX mimic joint in Isaac Sim 6; only joint 1 owns
-    # a drive. The articulation state still exposes both finger DOFs.
-    finger_joint = _find_joint(stage, "panda_finger_joint1")
-    finger_attributes = [
-        UsdPhysics.DriveAPI.Get(finger_joint, "linear").GetTargetPositionAttr()
-    ]
-    return Actuators(articulation, arm_attributes, finger_attributes)
-
-
-def _prepare_plug(stage: Any) -> PlugAttachment:
-    from pxr import UsdPhysics
-
-    plug = stage.GetPrimAtPath(PLUG_PATH)
-    if not plug.IsValid():
-        raise RuntimeError(f"plug prim is missing: {PLUG_PATH}")
-    hand = stage.GetPrimAtPath(f"{ROBOT_PATH}/panda_hand")
-    if not hand.IsValid():
-        raise RuntimeError(f"robot hand prim is missing: {ROBOT_PATH}/panda_hand")
-    UsdPhysics.RigidBodyAPI(plug).CreateKinematicEnabledAttr().Set(True)
-    collision_attributes = [
-        UsdPhysics.CollisionAPI(prim).CreateCollisionEnabledAttr()
-        for prim in stage.Traverse()
-        if prim.GetPath().HasPrefix(plug.GetPath())
-        and prim.HasAPI(UsdPhysics.CollisionAPI)
-    ]
-    return PlugAttachment(plug, hand, collision_attributes)
-
-
-def _smoothstep(progress: float) -> float:
-    return progress * progress * (3.0 - 2.0 * progress)
-
-
-def _recording_snapshot(
-    phase: RecordingLabel,
-    stage: ObservationStage,
-    command: JointCommand,
-    attachment: PlugAttachment,
-) -> RecordingSnapshot:
-    hand_position, hand_orientation = world_pose(attachment.hand_prim)
-    robot = attachment.hand_prim.GetStage().GetPrimAtPath(ROBOT_PATH)
-    base_position, base_orientation = world_pose(robot)
-    return RecordingSnapshot(
-        phase=phase,
-        stage=stage,
-        arm_positions=command.arm_positions,
-        gripper_width_m=command.gripper_width_m,
-        plug_position=world_pose(attachment.prim)[0],
-        plug_attached=attachment.attached,
-        end_effector_pose=DroidPose.from_world_poses(
-            base_position,
-            base_orientation,
-            hand_position,
-            hand_orientation,
-            command.gripper_width_m,
-        ),
-    )
-
-
-async def _move_targets(
-    actuators: Actuators,
-    start: JointCommand,
-    end: JointCommand,
-    duration_seconds: float,
-    attachment: PlugAttachment,
-    *,
-    phase: RecordingLabel,
-    stage: ObservationStage,
-    recorder: DemoRecorder | None,
-) -> None:
-    import omni.kit.app
-    import omni.usd
-
-    app = omni.kit.app.get_app()
-    hand = omni.usd.get_context().get_stage().GetPrimAtPath(f"{ROBOT_PATH}/panda_hand")
-    # Keep recorded motion samples aligned with the video manifest. Non-recorded
-    # interactive runs retain the original lightweight eight authored targets.
-    authored_fps = recorder.fps if recorder is not None else 8
-    frames = max(1, ceil(duration_seconds * authored_fps))
-
-    for frame in range(1, frames + 1):
-        blend = _smoothstep(frame / frames)
-        command = JointCommand(
-            start.arm_positions + (end.arm_positions - start.arm_positions) * blend,
-            start.gripper_width_m
-            + (end.gripper_width_m - start.gripper_width_m) * blend,
-        )
-        actuators.apply(command)
-        await app.next_update_async()
-        attachment.follow(world_pose(hand)[0])
-        if recorder is not None:
-            await recorder.capture(
-                _recording_snapshot(phase, stage, command, attachment),
-                advance=False,
-            )
+    return await reset_stage()
 
 
 async def _settle_at_target(
@@ -269,7 +76,7 @@ async def _settle_at_target(
         attachment.follow(hand_position)
         if recorder is not None:
             await recorder.capture(
-                _recording_snapshot(phase, stage, command, attachment),
+                recording_snapshot(phase, stage, command, attachment),
                 advance=False,
             )
         if error <= tolerance_m:
@@ -299,12 +106,12 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
     stage = omni.usd.get_context().get_stage()
     solved = solve_waypoints()
     stage.SetEditTarget(stage.GetSessionLayer())
-    attachment = _prepare_plug(stage)
+    attachment = prepare_plug(stage)
 
     await omni.kit.app.get_app().next_update_async()
     if SimulationManager.get_physics_sim_view() is None:
         SimulationManager.initialize_physics()
-    actuators = _create_actuators(stage, Articulation(ROBOT_PATH))
+    actuators = create_actuators(stage, Articulation(ROBOT_PATH))
     current = actuators.current_command()
     observation_stage = ObservationStage.APPROACHING_CABLE
 
@@ -316,7 +123,7 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
         await omni.kit.app.get_app().next_update_async()
         if recorder is not None:
             await recorder.capture(
-                _recording_snapshot(
+                recording_snapshot(
                     RecordingLabel(RecordingMoment.INITIAL),
                     observation_stage,
                     current,
@@ -335,12 +142,13 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
                 np.max(np.abs(np.rad2deg(target.arm_positions - current.arm_positions)))
             )
             duration = min(4.0, max(0.8, max_delta / 45.0))
-            await _move_targets(
+            authored_fps = recorder.fps if recorder is not None else 8
+            await move_joint_command(
                 actuators,
                 current,
                 target,
-                duration,
                 attachment,
+                frame_count=max(1, ceil(duration * authored_fps)),
                 phase=RecordingLabel(RecordingMoment.MOTION, waypoint.phase),
                 stage=observation_stage,
                 recorder=recorder,
@@ -364,7 +172,7 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
             if waypoint.phase == Phase.GRASP:
                 await _fill_stage_observations(
                     recorder,
-                    _recording_snapshot(
+                    recording_snapshot(
                         RecordingLabel(RecordingMoment.SETTLE, Phase.GRASP),
                         observation_stage,
                         current,
@@ -374,7 +182,7 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
             elif waypoint.phase == Phase.PRE_INSERTION:
                 await _fill_stage_observations(
                     recorder,
-                    _recording_snapshot(
+                    recording_snapshot(
                         RecordingLabel(RecordingMoment.SETTLE, Phase.PRE_INSERTION),
                         observation_stage,
                         current,
@@ -384,7 +192,7 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
                 observation_stage = ObservationStage.ALIGNED_WITH_SOCKET
                 await _fill_stage_observations(
                     recorder,
-                    _recording_snapshot(
+                    recording_snapshot(
                         RecordingLabel(RecordingMoment.SETTLE, Phase.PRE_INSERTION),
                         observation_stage,
                         current,
@@ -395,7 +203,7 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
                 observation_stage = ObservationStage.PLUG_SEATED
                 await _fill_stage_observations(
                     recorder,
-                    _recording_snapshot(
+                    recording_snapshot(
                         RecordingLabel(RecordingMoment.SETTLE, Phase.INSERT),
                         observation_stage,
                         current,
@@ -405,12 +213,13 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
 
             if waypoint.plug_action == PlugAction.ATTACH:
                 closed = JointCommand(current.arm_positions, waypoint.gripper_width_m)
-                await _move_targets(
+                authored_fps = recorder.fps if recorder is not None else 8
+                await move_joint_command(
                     actuators,
                     current,
                     closed,
-                    0.6,
                     attachment,
+                    frame_count=max(1, ceil(0.6 * authored_fps)),
                     phase=RecordingLabel(RecordingMoment.CLOSE, Phase.GRASP),
                     stage=observation_stage,
                     recorder=recorder,
@@ -421,7 +230,7 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
                 observation_stage = ObservationStage.CABLE_GRASPED
                 if recorder is not None:
                     await recorder.capture(
-                        _recording_snapshot(
+                        recording_snapshot(
                             RecordingLabel(RecordingMoment.ATTACHED, Phase.GRASP),
                             observation_stage,
                             current,
@@ -433,7 +242,7 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
                 attachment.detach_at(socket_position)
                 if recorder is not None:
                     await recorder.capture(
-                        _recording_snapshot(
+                        recording_snapshot(
                             RecordingLabel(RecordingMoment.COMPLETE, Phase.RELEASE),
                             observation_stage,
                             current,
@@ -528,3 +337,23 @@ def start_action_recording(recording_id: str) -> dict[str, Any]:
     """Start a DROID-action trajectory capture for offline world-model evaluation."""
 
     return _RECORDING_JOBS.start(recording_id, record_action_trajectory)
+
+
+def start_exploration_recording(
+    recording_id: str,
+    seed: int,
+    split: str,
+) -> dict[str, Any]:
+    """Start a seeded domain-exploration capture in the simulator background."""
+
+    from sim.isaac_exploration import record_exploration_trajectory
+
+    dataset_split = DatasetSplit(split)
+    return _RECORDING_JOBS.start(
+        recording_id,
+        lambda job_recording_id: record_exploration_trajectory(
+            job_recording_id,
+            seed,
+            dataset_split,
+        ),
+    )

@@ -19,6 +19,7 @@ from jepa_wm.adapter import (
     action_adapter_parameters,
     save_action_adapter,
 )
+from jepa_wm.adapter_metadata import adapter_report_path
 from jepa_wm.contract import MODEL_ID
 from jepa_wm.frames import video_batch
 from jepa_wm.model import load_headless_model
@@ -199,7 +200,7 @@ def adapt_recordings(
             3,
         ),
     }
-    report_path = output.with_suffix(output.suffix + ".json")
+    report_path = adapter_report_path(output)
     report["report"] = str(report_path.resolve())
     report_path.write_text(json.dumps(report, indent=2) + "\n")
     return report
