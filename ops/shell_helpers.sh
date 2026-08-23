@@ -34,6 +34,27 @@ require_positive_integer() {
   }
 }
 
+validate_control_policy() {
+  [[ "$1" == "direct" || "$1" == "zero" || "$1" == "scripted" ]] || {
+    printf 'error: control policy must be direct, zero, or scripted\n' >&2
+    return 1
+  }
+}
+
+respond_to_control_session() {
+  local repository="$1"
+  local session_id="$2"
+  local policy="$3"
+  validate_control_policy "${policy}" || return 1
+  if [[ "${policy}" == "direct" ]]; then
+    bash "${repository}/ops/jepa_wm.sh" \
+      control-infer-session --session "${session_id}"
+  else
+    bash "${repository}/ops/jepa_wm.sh" control-baseline-session \
+      --session "${session_id}" --policy "${policy}"
+  fi
+}
+
 isaac_demo_code() {
   local expression="$1"
   printf \

@@ -152,6 +152,9 @@ The command copies without deleting older backup files:
 | --- | --- |
 | `/home/ubuntu/docker/isaac-sim/data/quantis/scenes` | `/mnt/quantis-assets/quantis-state/isaac/scenes` |
 | `/home/ubuntu/docker/isaac-sim/data/quantis/recordings` | `/mnt/quantis-assets/quantis-state/isaac/recordings` |
+| `/home/ubuntu/docker/isaac-sim/data/quantis/control_sessions` | `/mnt/quantis-assets/quantis-state/isaac/control_sessions` |
+| `/home/ubuntu/docker/isaac-sim/data/quantis/control_rollouts` | `/mnt/quantis-assets/quantis-state/isaac/control_rollouts` |
+| `/home/ubuntu/docker/isaac-sim/data/quantis/control_baselines` | `/mnt/quantis-assets/quantis-state/isaac/control_baselines` |
 | `/home/ubuntu/docker/jepa-wm/checkpoints` | `/mnt/quantis-assets/quantis-state/jepa-wm/checkpoints` |
 
 The backup command fails closed unless `/mnt/quantis-assets` is the exact mount
@@ -159,14 +162,13 @@ point of a filesystem distinct from both live source filesystems. This prevents
 an unmounted asset-volume directory from being mistaken for a recovery copy on
 the deletable root disk.
 
-`LAST_BACKUP_UTC` records the most recent verified copy time. The snapshot
-verified at `2026-08-23T12:08:44Z` is 8,785,968,897 bytes and includes the
-reusable/result stages, all 43 synchronized recording directories,
-base/adapted evaluation reports, DINOv3 and JEPA-WM checkpoints, and the Isaac
-action adapter. Source code is preserved separately in this Git repository.
-Bootstrap does not restore this backup automatically; after replacing or
-terminating the instance, copy these three trees back to their corresponding
-live paths before starting Isaac or JEPA-WM.
+`LAST_BACKUP_UTC` records the most recent verified copy time. The recovery copy
+includes reusable/result stages, synchronized recordings, control-session and
+rollout evidence, realized-baseline reports, evaluation reports, DINOv3 and
+JEPA-WM checkpoints, and the Isaac action adapter. Source code is preserved
+separately in this Git repository. Bootstrap does not restore this backup
+automatically; after replacing or terminating the instance, copy these six
+trees back to their corresponding live paths before starting Isaac or JEPA-WM.
 
 ### GPU capacity after a stop
 
@@ -550,9 +552,40 @@ authority. The validated aggregate report persists at:
 /home/ubuntu/docker/isaac-sim/data/quantis/control_rollouts/rollout-20260823T203534Z-11401/report.json
 ```
 
+The realized comparison uses independent reset-identical rollouts rather than
+inferring baselines from model scores. Run the non-model trials and then build
+the strict provenance-bound report with:
+
+```bash
+./ops/aws.sh jepa-wm-control-baseline \
+  domain-20260823T113209Z-1400-held-01 11401 3 zero
+./ops/aws.sh jepa-wm-control-baseline \
+  domain-20260823T113209Z-1400-held-01 11401 3 scripted
+./ops/aws.sh jepa-wm-control-baselines \
+  baseline-proof-20260823-11401 \
+  rollout-20260823T203534Z-11401 \
+  zero-20260823T204640Z-11401 \
+  scripted-20260823T205005Z-11401 \
+  domain-20260823T113209Z-1400-held-01 11401 3 \
+  quantis_isaac_wrist_action_proposal_motion_state_12seed
+```
+
+All three trials applied three actions with 0 N contact. Zero-action physics
+drift improved translation/rotation error by `0.371 mm`/`0.000481 rad`.
+Direct control worsened them by `0.755 mm`/`0.002142 rad`, while improving
+gripper-closedness error by `0.1104`. The scripted reference improved all three
+dimensions: `13.325 mm`, `0.006869 rad`, and `0.08350`. The report therefore
+fails direct-versus-zero for translation and rotation and fails the scripted
+tolerance for the same dimensions. Candidate command authority remains false.
+The strict report persists at:
+
+```text
+/home/ubuntu/docker/isaac-sim/data/quantis/control_baselines/baseline-proof-20260823-11401/report.json
+```
+
 This does not establish grasp, cable, contact-recovery, or insertion
-capability; direct/zero/scripted counterfactual outcome comparison remains the
-promotion gate.
+capability. The next gate is an isolated reset-identical trial of the shadow
+CEM winner, followed by repetition across whole held-out seeds.
 Stop the worker independently with
 `./ops/aws.sh jepa-wm-control-worker-stop`.
 

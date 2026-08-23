@@ -9,6 +9,7 @@ reference_name="${2:-}"
 exploration_seed="${3:-}"
 step_count="${4:-}"
 proposal_name="${5:-}"
+policy="${6:-direct}"
 data_root="${HOME}/docker/isaac-sim/data/quantis"
 venv_python="${HOME}/.venvs/quantis-jepa-wm/bin/python"
 
@@ -26,6 +27,7 @@ require_positive_integer "step count" "${step_count}" || exit 1
   printf 'error: control rollout is capped at eight steps\n' >&2
   exit 1
 }
+validate_control_policy "${policy}" || exit 1
 
 step_status() {
   "${venv_python}" -m jepa_wm.control_rollout_cli status \
@@ -72,7 +74,7 @@ sessions="${first_session}"
 current_phase="initial_control_step"
 bash "${repo_dir}/ops/run_control_step.sh" \
   "${first_session}" "${reference_name}" "${exploration_seed}" \
-  "${proposal_name}" deferred
+  "${proposal_name}" deferred "${policy}"
 previous_session="${first_session}"
 current_phase="initial_status"
 status="$(step_status "${first_session}")"
@@ -87,16 +89,18 @@ for (( index = 1; index < step_count; index++ )); do
     "await demo.capture_followup_observation('${session_id}','${previous_session}','${proposal_name}')" \
     120
   current_phase="followup_inference_${suffix}"
-  bash "${repo_dir}/ops/jepa_wm.sh" control-infer-session --session "${session_id}"
+  respond_to_control_session "${repo_dir}" "${session_id}" "${policy}"
   current_phase="followup_apply_${suffix}"
   isaac_server_call "await demo.apply_control_response('${session_id}')" 180
   previous_session="${session_id}"
   current_phase="followup_status_${suffix}"
   status="$(step_status "${session_id}")"
 done
-current_phase="shadow_evidence"
-IFS=',' read -r -a shadow_sessions <<<"${sessions}"
-for session_id in "${shadow_sessions[@]}"; do
-  capture_shadow_control_evidence "${repo_dir}" "${session_id}"
-done
+if [[ "${policy}" == "direct" ]]; then
+  current_phase="shadow_evidence"
+  IFS=',' read -r -a shadow_sessions <<<"${sessions}"
+  for session_id in "${shadow_sessions[@]}"; do
+    capture_shadow_control_evidence "${repo_dir}" "${session_id}"
+  done
+fi
 current_phase="complete"

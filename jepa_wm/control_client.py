@@ -53,7 +53,7 @@ def main() -> None:
     parser.add_argument("--direct-response", type=Path)
     parser.add_argument("--adapter", type=Path)
     parser.add_argument("--shadow-request-output", type=Path)
-    parser.add_argument("--response", type=Path)
+    parser.add_argument("--shadow-response-output", type=Path)
     args = parser.parse_args()
     observation = ControlObservation.from_dict(json.loads(args.request.read_text()))
     if args.direct_response is None:
@@ -75,10 +75,12 @@ def main() -> None:
             shadow_request,
         )
     payload = json.dumps(response.to_dict(), indent=2) + "\n"
-    if args.response is None:
-        print(payload, end="")
-        return
-    write_json_atomic(args.response, response.to_dict())
+    if args.direct_response is not None:
+        if args.shadow_response_output is None:
+            parser.error("shadow planning requires --shadow-response-output")
+        write_json_atomic(args.shadow_response_output, response.to_dict())
+    elif args.shadow_response_output is not None:
+        parser.error("--shadow-response-output requires --direct-response")
     print(payload, end="")
 
 

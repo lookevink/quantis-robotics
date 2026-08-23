@@ -171,8 +171,17 @@ contact.
    predicted energy, direction, and no-actuation Isaac safety. Held-out rollout
    `rollout-20260823T203534Z-11401` passed all three search and safety gates with
    mean latent-energy improvement `0.000221416`.
-6. [ ] Compare realized goal progress against direct-proposal, zero, and
+6. [x] Compare realized goal progress against direct-proposal, zero, and
    scripted baselines before granting the candidate planner command authority.
+   The strict three-step AWS comparison
+   `baseline-proof-20260823-11401` measured actual reset-identical rollouts, not
+   inferred counterfactuals. Direct beat zero only on gripper closure and was
+   worse on translation and rotation, so the gate failed and candidate
+   authority remains false.
+7. [ ] Execute the shadow CEM winner only as an explicitly isolated
+   reset-identical experimental policy, compare its realized outcome against
+   the three established policies, then repeat on whole held-out seeds before
+   considering command authority.
 
 ## Recommended process boundary
 
@@ -262,7 +271,11 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     held-out seeds with strict provenance and an explicit warm-up boundary.
 12. [x] Execute only the first proposal through the simulator safety gate and
     capture the measured post-action observation on two unseen seeds.
-13. [ ] Feed each accepted post-action observation back to the resident worker,
+13. [x] Feed each accepted post-action observation back to the resident worker,
     replan, and compare bounded multi-step proposal, zero, and scripted rollouts
-    before approaching cable contact. The live feedback/replanning half is
-    proven for three safe steps; controlled baseline comparison remains.
+    before approaching cable contact. Three-step reset-identical trials now
+    establish the comparison, and its failed direct baseline gate prevents
+    premature promotion.
+14. [ ] Run the shadow CEM winner as a no-production-authority experimental
+    policy and establish repeatable realized improvement on whole held-out
+    seeds.

@@ -480,16 +480,18 @@ infer_control_session() {
   is_safe_identifier "${session_id}" || die "invalid control session"
   local session="${control_frame_root}/control_sessions/${session_id}"
   local request="${session}/request.json"
-  local response="${session}/response.json"
   [[ -f "${request}" ]] || die "control session request does not exist: ${session_id}"
-  [[ ! -e "${response}" ]] || die "control session already has a response: ${session_id}"
+  [[ ! -e "${session}/response.json" ]] \
+    || die "control session already has a response: ${session_id}"
   control_worker_status >/dev/null
   sudo chown -R "${USER}:${USER}" "${session}"
   cd "${repo_dir}"
   "${venv_dir}/bin/python" -m jepa_wm.control_client \
     --socket "${control_socket}" \
     --request "${request}" \
-    --response "${response}"
+  | "${venv_dir}/bin/python" -m sim.control_response_cli \
+      --data-root "${control_frame_root}" \
+      --session "${session_id}"
   sudo chmod -R a+rwX "${session}"
 }
 
@@ -519,7 +521,29 @@ infer_shadow_session() {
     --direct-response "${direct_response}" \
     --adapter "${checkpoint_dir}/${adapter_name}.pth" \
     --shadow-request-output "${session}/shadow_request.json" \
-    --response "${shadow_response}"
+    --shadow-response-output "${shadow_response}"
+  sudo chmod -R a+rwX "${session}"
+}
+
+persist_baseline_session() {
+  local -A options=()
+  parse_named_options options "session policy" "$@"
+  local session_id="${options[session]:-}"
+  local policy="${options[policy]:-}"
+  is_safe_identifier "${session_id}" || die "invalid control session"
+  [[ "${policy}" == "zero" || "${policy}" == "scripted" ]] \
+    || die "baseline policy must be zero or scripted"
+  local session="${control_frame_root}/control_sessions/${session_id}"
+  [[ -f "${session}/request.json" ]] \
+    || die "control session request does not exist: ${session_id}"
+  [[ ! -e "${session}/response.json" ]] \
+    || die "control session already has a response: ${session_id}"
+  sudo chown -R "${USER}:${USER}" "${session}"
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.control_baseline_cli \
+    --data-root "${control_frame_root}" \
+    --session "${session_id}" \
+    --policy "${policy}"
   sudo chmod -R a+rwX "${session}"
 }
 
@@ -545,7 +569,10 @@ report_control_rollout() {
   local report_dir="${control_frame_root}/control_rollouts/${rollout_id}"
   local proposal="${checkpoint_dir}/${proposal_name}.pth"
   local -a error_arguments=()
-  [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
+  if [[ "${proposal_name}" != "baseline_zero" \
+    && "${proposal_name}" != "baseline_scripted" ]]; then
+    [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
+  fi
   if [[ -n "${orchestration_failure}" ]]; then
     error_arguments=(--orchestration-failure "${orchestration_failure}")
   fi
@@ -560,6 +587,64 @@ report_control_rollout() {
     --sessions "${sessions}" \
     --requested-steps "${requested_steps}" \
     "${error_arguments[@]}" \
+    --output "${report_dir}/report.json"
+}
+
+rollout_session_list() {
+  local rollout_id="$1"
+  local step_count="$2"
+  local sessions=""
+  local index
+  local suffix
+  for (( index = 0; index < step_count; index++ )); do
+    printf -v suffix '%02d' "${index}"
+    sessions+="${sessions:+,}${rollout_id}-${suffix}"
+  done
+  printf '%s\n' "${sessions}"
+}
+
+report_control_baselines() {
+  local -A options=()
+  parse_named_options options \
+    "experiment reference seed requested-steps direct-rollout zero-rollout scripted-rollout direct-proposal" \
+    "$@"
+  local experiment_id="${options[experiment]:-}"
+  local reference_name="${options[reference]:-}"
+  local exploration_seed="${options[seed]:-}"
+  local requested_steps="${options[requested-steps]:-}"
+  local direct_rollout="${options[direct-rollout]:-}"
+  local zero_rollout="${options[zero-rollout]:-}"
+  local scripted_rollout="${options[scripted-rollout]:-}"
+  local direct_proposal_name="${options[direct-proposal]:-}"
+  for identifier in \
+    "${experiment_id}" "${reference_name}" "${direct_rollout}" \
+    "${zero_rollout}" "${scripted_rollout}" "${direct_proposal_name}"; do
+    is_safe_identifier "${identifier}" || die "invalid baseline comparison identifier"
+  done
+  require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+  require_positive_integer "requested steps" "${requested_steps}" || exit 1
+  (( requested_steps <= 8 )) || die "control rollout is capped at eight steps"
+  local direct_proposal="${checkpoint_dir}/${direct_proposal_name}.pth"
+  [[ -s "${direct_proposal}" ]] \
+    || die "action proposal does not exist: ${direct_proposal_name}"
+  local report_dir="${control_frame_root}/control_baselines/${experiment_id}"
+  sudo install -d -o "${USER}" -g "${USER}" "${report_dir}"
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.control_baseline_report_cli \
+    --data-root "${control_frame_root}" \
+    --experiment-id "${experiment_id}" \
+    --reference-recording "${reference_name}" \
+    --seed "${exploration_seed}" \
+    --requested-steps "${requested_steps}" \
+    --direct-rollout "${direct_rollout}" \
+    --direct-sessions "$(rollout_session_list "${direct_rollout}" "${requested_steps}")" \
+    --direct-proposal "${direct_proposal}" \
+    --zero-rollout "${zero_rollout}" \
+    --zero-sessions "$(rollout_session_list "${zero_rollout}" "${requested_steps}")" \
+    --zero-proposal "${checkpoint_dir}/baseline_zero.pth" \
+    --scripted-rollout "${scripted_rollout}" \
+    --scripted-sessions "$(rollout_session_list "${scripted_rollout}" "${requested_steps}")" \
+    --scripted-proposal "${checkpoint_dir}/baseline_scripted.pth" \
     --output "${report_dir}/report.json"
 }
 
@@ -744,8 +829,14 @@ case "${1:-}" in
   control-shadow-session)
     infer_shadow_session "${@:2}"
     ;;
+  control-baseline-session)
+    persist_baseline_session "${@:2}"
+    ;;
   control-rollout-report)
     report_control_rollout "${@:2}"
+    ;;
+  control-baseline-report)
+    report_control_baselines "${@:2}"
     ;;
   control-worker-start)
     start_control_worker "${@:2}"
@@ -761,6 +852,6 @@ case "${1:-}" in
       "${2:-}" "${3:-}" "${4:-}" "${5:-wrist}" "${6:-40}"
     ;;
   *)
-    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, proposal-eval, proposal-summarize, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-rollout-report, or summarize"
+    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, proposal-eval, proposal-summarize, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-rollout-report, control-baseline-report, or summarize"
     ;;
 esac

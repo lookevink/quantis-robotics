@@ -17,7 +17,12 @@ sync_tree() {
   local destination="$2"
   local remaining
   [[ -d "${source}" ]] || die "backup source does not exist: ${source}"
-  mkdir -p "${destination}"
+  if ! mkdir -p "${destination}" 2>/dev/null \
+    || [[ ! -w "${destination}" ]]; then
+    command -v sudo >/dev/null 2>&1 \
+      || die "backup destination is not writable and sudo is unavailable: ${destination}"
+    sudo install -d -o "$(id -u)" -g "$(id -g)" "${destination}"
+  fi
   rsync -a "${source}/" "${destination}/"
   remaining="$(rsync -anic "${source}/" "${destination}/")"
   [[ -z "${remaining}" ]] \
@@ -69,6 +74,13 @@ require_dedicated_backup_filesystem
 ensure_writable_backup_root
 sync_tree "${isaac_data_root}/quantis/scenes" "${backup_root}/isaac/scenes"
 sync_tree "${isaac_data_root}/quantis/recordings" "${backup_root}/isaac/recordings"
+for state_tree in control_sessions control_rollouts control_baselines; do
+  if [[ -d "${isaac_data_root}/quantis/${state_tree}" ]]; then
+    sync_tree \
+      "${isaac_data_root}/quantis/${state_tree}" \
+      "${backup_root}/isaac/${state_tree}"
+  fi
+done
 sync_tree "${checkpoint_dir}" "${backup_root}/jepa-wm/checkpoints"
 date -u +%Y-%m-%dT%H:%M:%SZ >"${backup_root}/LAST_BACKUP_UTC"
 

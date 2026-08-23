@@ -312,6 +312,8 @@ Commands:
   jepa-wm-control-worker-start [proposal] [adapter] | jepa-wm-control-worker-status | jepa-wm-control-worker-stop
   jepa-wm-control-step REFERENCE_RECORDING SEED [proposal] [adapter]
   jepa-wm-control-rollout REFERENCE_RECORDING SEED STEPS [proposal] [adapter]
+  jepa-wm-control-baseline REFERENCE_RECORDING SEED STEPS zero|scripted
+  jepa-wm-control-baselines EXPERIMENT DIRECT ZERO SCRIPTED REFERENCE SEED STEPS [direct-proposal]
   jepa-wm-control-rollout-report ROLLOUT SESSION[,SESSION...] REQUESTED_STEPS REFERENCE SEED [proposal]
   jepa-wm-control-apply SESSION
   jepa-wm-summarize EXPERIMENT TRAINING_CSV HELD_OUT_CSV [camera] [count]
@@ -634,6 +636,43 @@ case "${command}" in
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --proposal '${proposal_name}' --adapter '${adapter_name}'"
     remote "bash ~/quantis-robotics/ops/run_control_rollout.sh '${rollout_id}' '${reference_name}' '${exploration_seed}' '${step_count}' '${proposal_name}'"
     printf 'Control rollout: %s\n' "${rollout_id}"
+    ;;
+  jepa-wm-control-baseline)
+    reference_name="${2:-}"
+    exploration_seed="${3:-}"
+    step_count="${4:-3}"
+    policy="${5:-}"
+    is_safe_identifier "${reference_name}" || die "invalid reference recording"
+    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+    require_positive_integer "step count" "${step_count}" || exit 1
+    (( step_count <= 8 )) || die "control rollout is capped at eight steps"
+    [[ "${policy}" == "zero" || "${policy}" == "scripted" ]] \
+      || die "baseline policy must be zero or scripted"
+    proposal_name="baseline_${policy}"
+    rollout_id="${policy}-$(date -u +%Y%m%dT%H%M%SZ)-${exploration_seed}"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/run_control_rollout.sh '${rollout_id}' '${reference_name}' '${exploration_seed}' '${step_count}' '${proposal_name}' '${policy}'"
+    printf 'Control baseline: %s\n' "${rollout_id}"
+    ;;
+  jepa-wm-control-baselines)
+    experiment_id="${2:-}"
+    direct_rollout="${3:-}"
+    zero_rollout="${4:-}"
+    scripted_rollout="${5:-}"
+    reference_name="${6:-}"
+    exploration_seed="${7:-}"
+    step_count="${8:-3}"
+    proposal_name="${9:-quantis_isaac_wrist_action_proposal}"
+    for identifier in \
+      "${experiment_id}" "${direct_rollout}" "${zero_rollout}" \
+      "${scripted_rollout}" "${reference_name}" "${proposal_name}"; do
+      is_safe_identifier "${identifier}" || die "invalid baseline comparison identifier"
+    done
+    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+    require_positive_integer "step count" "${step_count}" || exit 1
+    (( step_count <= 8 )) || die "control rollout is capped at eight steps"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-baseline-report --experiment '${experiment_id}' --reference '${reference_name}' --seed '${exploration_seed}' --requested-steps '${step_count}' --direct-rollout '${direct_rollout}' --zero-rollout '${zero_rollout}' --scripted-rollout '${scripted_rollout}' --direct-proposal '${proposal_name}'"
     ;;
   jepa-wm-control-rollout-report)
     rollout_id="${2:-}"

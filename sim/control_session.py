@@ -442,6 +442,19 @@ class ControlSession:
                 f"control session has no valid response: {self.session_id}"
             ) from error
 
+    def write_response(self, response: ProposedControl) -> None:
+        if self.response_path.exists():
+            raise ValueError(f"control session already has a response: {self.session_id}")
+        observation, _ = self.load_capture()
+        if (
+            response.observation_id != observation.observation_id
+            or response.proposal != observation.expected_proposal
+            or response.created_at_unix_seconds
+            < observation.captured_at_unix_seconds
+        ):
+            raise ValueError("control response is not bound to its session")
+        write_json_atomic(self.response_path, response.to_dict())
+
     def load_shadow(self) -> ShadowSearchEvidence:
         try:
             shadow_request = ShadowPlanningRequest.from_dict(

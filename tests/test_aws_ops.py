@@ -192,6 +192,18 @@ class AwsLifecycleTests(unittest.TestCase):
                     isaac_data / "quantis/recordings/trajectory/manifest.json",
                     "recording",
                 ),
+                (
+                    isaac_data / "quantis/control_sessions/session/result.json",
+                    "control-session",
+                ),
+                (
+                    isaac_data / "quantis/control_rollouts/rollout/report.json",
+                    "control-rollout",
+                ),
+                (
+                    isaac_data / "quantis/control_baselines/proof/report.json",
+                    "control-baseline",
+                ),
                 (checkpoints / "model.pth", "checkpoint"),
             ):
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -223,6 +235,18 @@ class AwsLifecycleTests(unittest.TestCase):
             self.assertEqual(
                 (backup / "isaac/recordings/trajectory/manifest.json").read_text(),
                 "recording",
+            )
+            self.assertEqual(
+                (backup / "isaac/control_sessions/session/result.json").read_text(),
+                "control-session",
+            )
+            self.assertEqual(
+                (backup / "isaac/control_rollouts/rollout/report.json").read_text(),
+                "control-rollout",
+            )
+            self.assertEqual(
+                (backup / "isaac/control_baselines/proof/report.json").read_text(),
+                "control-baseline",
             )
             self.assertEqual(
                 (backup / "jepa-wm/checkpoints/model.pth").read_text(),
@@ -683,6 +707,40 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/run_control_rollout.sh", calls)
         self.assertIn("'3'", calls)
         self.assertIn("quantis_isaac_wrist_action_proposal", calls)
+
+    def test_jepa_wm_control_baseline_uses_an_explicit_non_model_policy(self):
+        result, calls = self.run_command(
+            "jepa-wm-control-baseline",
+            arguments=("domain-held-00", "11400", "3", "scripted"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/run_control_rollout.sh", calls)
+        self.assertIn("'baseline_scripted' 'scripted'", calls)
+        self.assertNotIn("control-worker-start", calls)
+
+    def test_jepa_wm_control_baselines_forwards_strict_trial_provenance(self):
+        result, calls = self.run_command(
+            "jepa-wm-control-baselines",
+            arguments=(
+                "baseline-proof",
+                "direct-rollout",
+                "zero-rollout",
+                "scripted-rollout",
+                "domain-held-00",
+                "11400",
+                "3",
+                "quantis_isaac_wrist_action_proposal",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/jepa_wm.sh control-baseline-report", calls)
+        self.assertIn("--direct-rollout 'direct-rollout'", calls)
+        self.assertIn("--zero-rollout 'zero-rollout'", calls)
+        self.assertIn("--scripted-rollout 'scripted-rollout'", calls)
+        self.assertIn("--requested-steps '3'", calls)
+        self.assertIn("--direct-proposal 'quantis_isaac_wrist_action_proposal'", calls)
 
     def test_jepa_wm_summarize_forwards_the_whole_experiment(self):
         result, calls = self.run_command(
