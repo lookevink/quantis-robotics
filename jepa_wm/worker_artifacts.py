@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from jepa_wm.objective_calibration import TaskProgressMargins
 from jepa_wm.persistence import write_json_atomic
 
 
@@ -19,6 +20,7 @@ class ControlWorkerArtifacts:
     proposal: Path
     adapter: Path
     calibration: Path | None = None
+    progress_margins: TaskProgressMargins | None = None
 
     def __post_init__(self) -> None:
         paths = (self.proposal, self.adapter)
@@ -26,6 +28,10 @@ class ControlWorkerArtifacts:
             self.calibration is not None and not self.calibration.is_absolute()
         ):
             raise ValueError("control worker artifact paths must be absolute")
+        if self.calibration is None and self.progress_margins is not None:
+            raise ValueError("uncalibrated workers cannot define progress margins")
+        if self.calibration is not None and self.progress_margins is None:
+            object.__setattr__(self, "progress_margins", TaskProgressMargins())
 
     @property
     def calibrated(self) -> bool:
@@ -44,6 +50,11 @@ class ControlWorkerArtifacts:
             "proposal": encoded(self.proposal),
             "adapter": encoded(self.adapter),
             "calibration": encoded(self.calibration),
+            "progress_margins": (
+                self.progress_margins.to_dict()
+                if self.progress_margins is not None
+                else None
+            ),
             "calibrated": self.calibrated,
         }
 
@@ -70,6 +81,11 @@ class ControlWorkerArtifacts:
             proposal=proposal,
             adapter=adapter,
             calibration=resolved(payload.get("calibration"), optional=True),
+            progress_margins=(
+                TaskProgressMargins.from_dict(payload["progress_margins"])
+                if payload.get("progress_margins") is not None
+                else None
+            ),
         )
         if payload.get("calibrated") is not artifacts.calibrated:
             raise ValueError("control worker artifact claims are inconsistent")
@@ -96,16 +112,34 @@ def main() -> None:
     write_parser.add_argument("--proposal", type=Path, required=True)
     write_parser.add_argument("--adapter", type=Path, required=True)
     write_parser.add_argument("--calibration", type=Path)
+    write_parser.add_argument("--translation-margin", type=float)
+    write_parser.add_argument("--rotation-margin", type=float)
+    write_parser.add_argument("--gripper-margin", type=float)
     proposal_parser = subparsers.add_parser("proposal-name")
     proposal_parser.add_argument("--manifest", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "proposal-name":
         print(ControlWorkerArtifacts.load(args.manifest).proposal.stem)
         return
+    margin_values = (
+        args.translation_margin,
+        args.rotation_margin,
+        args.gripper_margin,
+    )
+    if any(value is not None for value in margin_values) and not all(
+        value is not None for value in margin_values
+    ):
+        parser.error("all three progress margins must be provided together")
+    progress_margins = (
+        TaskProgressMargins(*margin_values)
+        if all(value is not None for value in margin_values)
+        else None
+    )
     ControlWorkerArtifacts(
         args.proposal.resolve(),
         args.adapter.resolve(),
         args.calibration.resolve() if args.calibration is not None else None,
+        progress_margins,
     ).write(args.output)
     print(args.output)
 

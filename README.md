@@ -671,6 +671,19 @@ reduction, maximum allowed error, and the resulting pass decision for both the
 direct and planned candidates. Legacy reports retain their original zero-margin
 interpretation when reloaded.
 
+The worker manifest owns these three thresholds, so stricter shadow experiments
+do not require code changes. Supply all three together after the calibration;
+uncalibrated workers reject them:
+
+```bash
+./ops/aws.sh jepa-wm-control-worker-configure \
+  quantis_seed11400_margin500_control \
+  quantis_isaac_wrist_action_proposal_motion_state_12seed \
+  quantis_isaac_wrist_action_adapter \
+  quantis_action_response_seed11400_v1 \
+  0.0005 0.001 0.005
+```
+
 Live shadow session `step-20260823T224924Z-11401` cleared all three margins. It
 predicted reductions of `0.218 mm` translation, `0.00233 rad` rotation, and
 `0.0419` gripper error, improved latent energy by `0.000182`, and passed the
@@ -704,6 +717,23 @@ When a candidate source is a standalone control step rather than a rollout,
 pass its exact session as the optional final argument to
 `jepa-wm-control-baselines`; the report retains and revalidates that source
 instead of inferring a `ROLLOUT-00` session name.
+
+The stricter `0.5 mm` translation gate produced cross-seed improvement in both
+directions. Calibration on seed 11400 and evaluation on seed 11401 produced
+shadow session `step-20260823T232339Z-11401`; its candidate predicted `0.697
+mm`, `0.00143 rad`, and `0.0222` gripper progress. Reset trial
+`candidate-20260823T232732Z-11401` realized `1.531 mm`, `0.00262 rad`, and
+`0.04444`, beat zero and direct on every axis, reached scripted tolerance on
+every axis, and passed the strict candidate gate at 0 N contact.
+
+The reverse experiment fit calibration only on seed 11401 and evaluated seed
+11400. Shadow session `step-20260823T233919Z-11400` predicted `0.958 mm`,
+`0.00110 rad`, and `0.0374`; reset trial
+`candidate-20260823T234655Z-11400` realized `2.188 mm`, `0.000477 rad`, and
+`0.03741`, again beating zero and direct on every axis at 0 N. It missed the
+scripted translation tolerance by about `0.057 mm`, so strict aggregate
+readiness and production authority remain false.
+
 Stop the worker independently with
 `./ops/aws.sh jepa-wm-control-worker-stop`.
 

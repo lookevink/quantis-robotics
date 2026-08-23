@@ -34,6 +34,15 @@ require_positive_integer() {
   }
 }
 
+require_nonnegative_number() {
+  local name="$1"
+  local value="$2"
+  [[ "${value}" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$ ]] || {
+    printf 'error: %s must be a non-negative number\n' "${name}" >&2
+    return 1
+  }
+}
+
 load_control_policy_descriptor() {
   local policy="$1"
   local direct_proposal="${2:-direct-proposal}"

@@ -673,11 +673,16 @@ calibrate_control_objective() {
 
 configure_control_worker() {
   local -A options=()
-  parse_named_options options "name proposal adapter calibration" "$@"
+  parse_named_options options \
+    "name proposal adapter calibration translation-margin rotation-margin gripper-margin" \
+    "$@"
   local name="${options[name]:-}"
   local proposal_name="${options[proposal]:-}"
   local adapter_name="${options[adapter]:-}"
   local calibration_name="${options[calibration]:-none}"
+  local translation_margin="${options[translation-margin]:-}"
+  local rotation_margin="${options[rotation-margin]:-}"
+  local gripper_margin="${options[gripper-margin]:-}"
   for identifier in "${name}" "${proposal_name}" "${adapter_name}" "${calibration_name}"; do
     is_safe_identifier "${identifier}" || die "invalid worker artifact identifier"
   done
@@ -686,18 +691,34 @@ configure_control_worker() {
   [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
   [[ -s "${adapter}" ]] || die "action adapter does not exist: ${adapter_name}"
   local -a calibration_arguments=()
+  local -a margin_arguments=()
   if [[ "${calibration_name}" != "none" ]]; then
     local calibration="${checkpoint_dir}/${calibration_name}.json"
     [[ -s "${calibration}" ]] \
       || die "action-response calibration does not exist: ${calibration_name}"
     calibration_arguments=(--calibration "${calibration}")
   fi
+  if [[ -n "${translation_margin}${rotation_margin}${gripper_margin}" ]]; then
+    [[ "${calibration_name}" != "none" ]] \
+      || die "progress margins require a calibration"
+    [[ -n "${translation_margin}" && -n "${rotation_margin}" && -n "${gripper_margin}" ]] \
+      || die "all three progress margins must be provided together"
+    require_nonnegative_number "translation margin" "${translation_margin}" || exit 1
+    require_nonnegative_number "rotation margin" "${rotation_margin}" || exit 1
+    require_nonnegative_number "gripper margin" "${gripper_margin}" || exit 1
+    margin_arguments=(
+      --translation-margin "${translation_margin}"
+      --rotation-margin "${rotation_margin}"
+      --gripper-margin "${gripper_margin}"
+    )
+  fi
   cd "${repo_dir}"
   "${venv_dir}/bin/python" -m jepa_wm.worker_artifacts write \
     --output "${checkpoint_dir}/${name}.worker.json" \
     --proposal "${proposal}" \
     --adapter "${adapter}" \
-    "${calibration_arguments[@]}"
+    "${calibration_arguments[@]}" \
+    "${margin_arguments[@]}"
 }
 
 rollout_session_list() {

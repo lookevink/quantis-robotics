@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 import unittest
 
+from jepa_wm.objective_calibration import TaskProgressMargins
 from jepa_wm.worker_artifacts import ControlWorkerArtifacts
 
 
@@ -16,12 +17,37 @@ class ControlWorkerArtifactsTest(unittest.TestCase):
                 root / "proposal.pth",
                 root / "adapter.pth",
                 root / "calibration.json",
+                TaskProgressMargins(5e-4, 1e-3, 0.005),
             )
 
             artifacts.write(manifest)
 
             self.assertEqual(ControlWorkerArtifacts.load(manifest), artifacts)
             self.assertNotIn(str(root), manifest.read_text())
+
+    def test_legacy_calibrated_manifest_receives_default_progress_margins(self) -> None:
+        root = Path("/tmp/quantis-worker-artifacts")
+        payload = {
+            "schema": "quantis.jepa_wm_control_worker_artifacts.v1",
+            "proposal": "proposal.pth",
+            "adapter": "adapter.pth",
+            "calibration": "calibration.json",
+            "calibrated": True,
+        }
+
+        artifacts = ControlWorkerArtifacts.from_dict(payload, relative_to=root)
+
+        self.assertEqual(artifacts.progress_margins, TaskProgressMargins())
+
+    def test_rejects_progress_margins_without_calibration(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError, "uncalibrated workers cannot define progress margins"
+        ):
+            ControlWorkerArtifacts(
+                Path("/tmp/proposal.pth"),
+                Path("/tmp/adapter.pth"),
+                progress_margins=TaskProgressMargins(),
+            )
 
     def test_rejects_a_tampered_calibrated_claim(self) -> None:
         root = Path("/tmp/quantis-worker-artifacts")

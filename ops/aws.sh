@@ -309,7 +309,7 @@ Commands:
   jepa-wm-proposal-eval RECORDING [camera] [start] [count] [stride] [proposal]
   jepa-wm-proposal-summarize RECORDING[,RECORDING...] [camera] [start] [count] [stride] [proposal]
   jepa-wm-control-infer-replay RECORDING [camera] [context-index] [proposal]
-  jepa-wm-control-worker-configure NAME PROPOSAL ADAPTER [CALIBRATION]
+  jepa-wm-control-worker-configure NAME PROPOSAL ADAPTER [CALIBRATION] [translation-margin rotation-margin gripper-margin]
   jepa-wm-control-worker-start [artifacts] | jepa-wm-control-worker-status | jepa-wm-control-worker-stop
   jepa-wm-control-step REFERENCE_RECORDING SEED [artifacts]
   jepa-wm-control-rollout REFERENCE_RECORDING SEED STEPS [artifacts]
@@ -599,12 +599,24 @@ case "${command}" in
     proposal_name="${3:-}"
     adapter_name="${4:-}"
     calibration_name="${5:-none}"
+    translation_margin="${6:-}"
+    rotation_margin="${7:-}"
+    gripper_margin="${8:-}"
     for identifier in \
       "${artifacts_name}" "${proposal_name}" "${adapter_name}" "${calibration_name}"; do
       is_safe_identifier "${identifier}" || die "invalid worker artifact identifier"
     done
+    margin_arguments=""
+    if [[ -n "${translation_margin}${rotation_margin}${gripper_margin}" ]]; then
+      [[ -n "${translation_margin}" && -n "${rotation_margin}" && -n "${gripper_margin}" ]] \
+        || die "all three progress margins must be provided together"
+      require_nonnegative_number "translation margin" "${translation_margin}" || exit 1
+      require_nonnegative_number "rotation margin" "${rotation_margin}" || exit 1
+      require_nonnegative_number "gripper margin" "${gripper_margin}" || exit 1
+      margin_arguments=" --translation-margin '${translation_margin}' --rotation-margin '${rotation_margin}' --gripper-margin '${gripper_margin}'"
+    fi
     sync_repo
-    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-configure --name '${artifacts_name}' --proposal '${proposal_name}' --adapter '${adapter_name}' --calibration '${calibration_name}'"
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-configure --name '${artifacts_name}' --proposal '${proposal_name}' --adapter '${adapter_name}' --calibration '${calibration_name}'${margin_arguments}"
     ;;
   jepa-wm-control-worker-start)
     artifacts_name="${2:-quantis_wrist_control}"

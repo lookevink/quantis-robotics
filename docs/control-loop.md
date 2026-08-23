@@ -287,8 +287,8 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     establish the comparison, and its failed direct baseline gate prevents
     premature promotion.
 14. [ ] Establish repeatable realized shadow-candidate improvement on whole
-    held-out seeds. Task-space reranking now beats direct on all axes in one
-    held-out trial, but the strict zero/scripted translation gates remain open.
+    held-out seeds. A `0.5 mm` manifest-bound translation gate now transfers in
+    both whole-seed directions and beats zero/direct on every axis.
     Calibration checkpoints retain reconstructible proposed/realized trials,
     require per-axis directional coverage, and are loaded through one manifest
     that binds proposal, adapter, and calibration. Target frame/pose identity is
@@ -296,6 +296,8 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     unresolved axis must also clear a persisted minimum predicted reduction
     (`0.1 mm` translation, `0.001 rad` rotation, `0.005` gripper closedness),
     with before/after/required progress exposed as reconstructible evidence.
-    A calibration fit only on seed 11400 now transfers to seed 11401: its
-    isolated candidate beat direct and zero on all axes, while the remaining
-    scripted-translation miss keeps promotion closed.
+    Calibration on seed 11400 and evaluation on 11401 passed the full realized
+    gate with `1.531 mm` translation progress. Calibration on 11401 and
+    evaluation on 11400 realized `2.188 mm` but missed scripted translation
+    tolerance by `0.057 mm`. This is repeatable improvement, but not yet two
+    strict passes; production authority remains false.

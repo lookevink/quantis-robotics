@@ -79,6 +79,7 @@ class FrozenProposalPredictor:
             else None
         )
         self._calibration_path = artifacts.calibration
+        self._progress_margins = artifacts.progress_margins
         if (
             self._calibration is not None
             and not self._calibration.ready_for_reranking
@@ -202,10 +203,13 @@ class FrozenProposalPredictor:
             target_pose = request.observation.target_pose
             if target_pose is None:
                 raise ValueError("calibrated shadow planning requires a target pose")
+            if self._progress_margins is None:
+                raise ValueError("calibrated worker is missing task-progress margins")
             task_progress = TaskProgressObjective(
                 request.observation.pose,
                 target_pose,
                 self._calibration,
+                minimum_progress=self._progress_margins,
             )
         return plan_shadow_candidates(
             observation_id=request.observation.observation_id,

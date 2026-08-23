@@ -697,6 +697,41 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("--name 'quantis_calibrated_control'", calls)
         self.assertIn("--calibration 'quantis_action_response'", calls)
 
+    def test_jepa_wm_control_worker_binds_progress_margins(self):
+        result, calls = self.run_command(
+            "jepa-wm-control-worker-configure",
+            arguments=(
+                "quantis_ambitious_control",
+                "proposal",
+                "adapter",
+                "calibration",
+                "0.0005",
+                "0.001",
+                "0.005",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--translation-margin '0.0005'", calls)
+        self.assertIn("--rotation-margin '0.001'", calls)
+        self.assertIn("--gripper-margin '0.005'", calls)
+
+    def test_jepa_wm_control_worker_rejects_partial_progress_margins(self):
+        result, calls = self.run_command(
+            "jepa-wm-control-worker-configure",
+            arguments=(
+                "quantis_ambitious_control",
+                "proposal",
+                "adapter",
+                "calibration",
+                "0.0005",
+            ),
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("all three progress margins", result.stderr)
+        self.assertNotIn("control-worker-configure", calls)
+
     def test_jepa_wm_control_step_keeps_inference_outside_isaac(self):
         result, calls = self.run_command(
             "jepa-wm-control-step",
