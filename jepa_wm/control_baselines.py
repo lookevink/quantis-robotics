@@ -20,7 +20,7 @@ from jepa_wm.control_protocol import (
 )
 from jepa_wm.control_rollout import ControlRolloutReport, ControlStepSummary, PoseError
 from jepa_wm.domain_recording import DomainRecording
-from jepa_wm.trajectory import load_rollouts
+from jepa_wm.trajectory import load_rollout_at
 from jepa_wm.trial_equivalence import (
     ResetEquivalenceTolerances,
     TrialResetState,
@@ -73,20 +73,12 @@ def scripted_actions_at(
     recording: DomainRecording,
     context_index: int,
 ) -> tuple[DroidAction, ...]:
-    matches = tuple(
-        rollout.actions
-        for rollout in load_rollouts(
-            recording.path,
-            camera="wrist",
-            bounds=ActionSelectionBounds(minimum_action_norm=0.0),
-        )
-        if rollout.context[0].index == context_index
-    )
-    if len(matches) != 1:
-        raise ValueError(
-            f"scripted reference has {len(matches)} rollouts at index {context_index}"
-        )
-    return matches[0]
+    return load_rollout_at(
+        recording.path,
+        camera="wrist",
+        context_index=context_index,
+        bounds=ActionSelectionBounds(minimum_action_norm=0.0),
+    ).actions
 
 
 def load_held_out_reference(path: Path, expected_seed: int) -> DomainRecording:

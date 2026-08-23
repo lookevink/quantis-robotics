@@ -29,15 +29,51 @@ def _strict_nonnegative_int(payload: dict[str, Any], field: str) -> int:
 
 
 @dataclass(frozen=True)
+class ControlTarget:
+    frame: Path
+    pose: DroidPose | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"frame": str(self.frame)}
+        if self.pose is not None:
+            payload["pose"] = list(self.pose.values)
+        return payload
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ControlTarget:
+        if not isinstance(payload, dict):
+            raise ValueError("control target is incomplete")
+        try:
+            return cls(
+                frame=Path(payload["frame"]),
+                pose=(
+                    DroidPose(tuple(payload["pose"]))
+                    if payload.get("pose") is not None
+                    else None
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("control target is incomplete") from error
+
+
+@dataclass(frozen=True)
 class ControlObservation:
     observation_id: int
     captured_at_unix_seconds: float
     context_frame: Path
-    target_frame: Path
+    target: ControlTarget
     expected_proposal: Path
     pose: DroidPose
     previous_action: DroidAction
     warmup_frames: int
+
+    @property
+    def target_frame(self) -> Path:
+        return self.target.frame
+
+    @property
+    def target_pose(self) -> DroidPose | None:
+        return self.target.pose
 
     def __post_init__(self) -> None:
         if isinstance(self.observation_id, bool) or self.observation_id <= 0:
@@ -58,7 +94,18 @@ class ControlObservation:
                 observation_id=_strict_positive_int(payload, "observation_id"),
                 captured_at_unix_seconds=float(payload["captured_at_unix_seconds"]),
                 context_frame=Path(payload["context_frame"]),
-                target_frame=Path(payload["target_frame"]),
+                target=(
+                    ControlTarget.from_dict(payload["target"])
+                    if payload.get("target") is not None
+                    else ControlTarget(
+                        frame=Path(payload["target_frame"]),
+                        pose=(
+                            DroidPose(tuple(payload["target_pose"]))
+                            if payload.get("target_pose") is not None
+                            else None
+                        ),
+                    )
+                ),
                 expected_proposal=Path(payload["expected_proposal"]),
                 pose=DroidPose(tuple(payload["pose"])),
                 previous_action=DroidAction(tuple(payload["previous_action"])),
@@ -68,17 +115,18 @@ class ControlObservation:
             raise ValueError("control observation is incomplete") from error
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema": CONTROL_SCHEMA,
             "observation_id": self.observation_id,
             "captured_at_unix_seconds": self.captured_at_unix_seconds,
             "context_frame": str(self.context_frame),
-            "target_frame": str(self.target_frame),
+            "target": self.target.to_dict(),
             "expected_proposal": str(self.expected_proposal),
             "pose": list(self.pose.values),
             "previous_action": list(self.previous_action.values),
             "warmup_frames": self.warmup_frames,
         }
+        return payload
 
 
 @dataclass(frozen=True)

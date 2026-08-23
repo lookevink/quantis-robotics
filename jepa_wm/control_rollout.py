@@ -13,6 +13,10 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from jepa_wm.action import DroidPose, action_between
+from jepa_wm.control_tracking import (
+    evaluate_action_tracking,
+    tracking_limits_for_policy,
+)
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.control_safety import SimulatorSafetyLimits
 from jepa_wm.shadow_planning import ShadowSearchEvidence
@@ -224,6 +228,25 @@ class ControlStepSummary:
                 raise ValueError(
                     f"post-action evidence is not bound to its response: {session.session_id}"
                 )
+            if result.post_action is not None:
+                actual = action_between(observation.pose, result.post_action.pose)
+                tracking = evaluate_action_tracking(
+                    commanded,
+                    actual,
+                    tracking_limits_for_policy(state.execution_policy),
+                )
+                if (
+                    not np.allclose(
+                        actual.values,
+                        result.post_action.actual_action.values,
+                        rtol=0.0,
+                        atol=1e-10,
+                    )
+                    or tracking != result.post_action.tracking
+                ):
+                    raise ValueError(
+                        f"post-action realization is inconsistent: {session.session_id}"
+                    )
         shadow = session.load_shadow() if session.shadow_path.is_file() else None
         shadow_safety = (
             session.load_shadow_safety()

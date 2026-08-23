@@ -13,11 +13,13 @@ from jepa_wm.action import (
     ACTION_RECORDING_CONTRACT,
     DROID_FPS,
     ActionRecordingContract,
+    ActionSelectionBounds,
     DroidAction,
     DroidPose,
 )
-from jepa_wm.control_protocol import ControlObservation
+from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.domain_recording import DomainRecording
+from jepa_wm.trajectory import load_rollout_at
 from sim.control_session import (
     CONTROL_ROOT,
     QUANTIS_DATA_ROOT,
@@ -171,16 +173,22 @@ async def capture_control_observation(
         or context_step.get("action_from_previous") is None
     ):
         raise RuntimeError("control warm-up telemetry is incomplete")
-    target = reference.path / "wrist" / f"frame_{warmup.frames + 3:06d}.png"
-    if not target.is_file():
-        raise ValueError(f"control target frame does not exist: {target}")
+    reference_rollout = load_rollout_at(
+        reference.path,
+        camera="wrist",
+        context_index=warmup.frames,
+        bounds=ActionSelectionBounds(minimum_action_norm=0.0),
+    )
+    target = reference_rollout.target.path
     observation = ControlObservation(
         observation_id=observation_id_for_session(session_id),
         captured_at_unix_seconds=time(),
         context_frame=(output / "wrist" / f"frame_{warmup.frames:06d}.png").relative_to(
             QUANTIS_DATA_ROOT
         ),
-        target_frame=target.relative_to(QUANTIS_DATA_ROOT),
+        target=ControlTarget(
+            target.relative_to(QUANTIS_DATA_ROOT), reference_rollout.target_pose
+        ),
         expected_proposal=control_proposal_path(proposal_name),
         pose=DroidPose(tuple(context_step["end_effector_pose"])),
         previous_action=DroidAction(tuple(context_step["action_from_previous"])),

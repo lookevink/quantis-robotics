@@ -25,6 +25,7 @@ from jepa_wm.planner_readiness import (
     FirstActionGate,
     FirstActionThresholds,
 )
+from jepa_wm.objective_calibration import CalibrationIdentity, TaskProgressObjective
 
 
 CandidateScorer = Callable[[np.ndarray], np.ndarray]
@@ -44,6 +45,7 @@ class ShadowPlanningRequest:
     observation: ControlObservation
     direct_control: ProposedControl
     expected_adapter: Path
+    expected_calibration: CalibrationIdentity | None = None
 
     def __post_init__(self) -> None:
         if self.observation.observation_id != self.direct_control.observation_id:
@@ -64,6 +66,11 @@ class ShadowPlanningRequest:
             "observation": self.observation.to_dict(),
             "direct_control": self.direct_control.to_dict(),
             "expected_adapter": str(self.expected_adapter),
+            "expected_calibration": (
+                self.expected_calibration.to_dict()
+                if self.expected_calibration is not None
+                else None
+            ),
         }
 
     @classmethod
@@ -75,6 +82,11 @@ class ShadowPlanningRequest:
                 ControlObservation.from_dict(payload["observation"]),
                 ProposedControl.from_dict(payload["direct_control"]),
                 Path(payload["expected_adapter"]),
+                (
+                    CalibrationIdentity.from_dict(payload["expected_calibration"])
+                    if payload.get("expected_calibration") is not None
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("shadow planning request is incomplete") from error
@@ -236,24 +248,40 @@ class ShadowSearchConfig:
         )
 
 
+CALIBRATED_SHADOW_SEARCH_CONFIG = ShadowSearchConfig(
+    planner=CEMConfig(iterations=5, samples=128, elites=12),
+    trust_region=CandidateTrustRegion(
+        maximum_translation_deviation=0.003,
+        maximum_rotation_deviation=0.01,
+        maximum_gripper_deviation=0.05,
+    ),
+)
+
+
 @dataclass(frozen=True)
 class ShadowCandidate:
     actions: tuple[DroidAction, ...]
     latent_energy: float
     prior_penalty: float
     objective: float
+    task_penalty: float = 0.0
 
     def __post_init__(self) -> None:
         if len(self.actions) != 3:
             raise ValueError("shadow candidate requires exactly three actions")
         if not all(
             isfinite(value)
-            for value in (self.latent_energy, self.prior_penalty, self.objective)
+            for value in (
+                self.latent_energy,
+                self.prior_penalty,
+                self.task_penalty,
+                self.objective,
+            )
         ):
             raise ValueError("shadow candidate metrics must be finite")
-        if self.prior_penalty < 0.0 or not np.isclose(
+        if self.prior_penalty < 0.0 or self.task_penalty < 0.0 or not np.isclose(
             self.objective,
-            self.latent_energy + self.prior_penalty,
+            self.latent_energy + self.prior_penalty + self.task_penalty,
             rtol=0.0,
             atol=1e-9,
         ):
@@ -264,6 +292,7 @@ class ShadowCandidate:
             "actions": [list(action.values) for action in self.actions],
             "latent_energy": self.latent_energy,
             "prior_penalty": self.prior_penalty,
+            "task_penalty": self.task_penalty,
             "objective": self.objective,
         }
 
@@ -274,6 +303,7 @@ class ShadowCandidate:
             latent_energy=float(payload["latent_energy"]),
             prior_penalty=float(payload["prior_penalty"]),
             objective=float(payload["objective"]),
+            task_penalty=float(payload.get("task_penalty", 0.0)),
         )
 
 
@@ -289,6 +319,7 @@ class ShadowSearchEvidence:
     candidates_scored: int
     iteration_best_objectives: tuple[float, ...]
     planning_seconds: float
+    task_progress: TaskProgressObjective | None = None
     authority: CandidateAuthority = CandidateAuthority.SHADOW_ONLY
 
     def __post_init__(self) -> None:
@@ -331,6 +362,30 @@ class ShadowSearchEvidence:
             or len(self.iteration_best_objectives) != self.config.planner.iterations
         ):
             raise ValueError("shadow CEM evidence does not match its saved budget")
+        task_candidates = (self.direct, self.planned)
+        if self.task_progress is None:
+            if any(candidate.task_penalty != 0.0 for candidate in task_candidates):
+                raise ValueError("shadow task penalty has no calibration context")
+        else:
+            expected_penalties = self.task_progress.penalty(
+                np.asarray(
+                    [
+                        [action.values for action in candidate.actions]
+                        for candidate in task_candidates
+                    ],
+                    dtype=np.float64,
+                )
+            )
+            if any(
+                not np.isclose(
+                    candidate.task_penalty,
+                    expected,
+                    rtol=0.0,
+                    atol=1e-12,
+                )
+                for candidate, expected in zip(task_candidates, expected_penalties)
+            ):
+                raise ValueError("shadow task penalty is inconsistent")
 
     @property
     def energy_improvement(self) -> float:
@@ -346,7 +401,12 @@ class ShadowSearchEvidence:
             self.energy_improvement > self.config.minimum_energy_improvement
             and self.objective_improvement > 0.0
             and self.first_action_gate.passed
+            and self.passes_task_progress_gate
         )
+
+    @property
+    def passes_task_progress_gate(self) -> bool:
+        return self.task_progress is None or self.planned.task_penalty == 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -361,9 +421,15 @@ class ShadowSearchEvidence:
             "candidates_scored": self.candidates_scored,
             "iteration_best_objectives": list(self.iteration_best_objectives),
             "planning_seconds": self.planning_seconds,
+            "task_progress": (
+                self.task_progress.to_dict()
+                if self.task_progress is not None
+                else None
+            ),
             "energy_improvement": self.energy_improvement,
             "objective_improvement": self.objective_improvement,
             "passes_shadow_gate": self.passes_shadow_gate,
+            "passes_task_progress_gate": self.passes_task_progress_gate,
             "authority": self.authority.value,
         }
 
@@ -371,7 +437,7 @@ class ShadowSearchEvidence:
     def from_dict(cls, payload: Mapping[str, Any]) -> ShadowSearchEvidence:
         if payload.get("schema") != "quantis_jepa_wm_shadow_search_v1":
             raise ValueError("shadow-search evidence schema is invalid")
-        return cls(
+        evidence = cls(
             observation_id=int(payload["observation_id"]),
             proposal=Path(payload["proposal"]),
             adapter=Path(payload["adapter"]),
@@ -386,23 +452,79 @@ class ShadowSearchEvidence:
                 float(value) for value in payload["iteration_best_objectives"]
             ),
             planning_seconds=float(payload["planning_seconds"]),
+            task_progress=(
+                TaskProgressObjective.from_dict(payload["task_progress"])
+                if payload.get("task_progress") is not None
+                else None
+            ),
             authority=CandidateAuthority(payload["authority"]),
         )
+        float_claims = (
+            ("energy_improvement", evidence.energy_improvement),
+            ("objective_improvement", evidence.objective_improvement),
+        )
+        boolean_claims = (
+            ("passes_shadow_gate", evidence.passes_shadow_gate),
+            ("passes_task_progress_gate", evidence.passes_task_progress_gate),
+        )
+        if any(
+            name in payload
+            and not np.isclose(
+                float(payload[name]), expected, rtol=0.0, atol=1e-12
+            )
+            for name, expected in float_claims
+        ) or any(
+            name in payload and payload[name] is not expected
+            for name, expected in boolean_claims
+        ):
+            raise ValueError("shadow-search derived claims are inconsistent")
+        return evidence
+
+
+@dataclass(frozen=True)
+class ShadowObjectiveComponents:
+    latent_energy: np.ndarray
+    prior_penalty: np.ndarray
+    task_penalty: np.ndarray
+    total: np.ndarray
+
+
+def _evaluate_objective(
+    candidates: np.ndarray,
+    score: CandidateScorer,
+    prior: EmpiricalActionPrior,
+    task_progress: TaskProgressObjective | None,
+) -> ShadowObjectiveComponents:
+    values = np.asarray(candidates, dtype=np.float64)
+    latent = np.asarray(score(values), dtype=np.float64)
+    prior_values = prior.penalty(values)
+    task_values = (
+        task_progress.penalty(values)
+        if task_progress is not None
+        else np.zeros(len(values), dtype=np.float64)
+    )
+    return ShadowObjectiveComponents(
+        latent,
+        prior_values,
+        task_values,
+        latent + prior_values + task_values,
+    )
 
 
 def _candidate(
     actions: np.ndarray,
     score: CandidateScorer,
     prior: EmpiricalActionPrior,
+    task_progress: TaskProgressObjective | None,
 ) -> ShadowCandidate:
     batch = np.asarray(actions, dtype=np.float64)[None, :, :]
-    latent_energy = float(np.asarray(score(batch), dtype=np.float64)[0])
-    prior_penalty = float(prior.penalty(batch)[0])
+    components = _evaluate_objective(batch, score, prior, task_progress)
     return ShadowCandidate(
         actions=tuple(DroidAction(tuple(row)) for row in batch[0]),
-        latent_energy=latent_energy,
-        prior_penalty=prior_penalty,
-        objective=latent_energy + prior_penalty,
+        latent_energy=float(components.latent_energy[0]),
+        prior_penalty=float(components.prior_penalty[0]),
+        objective=float(components.total[0]),
+        task_penalty=float(components.task_penalty[0]),
     )
 
 
@@ -414,6 +536,7 @@ def plan_shadow_candidates(
     proposal: Path,
     adapter: Path,
     config: ShadowSearchConfig = ShadowSearchConfig(),
+    task_progress: TaskProgressObjective | None = None,
 ) -> ShadowSearchEvidence:
     """Refine a direct proposal while preserving it as the command authority."""
 
@@ -432,8 +555,9 @@ def plan_shadow_candidates(
     )
 
     def objective(candidates: np.ndarray) -> np.ndarray:
-        latent = np.asarray(score(candidates), dtype=np.float64)
-        return latent + prior.penalty(candidates)
+        return _evaluate_objective(
+            candidates, score, prior, task_progress
+        ).total
 
     planning_started = monotonic()
     result = CEMPlanner(config.planner, bounds).plan(
@@ -441,8 +565,8 @@ def plan_shadow_candidates(
         initial_distribution=initial,
     )
     measured_planning_seconds = monotonic() - planning_started
-    direct_candidate = _candidate(center, score, prior)
-    planned_candidate = _candidate(result.actions, score, prior)
+    direct_candidate = _candidate(center, score, prior, task_progress)
+    planned_candidate = _candidate(result.actions, score, prior, task_progress)
     first_action_gate = FirstActionGate(config.first_action_thresholds).evaluate(
         direct_candidate.actions[0],
         planned_candidate.actions[0],
@@ -458,4 +582,5 @@ def plan_shadow_candidates(
         candidates_scored=result.candidates_scored,
         iteration_best_objectives=result.iteration_best_energies,
         planning_seconds=measured_planning_seconds,
+        task_progress=task_progress,
     )

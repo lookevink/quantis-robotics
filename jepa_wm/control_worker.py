@@ -13,11 +13,18 @@ from typing import Any, Protocol, TextIO
 from jepa_wm.action import DroidAction
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.shadow_planning import (
+    CALIBRATED_SHADOW_SEARCH_CONFIG,
     SHADOW_REQUEST_SCHEMA,
     ShadowPlanningRequest,
+    ShadowSearchConfig,
     ShadowSearchEvidence,
     plan_shadow_candidates,
 )
+from jepa_wm.objective_calibration import (
+    ActionResponseCalibration,
+    TaskProgressObjective,
+)
+from jepa_wm.worker_artifacts import ControlWorkerArtifacts
 
 
 class ControlPredictor(Protocol):
@@ -42,9 +49,8 @@ class FrozenProposalPredictor:
         self,
         source: Path,
         checkpoint: Path,
-        proposal: Path,
+        artifacts: ControlWorkerArtifacts,
         *,
-        adapter: Path | None = None,
         frame_root: Path | None = None,
     ) -> None:
         import torch
@@ -60,13 +66,24 @@ class FrozenProposalPredictor:
             source,
             checkpoint,
             device=self._device,
-            adapter=adapter.resolve() if adapter is not None else None,
+            adapter=artifacts.adapter,
         )
         self._proposal, _ = load_action_proposal(
-            proposal.resolve(), device=self._device
+            artifacts.proposal, device=self._device
         )
-        self._proposal_path = proposal.resolve()
-        self._adapter_path = adapter.resolve() if adapter is not None else None
+        self._proposal_path = artifacts.proposal
+        self._adapter_path = artifacts.adapter
+        self._calibration = (
+            ActionResponseCalibration.load(artifacts.calibration)
+            if artifacts.calibration is not None
+            else None
+        )
+        self._calibration_path = artifacts.calibration
+        if (
+            self._calibration is not None
+            and not self._calibration.ready_for_reranking
+        ):
+            raise ValueError("action-response calibration is not ready for reranking")
         self._frame_root = frame_root.resolve() if frame_root is not None else None
         self._latest: EncodedObservationCache | None = None
 
@@ -149,6 +166,24 @@ class FrozenProposalPredictor:
         if request.expected_adapter.resolve() != self._adapter_path:
             raise ValueError("shadow request expects a different action adapter")
         if (
+            request.expected_calibration is not None
+            and request.expected_calibration.path != self._calibration_path
+        ) or (
+            request.expected_calibration is None
+            and self._calibration_path is not None
+        ):
+            raise ValueError("shadow request expects a different calibration")
+        expected_fingerprint = (
+            self._calibration.fingerprint if self._calibration is not None else None
+        )
+        request_fingerprint = (
+            request.expected_calibration.fingerprint
+            if request.expected_calibration is not None
+            else None
+        )
+        if request_fingerprint != expected_fingerprint:
+            raise ValueError("shadow request calibration fingerprint does not match")
+        if (
             self._latest is not None
             and request.observation.observation_id == self._latest.observation_id
             and request.direct_control == self._latest.control
@@ -162,12 +197,28 @@ class FrozenProposalPredictor:
             target,
             device=self._device,
         )
+        task_progress = None
+        if self._calibration is not None:
+            target_pose = request.observation.target_pose
+            if target_pose is None:
+                raise ValueError("calibrated shadow planning requires a target pose")
+            task_progress = TaskProgressObjective(
+                request.observation.pose,
+                target_pose,
+                self._calibration,
+            )
         return plan_shadow_candidates(
             observation_id=request.observation.observation_id,
             direct_actions=request.direct_control.actions,
             score=scorer,
             proposal=self._proposal_path,
             adapter=self._adapter_path,
+            config=(
+                CALIBRATED_SHADOW_SEARCH_CONFIG
+                if task_progress is not None
+                else ShadowSearchConfig()
+            ),
+            task_progress=task_progress,
         )
 
 
@@ -193,8 +244,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--proposal", type=Path, required=True)
-    parser.add_argument("--adapter", type=Path)
+    parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument("--frame-root", type=Path)
     args = parser.parse_args()
     serve_jsonl(
@@ -203,8 +253,7 @@ def main() -> None:
         FrozenProposalPredictor(
             args.source,
             args.checkpoint,
-            args.proposal,
-            adapter=args.adapter,
+            ControlWorkerArtifacts.load(args.artifacts),
             frame_root=args.frame_root,
         ),
     )

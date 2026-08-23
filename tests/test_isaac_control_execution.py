@@ -4,7 +4,7 @@ import unittest
 import numpy as np
 
 from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
-from jepa_wm.control_protocol import ControlObservation, ProposedControl
+from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
 from jepa_wm.control_safety import ControlGateReason, SimulatorSafetyLimits
 from sim.isaac_control_execution import (
     ExecutionSafetyContext,
@@ -21,7 +21,7 @@ class ControlProjectionTest(unittest.TestCase):
             observation_id=123,
             captured_at_unix_seconds=100.0,
             context_frame=Path("context.png"),
-            target_frame=Path("target.png"),
+            target=ControlTarget(Path("target.png")),
             expected_proposal=Path("/tmp/proposal.pth"),
             pose=DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
             previous_action=DroidAction((0.0,) * 7),

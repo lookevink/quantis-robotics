@@ -184,9 +184,14 @@ contact.
    `candidate-proof-20260823T213129Z-11401` applied safely with 0 N contact but
    worsened translation/rotation error and failed every direct-comparison axis;
    production authority remains false.
-8. [ ] Calibrate or rerank predicted latent energy against realized task-space
-   progress, then repeat isolated trials across whole held-out seeds before
-   considering candidate command authority.
+8. [x] Calibrate predicted action response from realized trials and rerank
+   latent energy with a continuous per-axis task-space regression penalty.
+   Candidate `candidate-proof-20260823T220355Z-11401` beat the direct proposal
+   on all axes and reversed the prior translation/rotation regression, but
+   still trailed zero on translation and missed scripted translation tolerance.
+9. [ ] Add a positive translation margin, fit on disjoint whole-seed evidence,
+   and repeat isolated trials across whole held-out seeds before considering
+   candidate command authority.
 
 ## Recommended process boundary
 
@@ -282,5 +287,9 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     establish the comparison, and its failed direct baseline gate prevents
     premature promotion.
 14. [ ] Establish repeatable realized shadow-candidate improvement on whole
-    held-out seeds. The first no-production-authority trial executed safely but
-    failed its task-space outcome gate, exposing planner-objective misalignment.
+    held-out seeds. Task-space reranking now beats direct on all axes in one
+    held-out trial, but the strict zero/scripted translation gates remain open.
+    Calibration checkpoints retain reconstructible proposed/realized trials,
+    require per-axis directional coverage, and are loaded through one manifest
+    that binds proposal, adapter, and calibration. Target frame/pose identity is
+    revalidated against reference telemetry before every shadow search.

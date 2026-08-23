@@ -6,7 +6,7 @@ import unittest
 import numpy as np
 
 from jepa_wm.action import DroidAction, DroidPose
-from jepa_wm.control_protocol import ControlObservation
+from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.experimental_candidate import (
     ExperimentalCandidateAuthority,
     build_experimental_candidate_response,
@@ -72,7 +72,7 @@ class ExperimentalCandidateTest(unittest.TestCase):
             observation_id=92,
             captured_at_unix_seconds=103.0,
             context_frame=Path("context.png"),
-            target_frame=Path("target.png"),
+            target=ControlTarget(Path("target.png")),
             expected_proposal=Path("/tmp/reset-trial-policy.pth"),
             pose=DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
             previous_action=DroidAction((0.0,) * 7),
@@ -103,7 +103,7 @@ class ExperimentalCandidateTest(unittest.TestCase):
             observation_id=92,
             captured_at_unix_seconds=103.0,
             context_frame=Path("context.png"),
-            target_frame=Path("target.png"),
+            target=ControlTarget(Path("target.png")),
             expected_proposal=Path("/tmp/direct.pth"),
             pose=DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
             previous_action=DroidAction((0.0,) * 7),

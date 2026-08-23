@@ -8,14 +8,14 @@ rollout_id="${1:-}"
 reference_name="${2:-}"
 exploration_seed="${3:-}"
 step_count="${4:-}"
-proposal_name="${5:-}"
+control_identity="${5:-}"
 policy="${6:-direct}"
 data_root="${HOME}/docker/isaac-sim/data/quantis"
 venv_python="${HOME}/.venvs/quantis-jepa-wm/bin/python"
 
 cd "${repo_dir}"
 
-for value in "${rollout_id}" "${reference_name}" "${proposal_name}"; do
+for value in "${rollout_id}" "${reference_name}" "${control_identity}"; do
   is_safe_identifier "${value}" || {
     printf 'error: invalid control rollout identifier\n' >&2
     exit 1
@@ -28,6 +28,9 @@ require_positive_integer "step count" "${step_count}" || exit 1
   exit 1
 }
 validate_control_policy "${policy}" || exit 1
+proposal_name="$(control_proposal_from_identity \
+  "${policy}" "${control_identity}" \
+  "${HOME}/docker/jepa-wm/checkpoints" "${venv_python}")"
 expected_proposal="$(control_proposal_for_policy "${policy}" "${proposal_name}")"
 [[ "${proposal_name}" == "${expected_proposal}" ]] || {
   printf 'error: proposal does not match control policy\n' >&2
@@ -80,7 +83,7 @@ sessions="${first_session}"
 current_phase="initial_control_step"
 bash "${repo_dir}/ops/run_control_step.sh" \
   "${first_session}" "${reference_name}" "${exploration_seed}" \
-  "${proposal_name}" deferred "${policy}"
+  "${control_identity}" deferred "${policy}"
 previous_session="${first_session}"
 current_phase="initial_status"
 status="$(step_status "${first_session}")"

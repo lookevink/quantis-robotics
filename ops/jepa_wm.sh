@@ -20,8 +20,7 @@ dinov3_cached_checkpoint="${cache_dir}/torch/hub/checkpoints/$(basename "${dinov
 control_run_dir="${jepa_wm_home}/run"
 control_socket="${control_run_dir}/control.sock"
 control_pid_file="${control_run_dir}/control.pid"
-control_proposal_file="${control_run_dir}/control.proposal"
-control_adapter_file="${control_run_dir}/control.adapter"
+control_artifacts_file="${control_run_dir}/control.artifacts"
 control_log="${jepa_wm_home}/logs/control-worker.log"
 control_frame_root="${HOME}/docker/isaac-sim/data/quantis"
 
@@ -504,22 +503,24 @@ infer_shadow_session() {
   local request="${session}/request.json"
   local direct_response="${session}/response.json"
   local shadow_response="${session}/shadow.json"
-  local adapter_name
   [[ -f "${request}" ]] || die "control session request does not exist: ${session_id}"
   [[ -f "${direct_response}" ]] \
     || die "control session direct response does not exist: ${session_id}"
   [[ ! -e "${shadow_response}" ]] \
     || die "control session already has shadow evidence: ${session_id}"
   control_worker_status >/dev/null
-  adapter_name="$(<"${control_adapter_file}")"
-  is_safe_identifier "${adapter_name}" || die "invalid resident adapter state"
+  local artifacts_name
+  artifacts_name="$(<"${control_artifacts_file}")"
+  is_safe_identifier "${artifacts_name}" || die "invalid resident artifact state"
   sudo chown -R "${USER}:${USER}" "${session}"
   cd "${repo_dir}"
   "${venv_dir}/bin/python" -m jepa_wm.control_client \
     --socket "${control_socket}" \
     --request "${request}" \
+    --state "${session}/state.json" \
+    --recording-root "${control_frame_root}" \
     --direct-response "${direct_response}" \
-    --adapter "${checkpoint_dir}/${adapter_name}.pth" \
+    --artifacts "${checkpoint_dir}/${artifacts_name}.worker.json" \
     --shadow-request-output "${session}/shadow_request.json" \
     --shadow-response-output "${shadow_response}"
   sudo chmod -R a+rwX "${session}"
@@ -644,6 +645,61 @@ report_candidate_trial() {
     --output "${report_dir}/report.json"
 }
 
+calibrate_control_objective() {
+  local -A options=()
+  parse_named_options options "sessions output" "$@"
+  local sessions="${options[sessions]:-}"
+  local output_name="${options[output]:-}"
+  is_safe_identifier_list "${sessions}" || die "invalid calibration session list"
+  is_safe_identifier "${output_name}" || die "invalid calibration output name"
+  local -a session_ids
+  local -a session_arguments=()
+  local session_id
+  IFS=',' read -r -a session_ids <<<"${sessions}"
+  (( ${#session_ids[@]} >= 3 )) \
+    || die "objective calibration requires at least three sessions"
+  for session_id in "${session_ids[@]}"; do
+    [[ -f "${control_frame_root}/control_sessions/${session_id}/result.json" ]] \
+      || die "candidate session result does not exist: ${session_id}"
+    session_arguments+=(--session "${session_id}")
+  done
+  local output="${checkpoint_dir}/${output_name}.json"
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.calibrate_objective \
+    --data-root "${control_frame_root}" \
+    "${session_arguments[@]}" \
+    --output "${output}"
+}
+
+configure_control_worker() {
+  local -A options=()
+  parse_named_options options "name proposal adapter calibration" "$@"
+  local name="${options[name]:-}"
+  local proposal_name="${options[proposal]:-}"
+  local adapter_name="${options[adapter]:-}"
+  local calibration_name="${options[calibration]:-none}"
+  for identifier in "${name}" "${proposal_name}" "${adapter_name}" "${calibration_name}"; do
+    is_safe_identifier "${identifier}" || die "invalid worker artifact identifier"
+  done
+  local proposal="${checkpoint_dir}/${proposal_name}.pth"
+  local adapter="${checkpoint_dir}/${adapter_name}.pth"
+  [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
+  [[ -s "${adapter}" ]] || die "action adapter does not exist: ${adapter_name}"
+  local -a calibration_arguments=()
+  if [[ "${calibration_name}" != "none" ]]; then
+    local calibration="${checkpoint_dir}/${calibration_name}.json"
+    [[ -s "${calibration}" ]] \
+      || die "action-response calibration does not exist: ${calibration_name}"
+    calibration_arguments=(--calibration "${calibration}")
+  fi
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.worker_artifacts write \
+    --output "${checkpoint_dir}/${name}.worker.json" \
+    --proposal "${proposal}" \
+    --adapter "${adapter}" \
+    "${calibration_arguments[@]}"
+}
+
 rollout_session_list() {
   local rollout_id="$1"
   local step_count="$2"
@@ -705,8 +761,7 @@ report_control_baselines() {
 control_worker_is_running() {
   [[ -S "${control_socket}" ]] \
     && [[ -f "${control_pid_file}" ]] \
-    && [[ -f "${control_proposal_file}" ]] \
-    && [[ -f "${control_adapter_file}" ]] \
+    && [[ -f "${control_artifacts_file}" ]] \
     && [[ "$(<"${control_pid_file}")" =~ ^[0-9]+$ ]] \
     && kill -0 "$(<"${control_pid_file}")" 2>/dev/null
 }
@@ -715,14 +770,14 @@ control_worker_status() {
   control_worker_is_running || die "control worker is not ready"
   local worker_pid
   worker_pid="$(<"${control_pid_file}")"
-  printf 'ready pid=%s proposal=%s adapter=%s socket=%s\n' \
-    "${worker_pid}" "$(<"${control_proposal_file}")" \
-    "$(<"${control_adapter_file}")" "${control_socket}"
+  printf 'ready pid=%s artifacts=%s socket=%s\n' \
+    "${worker_pid}" "$(<"${control_artifacts_file}")" \
+    "${control_socket}"
 }
 
 stop_control_worker() {
   if [[ ! -f "${control_pid_file}" ]]; then
-    rm -f "${control_socket}" "${control_proposal_file}" "${control_adapter_file}"
+    rm -f "${control_socket}" "${control_artifacts_file}"
     printf 'control worker is already stopped\n'
     return
   fi
@@ -739,23 +794,18 @@ stop_control_worker() {
       sleep 0.25
     done
   fi
-  rm -f \
-    "${control_pid_file}" "${control_socket}" \
-    "${control_proposal_file}" "${control_adapter_file}"
+  rm -f "${control_pid_file}" "${control_socket}" "${control_artifacts_file}"
   printf 'control worker stopped\n'
 }
 
 start_control_worker() {
   local -A options=()
-  parse_named_options options "proposal adapter" "$@"
-  local proposal_name="${options[proposal]:-quantis_isaac_wrist_action_proposal}"
-  local adapter_name="${options[adapter]:-quantis_isaac_wrist_action_adapter}"
-  is_safe_identifier "${proposal_name}" || die "invalid proposal name"
-  is_safe_identifier "${adapter_name}" || die "invalid adapter name"
-  local proposal="${checkpoint_dir}/${proposal_name}.pth"
-  local adapter="${checkpoint_dir}/${adapter_name}.pth"
-  [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
-  [[ -s "${adapter}" ]] || die "action adapter does not exist: ${adapter_name}"
+  parse_named_options options "artifacts" "$@"
+  local artifacts_name="${options[artifacts]:-quantis_wrist_control}"
+  is_safe_identifier "${artifacts_name}" || die "invalid worker artifact name"
+  local artifacts="${checkpoint_dir}/${artifacts_name}.worker.json"
+  [[ -s "${artifacts}" ]] \
+    || die "control worker artifact manifest does not exist: ${artifacts_name}"
   require_runtime
   mkdir -p "${control_run_dir}" "$(dirname "${control_log}")"
   if [[ -f "${control_pid_file}" ]] \
@@ -765,29 +815,23 @@ start_control_worker() {
     die "control worker is running with incomplete state; stop it before restart"
   fi
   if control_worker_is_running; then
-    [[ "$(<"${control_proposal_file}")" == "${proposal_name}" ]] \
-      || die "control worker is already running with another proposal"
-    [[ "$(<"${control_adapter_file}")" == "${adapter_name}" ]] \
-      || die "control worker is already running with another adapter"
+    [[ "$(<"${control_artifacts_file}")" == "${artifacts_name}" ]] \
+      || die "control worker is already running with another artifact manifest"
     control_worker_status
     return
   fi
-  rm -f \
-    "${control_socket}" "${control_pid_file}" \
-    "${control_proposal_file}" "${control_adapter_file}"
+  rm -f "${control_socket}" "${control_pid_file}" "${control_artifacts_file}"
   cd "${repo_dir}"
   nohup "${venv_dir}/bin/python" -m jepa_wm.control_server \
     --source "${source_dir}" \
     --checkpoint "${jepa_checkpoint}" \
-    --proposal "${proposal}" \
-    --adapter "${adapter}" \
+    --artifacts "${artifacts}" \
     --socket "${control_socket}" \
     --frame-root "${control_frame_root}" \
     >"${control_log}" 2>&1 &
   local worker_pid=$!
   printf '%s\n' "${worker_pid}" >"${control_pid_file}"
-  printf '%s\n' "${proposal_name}" >"${control_proposal_file}"
-  printf '%s\n' "${adapter_name}" >"${control_adapter_file}"
+  printf '%s\n' "${artifacts_name}" >"${control_artifacts_file}"
   for _ in {1..60}; do
     if [[ -S "${control_socket}" ]]; then
       control_worker_status
@@ -898,6 +942,12 @@ case "${1:-}" in
   control-candidate-report)
     report_candidate_trial "${@:2}"
     ;;
+  control-objective-calibrate)
+    calibrate_control_objective "${@:2}"
+    ;;
+  control-worker-configure)
+    configure_control_worker "${@:2}"
+    ;;
   control-worker-start)
     start_control_worker "${@:2}"
     ;;
@@ -912,6 +962,6 @@ case "${1:-}" in
       "${2:-}" "${3:-}" "${4:-}" "${5:-wrist}" "${6:-40}"
     ;;
   *)
-    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, proposal-eval, proposal-summarize, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, control-candidate-report, or summarize"
+    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, proposal-eval, proposal-summarize, control-worker-configure, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, control-candidate-report, control-objective-calibrate, or summarize"
     ;;
 esac

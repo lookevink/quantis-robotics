@@ -11,6 +11,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from jepa_wm.action import DroidAction
+from jepa_wm.control_policy import ControlExecutionPolicy
 
 
 class ActionTrackingReason(str, Enum):
@@ -42,6 +43,19 @@ class ActionTrackingLimits:
             raise ValueError("action tracking limits must be finite and positive")
         if not -1.0 <= self.minimum_direction_cosine <= 1.0:
             raise ValueError("tracking cosine must be between negative and positive one")
+
+
+EXPERIMENTAL_CANDIDATE_TRACKING_LIMITS = ActionTrackingLimits(
+    rotation_activity_radians=2e-4,
+)
+
+
+def tracking_limits_for_policy(
+    policy: ControlExecutionPolicy,
+) -> ActionTrackingLimits:
+    if policy is ControlExecutionPolicy.RESET_TRIAL_CANDIDATE:
+        return EXPERIMENTAL_CANDIDATE_TRACKING_LIMITS
+    return ActionTrackingLimits()
 
 
 @dataclass(frozen=True)

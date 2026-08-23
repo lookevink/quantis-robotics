@@ -5,7 +5,7 @@ import unittest
 
 from jepa_wm.action import DroidAction, DroidPose
 from jepa_wm.control_client import request_control, request_shadow_plan
-from jepa_wm.control_protocol import ControlObservation, ProposedControl
+from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
 from jepa_wm.control_server import ControlUnixServer
 from jepa_wm.planner import CEMConfig
 from jepa_wm.shadow_planning import (
@@ -50,7 +50,7 @@ class ControlServerTest(unittest.TestCase):
                     observation_id=9,
                     captured_at_unix_seconds=100.0,
                     context_frame=Path("context.png"),
-                    target_frame=Path("target.png"),
+                    target=ControlTarget(Path("target.png")),
                     expected_proposal=Path("/tmp/proposal.pth"),
                     pose=DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
                     previous_action=DroidAction((0.0,) * 7),

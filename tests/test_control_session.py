@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 from jepa_wm.action import DroidAction, DroidPose
-from jepa_wm.control_protocol import ControlObservation, ProposedControl
+from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
 from sim.control_session import (
     ControlExecutionPolicy,
     ControlSession,
@@ -20,7 +20,7 @@ class ControlSessionTest(unittest.TestCase):
                 observation_id=123,
                 captured_at_unix_seconds=100.0,
                 context_frame=Path("context.png"),
-                target_frame=Path("target.png"),
+                target=ControlTarget(Path("target.png")),
                 expected_proposal=Path("/tmp/proposal.pth"),
                 pose=DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
                 previous_action=DroidAction((0.0,) * 7),
@@ -59,7 +59,7 @@ class ControlSessionTest(unittest.TestCase):
                 observation_id=123,
                 captured_at_unix_seconds=100.0,
                 context_frame=Path("context.png"),
-                target_frame=Path("target.png"),
+                target=ControlTarget(Path("target.png")),
                 expected_proposal=Path("/tmp/proposal.pth"),
                 pose=DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
                 previous_action=DroidAction((0.0,) * 7),
@@ -98,7 +98,7 @@ class ControlSessionTest(unittest.TestCase):
                 123,
                 100.0,
                 Path("context.png"),
-                Path("target.png"),
+                ControlTarget(Path("target.png")),
                 proposal,
                 DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
                 DroidAction((0.0,) * 7),
@@ -136,7 +136,7 @@ class ControlSessionTest(unittest.TestCase):
                 123,
                 100.0,
                 Path("context.png"),
-                Path("target.png"),
+                ControlTarget(Path("target.png")),
                 proposal,
                 DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
                 DroidAction((0.0,) * 7),

@@ -14,8 +14,13 @@ from jepa_wm.shadow_planning import (
     ShadowPlanningRequest,
     plan_shadow_candidates,
 )
-from jepa_wm.control_protocol import ControlObservation, ProposedControl
+from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
 from jepa_wm.action import DroidPose
+from jepa_wm.objective_calibration import (
+    ActionResponseCalibration,
+    ActionResponseTrial,
+    TaskProgressObjective,
+)
 
 
 class ShadowCandidatePlanningTest(unittest.TestCase):
@@ -26,7 +31,7 @@ class ShadowCandidatePlanningTest(unittest.TestCase):
                 observation_id=12,
                 captured_at_unix_seconds=100.0,
                 context_frame=Path("context.png"),
-                target_frame=Path("target.png"),
+                target=ControlTarget(Path("target.png")),
                 expected_proposal=Path("/tmp/proposal.pth"),
                 pose=DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
                 previous_action=DroidAction((0.0,) * 7),
@@ -48,7 +53,7 @@ class ShadowCandidatePlanningTest(unittest.TestCase):
             observation_id=12,
             captured_at_unix_seconds=100.0,
             context_frame=Path("context.png"),
-            target_frame=Path("target.png"),
+            target=ControlTarget(Path("target.png")),
             expected_proposal=Path("/tmp/proposal.pth"),
             pose=DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
             previous_action=DroidAction((0.0,) * 7),
@@ -152,6 +157,72 @@ class ShadowCandidatePlanningTest(unittest.TestCase):
         gate_tamper["first_action_gate"]["cosine"] = -1.0
         with self.assertRaisesRegex(ValueError, "first-action"):
             ShadowSearchEvidence.from_dict(gate_tamper)
+
+    def test_task_progress_reranking_rejects_the_latent_winner(self) -> None:
+        direct = (DroidAction((0.0,) * 7),) * 3
+        latent_winner = np.zeros((3, 7), dtype=np.float64)
+        latent_winner[0, 0] = -0.002
+        latent_winner[0, 6] = -0.1
+
+        def score(candidates: np.ndarray) -> np.ndarray:
+            return np.square(candidates - latent_winner[None, :, :]).sum(
+                axis=(1, 2)
+            )
+
+        calibration = ActionResponseCalibration.fit(
+            tuple(
+                ActionResponseTrial(
+                    f"trial-{index}",
+                    index + 1,
+                    DroidAction(
+                        (
+                            *(0.002 if axis == index else 0.0 for axis in range(3)),
+                            *(0.004 if axis == index else 0.0 for axis in range(3)),
+                            0.2,
+                        )
+                    ),
+                    DroidAction(
+                        (
+                            *(0.001 if axis == index else 0.0 for axis in range(3)),
+                            *(0.001 if axis == index else 0.0 for axis in range(3)),
+                            0.05,
+                        )
+                    ),
+                )
+                for index in range(3)
+            )
+        )
+        task_progress = TaskProgressObjective(
+            DroidPose((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25)),
+            DroidPose((0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5)),
+            calibration,
+        )
+
+        evidence = plan_shadow_candidates(
+            observation_id=92,
+            direct_actions=direct,
+            score=score,
+            proposal=Path("/tmp/proposal.pth"),
+            adapter=Path("/tmp/adapter.pth"),
+            config=ShadowSearchConfig(
+                planner=CEMConfig(
+                    iterations=5,
+                    samples=300,
+                    elites=20,
+                    seed=9,
+                ),
+            ),
+            task_progress=task_progress,
+        )
+
+        self.assertEqual(evidence.planned.task_penalty, 0.0)
+        self.assertGreater(evidence.planned.actions[0].values[0], 0.0)
+        self.assertGreater(evidence.planned.actions[0].values[6], 0.0)
+        self.assertEqual(ShadowSearchEvidence.from_dict(evidence.to_dict()), evidence)
+        claims_tamper = evidence.to_dict()
+        claims_tamper["passes_task_progress_gate"] = False
+        with self.assertRaisesRegex(ValueError, "claims"):
+            ShadowSearchEvidence.from_dict(claims_tamper)
 
 
 if __name__ == "__main__":

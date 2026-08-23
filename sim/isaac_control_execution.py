@@ -20,7 +20,7 @@ from jepa_wm.control_safety import (
     SimulatorSafetyState,
     SafetyProjectionAttempt,
 )
-from jepa_wm.control_tracking import evaluate_action_tracking
+from jepa_wm.control_tracking import evaluate_action_tracking, tracking_limits_for_policy
 from sim.control_session import (
     ControlResult,
     ControlResultStatus,
@@ -258,7 +258,9 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     observation.pose, post_snapshot.end_effector_pose
                 )
                 tracking = evaluate_action_tracking(
-                    candidate.first_action, actual_action
+                    candidate.first_action,
+                    actual_action,
+                    tracking_limits_for_policy(persisted_state.execution_policy),
                 )
                 capture = await capture_camera_frame(
                     JEPA_WM_CAMERA_SPECS[0], session.path / "post_action.png"

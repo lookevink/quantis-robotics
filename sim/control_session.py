@@ -567,6 +567,21 @@ class ControlSession:
             ) from error
         observation, _ = self.load_capture()
         response = self.load_response()
+        task_progress = evidence.task_progress
+        expected_calibration = shadow_request.expected_calibration
+        calibrated_binding_invalid = (
+            expected_calibration is None and task_progress is not None
+        ) or (
+            expected_calibration is not None
+            and (
+                task_progress is None
+                or observation.target_pose is None
+                or task_progress.start != observation.pose
+                or task_progress.target != observation.target_pose
+                or task_progress.calibration.fingerprint
+                != expected_calibration.fingerprint
+            )
+        )
         if (
             shadow_request.observation != observation
             or shadow_request.direct_control != response
@@ -574,6 +589,7 @@ class ControlSession:
             or evidence.proposal != response.proposal
             or evidence.direct.actions != response.actions
             or evidence.adapter != shadow_request.expected_adapter
+            or calibrated_binding_invalid
         ):
             raise ValueError("shadow evidence is not bound to its control session")
         return evidence

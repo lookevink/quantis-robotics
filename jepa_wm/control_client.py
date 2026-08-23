@@ -10,6 +10,13 @@ from typing import TYPE_CHECKING
 
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.persistence import write_json_atomic
+from jepa_wm.objective_calibration import (
+    ActionResponseCalibration,
+    CalibrationIdentity,
+)
+from jepa_wm.worker_artifacts import ControlWorkerArtifacts
+from jepa_wm.trajectory import validate_observation_target
+from sim.control_session import ControlSessionState
 
 if TYPE_CHECKING:
     from jepa_wm.shadow_planning import ShadowPlanningRequest, ShadowSearchEvidence
@@ -51,24 +58,51 @@ def main() -> None:
     parser.add_argument("--socket", type=Path, required=True)
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--direct-response", type=Path)
-    parser.add_argument("--adapter", type=Path)
+    parser.add_argument("--artifacts", type=Path)
     parser.add_argument("--shadow-request-output", type=Path)
     parser.add_argument("--shadow-response-output", type=Path)
+    parser.add_argument("--state", type=Path)
+    parser.add_argument("--recording-root", type=Path)
     args = parser.parse_args()
     observation = ControlObservation.from_dict(json.loads(args.request.read_text()))
     if args.direct_response is None:
-        if args.adapter is not None or args.shadow_request_output is not None:
+        if args.artifacts is not None or args.shadow_request_output is not None:
             parser.error("shadow options require --direct-response")
         response = request_control(args.socket, observation)
     else:
         from jepa_wm.shadow_planning import ShadowPlanningRequest
 
-        if args.adapter is None or args.shadow_request_output is None:
+        if args.artifacts is None or args.shadow_request_output is None:
             parser.error(
-                "--direct-response requires --adapter and --shadow-request-output"
+                "--direct-response requires --artifacts and --shadow-request-output"
             )
+        if args.state is None or args.recording_root is None:
+            parser.error("shadow planning requires --state and --recording-root")
+        state = ControlSessionState.from_dict(json.loads(args.state.read_text()))
+        validate_observation_target(
+            observation,
+            args.recording_root / "recordings" / state.reference_recording,
+            frame_root=args.recording_root,
+        )
         direct = ProposedControl.from_dict(json.loads(args.direct_response.read_text()))
-        shadow_request = ShadowPlanningRequest(observation, direct, args.adapter.resolve())
+        artifacts = ControlWorkerArtifacts.load(args.artifacts)
+        calibration = (
+            ActionResponseCalibration.load(artifacts.calibration)
+            if artifacts.calibration is not None
+            else None
+        )
+        shadow_request = ShadowPlanningRequest(
+            observation,
+            direct,
+            artifacts.adapter,
+            (
+                CalibrationIdentity.from_calibration(
+                    artifacts.calibration, calibration
+                )
+                if artifacts.calibration is not None and calibration is not None
+                else None
+            ),
+        )
         write_json_atomic(args.shadow_request_output, shadow_request.to_dict())
         response = request_shadow_plan(
             args.socket,

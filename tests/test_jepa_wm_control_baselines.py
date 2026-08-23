@@ -10,7 +10,7 @@ from jepa_wm.control_baselines import (
     RealizedBaselineReport,
     build_baseline_response,
 )
-from jepa_wm.control_protocol import ControlObservation, ProposedControl
+from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
 from jepa_wm.control_rollout import ControlRolloutReport, ControlStepSummary
 from jepa_wm.control_safety import ControlGateDecision, SafetyProjectionAttempt
 from jepa_wm.control_tracking import ActionTrackingDecision
@@ -40,7 +40,7 @@ class RealizedBaselineComparisonTest(unittest.TestCase):
             7,
             100.0,
             Path("context.png"),
-            Path("recordings/reference/wrist/frame_000007.png"),
+            ControlTarget(Path("recordings/reference/wrist/frame_000007.png")),
             proposal,
             initial,
             DroidAction((0.0,) * 7),
@@ -98,7 +98,7 @@ class RealizedBaselineComparisonTest(unittest.TestCase):
             7,
             100.0,
             Path("context.png"),
-            Path("target.png"),
+            ControlTarget(Path("target.png")),
             Path("/tmp/baseline_zero.pth"),
             DroidPose((0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.2)),
             DroidAction((0.0,) * 7),
@@ -118,7 +118,7 @@ class RealizedBaselineComparisonTest(unittest.TestCase):
             observation.observation_id,
             observation.captured_at_unix_seconds,
             observation.context_frame,
-            observation.target_frame,
+            observation.target,
             Path("/tmp/baseline_scripted.pth"),
             observation.pose,
             observation.previous_action,

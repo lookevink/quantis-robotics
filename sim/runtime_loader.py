@@ -27,6 +27,7 @@ def reload_demo_runtime() -> ModuleType:
         "jepa_wm.control_protocol",
         "jepa_wm.control_safety",
         "jepa_wm.control_tracking",
+        "jepa_wm.objective_calibration",
         "jepa_wm.shadow_planning",
         "jepa_wm.shadow_safety",
         "jepa_wm.trial_equivalence",

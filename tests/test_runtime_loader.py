@@ -10,11 +10,12 @@ class RuntimeLoaderTest(unittest.TestCase):
         source = """
 from sim.runtime_loader import reload_demo_runtime
 reload_demo_runtime()
-from jepa_wm import action, control_safety, experimental_candidate, shadow_safety
+from jepa_wm import action, control_safety, experimental_candidate, objective_calibration, shadow_planning, shadow_safety
 from sim import recording
 assert control_safety.DroidActionScale is action.DroidActionScale
 assert control_safety.DroidPose is action.DroidPose
 assert experimental_candidate.validate_recording_id is recording.validate_recording_id
+assert shadow_planning.TaskProgressObjective is objective_calibration.TaskProgressObjective
 scale = control_safety.ACTION_SCALES[0]
 evidence = shadow_safety.ShadowSafetyEvidence(
     observation_id=1,

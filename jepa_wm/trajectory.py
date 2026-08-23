@@ -15,6 +15,7 @@ from jepa_wm.action import (
     DroidPose,
     action_between,
 )
+from jepa_wm.control_protocol import ControlObservation, ControlTarget
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,7 @@ class RecordedRollout:
     context_pose: DroidPose
     previous_action: DroidAction
     target: RecordedFrame
+    target_pose: DroidPose
     actions: tuple[DroidAction, ...]
 
     @property
@@ -197,7 +199,54 @@ def load_rollouts(
                     target_index,
                     _frame_path(recording, steps[target_index], camera),
                 ),
+                target_pose=poses[target_index],
                 actions=actions,
             )
         )
     return tuple(rollouts)
+
+
+def load_rollout_at(
+    recording: Path,
+    *,
+    camera: str,
+    context_index: int,
+    protocol: RolloutProtocol = DROID_ROLLOUT_PROTOCOL,
+    bounds: ActionSelectionBounds = DEFAULT_ACTION_SELECTION_BOUNDS,
+) -> RecordedRollout:
+    matches = tuple(
+        rollout
+        for rollout in load_rollouts(
+            recording,
+            camera=camera,
+            protocol=protocol,
+            bounds=bounds,
+        )
+        if rollout.context[0].index == context_index
+    )
+    if len(matches) != 1:
+        raise ValueError(
+            f"recording has {len(matches)} rollouts at context index {context_index}"
+        )
+    return matches[0]
+
+
+def validate_observation_target(
+    observation: ControlObservation,
+    recording: Path,
+    *,
+    frame_root: Path,
+    camera: str = "wrist",
+) -> None:
+    rollout = load_rollout_at(
+        recording,
+        camera=camera,
+        context_index=observation.warmup_frames,
+        bounds=ActionSelectionBounds(minimum_action_norm=0.0),
+    )
+    expected = ControlTarget(
+        rollout.target.path.relative_to(frame_root.resolve()),
+        rollout.target_pose,
+    )
+    if observation.target != expected:
+        raise ValueError("control target does not match its reference telemetry")

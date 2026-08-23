@@ -4,6 +4,7 @@ import unittest
 from jepa_wm.action import DroidAction, DroidPose
 from jepa_wm.control_protocol import (
     ControlObservation,
+    ControlTarget,
     ProposedControl,
 )
 from jepa_wm.control_safety import (
@@ -13,15 +14,18 @@ from jepa_wm.control_safety import (
 )
 from jepa_wm.control_tracking import (
     evaluate_action_tracking,
+    tracking_limits_for_policy,
 )
+from jepa_wm.control_policy import ControlExecutionPolicy
 
 
 def _observation(**overrides) -> ControlObservation:
+    target_pose = overrides.pop("target_pose", None)
     values = {
         "observation_id": 1,
         "captured_at_unix_seconds": 100.0,
         "context_frame": Path("context.png"),
-        "target_frame": Path("target.png"),
+        "target": ControlTarget(Path("target.png"), target_pose),
         "expected_proposal": Path("/tmp/proposal.pth"),
         "pose": DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
         "previous_action": DroidAction((0.0,) * 7),
@@ -154,10 +158,12 @@ class SimulatorControlGateTest(unittest.TestCase):
         self.assertTrue(decision.passed)
 
     def test_round_trips_versioned_observation_and_proposal(self) -> None:
-        observation = _observation()
+        target_pose = DroidPose((0.41, 0.0, 0.5, 0.0, 0.0, 0.0, 0.6))
+        observation = _observation(target_pose=target_pose)
         proposal = _proposal()
 
         self.assertEqual(ControlObservation.from_dict(observation.to_dict()), observation)
+        self.assertEqual(observation.target_pose, target_pose)
         self.assertEqual(ProposedControl.from_dict(proposal.to_dict()), proposal)
 
     def test_rejects_cartesian_motion_in_the_wrong_direction(self) -> None:
@@ -176,6 +182,26 @@ class SimulatorControlGateTest(unittest.TestCase):
         scaled = action.scaled(0.25)
 
         self.assertEqual(scaled.values, tuple(value * 0.25 for value in action.values))
+
+    def test_experimental_candidate_requires_small_rotation_direction_tracking(self) -> None:
+        commanded = DroidAction((0.0005, 0.0, 0.0, 0.0003, 0.0, 0.0, 0.01))
+        realized = DroidAction((0.0005, 0.0, 0.0, -0.0003, 0.0, 0.0, 0.01))
+
+        direct = evaluate_action_tracking(
+            commanded,
+            realized,
+            tracking_limits_for_policy(ControlExecutionPolicy.DIRECT),
+        )
+        candidate = evaluate_action_tracking(
+            commanded,
+            realized,
+            tracking_limits_for_policy(
+                ControlExecutionPolicy.RESET_TRIAL_CANDIDATE
+            ),
+        )
+
+        self.assertTrue(direct.passed)
+        self.assertFalse(candidate.passed)
 
 
 if __name__ == "__main__":

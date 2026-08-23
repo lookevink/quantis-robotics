@@ -8,8 +8,8 @@ from pathlib import Path
 from time import time
 
 from jepa_wm.action import ActionSelectionBounds
-from jepa_wm.control_protocol import ControlObservation
-from jepa_wm.trajectory import load_rollouts
+from jepa_wm.control_protocol import ControlObservation, ControlTarget
+from jepa_wm.trajectory import load_rollout_at
 
 
 def observation_from_recording(
@@ -21,20 +21,12 @@ def observation_from_recording(
     observation_id: int = 1,
     captured_at_unix_seconds: float | None = None,
 ) -> ControlObservation:
-    matches = tuple(
-        rollout
-        for rollout in load_rollouts(
-            recording,
-            camera=camera,
-            bounds=ActionSelectionBounds(minimum_action_norm=0.0),
-        )
-        if rollout.context[0].index == context_index
+    rollout = load_rollout_at(
+        recording,
+        camera=camera,
+        context_index=context_index,
+        bounds=ActionSelectionBounds(minimum_action_norm=0.0),
     )
-    if len(matches) != 1:
-        raise ValueError(
-            f"recording has {len(matches)} rollouts at context index {context_index}"
-        )
-    rollout = matches[0]
     return ControlObservation(
         observation_id=observation_id,
         captured_at_unix_seconds=(
@@ -43,7 +35,7 @@ def observation_from_recording(
             else captured_at_unix_seconds
         ),
         context_frame=rollout.context[0].path,
-        target_frame=rollout.target.path,
+        target=ControlTarget(rollout.target.path, rollout.target_pose),
         expected_proposal=expected_proposal,
         pose=rollout.context_pose,
         previous_action=rollout.previous_action,

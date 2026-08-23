@@ -456,13 +456,15 @@ Start the resident worker once, inspect it, and run one consume-once control
 session against a whole held-out reference trajectory:
 
 ```bash
-./ops/aws.sh jepa-wm-control-worker-start \
+./ops/aws.sh jepa-wm-control-worker-configure \
+  quantis_wrist_control \
   quantis_isaac_wrist_action_proposal_motion_state_12seed \
   quantis_isaac_wrist_action_adapter
+./ops/aws.sh jepa-wm-control-worker-start quantis_wrist_control
 ./ops/aws.sh jepa-wm-control-worker-status
 ./ops/aws.sh jepa-wm-control-step \
   domain-20260823T113209Z-1400-held-00 11400 \
-  quantis_isaac_wrist_action_proposal_motion_state_12seed
+  quantis_wrist_control
 ```
 
 Run a bounded repeated rollout on the same live Isaac stage with:
@@ -470,7 +472,7 @@ Run a bounded repeated rollout on the same live Isaac stage with:
 ```bash
 ./ops/aws.sh jepa-wm-control-rollout \
   domain-20260823T113209Z-1400-held-01 11401 3 \
-  quantis_isaac_wrist_action_proposal_motion_state_12seed
+  quantis_wrist_control
 ```
 
 Isaac validates that the goal recording is the matching whole held-out seed,
@@ -619,8 +621,51 @@ report persists at:
 /home/ubuntu/docker/isaac-sim/data/quantis/control_candidates/candidate-proof-20260823T213129Z-11401/report.json
 ```
 
-The next milestone is to calibrate/rerank the planner objective using realized
-task-space outcomes, then repeat isolated trials across whole held-out seeds.
+The planner can now fit a non-production action-response calibration from
+realized direct, scripted, or reset-candidate sessions:
+
+```bash
+./ops/aws.sh jepa-wm-objective-calibrate \
+  quantis_action_response_mixed_11401 \
+  rollout-20260823T203534Z-11401-00,rollout-20260823T203534Z-11401-01,rollout-20260823T203534Z-11401-02,scripted-20260823T205005Z-11401-00,scripted-20260823T205005Z-11401-01,scripted-20260823T205005Z-11401-02
+```
+
+The calibration artifact persists every raw proposed/realized action and
+recomputes its gains, alignments, and per-axis directional coverage whenever it
+is loaded. A fitted scalar cannot be edited independently of that evidence.
+The six realized actions produced translation, rotation, and gripper
+alignments of `0.9993`, `0.9275`, and `1.0`; reranking is enabled only when the
+translation and rotation evidence each cover at least three distinct
+directions. The worker artifact manifest below binds the proposal, adapter, and
+calibration as one identity. Starting it adds a continuous task-space
+regression penalty to the latent-energy objective while retaining
+`shadow_only` authority:
+
+```bash
+./ops/aws.sh jepa-wm-control-worker-configure \
+  quantis_calibrated_control \
+  quantis_isaac_wrist_action_proposal_motion_state_12seed \
+  quantis_isaac_wrist_action_adapter \
+  quantis_action_response_mixed_11401
+./ops/aws.sh jepa-wm-control-worker-start quantis_calibrated_control
+```
+
+Calibrated experiment `candidate-proof-20260823T220355Z-11401` safely applied
+at 0 N contact. Unlike the latent-only winner, it beat the direct proposal on
+all three axes and improved translation by `0.0267 mm`, rotation by
+`0.000911 rad`, and gripper progress by `0.04426`. It still trailed zero's
+translation drift by about `0.052 mm` and missed scripted translation
+tolerance, so its strict gate and production authority remain false. The
+report persists at:
+
+```text
+/home/ubuntu/docker/isaac-sim/data/quantis/control_candidates/candidate-proof-20260823T220355Z-11401/report.json
+```
+
+Before calibrated shadow reranking, the target frame and target pose are
+revalidated together against the exact reference telemetry. The next milestone
+is to add translation margin to the calibrated objective and repeat the
+calibration/trial split across whole held-out seeds.
 Stop the worker independently with
 `./ops/aws.sh jepa-wm-control-worker-stop`.
 

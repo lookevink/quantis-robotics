@@ -5,7 +5,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from jepa_wm.trajectory import RolloutProtocol, RolloutWindow, load_rollouts
+from jepa_wm.action import DroidAction, DroidPose
+from jepa_wm.control_protocol import ControlObservation, ControlTarget
+from jepa_wm.trajectory import (
+    RolloutProtocol,
+    RolloutWindow,
+    load_rollouts,
+    validate_observation_target,
+)
 
 
 class RecordedTrajectoryTest(unittest.TestCase):
@@ -80,6 +87,40 @@ class RecordedTrajectoryTest(unittest.TestCase):
             self.assertEqual(
                 rollout.target.path, (wrist / "frame_000003.png").resolve()
             )
+            self.assertEqual(
+                rollout.target_pose.values,
+                (0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5),
+            )
+            observation = ControlObservation(
+                1,
+                1.0,
+                Path("context.png"),
+                ControlTarget(Path("wrist/frame_000003.png"), rollout.target_pose),
+                Path("/tmp/proposal.pth"),
+                DroidPose((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5)),
+                DroidAction((0.0,) * 7),
+                0,
+            )
+            validate_observation_target(
+                observation, recording, frame_root=recording
+            )
+            tampered = ControlObservation(
+                observation.observation_id,
+                observation.captured_at_unix_seconds,
+                observation.context_frame,
+                ControlTarget(
+                    observation.target.frame,
+                    DroidPose((0.04, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5)),
+                ),
+                observation.expected_proposal,
+                observation.pose,
+                observation.previous_action,
+                observation.warmup_frames,
+            )
+            with self.assertRaisesRegex(ValueError, "reference telemetry"):
+                validate_observation_target(
+                    tampered, recording, frame_root=recording
+                )
 
     def test_rejects_a_recording_without_droid_actions(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

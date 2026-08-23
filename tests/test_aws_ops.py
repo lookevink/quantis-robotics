@@ -668,22 +668,34 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/jepa_wm.sh control-infer-replay", calls)
         self.assertIn("--context-index '4' --observation-id '1'", calls)
 
-    def test_jepa_wm_control_worker_start_selects_the_promoted_proposal(self):
+    def test_jepa_wm_control_worker_start_selects_one_artifact_manifest(self):
         result, calls = self.run_command(
             "jepa-wm-control-worker-start",
-            arguments=("quantis_isaac_wrist_action_proposal",),
+            arguments=("quantis_calibrated_control",),
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ops/jepa_wm.sh control-worker-start", calls)
         self.assertIn(
-            "--proposal 'quantis_isaac_wrist_action_proposal'",
+            "--artifacts 'quantis_calibrated_control'",
             calls,
         )
-        self.assertIn(
-            "--adapter 'quantis_isaac_wrist_action_adapter'",
-            calls,
+
+    def test_jepa_wm_control_worker_configures_one_artifact_manifest(self):
+        result, calls = self.run_command(
+            "jepa-wm-control-worker-configure",
+            arguments=(
+                "quantis_calibrated_control",
+                "quantis_isaac_wrist_action_proposal",
+                "quantis_isaac_wrist_action_adapter",
+                "quantis_action_response",
+            ),
         )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/jepa_wm.sh control-worker-configure", calls)
+        self.assertIn("--name 'quantis_calibrated_control'", calls)
+        self.assertIn("--calibration 'quantis_action_response'", calls)
 
     def test_jepa_wm_control_step_keeps_inference_outside_isaac(self):
         result, calls = self.run_command(
@@ -691,14 +703,14 @@ class AwsLifecycleTests(unittest.TestCase):
             arguments=(
                 "domain-held-00",
                 "11400",
-                "quantis_isaac_wrist_action_proposal",
+                "quantis_calibrated_control",
             ),
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ops/jepa_wm.sh control-worker-start", calls)
         self.assertIn("ops/run_control_step.sh", calls)
-        self.assertIn("quantis_isaac_wrist_action_proposal", calls)
+        self.assertIn("quantis_calibrated_control", calls)
 
     def test_jepa_wm_control_rollout_forwards_a_bounded_step_count(self):
         result, calls = self.run_command(
@@ -707,14 +719,14 @@ class AwsLifecycleTests(unittest.TestCase):
                 "domain-held-00",
                 "11400",
                 "3",
-                "quantis_isaac_wrist_action_proposal",
+                "quantis_calibrated_control",
             ),
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ops/run_control_rollout.sh", calls)
         self.assertIn("'3'", calls)
-        self.assertIn("quantis_isaac_wrist_action_proposal", calls)
+        self.assertIn("quantis_calibrated_control", calls)
 
     def test_jepa_wm_control_baseline_uses_an_explicit_non_model_policy(self):
         result, calls = self.run_command(
@@ -766,6 +778,23 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("'direct-rollout-00'", calls)
         self.assertIn("control-candidate-report", calls)
         self.assertIn("--baseline-experiment 'baseline-proof'", calls)
+
+    def test_jepa_wm_objective_calibration_forwards_realized_candidate_sessions(self):
+        result, calls = self.run_command(
+            "jepa-wm-objective-calibrate",
+            arguments=(
+                "quantis_action_response",
+                "candidate-00,candidate-01,candidate-02",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("control-objective-calibrate", calls)
+        self.assertIn(
+            "--sessions 'candidate-00,candidate-01,candidate-02'",
+            calls,
+        )
+        self.assertIn("--output 'quantis_action_response'", calls)
 
     def test_jepa_wm_summarize_forwards_the_whole_experiment(self):
         result, calls = self.run_command(

@@ -69,6 +69,23 @@ control_proposal_for_policy() {
   printf '%s\n' "${CONTROL_POLICY_PROPOSAL}"
 }
 
+control_proposal_from_identity() {
+  local policy="$1"
+  local identity="$2"
+  local checkpoint_root="$3"
+  local python_bin="$4"
+  local proposal_name="${identity}"
+  if [[ "${policy}" == "direct" ]]; then
+    proposal_name="$("${python_bin}" -m jepa_wm.worker_artifacts proposal-name \
+      --manifest "${checkpoint_root}/${identity}.worker.json")" || return 1
+  fi
+  is_safe_identifier "${proposal_name}" || {
+    printf 'error: control identity resolves to an invalid proposal\n' >&2
+    return 1
+  }
+  printf '%s\n' "${proposal_name}"
+}
+
 respond_to_control_session() {
   local repository="$1"
   local session_id="$2"

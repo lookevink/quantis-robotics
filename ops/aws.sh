@@ -309,12 +309,14 @@ Commands:
   jepa-wm-proposal-eval RECORDING [camera] [start] [count] [stride] [proposal]
   jepa-wm-proposal-summarize RECORDING[,RECORDING...] [camera] [start] [count] [stride] [proposal]
   jepa-wm-control-infer-replay RECORDING [camera] [context-index] [proposal]
-  jepa-wm-control-worker-start [proposal] [adapter] | jepa-wm-control-worker-status | jepa-wm-control-worker-stop
-  jepa-wm-control-step REFERENCE_RECORDING SEED [proposal] [adapter]
-  jepa-wm-control-rollout REFERENCE_RECORDING SEED STEPS [proposal] [adapter]
+  jepa-wm-control-worker-configure NAME PROPOSAL ADAPTER [CALIBRATION]
+  jepa-wm-control-worker-start [artifacts] | jepa-wm-control-worker-status | jepa-wm-control-worker-stop
+  jepa-wm-control-step REFERENCE_RECORDING SEED [artifacts]
+  jepa-wm-control-rollout REFERENCE_RECORDING SEED STEPS [artifacts]
   jepa-wm-control-baseline REFERENCE_RECORDING SEED STEPS zero|scripted
   jepa-wm-control-baselines EXPERIMENT DIRECT ZERO SCRIPTED REFERENCE SEED STEPS [direct-proposal]
   jepa-wm-control-candidate REFERENCE_RECORDING SEED SOURCE_SESSION BASELINE_EXPERIMENT
+  jepa-wm-objective-calibrate CALIBRATION SESSION[,SESSION...]
   jepa-wm-control-rollout-report ROLLOUT SESSION[,SESSION...] REQUESTED_STEPS REFERENCE SEED [proposal] [policy]
   jepa-wm-control-apply SESSION
   jepa-wm-summarize EXPERIMENT TRAINING_CSV HELD_OUT_CSV [camera] [count]
@@ -591,13 +593,23 @@ case "${command}" in
     sync_repo
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-infer-replay --recording '${recording_name}' --camera '${camera_name}' --context-index '${context_index}' --observation-id '1' --proposal '${proposal_name}'"
     ;;
-  jepa-wm-control-worker-start)
-    proposal_name="${2:-quantis_isaac_wrist_action_proposal}"
-    adapter_name="${3:-quantis_isaac_wrist_action_adapter}"
-    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
-    is_safe_identifier "${adapter_name}" || die "invalid adapter name"
+  jepa-wm-control-worker-configure)
+    artifacts_name="${2:-}"
+    proposal_name="${3:-}"
+    adapter_name="${4:-}"
+    calibration_name="${5:-none}"
+    for identifier in \
+      "${artifacts_name}" "${proposal_name}" "${adapter_name}" "${calibration_name}"; do
+      is_safe_identifier "${identifier}" || die "invalid worker artifact identifier"
+    done
     sync_repo
-    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --proposal '${proposal_name}' --adapter '${adapter_name}'"
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-configure --name '${artifacts_name}' --proposal '${proposal_name}' --adapter '${adapter_name}' --calibration '${calibration_name}'"
+    ;;
+  jepa-wm-control-worker-start)
+    artifacts_name="${2:-quantis_wrist_control}"
+    is_safe_identifier "${artifacts_name}" || die "invalid worker artifact name"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --artifacts '${artifacts_name}'"
     ;;
   jepa-wm-control-worker-status)
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-status"
@@ -608,34 +620,30 @@ case "${command}" in
   jepa-wm-control-step)
     reference_name="${2:-}"
     exploration_seed="${3:-}"
-    proposal_name="${4:-quantis_isaac_wrist_action_proposal}"
-    adapter_name="${5:-quantis_isaac_wrist_action_adapter}"
+    artifacts_name="${4:-quantis_wrist_control}"
     is_safe_identifier "${reference_name}" || die "invalid reference recording"
     require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
-    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
-    is_safe_identifier "${adapter_name}" || die "invalid adapter name"
+    is_safe_identifier "${artifacts_name}" || die "invalid worker artifact name"
     session_id="step-$(date -u +%Y%m%dT%H%M%SZ)-${exploration_seed}"
     sync_repo
-    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --proposal '${proposal_name}' --adapter '${adapter_name}'"
-    remote "bash ~/quantis-robotics/ops/run_control_step.sh '${session_id}' '${reference_name}' '${exploration_seed}' '${proposal_name}'"
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --artifacts '${artifacts_name}'"
+    remote "bash ~/quantis-robotics/ops/run_control_step.sh '${session_id}' '${reference_name}' '${exploration_seed}' '${artifacts_name}'"
     printf 'Control session: %s\n' "${session_id}"
     ;;
   jepa-wm-control-rollout)
     reference_name="${2:-}"
     exploration_seed="${3:-}"
     step_count="${4:-3}"
-    proposal_name="${5:-quantis_isaac_wrist_action_proposal}"
-    adapter_name="${6:-quantis_isaac_wrist_action_adapter}"
+    artifacts_name="${5:-quantis_wrist_control}"
     is_safe_identifier "${reference_name}" || die "invalid reference recording"
     require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
     require_positive_integer "step count" "${step_count}" || exit 1
     (( step_count <= 8 )) || die "control rollout is capped at eight steps"
-    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
-    is_safe_identifier "${adapter_name}" || die "invalid adapter name"
+    is_safe_identifier "${artifacts_name}" || die "invalid worker artifact name"
     rollout_id="rollout-$(date -u +%Y%m%dT%H%M%SZ)-${exploration_seed}"
     sync_repo
-    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --proposal '${proposal_name}' --adapter '${adapter_name}'"
-    remote "bash ~/quantis-robotics/ops/run_control_rollout.sh '${rollout_id}' '${reference_name}' '${exploration_seed}' '${step_count}' '${proposal_name}'"
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --artifacts '${artifacts_name}'"
+    remote "bash ~/quantis-robotics/ops/run_control_rollout.sh '${rollout_id}' '${reference_name}' '${exploration_seed}' '${step_count}' '${artifacts_name}'"
     printf 'Control rollout: %s\n' "${rollout_id}"
     ;;
   jepa-wm-control-baseline)
@@ -711,6 +719,14 @@ case "${command}" in
     validate_control_policy "${policy}" "${proposal_name}" || exit 1
     sync_repo
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-rollout-report --rollout '${rollout_id}' --reference '${reference_name}' --seed '${exploration_seed}' --proposal '${proposal_name}' --policy '${policy}' --sessions '${sessions}' --requested-steps '${requested_steps}'"
+    ;;
+  jepa-wm-objective-calibrate)
+    calibration_name="${2:-}"
+    sessions="${3:-}"
+    is_safe_identifier "${calibration_name}" || die "invalid calibration name"
+    is_safe_identifier_list "${sessions}" || die "invalid calibration session list"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-objective-calibrate --sessions '${sessions}' --output '${calibration_name}'"
     ;;
   jepa-wm-control-apply)
     session_id="${2:-}"

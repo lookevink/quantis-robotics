@@ -9,9 +9,10 @@ import numpy as np
 
 from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.action_prior import ActionPriorConfig
-from jepa_wm.control_protocol import ControlObservation, ProposedControl
+from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
 from jepa_wm.control_rollout import (
     ControlRolloutReport,
+    ControlStepSummary,
     OrchestrationFailure,
     OrchestrationOperation,
 )
@@ -19,6 +20,12 @@ from jepa_wm.control_safety import ControlGateDecision, SafetyProjectionAttempt
 from jepa_wm.control_tracking import ActionTrackingDecision
 from jepa_wm.planner import CEMConfig
 from jepa_wm.planner_readiness import FirstActionThresholds
+from jepa_wm.objective_calibration import (
+    ActionResponseCalibration,
+    ActionResponseTrial,
+    CalibrationIdentity,
+    TaskProgressObjective,
+)
 from jepa_wm.shadow_planning import (
     ShadowPlanningRequest,
     ShadowSearchConfig,
@@ -28,6 +35,7 @@ from jepa_wm.shadow_safety import ShadowSafetyEvidence
 from sim.control_session import (
     ControlResult,
     ControlResultStatus,
+    ControlSession,
     ControlSessionState,
     PostActionEvidence,
 )
@@ -47,6 +55,7 @@ class ControlRolloutTest(unittest.TestCase):
         warmup_frames: int = 4,
         captured_at: float = 100.0,
         previous_action_x: float = 0.0,
+        target_pose: DroidPose | None = None,
     ) -> None:
         session = root / "control_sessions" / session_id
         session.mkdir(parents=True)
@@ -58,7 +67,7 @@ class ControlRolloutTest(unittest.TestCase):
             ),
             captured_at_unix_seconds=captured_at,
             context_frame=Path(f"control_sessions/{session_id}/context.png"),
-            target_frame=Path(target_frame),
+            target=ControlTarget(Path(target_frame), target_pose),
             expected_proposal=Path("/tmp/proposal.pth"),
             pose=DroidPose((pose_x, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
             previous_action=DroidAction((previous_action_x, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
@@ -328,6 +337,96 @@ class ControlRolloutTest(unittest.TestCase):
             self.assertEqual(report["requested_steps"], 3)
             self.assertEqual(report["attempted_steps"], 1)
             self.assertFalse(report["all_steps_applied"])
+
+    def test_recomputes_realized_action_instead_of_trusting_result_claims(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._write_step(
+                root,
+                "session-0",
+                previous_session_id=None,
+                pose_x=0.40,
+                post_x=0.41,
+            )
+            result_path = root / "control_sessions" / "session-0" / "result.json"
+            result = json.loads(result_path.read_text())
+            result["actual_action"][0] = 0.02
+            result_path.write_text(json.dumps(result))
+
+            with self.assertRaisesRegex(ValueError, "realization"):
+                ControlStepSummary.from_session(
+                    ControlSession.at(root / "control_sessions", "session-0")
+                )
+
+    def test_rejects_shadow_objective_rebound_to_another_start_pose(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target_pose = DroidPose((0.43, 0.0, 0.5, 0.0, 0.0, 0.0, 0.6))
+            self._write_step(
+                root,
+                "session-0",
+                previous_session_id=None,
+                pose_x=0.40,
+                post_x=0.41,
+                target_pose=target_pose,
+            )
+            session = ControlSession.at(root / "control_sessions", "session-0")
+            observation, _ = session.load_capture()
+            response = session.load_response()
+            calibration = ActionResponseCalibration.fit(
+                tuple(
+                    ActionResponseTrial(
+                        f"trial-{axis}",
+                        axis,
+                        DroidAction(
+                            (
+                                *(0.002 if index == axis else 0.0 for index in range(3)),
+                                *(0.004 if index == axis else 0.0 for index in range(3)),
+                                0.2,
+                            )
+                        ),
+                        DroidAction(
+                            (
+                                *(0.001 if index == axis else 0.0 for index in range(3)),
+                                *(0.001 if index == axis else 0.0 for index in range(3)),
+                                0.05,
+                            )
+                        ),
+                    )
+                    for axis in range(3)
+                )
+            )
+            calibration_path = root / "calibration.json"
+            calibration_path.write_text(json.dumps(calibration.to_dict()))
+            request = ShadowPlanningRequest(
+                observation,
+                response,
+                Path("/tmp/adapter.pth"),
+                CalibrationIdentity.from_calibration(
+                    calibration_path, calibration
+                ),
+            )
+            session.shadow_request_path.write_text(json.dumps(request.to_dict()))
+            tampered_start = DroidPose(
+                (0.401, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)
+            )
+            shadow = plan_shadow_candidates(
+                observation_id=observation.observation_id,
+                direct_actions=response.actions,
+                score=lambda candidates: np.square(candidates).sum(axis=(1, 2)),
+                proposal=response.proposal,
+                adapter=Path("/tmp/adapter.pth"),
+                config=ShadowSearchConfig(
+                    planner=CEMConfig(iterations=1, samples=4, elites=2)
+                ),
+                task_progress=TaskProgressObjective(
+                    tampered_start, target_pose, calibration
+                ),
+            )
+            session.shadow_path.write_text(json.dumps(shadow.to_dict()))
+
+            with self.assertRaisesRegex(ValueError, "not bound"):
+                session.load_shadow()
 
     def test_rejects_target_or_observation_identity_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

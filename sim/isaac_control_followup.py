@@ -128,7 +128,7 @@ async def capture_followup_observation(
         observation_id=observation_id_for_session(session_id),
         captured_at_unix_seconds=captured_at,
         context_frame=context_path.relative_to(QUANTIS_DATA_ROOT),
-        target_frame=previous_observation.target_frame,
+        target=previous_observation.target,
         expected_proposal=expected_proposal,
         pose=snapshot.end_effector_pose,
         previous_action=action_between(
