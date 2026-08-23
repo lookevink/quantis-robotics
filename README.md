@@ -105,7 +105,10 @@ Bootstrap stores persistent content under `QUANTIS_ASSET_HOME` (configured as `/
 
 Neither downloaded pack supplies the task-ready power cord and matching receptacle needed for the plug-in demo. `/assets/cable` is reserved for that custom asset. For the first JEPA-controlled demo, use a vendor CAD/mesh pair for the connector and socket, convert them to USD, and author accurate collision geometry and insertion tolerances. Keep the connector rigid and represent the trailing cable as either a short articulated chain or a visually updated curve at first. Full flexible-cable contact is a separate physics milestone and would make policy debugging substantially harder.
 
-Bootstrap provisions and mounts the assets; it does not yet compose the data-center pack, Franka, connector, and socket into one task stage. That scene and its insertion controller are the next implementation milestone.
+Bootstrap provisions and mounts the source assets. The implemented demo composes
+the Franka, rack/module proxy, rigid connector, and socket into the reusable
+`datacenter_demo.usda` stage. This remains a geometry-driven placeholder task:
+the connector has no deformable trailing cable and is not a production asset.
 
 The PhysicalAI reference dataset is opt-in because it is training data rather than a simulator asset. Set `DOWNLOAD_PHYSICALAI_DATASET=1` in local `.env` when it is needed; authenticate Hugging Face on the remote host first to avoid anonymous API limits. For the collection's 136,000+ small files, `HF_DOWNLOAD_MAX_WORKERS` controls download concurrency and defaults to `32`. The AWS wrapper forwards these and the Isaac version/port settings to the remote scripts. The stream is ready when the status command reports:
 
@@ -118,10 +121,49 @@ For normal sessions after the first bootstrap:
 ```bash
 ./ops/aws.sh up
 # Work, capture, or embed...
+./ops/aws.sh backup-state
 ./ops/aws.sh down
 ```
 
 `down` stops the EC2 host and waits until it is fully stopped. Compute billing then stops, while EBS volumes and snapshots continue to incur storage charges. The EBS data and instance ID survive. Unless the instance has an Elastic IP, its public IP changes on the next start; `aws.sh` discovers the new address automatically and refreshes the security-group rules.
+
+### Persistent state and recovery copy
+
+Scenes, recordings, reports, virtual environments, and model checkpoints live
+on the instance's 200 GB root EBS volume. They survive container restarts and
+normal EC2 stop/start cycles. On the current instance, however, the root volume
+`vol-0df988a8afe2217b0` has `DeleteOnTermination=true`.
+
+The asset volume `vol-023dd41d53c058eac` is mounted at
+`/mnt/quantis-assets`, has `DeleteOnTermination=false`, and therefore also holds
+a recovery copy of mutable project state. Refresh and checksum-verify it before
+stopping work:
+
+```bash
+./ops/aws.sh backup-state
+```
+
+The command copies without deleting older backup files:
+
+| Live state | Recovery copy |
+| --- | --- |
+| `/home/ubuntu/docker/isaac-sim/data/quantis/scenes` | `/mnt/quantis-assets/quantis-state/isaac/scenes` |
+| `/home/ubuntu/docker/isaac-sim/data/quantis/recordings` | `/mnt/quantis-assets/quantis-state/isaac/recordings` |
+| `/home/ubuntu/docker/jepa-wm/checkpoints` | `/mnt/quantis-assets/quantis-state/jepa-wm/checkpoints` |
+
+The backup command fails closed unless `/mnt/quantis-assets` is the exact mount
+point of a filesystem distinct from both live source filesystems. This prevents
+an unmounted asset-volume directory from being mistaken for a recovery copy on
+the deletable root disk.
+
+`LAST_BACKUP_UTC` records the most recent verified copy time. The snapshot
+verified at `2026-08-23T04:42:24Z` is 8,189,717,453 bytes and includes the
+reusable/result stages, all 15 synchronized recording directories,
+base/adapted evaluation reports, DINOv3 and JEPA-WM checkpoints, and the Isaac
+action adapter. Source code is preserved separately in this Git repository.
+Bootstrap does not restore this backup automatically; after replacing or
+terminating the instance, copy these three trees back to their corresponding
+live paths before starting Isaac or JEPA-WM.
 
 ### GPU capacity after a stop
 
@@ -317,12 +359,27 @@ persists the overlay on the EBS-backed model volume:
 The adapter improved the same held-out run to a positive `0.000173` mean and a
 50% win rate while preserving the base model's zero-action prediction. This is
 a real repeatable signal, but it is below the 75% held-out acceptance gate. The
-adapter remains available at
-`/home/ubuntu/docker/jepa-wm/checkpoints/quantis_isaac_wrist_action_adapter.pth`;
-it is not connected to the arm. The next model milestone is action-rich,
-camera/geometry-diverse Isaac data followed by broader action-conditioned
-predictor adaptation. Only after that held-out gate passes should CEM candidate
-selection or controller wiring begin.
+exact run used training recording `trajectory-20260823T034710Z`, 100 optimizer
+steps, batch size 2, learning rate `1e-3`, seed 234, and 30 native rollouts. The
+adapter and training report remain available at:
+
+```text
+/home/ubuntu/docker/jepa-wm/checkpoints/quantis_isaac_wrist_action_adapter.pth
+/home/ubuntu/docker/jepa-wm/checkpoints/quantis_isaac_wrist_action_adapter.pth.json
+```
+
+The untouched held-out recording and its reports are:
+
+```text
+/home/ubuntu/docker/isaac-sim/data/quantis/recordings/trajectory-20260823T041000Z
+  jepa_wm/wrist_rollout_eval_000000_020.json
+  jepa_wm/wrist_adapted_rollout_eval_000000_020.json
+```
+
+The adapter is not connected to the arm. The next model milestone is
+action-rich, camera/geometry-diverse Isaac data followed by broader
+action-conditioned predictor adaptation. Only after that held-out gate passes
+should CEM candidate selection or controller wiring begin.
 
 ## Validation
 

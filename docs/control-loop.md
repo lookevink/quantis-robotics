@@ -64,6 +64,39 @@ worker-to-controller boundary remains unwired. Collect diverse action-rich
 Isaac trajectories and adapt the action-conditioned predictor before
 implementing CEM or sending any sampled action to the articulation.
 
+### Reproducible adaptation proof
+
+The current adapter was trained from
+`trajectory-20260823T034710Z` with 30 native rollouts, 100 optimizer steps,
+batch size 2, learning rate `1e-3`, seed 234, contrastive weight 1.0, and margin
+`1e-3`. Only the action encoder weight matrix was trainable: 7,168 parameters.
+Its checkpoint and JSON training report are stored together at:
+
+```text
+/home/ubuntu/docker/jepa-wm/checkpoints/quantis_isaac_wrist_action_adapter.pth
+/home/ubuntu/docker/jepa-wm/checkpoints/quantis_isaac_wrist_action_adapter.pth.json
+```
+
+`trajectory-20260823T041000Z` was captured afterward and never used for
+optimization. Its base and adapted reports are under that recording's
+`jepa_wm/` directory. Both the live artifacts and a recovery copy are preserved
+by `./ops/aws.sh backup-state`; see the persistence inventory in the README.
+
+### Next domain-data milestone
+
+1. Generate bounded exploratory Franka trajectories that excite translation,
+   rotation, and gripper dimensions instead of repeating only the nominal cable
+   sequence.
+2. Vary camera pose, lighting, rack/module geometry, initial arm pose, and task
+   outcomes; include stationary, failed, and recovery segments.
+3. Split whole scene/geometry seeds between training and validation so adjacent
+   frames from one deterministic run never cross the boundary.
+4. Re-evaluate the 7,168-parameter adapter first. If it remains below the gate,
+   adapt the predictor's action-conditioning blocks while keeping DINOv3 frozen.
+5. Require positive mean improvement and at least a 75% held-out
+   recorded-action win rate. Only then implement candidate-action search and
+   connect its bounded first action to the simulator controller.
+
 ## Recommended process boundary
 
 Keep Isaac Sim and JEPA in different processes:

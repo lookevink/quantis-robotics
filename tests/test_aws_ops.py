@@ -11,6 +11,45 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 AWS_SCRIPT = REPO_ROOT / "ops" / "aws.sh"
 REMOTE_BOOTSTRAP = REPO_ROOT / "ops" / "remote_bootstrap.sh"
 ENCODE_RECORDING = REPO_ROOT / "ops" / "encode_demo_recording.sh"
+BACKUP_STATE = REPO_ROOT / "ops" / "backup_state.sh"
+
+
+def write_fake_findmnt(path: Path) -> Path:
+    fake_findmnt = path / "findmnt"
+    fake_findmnt.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -euo pipefail
+            query_path=""
+            output_field=""
+            while (( $# )); do
+              case "$1" in
+                -T) query_path="$2"; shift 2 ;;
+                -o) output_field="$2"; shift 2 ;;
+                *) shift ;;
+              esac
+            done
+            if [[ "${query_path}" == "${FAKE_ASSET_HOME}" ]]; then
+              if [[ "${output_field}" == "TARGET" ]]; then
+                printf '%s\\n' "${FAKE_ASSET_MOUNT_TARGET}"
+              elif [[ "${output_field}" == "MAJ:MIN" ]]; then
+                printf '%s\\n' "${FAKE_ASSET_DEVICE_ID:-259:2}"
+              else
+                printf '%s\\n' "${FAKE_ASSET_SOURCE:-/dev/fake-asset}"
+              fi
+            elif [[ "${output_field}" == "TARGET" ]]; then
+              printf '/\\n'
+            elif [[ "${output_field}" == "MAJ:MIN" ]]; then
+              printf '%s\\n' "${FAKE_LIVE_DEVICE_ID:-259:1}"
+            else
+              printf '%s\\n' "${FAKE_LIVE_SOURCE:-/dev/fake-root}"
+            fi
+            """
+        )
+    )
+    fake_findmnt.chmod(0o755)
+    return fake_findmnt
 
 
 class AwsLifecycleTests(unittest.TestCase):
@@ -132,6 +171,133 @@ class AwsLifecycleTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ops/isaac_container.sh status", calls)
+
+    def test_backup_state_syncs_and_runs_on_the_remote_host(self):
+        result, calls = self.run_command("backup-state")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("rsync ", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+
+    def test_backup_state_copies_persistent_runtime_artifacts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            isaac_data = root / "isaac-data"
+            checkpoints = root / "checkpoints"
+            asset_home = root / "assets"
+            asset_home.mkdir()
+            for path, contents in (
+                (isaac_data / "quantis/scenes/demo.usda", "scene"),
+                (
+                    isaac_data / "quantis/recordings/trajectory/manifest.json",
+                    "recording",
+                ),
+                (checkpoints / "model.pth", "checkpoint"),
+            ):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(contents)
+            fake_findmnt = write_fake_findmnt(root)
+
+            result = subprocess.run(
+                [str(BACKUP_STATE)],
+                env={
+                    **os.environ,
+                    "ISAAC_DATA_ROOT": str(isaac_data),
+                    "JEPA_WM_CHECKPOINT_DIR": str(checkpoints),
+                    "QUANTIS_ASSET_HOME": str(asset_home),
+                    "FINDMNT_COMMAND": str(fake_findmnt),
+                    "FAKE_ASSET_HOME": str(asset_home),
+                    "FAKE_ASSET_MOUNT_TARGET": str(asset_home),
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            backup = asset_home / "quantis-state"
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                (backup / "isaac/scenes/demo.usda").read_text(),
+                "scene",
+            )
+            self.assertEqual(
+                (backup / "isaac/recordings/trajectory/manifest.json").read_text(),
+                "recording",
+            )
+            self.assertEqual(
+                (backup / "jepa-wm/checkpoints/model.pth").read_text(),
+                "checkpoint",
+            )
+
+    def test_backup_state_refuses_an_unmounted_destination(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            isaac_data = root / "isaac-data"
+            checkpoints = root / "checkpoints"
+            asset_home = root / "unmounted-assets"
+            (isaac_data / "quantis/scenes").mkdir(parents=True)
+            (isaac_data / "quantis/recordings").mkdir(parents=True)
+            checkpoints.mkdir()
+            asset_home.mkdir()
+            fake_findmnt = write_fake_findmnt(root)
+
+            result = subprocess.run(
+                [str(BACKUP_STATE)],
+                env={
+                    **os.environ,
+                    "ISAAC_DATA_ROOT": str(isaac_data),
+                    "JEPA_WM_CHECKPOINT_DIR": str(checkpoints),
+                    "QUANTIS_ASSET_HOME": str(asset_home),
+                    "FINDMNT_COMMAND": str(fake_findmnt),
+                    "FAKE_ASSET_HOME": str(asset_home),
+                    "FAKE_ASSET_MOUNT_TARGET": "/",
+                    "FAKE_ASSET_SOURCE": "/dev/fake-root",
+                    "FAKE_LIVE_SOURCE": "/dev/fake-root",
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("not a dedicated mount point", result.stderr)
+            self.assertFalse((asset_home / "quantis-state").exists())
+
+    def test_backup_state_refuses_a_bind_mount_from_the_live_filesystem(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            isaac_data = root / "isaac-data"
+            checkpoints = root / "checkpoints"
+            asset_home = root / "bind-mounted-assets"
+            (isaac_data / "quantis/scenes").mkdir(parents=True)
+            (isaac_data / "quantis/recordings").mkdir(parents=True)
+            checkpoints.mkdir()
+            asset_home.mkdir()
+            fake_findmnt = write_fake_findmnt(root)
+
+            result = subprocess.run(
+                [str(BACKUP_STATE)],
+                env={
+                    **os.environ,
+                    "ISAAC_DATA_ROOT": str(isaac_data),
+                    "JEPA_WM_CHECKPOINT_DIR": str(checkpoints),
+                    "QUANTIS_ASSET_HOME": str(asset_home),
+                    "FINDMNT_COMMAND": str(fake_findmnt),
+                    "FAKE_ASSET_HOME": str(asset_home),
+                    "FAKE_ASSET_MOUNT_TARGET": str(asset_home),
+                    "FAKE_ASSET_SOURCE": "/dev/fake-root[/asset-backup]",
+                    "FAKE_LIVE_SOURCE": "/dev/fake-root",
+                    "FAKE_ASSET_DEVICE_ID": "259:1",
+                    "FAKE_LIVE_DEVICE_ID": "259:1",
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("shares a filesystem", result.stderr)
+            self.assertFalse((asset_home / "quantis-state").exists())
 
     def test_demo_run_syncs_and_calls_the_loopback_python_server(self):
         result, calls = self.run_command("demo-run")

@@ -244,7 +244,7 @@ if [[ "${command}" == "help" ]]; then
 Usage: ./ops/aws.sh COMMAND
 
 Commands:
-  ensure-running | status | ip | firewall-webrtc
+  ensure-running | status | ip | firewall-webrtc | backup-state
   bootstrap                      Start, secure, sync, and bootstrap the host
   up                             Start, secure, sync, and start Isaac Sim
   down                           Stop the EC2 instance
@@ -312,6 +312,10 @@ case "${command}" in
     ;;
   isaac-status)
     remote_with_config 'bash ~/quantis-robotics/ops/isaac_container.sh status'
+    ;;
+  backup-state)
+    sync_repo
+    remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh'
     ;;
   demo-preflight)
     demo_python 'demo.preflight_report()'
