@@ -5,7 +5,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 from jepa.contract import ObservationStage
+from jepa_wm.action import DroidPose
 from sim.demo_sequence import Phase
 from sim.recording import (
     RECORDING_SCHEMA,
@@ -62,19 +65,37 @@ class RecordingWriterTest(unittest.TestCase):
                     gripper_width_m=0.07,
                     plug_position=[-0.02, -0.25, 1.32],
                     plug_attached=False,
+                    end_effector_pose=DroidPose((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.125)),
                 )
             )
-            self.assertEqual(writer.frame_count, 1)
+            for path in writer.frame_paths().values():
+                path.touch()
+            writer.add_step(
+                RecordingSnapshot(
+                    phase=RecordingLabel(RecordingMoment.MOTION, Phase.READY),
+                    stage=ObservationStage.APPROACHING_CABLE,
+                    arm_positions=[0.2, 0.3],
+                    gripper_width_m=0.03,
+                    plug_position=[-0.02, -0.25, 1.32],
+                    plug_attached=False,
+                    end_effector_pose=DroidPose((0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.625)),
+                )
+            )
+            self.assertEqual(writer.frame_count, 2)
             self.assertEqual(
-                writer.stage_frame_count(ObservationStage.APPROACHING_CABLE), 1
+                writer.stage_frame_count(ObservationStage.APPROACHING_CABLE), 2
             )
             output = writer.finish()
 
             manifest = json.loads((output / "manifest.json").read_text())
-            step = json.loads((output / "steps.jsonl").read_text())
+            steps = [
+                json.loads(line)
+                for line in (output / "steps.jsonl").read_text().splitlines()
+            ]
+            step = steps[0]
             self.assertEqual(manifest["schema"], RECORDING_SCHEMA)
             self.assertEqual(manifest["fps"], 8)
-            self.assertEqual(manifest["frames"], 1)
+            self.assertEqual(manifest["frames"], 2)
             self.assertEqual(
                 manifest["resolutions"],
                 {
@@ -82,7 +103,16 @@ class RecordingWriterTest(unittest.TestCase):
                     "wrist": [1920, 1080],
                 },
             )
-            self.assertEqual(manifest["stage_frames"], {"approaching_cable": 1})
+            self.assertEqual(manifest["stage_frames"], {"approaching_cable": 2})
+            self.assertEqual(
+                manifest["action"],
+                {
+                    "format": "droid_delta_pose_v1",
+                    "dimensions": 7,
+                    "field": "action_from_previous",
+                    "pose_field": "end_effector_pose",
+                },
+            )
             self.assertEqual(
                 manifest["videos"],
                 {
@@ -102,6 +132,12 @@ class RecordingWriterTest(unittest.TestCase):
             self.assertEqual(step["phase"], "ready")
             self.assertEqual(step["stage"], "approaching_cable")
             self.assertFalse(step["plug_attached"])
+            self.assertIsNone(step["action_from_previous"])
+            np.testing.assert_allclose(
+                steps[1]["action_from_previous"],
+                [0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5],
+                atol=1e-7,
+            )
 
     def test_rejects_an_unsafe_recording_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

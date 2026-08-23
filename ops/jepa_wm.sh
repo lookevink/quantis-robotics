@@ -2,6 +2,8 @@
 set -euo pipefail
 
 repo_dir="${HOME}/quantis-robotics"
+# shellcheck source=ops/shell_helpers.sh
+source "${repo_dir}/ops/shell_helpers.sh"
 jepa_wm_home="${JEPA_WM_HOME:-${HOME}/docker/jepa-wm}"
 source_dir="${jepa_wm_home}/source/jepa-wms"
 dinov3_dir="${jepa_wm_home}/source/dinov3"
@@ -162,6 +164,35 @@ status_runtime() {
     "$("${venv_dir}/bin/python" --version 2>&1)"
 }
 
+evaluate_recording() {
+  local recording_name="$1"
+  local camera_name="$2"
+  local start_index="$3"
+  local transition_count="$4"
+  local transition_stride="$5"
+  is_safe_identifier "${recording_name}" \
+    || die "invalid recording name"
+  is_safe_identifier "${camera_name}" \
+    || die "invalid camera name"
+  require_nonnegative_integer "start index" "${start_index}" || exit 1
+  require_positive_integer "transition count" "${transition_count}" || exit 1
+  require_positive_integer "transition stride" "${transition_stride}" || exit 1
+  local recording="${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}"
+  [[ -f "${recording}/manifest.json" ]] \
+    || die "recording does not exist: ${recording_name}"
+  require_runtime
+  sudo chown -R "${USER}:${USER}" "${recording}"
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.evaluate_recording \
+    --source "${source_dir}" \
+    --checkpoint "${jepa_checkpoint}" \
+    --recording "${recording}" \
+    --camera "${camera_name}" \
+    --start-index "${start_index}" \
+    --count "${transition_count}" \
+    --stride "${transition_stride}"
+}
+
 case "${1:-}" in
   install)
     install_runtime
@@ -172,7 +203,11 @@ case "${1:-}" in
   status)
     status_runtime
     ;;
+  evaluate)
+    evaluate_recording \
+      "${2:-}" "${3:-wrist}" "${4:-0}" "${5:-8}" "${6:-1}"
+    ;;
   *)
-    die "expected install, smoke, or status"
+    die "expected install, smoke, status, or evaluate"
     ;;
 esac

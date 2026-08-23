@@ -8,9 +8,11 @@ from typing import Any
 
 import numpy as np
 
-from jepa.contract import DEFAULT_FRAMES, ObservationStage
+from jepa.contract import ObservationStage
+from jepa_wm.action import DROID_FPS, DroidPose
 from sim.demo_sequence import Phase, PlugAction
 from sim.isaac_demo_camera import (
+    DEMO_FPS,
     RECORDING_JOB_ROOT,
     DemoRecorder,
     capture_cameras,
@@ -77,6 +79,7 @@ class Actuators:
 @dataclass
 class PlugAttachment:
     prim: Any
+    hand_prim: Any
     collision_attributes: list[Any]
     hand_to_plug_offset: np.ndarray | None = None
 
@@ -161,6 +164,9 @@ def _prepare_plug(stage: Any) -> PlugAttachment:
     plug = stage.GetPrimAtPath(PLUG_PATH)
     if not plug.IsValid():
         raise RuntimeError(f"plug prim is missing: {PLUG_PATH}")
+    hand = stage.GetPrimAtPath(f"{ROBOT_PATH}/panda_hand")
+    if not hand.IsValid():
+        raise RuntimeError(f"robot hand prim is missing: {ROBOT_PATH}/panda_hand")
     UsdPhysics.RigidBodyAPI(plug).CreateKinematicEnabledAttr().Set(True)
     collision_attributes = [
         UsdPhysics.CollisionAPI(prim).CreateCollisionEnabledAttr()
@@ -168,7 +174,7 @@ def _prepare_plug(stage: Any) -> PlugAttachment:
         if prim.GetPath().HasPrefix(plug.GetPath())
         and prim.HasAPI(UsdPhysics.CollisionAPI)
     ]
-    return PlugAttachment(plug, collision_attributes)
+    return PlugAttachment(plug, hand, collision_attributes)
 
 
 def _smoothstep(progress: float) -> float:
@@ -181,6 +187,7 @@ def _recording_snapshot(
     command: JointCommand,
     attachment: PlugAttachment,
 ) -> RecordingSnapshot:
+    hand_position, hand_orientation = world_pose(attachment.hand_prim)
     return RecordingSnapshot(
         phase=phase,
         stage=stage,
@@ -188,6 +195,11 @@ def _recording_snapshot(
         gripper_width_m=command.gripper_width_m,
         plug_position=world_pose(attachment.prim)[0],
         plug_attached=attachment.attached,
+        end_effector_pose=DroidPose.from_world_pose(
+            hand_position,
+            hand_orientation,
+            command.gripper_width_m,
+        ),
     )
 
 
@@ -267,7 +279,7 @@ async def _fill_stage_observations(
 ) -> None:
     if recorder is None:
         return
-    while recorder.stage_frame_count(snapshot.stage) < DEFAULT_FRAMES:
+    while recorder.stage_frame_count(snapshot.stage) < recorder.minimum_stage_frames:
         await recorder.capture(snapshot)
 
 
@@ -453,11 +465,18 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
     }
 
 
-async def record_demo(recording_id: str) -> dict[str, Any]:
-    """Reset, run, and capture the demo from both cameras."""
-
+async def _record_demo(
+    recording_id: str,
+    *,
+    fps: int,
+    minimum_stage_frames: int,
+) -> dict[str, Any]:
     await reset_demo()
-    recorder = DemoRecorder(recording_id)
+    recorder = DemoRecorder(
+        recording_id,
+        fps=fps,
+        minimum_stage_frames=minimum_stage_frames,
+    )
     try:
         await recorder.initialize()
         result = await run_demo(recorder=recorder)
@@ -473,7 +492,35 @@ async def record_demo(recording_id: str) -> dict[str, Any]:
     }
 
 
+async def record_demo(recording_id: str) -> dict[str, Any]:
+    """Capture the presentation recording with complete stage windows."""
+
+    from jepa.contract import DEFAULT_FRAMES
+
+    return await _record_demo(
+        recording_id,
+        fps=DEMO_FPS,
+        minimum_stage_frames=DEFAULT_FRAMES,
+    )
+
+
+async def record_action_trajectory(recording_id: str) -> dict[str, Any]:
+    """Capture motion-only frames at JEPA-WM's four-frame-per-second rate."""
+
+    return await _record_demo(
+        recording_id,
+        fps=DROID_FPS,
+        minimum_stage_frames=0,
+    )
+
+
 def start_recording(recording_id: str) -> dict[str, Any]:
     """Start a long recording without holding the Python server connection."""
 
     return _RECORDING_JOBS.start(recording_id, record_demo)
+
+
+def start_action_recording(recording_id: str) -> dict[str, Any]:
+    """Start a DROID-action trajectory capture for offline world-model evaluation."""
+
+    return _RECORDING_JOBS.start(recording_id, record_action_trajectory)

@@ -26,9 +26,11 @@ are evaluated.
 
 The intended resulting stage/subgoal is executed by Isaac Sim's motion generation controller as an online visual feedback loop, not open-loop playback.
 
-## Why V-JEPA 2-AC is not the first step
+## Why action-conditioned JEPA-WM is not a policy yet
 
-The released action-conditioned checkpoint is a useful experiment but is not a drop-in robot policy. It predicts future latents conditioned on Franka/DROID actions. Control additionally requires:
+The installed DROID JEPA-WM checkpoint is useful but is not a drop-in robot
+policy. It predicts future DINOv3 latents conditioned on seven-dimensional
+DROID pose deltas. Control additionally requires:
 
 - matching its action and proprioception normalization;
 - sampling candidate actions;
@@ -38,18 +40,19 @@ The released action-conditioned checkpoint is a useful experiment but is not a d
 - applying only the first action and replanning;
 - enforcing workspace, velocity, collision, and force limits.
 
-The official entry point is:
+The repository now tests the official checkpoint through:
 
-```python
-import torch
-
-encoder, predictor = torch.hub.load(
-    "facebookresearch/vjepa2",
-    "vjepa2_ac_vit_giant",
-)
+```bash
+./ops/aws.sh demo-record-actions
+./ops/aws.sh jepa-wm-eval RECORDING wrist 7 8 1
 ```
 
-Use Meta's `energy_landscape_example.ipynb` as the executable reference for preprocessing and energy scoring. Do not send its raw sampled actions directly to a robot or simulator articulation without a safety/controller layer.
+`trajectory-20260823T025416Z` proved the recording and evaluation path but failed
+the action-validity gate. Across eight bounded, nonzero actions, recorded actions
+were worse than zero on average for both wrist and presentation cameras. The
+worker-to-controller boundary therefore remains unwired. Validate against native
+DROID samples and adapt the model to Isaac imagery/actions before implementing
+CEM or sending any sampled action to the simulator articulation.
 
 ## Recommended process boundary
 
@@ -101,14 +104,14 @@ Later, the action-conditioned interface can return a bounded 7D command:
 
 ## Dataset contract
 
-Each stage recording contains:
+Each v2 action trajectory contains:
 
 - ordered RGB frames at a fixed capture rate;
 - one 7D action per transition;
 - joint/end-effector state sampled at the same point;
 - task and camera metadata;
 - one observable-stage label per synchronized step;
-- at least 64 newly rendered observations for each stage;
+- motion-only observations at the model's 4 FPS cadence;
 - success/failure outcome.
 
 WebRTC is only for viewing. Capture directly from Replicator and the controller because WebRTC compression and network latency break action/frame alignment.
@@ -125,6 +128,7 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
 5. [x] Implement the stale/unknown/confidence/consecutive-confirmation gate.
 6. [ ] Record failed and camera/geometry-perturbed runs and calibrate thresholds.
 7. [ ] Close validated stage predictions around Isaac's bounded motion controller.
-8. [ ] Evaluate V-JEPA 2-AC offline against held-out simulated trajectories.
+8. [x] Evaluate JEPA-WM action conditioning offline against a synchronized
+   simulated trajectory; the first recorded-action-versus-zero gate failed.
 9. [ ] Only then allow the action-conditioned planner to propose bounded
    simulated actions.

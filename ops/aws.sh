@@ -251,11 +251,13 @@ Commands:
   ssh | sync | remote-bootstrap
   isaac-start | isaac-stop | isaac-status | isaac-logs
   demo-reset | demo-preflight | demo-run | demo-capture | demo-record
+  demo-record-actions             Capture a short 4 FPS JEPA-WM trajectory
   demo-dashboard REFERENCE [primary-camera] [jepa-camera]
   capture-smoke | jepa-embed [source-name] [camera]
   jepa-stage-embed [recording-name] [camera]
   jepa-stage-report REFERENCE QUERY [camera]
   jepa-wm-install | jepa-wm-smoke | jepa-wm-status
+  jepa-wm-eval RECORDING [camera] [start-index] [count] [stride]
 EOF
   exit 0
 fi
@@ -327,6 +329,13 @@ case "${command}" in
     remote "bash ~/quantis-robotics/ops/wait_demo_recording.sh '${recording_id}'"
     remote "bash ~/quantis-robotics/ops/encode_demo_recording.sh '${recording_id}'"
     ;;
+  demo-record-actions)
+    recording_id="trajectory-$(date -u +%Y%m%dT%H%M%SZ)"
+    demo_python "demo.start_action_recording('${recording_id}')"
+    remote "bash ~/quantis-robotics/ops/wait_demo_recording.sh '${recording_id}'"
+    remote "bash ~/quantis-robotics/ops/encode_demo_recording.sh '${recording_id}'"
+    printf 'Recording ID: %s\n' "${recording_id}"
+    ;;
   demo-dashboard)
     reference_name="${2:-}"
     primary_camera="${3:-wrist}"
@@ -381,6 +390,20 @@ case "${command}" in
     ;;
   jepa-wm-status)
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh status"
+    ;;
+  jepa-wm-eval)
+    recording_name="${2:-}"
+    camera_name="${3:-wrist}"
+    start_index="${4:-0}"
+    transition_count="${5:-8}"
+    transition_stride="${6:-1}"
+    is_safe_identifier "${recording_name}" || die "invalid recording name"
+    is_safe_identifier "${camera_name}" || die "invalid camera name"
+    require_nonnegative_integer "start index" "${start_index}" || exit 1
+    require_positive_integer "transition count" "${transition_count}" || exit 1
+    require_positive_integer "transition stride" "${transition_stride}" || exit 1
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh evaluate '${recording_name}' '${camera_name}' '${start_index}' '${transition_count}' '${transition_stride}'"
     ;;
   *)
     die "unknown command: ${command} (run $0 help)"

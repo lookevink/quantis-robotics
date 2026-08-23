@@ -8,7 +8,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from jepa.contract import ObservationStage
+from jepa.contract import DEFAULT_FRAMES, ObservationStage
 from sim.isaac_demo_scene import (
     PRESENTATION_CAMERA_PATH,
     WRIST_CAMERA_PATH,
@@ -109,10 +109,19 @@ def configure_wrist_camera() -> dict[str, Any]:
 class DemoRecorder:
     """Capture both demo cameras and synchronized robot state per update."""
 
-    def __init__(self, recording_id: str, *, fps: int = DEMO_FPS) -> None:
+    def __init__(
+        self,
+        recording_id: str,
+        *,
+        fps: int = DEMO_FPS,
+        minimum_stage_frames: int = DEFAULT_FRAMES,
+    ) -> None:
         import omni.replicator.core as rep
 
         self._rep = rep
+        if minimum_stage_frames < 0:
+            raise ValueError("minimum stage frames must be non-negative")
+        self.minimum_stage_frames = minimum_stage_frames
         self._writer = RecordingWriter(
             Path(RECORDING_ROOT),
             recording_id=recording_id,

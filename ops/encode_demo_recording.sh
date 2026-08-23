@@ -3,10 +3,12 @@ set -euo pipefail
 
 # shellcheck source=isaac_common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/isaac_common.sh"
+# shellcheck source=shell_helpers.sh
+source "$(dirname "${BASH_SOURCE[0]}")/shell_helpers.sh"
 
 recording_id="${1:-}"
-if [[ ! "${recording_id}" =~ ^demo-[0-9]{8}T[0-9]{6}Z$ ]]; then
-  printf 'error: expected recording ID demo-YYYYMMDDTHHMMSSZ\n' >&2
+if ! is_safe_identifier "${recording_id}"; then
+  printf 'error: invalid recording ID: %s\n' "${recording_id}" >&2
   exit 1
 fi
 

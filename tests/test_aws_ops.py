@@ -10,6 +10,7 @@ from typing import Optional
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AWS_SCRIPT = REPO_ROOT / "ops" / "aws.sh"
 REMOTE_BOOTSTRAP = REPO_ROOT / "ops" / "remote_bootstrap.sh"
+ENCODE_RECORDING = REPO_ROOT / "ops" / "encode_demo_recording.sh"
 
 
 class AwsLifecycleTests(unittest.TestCase):
@@ -159,6 +160,15 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/encode_demo_recording.sh", calls)
         self.assertRegex(calls, r"demo-[0-9]{8}T[0-9]{6}Z")
 
+    def test_demo_record_actions_uses_the_short_world_model_capture(self):
+        result, calls = self.run_command("demo-record-actions")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("start_action_recording", calls)
+        self.assertIn("ops/wait_demo_recording.sh", calls)
+        self.assertIn("ops/encode_demo_recording.sh", calls)
+        self.assertRegex(calls, r"trajectory-[0-9]{8}T[0-9]{6}Z")
+
     def test_demo_dashboard_records_scores_and_renders_one_recording(self):
         result, calls = self.run_command(
             "demo-dashboard",
@@ -238,6 +248,19 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertNotIn("rsync ", calls)
         self.assertIn("ops/jepa_wm.sh status", calls)
 
+    def test_jepa_wm_eval_forwards_recording_transition_window(self):
+        result, calls = self.run_command(
+            "jepa-wm-eval",
+            arguments=("demo-trajectory", "wrist", "190", "8", "3"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("rsync ", calls)
+        self.assertIn(
+            "ops/jepa_wm.sh evaluate 'demo-trajectory' 'wrist' '190' '8' '3'",
+            calls,
+        )
+
     def test_remote_bootstrap_installs_python_server_client(self):
         bootstrap = REMOTE_BOOTSTRAP.read_text()
         self.assertIn("netcat-openbsd", bootstrap)
@@ -248,6 +271,33 @@ class AwsLifecycleTests(unittest.TestCase):
 
         self.assertIn('jepa_wm.sh" install', bootstrap)
         self.assertIn('jepa_wm.sh" smoke', bootstrap)
+
+    def test_recording_encoder_accepts_a_safe_trajectory_id(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = subprocess.run(
+                [str(ENCODE_RECORDING), "trajectory-20260823T025416Z"],
+                env={**os.environ, "HOME": temp_dir},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("recording manifest does not exist", result.stderr)
+        self.assertNotIn("expected recording ID", result.stderr)
+
+    def test_recording_encoder_rejects_parent_directory_identifier(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = subprocess.run(
+                [str(ENCODE_RECORDING), ".."],
+                env={**os.environ, "HOME": temp_dir},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("invalid recording ID", result.stderr)
 
 
 if __name__ == "__main__":

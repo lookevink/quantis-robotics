@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from jepa.contract import ObservationStage
+from jepa_wm.action import ACTION_RECORDING_CONTRACT, DroidPose, action_between
 from sim.demo_sequence import Phase
 
 
-RECORDING_SCHEMA = "quantis.demo_recording.v1"
+RECORDING_SCHEMA = "quantis.demo_recording.v2"
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -64,6 +65,7 @@ class RecordingSnapshot:
     gripper_width_m: float
     plug_position: Sequence[float]
     plug_attached: bool
+    end_effector_pose: DroidPose
 
 
 @dataclass(frozen=True)
@@ -77,6 +79,8 @@ class RecordingStep:
     gripper_width_m: float
     plug_position: list[float]
     plug_attached: bool
+    end_effector_pose: list[float]
+    action_from_previous: list[float] | None
 
 
 class RecordingWriter:
@@ -114,6 +118,7 @@ class RecordingWriter:
             (self.output_dir / camera).mkdir()
         self._steps: list[RecordingStep] = []
         self._stage_frame_counts = {stage: 0 for stage in ObservationStage}
+        self._previous_end_effector_pose: DroidPose | None = None
 
     @property
     def frame_count(self) -> int:
@@ -137,6 +142,12 @@ class RecordingWriter:
             raise ValueError(
                 f"camera frames must exist before adding a step: {missing}"
             )
+        end_effector_pose = snapshot.end_effector_pose
+        action = (
+            action_between(self._previous_end_effector_pose, end_effector_pose)
+            if self._previous_end_effector_pose is not None
+            else None
+        )
         self._steps.append(
             RecordingStep(
                 index=index,
@@ -151,8 +162,13 @@ class RecordingWriter:
                 gripper_width_m=float(snapshot.gripper_width_m),
                 plug_position=[float(value) for value in snapshot.plug_position],
                 plug_attached=bool(snapshot.plug_attached),
+                end_effector_pose=list(end_effector_pose.values),
+                action_from_previous=(
+                    list(action.values) if action is not None else None
+                ),
             )
         )
+        self._previous_end_effector_pose = end_effector_pose
         self._stage_frame_counts[snapshot.stage] += 1
 
     def finish(self) -> Path:
@@ -181,6 +197,7 @@ class RecordingWriter:
                 camera: list(self.camera_resolutions[camera]) for camera in self.cameras
             },
             "videos": {camera: f"{camera}.mp4" for camera in self.cameras},
+            "action": ACTION_RECORDING_CONTRACT.to_dict(),
         }
         (self.output_dir / "manifest.json").write_text(
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8"

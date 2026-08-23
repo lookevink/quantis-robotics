@@ -274,9 +274,41 @@ online planner service will keep the model resident.
 On the `g6.2xlarge` L4 proof, the headless model used 2.01 GiB peak allocated
 VRAM, loaded in 10–12 seconds, and completed the warm single-action rollout in
 0.23–0.30 seconds. With Isaac streaming concurrently, total GPU use peaked at
-about 10.4 GiB of 23.0 GiB and Isaac remained healthy. This is enough capacity
-for the next planner prototype on one machine; candidate batching and planning
-latency still need a separate benchmark before claiming real-time control.
+about 10.4 GiB of 23.0 GiB and Isaac remained healthy. The machine has enough
+capacity for an offline planner prototype, but model validity—not hardware—is
+the current blocker.
+
+### Offline action validation
+
+Capture a motion-only trajectory at the DROID checkpoint's native 4 FPS, then
+compare recorded actions with a zero-action baseline:
+
+```bash
+./ops/aws.sh demo-record-actions
+./ops/aws.sh jepa-wm-eval trajectory-<UTC timestamp> wrist 7 8 1
+./ops/aws.sh jepa-wm-eval trajectory-<UTC timestamp> presentation 7 8 1
+```
+
+The v2 recording schema stores the world-space hand pose and a synchronized
+DROID-format action for every transition: delta XYZ, relative XYZ Euler
+rotation, and gripper-closedness delta. Evaluation skips unchanged frames and
+out-of-bounds actions, rolls each recorded action and a zero action through the
+same context, and scores the predicted next latent with the official terminal
+L2 objective. Reports persist under the recording's `jepa_wm/` directory.
+
+The first trajectory, `trajectory-20260823T025416Z`, contains 41 synchronized
+frames. Across eight nonzero actions inside the official `0.1` pose and `0.75`
+gripper bounds, the wrist view chose the recorded action over zero only 12.5% of
+the time and its mean L2 energy was `0.003226` worse. The presentation view chose
+the recorded action 0% of the time and was `0.000174` worse on average. A focused
+three-transition insertion check reached 2/3 wrist wins, but its largest motion
+still lost badly enough to make the mean result negative.
+
+This is a successful evaluation harness and a failed control-readiness result.
+Do not build CEM candidate selection or connect JEPA-WM to the arm yet. The next
+model milestone is domain/action adaptation: validate the action convention on
+native DROID samples, then fine-tune or calibrate on Isaac trajectories until
+recorded actions consistently beat zero on held-out simulated runs.
 
 ## Validation
 
