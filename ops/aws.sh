@@ -235,7 +235,7 @@ demo_python() {
   local expression="$1"
   local timeout_seconds="${2:-60}"
   sync_repo
-  isaac_python "import sys,json,importlib; sys.path.insert(0,'/workspace') if '/workspace' not in sys.path else None; importlib.invalidate_caches(); import jepa.contract as contract; importlib.reload(contract); import sim.recording as recording; importlib.reload(recording); import sim.recording_jobs as recording_jobs, sim.isaac_demo_scene as scene, sim.isaac_demo_camera as camera, sim.isaac_demo_kinematics as kinematics, sim.isaac_demo as demo; importlib.reload(recording_jobs); importlib.reload(scene); importlib.reload(camera); importlib.reload(kinematics); importlib.reload(demo); print(json.dumps(${expression},indent=2))" "${timeout_seconds}"
+  isaac_python "import sys,json,importlib; sys.path.insert(0,'/workspace') if '/workspace' not in sys.path else None; importlib.invalidate_caches(); import jepa.contract as contract, jepa_wm.action as wm_action; importlib.reload(contract); importlib.reload(wm_action); import sim.recording as recording; importlib.reload(recording); import sim.recording_jobs as recording_jobs, sim.isaac_demo_scene as scene, sim.isaac_demo_camera as camera, sim.isaac_demo_kinematics as kinematics, sim.isaac_demo as demo; importlib.reload(recording_jobs); importlib.reload(scene); importlib.reload(camera); importlib.reload(kinematics); importlib.reload(demo); print(json.dumps(${expression},indent=2))" "${timeout_seconds}"
 }
 
 command="${1:-help}"
@@ -258,6 +258,8 @@ Commands:
   jepa-stage-report REFERENCE QUERY [camera]
   jepa-wm-install | jepa-wm-smoke | jepa-wm-status
   jepa-wm-eval RECORDING [camera] [start-index] [count] [stride]
+  jepa-wm-adapt RECORDING [camera] [steps]
+  jepa-wm-eval-adapted RECORDING [camera] [start-index] [count] [stride]
 EOF
   exit 0
 fi
@@ -391,7 +393,7 @@ case "${command}" in
   jepa-wm-status)
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh status"
     ;;
-  jepa-wm-eval)
+  jepa-wm-eval|jepa-wm-eval-adapted)
     recording_name="${2:-}"
     camera_name="${3:-wrist}"
     start_index="${4:-0}"
@@ -402,8 +404,20 @@ case "${command}" in
     require_nonnegative_integer "start index" "${start_index}" || exit 1
     require_positive_integer "transition count" "${transition_count}" || exit 1
     require_positive_integer "transition stride" "${transition_stride}" || exit 1
+    evaluation_mode="base"
+    [[ "${command}" == "jepa-wm-eval-adapted" ]] && evaluation_mode="adapted"
     sync_repo
-    remote "bash ~/quantis-robotics/ops/jepa_wm.sh evaluate '${recording_name}' '${camera_name}' '${start_index}' '${transition_count}' '${transition_stride}'"
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh evaluate '${recording_name}' '${camera_name}' '${start_index}' '${transition_count}' '${transition_stride}' '${evaluation_mode}'"
+    ;;
+  jepa-wm-adapt)
+    recording_name="${2:-}"
+    camera_name="${3:-wrist}"
+    training_steps="${4:-100}"
+    is_safe_identifier "${recording_name}" || die "invalid recording name"
+    is_safe_identifier "${camera_name}" || die "invalid camera name"
+    require_positive_integer "training steps" "${training_steps}" || exit 1
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh adapt '${recording_name}' '${camera_name}' '${training_steps}'"
     ;;
   *)
     die "unknown command: ${command} (run $0 help)"

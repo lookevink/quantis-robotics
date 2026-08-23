@@ -11,7 +11,8 @@ venv_dir="${HOME}/.venvs/quantis-jepa-wm"
 bootstrap_venv="${jepa_wm_home}/bootstrap-venv"
 checkpoint_dir="${jepa_wm_home}/checkpoints"
 cache_dir="${jepa_wm_home}/cache"
-jepa_checkpoint="${checkpoint_dir}/jepa_wm_droid.pth.tar"
+model_id="jepa_wm_droid"
+jepa_checkpoint="${checkpoint_dir}/${model_id}.pth.tar"
 dinov3_checkpoint_dir="${checkpoint_dir}/dinov3"
 dinov3_checkpoint="${dinov3_checkpoint_dir}/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth"
 dinov3_expected_checkpoint="${dinov3_checkpoint_dir}/dinov3_vitl16_pretrain_lvd1689m-7c1da9a5.pth"
@@ -159,8 +160,8 @@ smoke_runtime() {
 
 status_runtime() {
   require_runtime
-  printf 'ready model=jepa_wm_droid revision=%s python=%s\n' \
-    "${jepa_revision}" \
+  printf 'ready model=%s revision=%s python=%s\n' \
+    "${model_id}" "${jepa_revision}" \
     "$("${venv_dir}/bin/python" --version 2>&1)"
 }
 
@@ -170,6 +171,7 @@ evaluate_recording() {
   local start_index="$3"
   local transition_count="$4"
   local transition_stride="$5"
+  local adapter_mode="${6:-base}"
   is_safe_identifier "${recording_name}" \
     || die "invalid recording name"
   is_safe_identifier "${camera_name}" \
@@ -183,14 +185,47 @@ evaluate_recording() {
   require_runtime
   sudo chown -R "${USER}:${USER}" "${recording}"
   cd "${repo_dir}"
-  "${venv_dir}/bin/python" -m jepa_wm.evaluate_recording \
+  local arguments=(
+    -m jepa_wm.evaluate_recording
+    --source "${source_dir}"
+    --checkpoint "${jepa_checkpoint}"
+    --recording "${recording}"
+    --camera "${camera_name}"
+    --start-index "${start_index}"
+    --count "${transition_count}"
+    --stride "${transition_stride}"
+  )
+  if [[ "${adapter_mode}" == "adapted" ]]; then
+    local adapter="${checkpoint_dir}/quantis_isaac_${camera_name}_action_adapter.pth"
+    [[ -s "${adapter}" ]] || die "action adapter is not installed for ${camera_name}"
+    arguments+=(--adapter "${adapter}")
+  elif [[ "${adapter_mode}" != "base" ]]; then
+    die "evaluation mode must be base or adapted"
+  fi
+  "${venv_dir}/bin/python" "${arguments[@]}"
+}
+
+adapt_recording() {
+  local recording_name="$1"
+  local camera_name="$2"
+  local training_steps="$3"
+  is_safe_identifier "${recording_name}" || die "invalid recording name"
+  is_safe_identifier "${camera_name}" || die "invalid camera name"
+  require_positive_integer "training steps" "${training_steps}" || exit 1
+  local recording="${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}"
+  [[ -f "${recording}/manifest.json" ]] \
+    || die "recording does not exist: ${recording_name}"
+  require_runtime
+  sudo chown -R "${USER}:${USER}" "${recording}"
+  local adapter="${checkpoint_dir}/quantis_isaac_${camera_name}_action_adapter.pth"
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.adapt_recording \
     --source "${source_dir}" \
     --checkpoint "${jepa_checkpoint}" \
     --recording "${recording}" \
+    --output "${adapter}" \
     --camera "${camera_name}" \
-    --start-index "${start_index}" \
-    --count "${transition_count}" \
-    --stride "${transition_stride}"
+    --steps "${training_steps}"
 }
 
 case "${1:-}" in
@@ -205,9 +240,12 @@ case "${1:-}" in
     ;;
   evaluate)
     evaluate_recording \
-      "${2:-}" "${3:-wrist}" "${4:-0}" "${5:-8}" "${6:-1}"
+      "${2:-}" "${3:-wrist}" "${4:-0}" "${5:-8}" "${6:-1}" "${7:-base}"
+    ;;
+  adapt)
+    adapt_recording "${2:-}" "${3:-wrist}" "${4:-100}"
     ;;
   *)
-    die "expected install, smoke, status, or evaluate"
+    die "expected install, smoke, status, evaluate, or adapt"
     ;;
 esac

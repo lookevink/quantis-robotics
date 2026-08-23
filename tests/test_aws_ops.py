@@ -248,7 +248,7 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertNotIn("rsync ", calls)
         self.assertIn("ops/jepa_wm.sh status", calls)
 
-    def test_jepa_wm_eval_forwards_recording_transition_window(self):
+    def test_jepa_wm_eval_forwards_recording_rollout_window(self):
         result, calls = self.run_command(
             "jepa-wm-eval",
             arguments=("demo-trajectory", "wrist", "190", "8", "3"),
@@ -257,7 +257,32 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("rsync ", calls)
         self.assertIn(
-            "ops/jepa_wm.sh evaluate 'demo-trajectory' 'wrist' '190' '8' '3'",
+            "ops/jepa_wm.sh evaluate 'demo-trajectory' 'wrist' '190' '8' '3' 'base'",
+            calls,
+        )
+
+    def test_jepa_wm_adapt_forwards_training_recording_and_steps(self):
+        result, calls = self.run_command(
+            "jepa-wm-adapt",
+            arguments=("demo-trajectory", "wrist", "100"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("rsync ", calls)
+        self.assertIn(
+            "ops/jepa_wm.sh adapt 'demo-trajectory' 'wrist' '100'",
+            calls,
+        )
+
+    def test_jepa_wm_eval_adapted_selects_the_persistent_adapter(self):
+        result, calls = self.run_command(
+            "jepa-wm-eval-adapted",
+            arguments=("demo-held-out", "wrist", "0", "20", "1"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "ops/jepa_wm.sh evaluate 'demo-held-out' 'wrist' '0' '20' '1' 'adapted'",
             calls,
         )
 

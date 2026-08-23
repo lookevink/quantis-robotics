@@ -32,16 +32,34 @@ class DroidActionTest(unittest.TestCase):
         self.assertFalse(bounds.accepts(DroidAction((0.2, 0, 0, 0, 0, 0, 0))))
         self.assertFalse(bounds.accepts(DroidAction((0, 0, 0, 0, 0, 0, 0.8))))
 
+    def test_rollout_bounds_allow_zero_steps_if_the_rollout_moves(self) -> None:
+        bounds = ActionSelectionBounds()
+
+        self.assertTrue(
+            bounds.accepts_rollout(
+                (
+                    DroidAction((0, 0, 0, 0, 0, 0, 0)),
+                    DroidAction((0.01, 0, 0, 0, 0, 0, 0)),
+                    DroidAction((0, 0, 0, 0, 0, 0, 0)),
+                )
+            )
+        )
+        self.assertFalse(
+            bounds.accepts_rollout((DroidAction((0, 0, 0, 0, 0, 0, 0)),) * 3)
+        )
+
     def test_converts_world_pose_and_gripper_width_to_droid_pose(self) -> None:
-        pose = DroidPose.from_world_pose(
-            position=[0.1, -0.2, 0.3],
-            orientation_wxyz=[1.0, 0.0, 0.0, 0.0],
+        pose = DroidPose.from_world_poses(
+            base_position=[0.0, 0.0, 0.0],
+            base_orientation_wxyz=[0.0, 0.0, 0.0, 1.0],
+            end_effector_position=[0.1, -0.2, 0.3],
+            end_effector_orientation_wxyz=[1.0, 0.0, 0.0, 0.0],
             gripper_width_m=0.02,
         )
 
         np.testing.assert_allclose(
             pose.values,
-            [0.1, -0.2, 0.3, 0.0, 0.0, 0.0, 0.75],
+            [-0.1, 0.2, 0.3, 0.0, 0.0, -pi, 0.75],
             atol=1e-7,
         )
 

@@ -14,7 +14,7 @@ from jepa_wm.action import ACTION_RECORDING_CONTRACT, DroidPose, action_between
 from sim.demo_sequence import Phase
 
 
-RECORDING_SCHEMA = "quantis.demo_recording.v2"
+RECORDING_SCHEMA = "quantis.demo_recording.v3"
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 

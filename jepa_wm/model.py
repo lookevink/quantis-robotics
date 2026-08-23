@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sys
 from typing import Any
 
 import torch
 import yaml
+
+from jepa_wm.adapter import apply_action_adapter
 
 
 CONFIG_RELATIVE_PATH = Path(
@@ -22,6 +25,7 @@ def load_headless_model(
     checkpoint: Path,
     *,
     device: torch.device,
+    adapter: Path | None = None,
 ) -> Any:
     """Load the official model without its optional pixel-decoder head."""
 
@@ -67,7 +71,7 @@ def load_headless_model(
             normalize=augmentation["normalize"],
         ),
     )
-    return init_module(
+    model = init_module(
         folder=checkpoint.parent,
         checkpoint=checkpoint.name,
         model_kwargs=pretrain_config,
@@ -78,3 +82,10 @@ def load_headless_model(
         cfgs_data=data_config,
         wrapper_kwargs=model_config["wrapper_kwargs"],
     )
+    if adapter is not None:
+        apply_action_adapter(
+            model,
+            adapter,
+            expected_source_revision=os.environ.get("JEPA_WM_REVISION", "unknown"),
+        )
+    return model

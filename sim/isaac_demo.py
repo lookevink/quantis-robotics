@@ -188,6 +188,8 @@ def _recording_snapshot(
     attachment: PlugAttachment,
 ) -> RecordingSnapshot:
     hand_position, hand_orientation = world_pose(attachment.hand_prim)
+    robot = attachment.hand_prim.GetStage().GetPrimAtPath(ROBOT_PATH)
+    base_position, base_orientation = world_pose(robot)
     return RecordingSnapshot(
         phase=phase,
         stage=stage,
@@ -195,7 +197,9 @@ def _recording_snapshot(
         gripper_width_m=command.gripper_width_m,
         plug_position=world_pose(attachment.prim)[0],
         plug_attached=attachment.attached,
-        end_effector_pose=DroidPose.from_world_pose(
+        end_effector_pose=DroidPose.from_world_poses(
+            base_position,
+            base_orientation,
             hand_position,
             hand_orientation,
             command.gripper_width_m,

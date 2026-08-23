@@ -44,15 +44,25 @@ The repository now tests the official checkpoint through:
 
 ```bash
 ./ops/aws.sh demo-record-actions
-./ops/aws.sh jepa-wm-eval RECORDING wrist 7 8 1
+./ops/aws.sh jepa-wm-eval RECORDING wrist 0 20 1
+./ops/aws.sh jepa-wm-adapt TRAINING_RECORDING wrist 100
+./ops/aws.sh jepa-wm-eval-adapted HELD_OUT_RECORDING wrist 0 20 1
 ```
 
-`trajectory-20260823T025416Z` proved the recording and evaluation path but failed
-the action-validity gate. Across eight bounded, nonzero actions, recorded actions
-were worse than zero on average for both wrist and presentation cameras. The
-worker-to-controller boundary therefore remains unwired. Validate against native
-DROID samples and adapt the model to Isaac imagery/actions before implementing
-CEM or sending any sampled action to the simulator articulation.
+The action contract was checked against the pinned upstream DROID loader. Each
+v3 recording stores robot-base-frame poses at 4 FPS, derives the same
+translation/relative-Euler/closedness deltas, and evaluates the planner's native
+one-frame/three-action rollout. The released model failed on both camera views.
+
+A lightweight adapter can now calibrate only the action encoder's weight matrix
+while the DINOv3 encoder, predictor, and zero-action bias remain frozen. It is
+small enough to train beside Isaac on the L4 and persists on EBS. On held-out
+`trajectory-20260823T041000Z`, the base wrist model scored a 10% recorded-action
+win rate and `-0.002089` mean improvement over zero; the adapter improved this
+to 50% and `+0.000173`. The required held-out win rate is 75%, so the
+worker-to-controller boundary remains unwired. Collect diverse action-rich
+Isaac trajectories and adapt the action-conditioned predictor before
+implementing CEM or sending any sampled action to the articulation.
 
 ## Recommended process boundary
 
@@ -104,7 +114,7 @@ Later, the action-conditioned interface can return a bounded 7D command:
 
 ## Dataset contract
 
-Each v2 action trajectory contains:
+Each v3 action trajectory contains:
 
 - ordered RGB frames at a fixed capture rate;
 - one 7D action per transition;
@@ -113,6 +123,10 @@ Each v2 action trajectory contains:
 - one observable-stage label per synchronized step;
 - motion-only observations at the model's 4 FPS cadence;
 - success/failure outcome.
+
+End-effector pose and action axes are expressed in the Franka base frame. This
+matters because the demo's Franka root is rotated relative to the Isaac world;
+world-space deltas silently invert the model's X/Y semantics.
 
 WebRTC is only for viewing. Capture directly from Replicator and the controller because WebRTC compression and network latency break action/frame alignment.
 
@@ -130,5 +144,9 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
 7. [ ] Close validated stage predictions around Isaac's bounded motion controller.
 8. [x] Evaluate JEPA-WM action conditioning offline against a synchronized
    simulated trajectory; the first recorded-action-versus-zero gate failed.
-9. [ ] Only then allow the action-conditioned planner to propose bounded
+9. [x] Match the native DROID base-frame and one-frame/three-action contract,
+   and validate a persistent frozen-backbone action adapter on a held-out run.
+10. [ ] Collect varied Isaac dynamics data and reach at least a 75% held-out
+    recorded-action win rate with positive mean improvement over zero.
+11. [ ] Only then allow the action-conditioned planner to propose bounded
    simulated actions.

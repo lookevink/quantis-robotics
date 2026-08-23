@@ -1,4 +1,4 @@
-"""Validated action/frame transitions from a recorded Isaac trajectory."""
+"""Validated action/frame rollouts from a recorded Isaac trajectory."""
 
 from __future__ import annotations
 
@@ -18,17 +18,54 @@ from jepa_wm.action import (
 
 
 @dataclass(frozen=True)
-class RecordedTransition:
-    current_index: int
-    next_index: int
-    current_frame: Path
-    next_frame: Path
-    action: DroidAction
+class RolloutProtocol:
+    """Temporal shape used by the released DROID planner."""
+
+    context_frames: int = 1
+    action_horizon: int = 3
+
+    def __post_init__(self) -> None:
+        if self.context_frames <= 0 or self.action_horizon <= 0:
+            raise ValueError("context frames and action horizon must be positive")
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "context_frames": self.context_frames,
+            "action_horizon": self.action_horizon,
+        }
+
+
+DROID_ROLLOUT_PROTOCOL = RolloutProtocol()
 
 
 @dataclass(frozen=True)
-class TransitionWindow:
-    """Validated selection and naming contract for trajectory transitions."""
+class RecordedFrame:
+    index: int
+    path: Path
+
+    def __post_init__(self) -> None:
+        if self.index < 0:
+            raise ValueError("recorded frame index must be non-negative")
+
+
+@dataclass(frozen=True)
+class RecordedRollout:
+    context: tuple[RecordedFrame, ...]
+    target: RecordedFrame
+    actions: tuple[DroidAction, ...]
+
+    @property
+    def context_paths(self) -> tuple[Path, ...]:
+        return tuple(frame.path for frame in self.context)
+
+    @property
+    def target_clip(self) -> tuple[Path, ...]:
+        return (self.target.path,)
+
+
+@dataclass(frozen=True)
+class RolloutWindow:
+    """Validated selection and naming contract for recorded rollouts."""
 
     start_index: int
     count: int
@@ -48,9 +85,23 @@ class TransitionWindow:
         }
 
     def report_name(self, camera: str) -> str:
-        return (
-            f"{camera}_transition_eval_" f"{self.start_index:06d}_{self.count:03d}.json"
-        )
+        return f"{camera}_rollout_eval_" f"{self.start_index:06d}_{self.count:03d}.json"
+
+    def select(
+        self, rollouts: tuple[RecordedRollout, ...]
+    ) -> tuple[RecordedRollout, ...]:
+        selected = tuple(
+            rollout
+            for rollout in rollouts
+            if rollout.context[0].index >= self.start_index
+            and (rollout.context[0].index - self.start_index) % self.stride == 0
+        )[: self.count]
+        if len(selected) != self.count:
+            raise ValueError(
+                f"recording has only {len(selected)} qualifying rollouts, "
+                f"expected {self.count}"
+            )
+        return selected
 
 
 def _read_object(path: Path) -> dict[str, Any]:
@@ -80,13 +131,13 @@ def _frame_path(recording: Path, step: dict[str, Any], camera: str) -> Path:
     return frame
 
 
-def load_transitions(
+def load_rollouts(
     recording: Path,
     *,
     camera: str,
-    window: TransitionWindow,
+    protocol: RolloutProtocol = DROID_ROLLOUT_PROTOCOL,
     bounds: ActionSelectionBounds = DEFAULT_ACTION_SELECTION_BOUNDS,
-) -> tuple[RecordedTransition, ...]:
+) -> tuple[RecordedRollout, ...]:
     recording = recording.resolve()
     manifest = _read_object(recording / "manifest.json")
     action_contract = ActionRecordingContract.from_mapping(manifest.get("action"))
@@ -104,39 +155,41 @@ def load_transitions(
         if not isinstance(step, dict) or step.get("index") != index:
             raise ValueError(f"recording step indices are not contiguous at {index}")
 
-    transitions = []
-    for current_index in range(
-        window.start_index,
-        len(steps) - window.stride,
-        window.stride,
-    ):
-        next_index = current_index + window.stride
-        current = steps[current_index]
-        following = steps[next_index]
+    poses = []
+    for index, step in enumerate(steps):
         try:
-            previous_pose = DroidPose(tuple(current[action_contract.pose_field]))
-            current_pose = DroidPose(tuple(following[action_contract.pose_field]))
-            action = action_between(previous_pose, current_pose)
+            poses.append(DroidPose(tuple(step[action_contract.pose_field])))
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(
-                f"recording step {next_index} has no valid DROID action"
+                f"recording step {index} has no valid DROID pose"
             ) from error
-        if not bounds.accepts(action):
+
+    rollouts = []
+    candidate_stop = len(steps) - protocol.context_frames - protocol.action_horizon + 1
+    for context_start in range(candidate_stop):
+        context_stop = context_start + protocol.context_frames
+        target_index = context_stop - 1 + protocol.action_horizon
+        actions = tuple(
+            action_between(poses[index], poses[index + 1])
+            for index in range(context_stop - 1, target_index)
+        )
+        if not bounds.accepts_rollout(actions):
             continue
-        transitions.append(
-            RecordedTransition(
-                current_index=current_index,
-                next_index=next_index,
-                current_frame=_frame_path(recording, current, camera),
-                next_frame=_frame_path(recording, following, camera),
-                action=action,
+        context_indices = tuple(range(context_start, context_stop))
+        rollouts.append(
+            RecordedRollout(
+                context=tuple(
+                    RecordedFrame(
+                        index,
+                        _frame_path(recording, steps[index], camera),
+                    )
+                    for index in context_indices
+                ),
+                target=RecordedFrame(
+                    target_index,
+                    _frame_path(recording, steps[target_index], camera),
+                ),
+                actions=actions,
             )
         )
-        if len(transitions) == window.count:
-            break
-    if len(transitions) != window.count:
-        raise ValueError(
-            f"recording has only {len(transitions)} qualifying transitions, "
-            f"expected {window.count}"
-        )
-    return tuple(transitions)
+    return tuple(rollouts)

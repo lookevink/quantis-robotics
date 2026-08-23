@@ -34,11 +34,12 @@ DINOv3 + JEPA-WM + candidate 7D actions → predicted future latents
 planner → safety gate → Isaac motion controller (next milestone)
 ```
 
-The current bootstrap proves simulation, capture, stage recognition, and one
-action-conditioned JEPA-WM latent rollout. It does not yet let JEPA command the
-arm. The next milestone is to score candidate action sequences against a visual
-goal, pass the selected action through the existing safety gate, and execute it
-through Isaac's controller.
+The bootstrap proves the simulation, capture, stage-recognition, and base
+JEPA-WM runtimes. The separate offline workflow additionally proves native
+three-action rollouts and persistent lightweight action adaptation. It does not
+yet let JEPA command the arm. The held-out action gate still fails, so the next
+milestone is to collect diverse Isaac trajectories and adapt the
+action-conditioned predictor before candidate-action planning is enabled.
 
 ## 1. AWS EC2 instance
 
@@ -285,30 +286,43 @@ compare recorded actions with a zero-action baseline:
 
 ```bash
 ./ops/aws.sh demo-record-actions
-./ops/aws.sh jepa-wm-eval trajectory-<UTC timestamp> wrist 7 8 1
-./ops/aws.sh jepa-wm-eval trajectory-<UTC timestamp> presentation 7 8 1
+./ops/aws.sh jepa-wm-eval trajectory-<UTC timestamp> wrist 0 20 1
+./ops/aws.sh jepa-wm-eval trajectory-<UTC timestamp> presentation 0 20 1
 ```
 
-The v2 recording schema stores the world-space hand pose and a synchronized
-DROID-format action for every transition: delta XYZ, relative XYZ Euler
-rotation, and gripper-closedness delta. Evaluation skips unchanged frames and
-out-of-bounds actions, rolls each recorded action and a zero action through the
-same context, and scores the predicted next latent with the official terminal
-L2 objective. Reports persist under the recording's `jepa_wm/` directory.
+The v3 recording schema stores the hand pose in the Franka base frame and a
+synchronized DROID-format action for every transition: delta XYZ, relative XYZ
+Euler rotation, and gripper-closedness delta. Evaluation uses the released
+planner's native temporal contract—one observed frame followed by three actions
+and a terminal target frame. It filters out-of-bounds rollouts, compares each
+recorded three-action rollout with three zero actions, and scores both with the
+official terminal latent-L2 objective. Reports persist under each recording's
+`jepa_wm/` directory.
 
-The first trajectory, `trajectory-20260823T025416Z`, contains 41 synchronized
-frames. Across eight nonzero actions inside the official `0.1` pose and `0.75`
-gripper bounds, the wrist view chose the recorded action over zero only 12.5% of
-the time and its mean L2 energy was `0.003226` worse. The presentation view chose
-the recorded action 0% of the time and was `0.000174` worse on average. A focused
-three-transition insertion check reached 2/3 wrist wins, but its largest motion
-still lost badly enough to make the mean result negative.
+The released checkpoint does not pass this gate on Isaac imagery. On the fresh
+held-out recording `trajectory-20260823T041000Z`, its wrist-camera recorded
+actions won 10% of 20 rollouts, with mean improvement over zero of `-0.002089`.
+The exterior presentation view also failed on the training trajectory, so the
+problem is not resolved by swapping cameras.
 
-This is a successful evaluation harness and a failed control-readiness result.
-Do not build CEM candidate selection or connect JEPA-WM to the arm yet. The next
-model milestone is domain/action adaptation: validate the action convention on
-native DROID samples, then fine-tune or calibrate on Isaac trajectories until
-recorded actions consistently beat zero on held-out simulated runs.
+There is now a bounded calibration path that freezes DINOv3 and the complete
+predictor, trains only the action encoder's 7,168 action-dependent weights, and
+persists the overlay on the EBS-backed model volume:
+
+```bash
+./ops/aws.sh jepa-wm-adapt trajectory-<training timestamp> wrist 100
+./ops/aws.sh jepa-wm-eval-adapted trajectory-<held-out timestamp> wrist 0 20 1
+```
+
+The adapter improved the same held-out run to a positive `0.000173` mean and a
+50% win rate while preserving the base model's zero-action prediction. This is
+a real repeatable signal, but it is below the 75% held-out acceptance gate. The
+adapter remains available at
+`/home/ubuntu/docker/jepa-wm/checkpoints/quantis_isaac_wrist_action_adapter.pth`;
+it is not connected to the arm. The next model milestone is action-rich,
+camera/geometry-diverse Isaac data followed by broader action-conditioned
+predictor adaptation. Only after that held-out gate passes should CEM candidate
+selection or controller wiring begin.
 
 ## Validation
 

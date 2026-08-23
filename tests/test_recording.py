@@ -107,10 +107,11 @@ class RecordingWriterTest(unittest.TestCase):
             self.assertEqual(
                 manifest["action"],
                 {
-                    "format": "droid_delta_pose_v1",
+                    "format": "droid_base_delta_pose_v2",
                     "dimensions": 7,
                     "field": "action_from_previous",
                     "pose_field": "end_effector_pose",
+                    "coordinate_frame": "robot_base",
                 },
             )
             self.assertEqual(

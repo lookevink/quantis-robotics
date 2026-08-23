@@ -11,10 +11,8 @@ from typing import Any
 
 import torch
 
+from jepa_wm.contract import MODEL_ID
 from jepa_wm.model import load_headless_model
-
-
-MODEL_NAME = "jepa_wm_droid"
 
 
 def _shape(value: Any) -> list[int]:
@@ -44,7 +42,7 @@ def run_smoke(source: Path, checkpoint: Path) -> dict[str, Any]:
 
     return {
         "status": "ready",
-        "model": MODEL_NAME,
+        "model": MODEL_ID,
         "source_revision": os.environ.get("JEPA_WM_REVISION", "unknown"),
         "device": torch.cuda.get_device_name(device),
         "action_dimensions": int(model.action_dim),

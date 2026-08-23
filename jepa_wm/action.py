@@ -11,9 +11,10 @@ from scipy.spatial.transform import Rotation
 
 
 ACTION_DIMENSIONS = 7
-ACTION_FORMAT = "droid_delta_pose_v1"
+ACTION_FORMAT = "droid_base_delta_pose_v2"
 ACTION_FIELD = "action_from_previous"
 POSE_FIELD = "end_effector_pose"
+COORDINATE_FRAME = "robot_base"
 DROID_FPS = 4
 MAX_GRIPPER_WIDTH_M = 0.08
 
@@ -26,6 +27,7 @@ class ActionRecordingContract:
     dimensions: int = ACTION_DIMENSIONS
     action_field: str = ACTION_FIELD
     pose_field: str = POSE_FIELD
+    coordinate_frame: str = COORDINATE_FRAME
 
     def to_dict(self) -> dict[str, str | int]:
         return {
@@ -33,6 +35,7 @@ class ActionRecordingContract:
             "dimensions": self.dimensions,
             "field": self.action_field,
             "pose_field": self.pose_field,
+            "coordinate_frame": self.coordinate_frame,
         }
 
     @classmethod
@@ -44,6 +47,7 @@ class ActionRecordingContract:
             dimensions=payload.get("dimensions"),
             action_field=payload.get("field"),
             pose_field=payload.get("pose_field"),
+            coordinate_frame=payload.get("coordinate_frame"),
         )
         if contract != ACTION_RECORDING_CONTRACT:
             raise ValueError("recording does not contain DROID-compatible actions")
@@ -72,22 +76,54 @@ class DroidPose:
             raise ValueError("pose gripper closedness must be between zero and one")
 
     @classmethod
-    def from_world_pose(
+    def from_world_poses(
         cls,
-        position: Sequence[float],
-        orientation_wxyz: Sequence[float],
+        base_position: Sequence[float],
+        base_orientation_wxyz: Sequence[float],
+        end_effector_position: Sequence[float],
+        end_effector_orientation_wxyz: Sequence[float],
         gripper_width_m: float,
     ) -> DroidPose:
-        position_values = tuple(float(value) for value in position)
-        quaternion = tuple(float(value) for value in orientation_wxyz)
-        if len(position_values) != 3 or len(quaternion) != 4:
-            raise ValueError("world pose requires XYZ position and WXYZ orientation")
+        base_position_values = np.asarray(base_position, dtype=np.float64)
+        end_effector_position_values = np.asarray(
+            end_effector_position, dtype=np.float64
+        )
+        base_quaternion = tuple(float(value) for value in base_orientation_wxyz)
+        end_effector_quaternion = tuple(
+            float(value) for value in end_effector_orientation_wxyz
+        )
+        if (
+            base_position_values.shape != (3,)
+            or end_effector_position_values.shape != (3,)
+            or len(base_quaternion) != 4
+            or len(end_effector_quaternion) != 4
+        ):
+            raise ValueError("base and end-effector poses require XYZ and WXYZ")
         if not 0.0 <= gripper_width_m <= MAX_GRIPPER_WIDTH_M:
             raise ValueError("gripper width is outside the Franka range")
-        xyzw = (quaternion[1], quaternion[2], quaternion[3], quaternion[0])
-        euler = Rotation.from_quat(xyzw).as_euler("xyz", degrees=False)
+        base_rotation = Rotation.from_quat(
+            (
+                base_quaternion[1],
+                base_quaternion[2],
+                base_quaternion[3],
+                base_quaternion[0],
+            )
+        )
+        end_effector_rotation = Rotation.from_quat(
+            (
+                end_effector_quaternion[1],
+                end_effector_quaternion[2],
+                end_effector_quaternion[3],
+                end_effector_quaternion[0],
+            )
+        )
+        relative_position = base_rotation.inv().apply(
+            end_effector_position_values - base_position_values
+        )
+        relative_rotation = base_rotation.inv() * end_effector_rotation
+        euler = relative_rotation.as_euler("xyz", degrees=False)
         closedness = 1.0 - gripper_width_m / MAX_GRIPPER_WIDTH_M
-        return cls((*position_values, *euler.tolist(), closedness))
+        return cls((*relative_position.tolist(), *euler.tolist(), closedness))
 
 
 @dataclass(frozen=True)
@@ -122,12 +158,19 @@ class ActionSelectionBounds:
             raise ValueError("maximum action bounds must be positive")
 
     def accepts(self, action: DroidAction) -> bool:
-        action_norm = sqrt(sum(value * value for value in action.values))
-        pose_action_norm = sqrt(sum(value * value for value in action.values[:6]))
-        return (
-            action_norm >= self.minimum_action_norm
-            and pose_action_norm <= self.maximum_pose_action_norm
+        return self.accepts_rollout((action,))
+
+    def accepts_rollout(self, actions: Sequence[DroidAction]) -> bool:
+        if not actions:
+            return False
+        action_norm = sqrt(
+            sum(value * value for action in actions for value in action.values)
+        )
+        return action_norm >= self.minimum_action_norm and all(
+            sqrt(sum(value * value for value in action.values[:6]))
+            <= self.maximum_pose_action_norm
             and abs(action.values[6]) <= self.maximum_gripper_action
+            for action in actions
         )
 
     def to_dict(self) -> dict[str, float]:
