@@ -51,6 +51,8 @@ class RecordedFrame:
 @dataclass(frozen=True)
 class RecordedRollout:
     context: tuple[RecordedFrame, ...]
+    context_pose: DroidPose
+    previous_action: DroidAction
     target: RecordedFrame
     actions: tuple[DroidAction, ...]
 
@@ -184,6 +186,12 @@ def load_rollouts(
                         _frame_path(recording, steps[index], camera),
                     )
                     for index in context_indices
+                ),
+                context_pose=poses[context_stop - 1],
+                previous_action=(
+                    action_between(poses[context_stop - 2], poses[context_stop - 1])
+                    if context_stop >= 2
+                    else DroidAction((0.0,) * 7)
                 ),
                 target=RecordedFrame(
                     target_index,

@@ -12,11 +12,11 @@ except ImportError:
 
 if torch is not None:
     from jepa_wm.adapter import (
-        ActionAdapterMetadata,
         action_adapter_parameters,
         apply_action_adapter,
         save_action_adapter,
     )
+    from jepa_wm.training_artifact import TrainingArtifactMetadata
     from jepa_wm.contract import MODEL_ID
 
 
@@ -36,7 +36,7 @@ class ActionAdapterTest(unittest.TestCase):
 
     def test_saves_and_applies_only_the_action_encoder(self) -> None:
         source_model = _model()
-        metadata = ActionAdapterMetadata(
+        metadata = TrainingArtifactMetadata(
             base_model=MODEL_ID,
             source_revision="revision",
             camera="wrist",
@@ -58,20 +58,14 @@ class ActionAdapterTest(unittest.TestCase):
             torch.testing.assert_close(source, target)
 
     def test_rejects_an_adapter_for_another_model(self) -> None:
-        model = _model()
-        metadata = ActionAdapterMetadata(
-            base_model="another_model",
-            source_revision="revision",
-            camera="wrist",
-            training_recordings=("trajectory-train",),
-            training_steps=10,
-        )
-        with tempfile.TemporaryDirectory() as temp_dir:
-            path = Path(temp_dir) / "adapter.pth"
-            save_action_adapter(model, path, metadata)
-
-            with self.assertRaisesRegex(ValueError, "base model"):
-                apply_action_adapter(model, path, expected_base_model=MODEL_ID)
+        with self.assertRaisesRegex(ValueError, "metadata"):
+            TrainingArtifactMetadata(
+                base_model="another_model",
+                source_revision="revision",
+                camera="wrist",
+                training_recordings=("trajectory-train",),
+                training_steps=10,
+            )
 
 
 if __name__ == "__main__":

@@ -38,6 +38,24 @@ die() {
   exit 1
 }
 
+parse_named_options() {
+  local target_name="$1"
+  local allowed_options="$2"
+  shift 2
+  local -n target="${target_name}"
+  local option_name
+  (( $# % 2 == 0 )) || die "named options require a value"
+  while (( $# )); do
+    [[ "$1" == --* ]] || die "expected a named option, received: $1"
+    option_name="${1#--}"
+    [[ " ${allowed_options} " == *" ${option_name} "* ]] \
+      || die "unknown option: $1"
+    [[ -z "${target[${option_name}]+x}" ]] || die "duplicate option: $1"
+    target["${option_name}"]="$2"
+    shift 2
+  done
+}
+
 download_file() {
   local url="$1"
   local destination="$2"
@@ -209,8 +227,10 @@ adapt_recording_set() {
   local recording_list="$1"
   local camera_name="$2"
   local training_steps="$3"
+  local adapter_name="${4:-quantis_isaac_${camera_name}_action_adapter}"
   is_safe_identifier_list "${recording_list}" || die "invalid recording list"
   is_safe_identifier "${camera_name}" || die "invalid camera name"
+  is_safe_identifier "${adapter_name}" || die "invalid adapter name"
   require_positive_integer "training steps" "${training_steps}" || exit 1
   local -a recording_names
   local -a recording_arguments
@@ -228,7 +248,7 @@ adapt_recording_set() {
     sudo chown -R "${USER}:${USER}" \
       "${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}"
   done
-  local adapter="${checkpoint_dir}/quantis_isaac_${camera_name}_action_adapter.pth"
+  local adapter="${checkpoint_dir}/${adapter_name}.pth"
   cd "${repo_dir}"
   "${venv_dir}/bin/python" -m jepa_wm.adapt_recording \
     --source "${source_dir}" \
@@ -237,6 +257,174 @@ adapt_recording_set() {
     --output "${adapter}" \
     --camera "${camera_name}" \
     --steps "${training_steps}"
+}
+
+benchmark_planner() {
+  local -A options=()
+  parse_named_options options \
+    "recording camera start-index count stride iterations samples elites adapter proposal" \
+    "$@"
+  local recording_name="${options[recording]:-}"
+  local camera_name="${options[camera]:-wrist}"
+  local start_index="${options[start-index]:-0}"
+  local rollout_count="${options[count]:-8}"
+  local rollout_stride="${options[stride]:-1}"
+  local planner_iterations="${options[iterations]:-6}"
+  local planner_samples="${options[samples]:-300}"
+  local planner_elites="${options[elites]:-10}"
+  local adapter_name="${options[adapter]:-quantis_isaac_${camera_name}_action_adapter}"
+  local proposal_name="${options[proposal]:-}"
+  is_safe_identifier "${recording_name}" || die "invalid recording name"
+  is_safe_identifier "${camera_name}" || die "invalid camera name"
+  is_safe_identifier "${adapter_name}" || die "invalid adapter name"
+  if [[ -n "${proposal_name}" ]]; then
+    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+  fi
+  require_nonnegative_integer "start index" "${start_index}" || exit 1
+  require_positive_integer "rollout count" "${rollout_count}" || exit 1
+  require_positive_integer "rollout stride" "${rollout_stride}" || exit 1
+  require_positive_integer "planner iterations" "${planner_iterations}" || exit 1
+  require_positive_integer "planner samples" "${planner_samples}" || exit 1
+  require_positive_integer "planner elites" "${planner_elites}" || exit 1
+  (( planner_elites <= planner_samples )) \
+    || die "planner elites must not exceed planner samples"
+  local recording="${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}"
+  local adapter="${checkpoint_dir}/${adapter_name}.pth"
+  [[ -f "${recording}/manifest.json" ]] \
+    || die "recording does not exist: ${recording_name}"
+  [[ -s "${adapter}" ]] || die "action adapter is not installed for ${camera_name}"
+  require_runtime
+  sudo chown -R "${USER}:${USER}" "${recording}"
+  cd "${repo_dir}"
+  local -a arguments=(
+    -m jepa_wm.benchmark_planner
+    --source "${source_dir}"
+    --checkpoint "${jepa_checkpoint}"
+    --recording "${recording}"
+    --adapter "${adapter}"
+    --camera "${camera_name}"
+    --start-index "${start_index}"
+    --count "${rollout_count}"
+    --stride "${rollout_stride}"
+    --iterations "${planner_iterations}"
+    --samples "${planner_samples}"
+    --elites "${planner_elites}"
+  )
+  if [[ -n "${proposal_name}" ]]; then
+    local proposal="${checkpoint_dir}/${proposal_name}.pth"
+    [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
+    arguments+=(--proposal "${proposal}")
+  fi
+  "${venv_dir}/bin/python" "${arguments[@]}"
+}
+
+train_action_proposal() {
+  local -A options=()
+  parse_named_options options "recordings camera steps proposal" "$@"
+  local recording_list="${options[recordings]:-}"
+  local camera_name="${options[camera]:-wrist}"
+  local training_steps="${options[steps]:-2000}"
+  local proposal_name="${options[proposal]:-quantis_isaac_${camera_name}_action_proposal}"
+  is_safe_identifier_list "${recording_list}" || die "invalid recording list"
+  is_safe_identifier "${camera_name}" || die "invalid camera name"
+  is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+  require_positive_integer "training steps" "${training_steps}" || exit 1
+  local -a recording_names
+  local -a recording_arguments
+  local recording_name
+  local recording
+  IFS=',' read -r -a recording_names <<<"${recording_list}"
+  for recording_name in "${recording_names[@]}"; do
+    recording="${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}"
+    [[ -f "${recording}/manifest.json" ]] \
+      || die "recording does not exist: ${recording_name}"
+    sudo chown -R "${USER}:${USER}" "${recording}"
+    recording_arguments+=(--recording "${recording}")
+  done
+  require_runtime
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.train_proposal \
+    --source "${source_dir}" \
+    --checkpoint "${jepa_checkpoint}" \
+    "${recording_arguments[@]}" \
+    --output "${checkpoint_dir}/${proposal_name}.pth" \
+    --camera "${camera_name}" \
+    --steps "${training_steps}"
+}
+
+evaluate_action_proposal() {
+  local -A options=()
+  parse_named_options options \
+    "recording camera start-index count stride proposal" "$@"
+  local recording_name="${options[recording]:-}"
+  local camera_name="${options[camera]:-wrist}"
+  local start_index="${options[start-index]:-0}"
+  local rollout_count="${options[count]:-8}"
+  local rollout_stride="${options[stride]:-1}"
+  local proposal_name="${options[proposal]:-quantis_isaac_${camera_name}_action_proposal}"
+  is_safe_identifier "${recording_name}" || die "invalid recording name"
+  is_safe_identifier "${camera_name}" || die "invalid camera name"
+  is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+  require_nonnegative_integer "start index" "${start_index}" || exit 1
+  require_positive_integer "rollout count" "${rollout_count}" || exit 1
+  require_positive_integer "rollout stride" "${rollout_stride}" || exit 1
+  local recording="${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}"
+  local proposal="${checkpoint_dir}/${proposal_name}.pth"
+  [[ -f "${recording}/manifest.json" ]] \
+    || die "recording does not exist: ${recording_name}"
+  [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
+  require_runtime
+  sudo chown -R "${USER}:${USER}" "${recording}"
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.evaluate_proposal \
+    --source "${source_dir}" \
+    --checkpoint "${jepa_checkpoint}" \
+    --proposal "${proposal}" \
+    --recording "${recording}" \
+    --camera "${camera_name}" \
+    --start-index "${start_index}" \
+    --count "${rollout_count}" \
+    --stride "${rollout_stride}"
+}
+
+summarize_action_proposal() {
+  local -A options=()
+  parse_named_options options \
+    "recordings camera start-index count stride proposal" "$@"
+  local recording_list="${options[recordings]:-}"
+  local camera_name="${options[camera]:-wrist}"
+  local start_index="${options[start-index]:-4}"
+  local rollout_count="${options[count]:-62}"
+  local rollout_stride="${options[stride]:-1}"
+  local proposal_name="${options[proposal]:-quantis_isaac_${camera_name}_action_proposal}"
+  is_safe_identifier_list "${recording_list}" || die "invalid recording list"
+  is_safe_identifier "${camera_name}" || die "invalid camera name"
+  is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+  require_nonnegative_integer "start index" "${start_index}" || exit 1
+  require_positive_integer "rollout count" "${rollout_count}" || exit 1
+  require_positive_integer "rollout stride" "${rollout_stride}" || exit 1
+  local proposal="${checkpoint_dir}/${proposal_name}.pth"
+  [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
+  local -a recording_names
+  local -a arguments
+  local recording_name
+  local report_name
+  local report
+  IFS=',' read -r -a recording_names <<<"${recording_list}"
+  printf -v report_name '%s_%s_proposal_eval_%06d_%03d_%03d.json' \
+    "${camera_name}" "${proposal_name}" "${start_index}" \
+    "${rollout_count}" "${rollout_stride}"
+  for recording_name in "${recording_names[@]}"; do
+    report="${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}/jepa_wm/${report_name}"
+    [[ -f "${report}" ]] || die "proposal report does not exist: ${report}"
+    arguments+=(--evaluation-report "${report}")
+  done
+  local output="${checkpoint_dir}/experiments/${proposal_name}_readiness.json"
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.proposal_readiness \
+    --proposal "${proposal}" \
+    "${arguments[@]}" \
+    --output "${output}"
 }
 
 summarize_experiment() {
@@ -299,13 +487,25 @@ case "${1:-}" in
     adapt_recording_set "${2:-}" "${3:-wrist}" "${4:-100}"
     ;;
   adapt-set)
-    adapt_recording_set "${2:-}" "${3:-wrist}" "${4:-500}"
+    adapt_recording_set "${2:-}" "${3:-wrist}" "${4:-500}" "${5:-}"
+    ;;
+  plan-benchmark)
+    benchmark_planner "${@:2}"
+    ;;
+  proposal-train)
+    train_action_proposal "${@:2}"
+    ;;
+  proposal-eval)
+    evaluate_action_proposal "${@:2}"
+    ;;
+  proposal-summarize)
+    summarize_action_proposal "${@:2}"
     ;;
   summarize)
     summarize_experiment \
       "${2:-}" "${3:-}" "${4:-}" "${5:-wrist}" "${6:-40}"
     ;;
   *)
-    die "expected install, smoke, status, evaluate, adapt, adapt-set, or summarize"
+    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, proposal-eval, proposal-summarize, or summarize"
     ;;
 esac

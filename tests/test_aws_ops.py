@@ -470,6 +470,23 @@ class AwsLifecycleTests(unittest.TestCase):
             calls,
         )
 
+    def test_jepa_wm_adapt_set_can_preserve_a_named_adapter_checkpoint(self):
+        result, calls = self.run_command(
+            "jepa-wm-adapt-set",
+            arguments=(
+                "domain-train-00,domain-train-01",
+                "wrist",
+                "500",
+                "quantis_isaac_wrist_goal_contrastive",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "'500' 'quantis_isaac_wrist_goal_contrastive'",
+            calls,
+        )
+
     def test_jepa_wm_eval_adapted_selects_the_persistent_adapter(self):
         result, calls = self.run_command(
             "jepa-wm-eval-adapted",
@@ -481,6 +498,128 @@ class AwsLifecycleTests(unittest.TestCase):
             "ops/jepa_wm.sh evaluate 'demo-held-out' 'wrist' '0' '20' '1' 'adapted'",
             calls,
         )
+
+    def test_jepa_wm_plan_benchmark_forwards_the_bounded_search_budget(self):
+        result, calls = self.run_command(
+            "jepa-wm-plan-benchmark",
+            arguments=(
+                "domain-held-00",
+                "wrist",
+                "4",
+                "8",
+                "3",
+                "4",
+                "128",
+                "10",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("rsync ", calls)
+        self.assertIn(
+            "ops/jepa_wm.sh plan-benchmark --recording 'domain-held-00' "
+            "--camera 'wrist' --start-index '4' --count '8' --stride '3' "
+            "--iterations '4' --samples '128' --elites '10'",
+            calls,
+        )
+
+    def test_jepa_wm_plan_benchmark_can_select_a_named_adapter(self):
+        result, calls = self.run_command(
+            "jepa-wm-plan-benchmark",
+            arguments=(
+                "domain-held-00",
+                "wrist",
+                "0",
+                "8",
+                "1",
+                "4",
+                "128",
+                "10",
+                "quantis_isaac_wrist_goal_contrastive",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "--elites '10' --adapter 'quantis_isaac_wrist_goal_contrastive'",
+            calls,
+        )
+
+    def test_jepa_wm_plan_benchmark_can_refine_a_named_proposal(self):
+        result, calls = self.run_command(
+            "jepa-wm-plan-benchmark",
+            arguments=(
+                "domain-held-00",
+                "wrist",
+                "0",
+                "8",
+                "1",
+                "4",
+                "128",
+                "10",
+                "quantis_isaac_wrist_action_adapter",
+                "quantis_isaac_wrist_action_proposal_pose_spatial_12seed",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "--adapter 'quantis_isaac_wrist_action_adapter' "
+            "--proposal 'quantis_isaac_wrist_action_proposal_pose_spatial_12seed'",
+            calls,
+        )
+
+    def test_jepa_wm_proposal_train_forwards_recording_set_and_checkpoint_name(self):
+        result, calls = self.run_command(
+            "jepa-wm-proposal-train",
+            arguments=(
+                "domain-train-00,domain-train-01",
+                "wrist",
+                "2000",
+                "quantis_isaac_wrist_action_proposal",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/jepa_wm.sh proposal-train", calls)
+        self.assertIn("domain-train-00,domain-train-01", calls)
+        self.assertIn("quantis_isaac_wrist_action_proposal", calls)
+
+    def test_jepa_wm_proposal_eval_forwards_held_out_window(self):
+        result, calls = self.run_command(
+            "jepa-wm-proposal-eval",
+            arguments=(
+                "domain-held-00",
+                "wrist",
+                "4",
+                "8",
+                "8",
+                "quantis_isaac_wrist_action_proposal",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/jepa_wm.sh proposal-eval", calls)
+        self.assertIn("--start-index '4' --count '8' --stride '8'", calls)
+        self.assertIn("quantis_isaac_wrist_action_proposal", calls)
+
+    def test_jepa_wm_proposal_summarize_forwards_whole_seed_reports(self):
+        result, calls = self.run_command(
+            "jepa-wm-proposal-summarize",
+            arguments=(
+                "domain-held-00,domain-held-01",
+                "wrist",
+                "4",
+                "62",
+                "1",
+                "quantis_isaac_wrist_action_proposal_motion_state_12seed",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/jepa_wm.sh proposal-summarize", calls)
+        self.assertIn("domain-held-00,domain-held-01", calls)
+        self.assertIn("--start-index '4' --count '62' --stride '1'", calls)
 
     def test_jepa_wm_summarize_forwards_the_whole_experiment(self):
         result, calls = self.run_command(

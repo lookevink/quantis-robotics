@@ -17,6 +17,15 @@ class RolloutEnergies:
     zero: torch.Tensor
 
 
+def score_actions(
+    model: Any,
+    context: torch.Tensor,
+    target: torch.Tensor,
+    actions: torch.Tensor,
+) -> torch.Tensor:
+    return terminal_l2_energy(model.unroll(context, actions), target)
+
+
 def rollout_action_tensor(
     rollouts: Sequence[RecordedRollout],
     *,
@@ -35,9 +44,7 @@ def score_recorded_against_zero(
     target: torch.Tensor,
     actions: torch.Tensor,
 ) -> RolloutEnergies:
-    recorded_prediction = model.unroll(context, actions)
-    zero_prediction = model.unroll(context, torch.zeros_like(actions))
     return RolloutEnergies(
-        recorded=terminal_l2_energy(recorded_prediction, target),
-        zero=terminal_l2_energy(zero_prediction, target),
+        recorded=score_actions(model, context, target, actions),
+        zero=score_actions(model, context, target, torch.zeros_like(actions)),
     )

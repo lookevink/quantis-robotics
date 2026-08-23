@@ -7,7 +7,7 @@ from typing import Any
 
 import torch
 
-from jepa_wm.adapter_metadata import ActionAdapterMetadata
+from jepa_wm.training_artifact import TrainingArtifactMetadata
 from jepa_wm.contract import MODEL_ID
 
 
@@ -35,7 +35,7 @@ def action_adapter_parameters(model: Any) -> tuple[torch.nn.Parameter, ...]:
 def save_action_adapter(
     model: Any,
     path: Path,
-    metadata: ActionAdapterMetadata,
+    metadata: TrainingArtifactMetadata,
 ) -> None:
     path = path.resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -57,11 +57,11 @@ def apply_action_adapter(
     *,
     expected_base_model: str = MODEL_ID,
     expected_source_revision: str | None = None,
-) -> ActionAdapterMetadata:
+) -> TrainingArtifactMetadata:
     payload = torch.load(path, map_location="cpu", weights_only=True)
     if not isinstance(payload, dict) or payload.get("schema") != ADAPTER_SCHEMA:
         raise ValueError("unsupported JEPA-WM action adapter")
-    metadata = ActionAdapterMetadata.from_dict(payload.get("metadata"))
+    metadata = TrainingArtifactMetadata.from_dict(payload.get("metadata"))
     if metadata.base_model != expected_base_model:
         raise ValueError(
             f"adapter base model is {metadata.base_model}, expected {expected_base_model}"

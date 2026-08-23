@@ -306,7 +306,11 @@ Commands:
   jepa-wm-install | jepa-wm-smoke | jepa-wm-status
   jepa-wm-eval RECORDING [camera] [start-index] [count] [stride]
   jepa-wm-adapt RECORDING [camera] [steps]
-  jepa-wm-adapt-set RECORDING[,RECORDING...] [camera] [steps]
+  jepa-wm-adapt-set RECORDING[,RECORDING...] [camera] [steps] [adapter-name]
+  jepa-wm-plan-benchmark RECORDING [camera] [start] [count] [stride] [iterations] [samples] [elites] [adapter] [proposal]
+  jepa-wm-proposal-train RECORDING[,RECORDING...] [camera] [steps] [proposal]
+  jepa-wm-proposal-eval RECORDING [camera] [start] [count] [stride] [proposal]
+  jepa-wm-proposal-summarize RECORDING[,RECORDING...] [camera] [start] [count] [stride] [proposal]
   jepa-wm-summarize EXPERIMENT TRAINING_CSV HELD_OUT_CSV [camera] [count]
   jepa-wm-milestone [train-count] [held-out-count] [steps] [base-seed]
   jepa-wm-eval-adapted RECORDING [camera] [start-index] [count] [stride]
@@ -488,12 +492,86 @@ case "${command}" in
     recording_names="${2:-}"
     camera_name="${3:-wrist}"
     training_steps="${4:-500}"
+    adapter_name="${5:-quantis_isaac_${camera_name}_action_adapter}"
     is_safe_identifier_list "${recording_names}" \
       || die "invalid training recording list"
     is_safe_identifier "${camera_name}" || die "invalid camera name"
+    is_safe_identifier "${adapter_name}" || die "invalid adapter name"
     require_positive_integer "training steps" "${training_steps}" || exit 1
     sync_repo
-    remote "bash ~/quantis-robotics/ops/jepa_wm.sh adapt-set '${recording_names}' '${camera_name}' '${training_steps}'"
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh adapt-set '${recording_names}' '${camera_name}' '${training_steps}' '${adapter_name}'"
+    ;;
+  jepa-wm-plan-benchmark)
+    recording_name="${2:-}"
+    camera_name="${3:-wrist}"
+    start_index="${4:-0}"
+    rollout_count="${5:-8}"
+    rollout_stride="${6:-1}"
+    planner_iterations="${7:-6}"
+    planner_samples="${8:-300}"
+    planner_elites="${9:-10}"
+    adapter_name="${10:-quantis_isaac_${camera_name}_action_adapter}"
+    proposal_name="${11:-}"
+    is_safe_identifier "${recording_name}" || die "invalid recording name"
+    is_safe_identifier "${camera_name}" || die "invalid camera name"
+    is_safe_identifier "${adapter_name}" || die "invalid adapter name"
+    if [[ -n "${proposal_name}" ]]; then
+      is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    fi
+    require_nonnegative_integer "start index" "${start_index}" || exit 1
+    require_positive_integer "rollout count" "${rollout_count}" || exit 1
+    require_positive_integer "rollout stride" "${rollout_stride}" || exit 1
+    require_positive_integer "planner iterations" "${planner_iterations}" || exit 1
+    require_positive_integer "planner samples" "${planner_samples}" || exit 1
+    require_positive_integer "planner elites" "${planner_elites}" || exit 1
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh plan-benchmark --recording '${recording_name}' --camera '${camera_name}' --start-index '${start_index}' --count '${rollout_count}' --stride '${rollout_stride}' --iterations '${planner_iterations}' --samples '${planner_samples}' --elites '${planner_elites}' --adapter '${adapter_name}' --proposal '${proposal_name}'"
+    ;;
+  jepa-wm-proposal-train)
+    recording_names="${2:-}"
+    camera_name="${3:-wrist}"
+    training_steps="${4:-2000}"
+    proposal_name="${5:-quantis_isaac_${camera_name}_action_proposal}"
+    is_safe_identifier_list "${recording_names}" \
+      || die "invalid training recording list"
+    is_safe_identifier "${camera_name}" || die "invalid camera name"
+    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    require_positive_integer "training steps" "${training_steps}" || exit 1
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh proposal-train --recordings '${recording_names}' --camera '${camera_name}' --steps '${training_steps}' --proposal '${proposal_name}'"
+    ;;
+  jepa-wm-proposal-eval)
+    recording_name="${2:-}"
+    camera_name="${3:-wrist}"
+    start_index="${4:-0}"
+    rollout_count="${5:-8}"
+    rollout_stride="${6:-1}"
+    proposal_name="${7:-quantis_isaac_${camera_name}_action_proposal}"
+    is_safe_identifier "${recording_name}" || die "invalid recording name"
+    is_safe_identifier "${camera_name}" || die "invalid camera name"
+    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    require_nonnegative_integer "start index" "${start_index}" || exit 1
+    require_positive_integer "rollout count" "${rollout_count}" || exit 1
+    require_positive_integer "rollout stride" "${rollout_stride}" || exit 1
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh proposal-eval --recording '${recording_name}' --camera '${camera_name}' --start-index '${start_index}' --count '${rollout_count}' --stride '${rollout_stride}' --proposal '${proposal_name}'"
+    ;;
+  jepa-wm-proposal-summarize)
+    recording_names="${2:-}"
+    camera_name="${3:-wrist}"
+    start_index="${4:-4}"
+    rollout_count="${5:-62}"
+    rollout_stride="${6:-1}"
+    proposal_name="${7:-quantis_isaac_${camera_name}_action_proposal}"
+    is_safe_identifier_list "${recording_names}" \
+      || die "invalid held-out recording list"
+    is_safe_identifier "${camera_name}" || die "invalid camera name"
+    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    require_nonnegative_integer "start index" "${start_index}" || exit 1
+    require_positive_integer "rollout count" "${rollout_count}" || exit 1
+    require_positive_integer "rollout stride" "${rollout_stride}" || exit 1
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh proposal-summarize --recordings '${recording_names}' --camera '${camera_name}' --start-index '${start_index}' --count '${rollout_count}' --stride '${rollout_stride}' --proposal '${proposal_name}'"
     ;;
   jepa-wm-summarize)
     experiment_id="${2:-}"

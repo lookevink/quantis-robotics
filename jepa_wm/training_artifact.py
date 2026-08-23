@@ -1,0 +1,74 @@
+"""Shared provenance and sidecar contract for trained JEPA-WM artifacts."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
+from pathlib import Path
+from typing import Any
+
+from jepa_wm.contract import MODEL_ID
+
+
+@dataclass(frozen=True)
+class TrainingArtifactMetadata:
+    base_model: str
+    source_revision: str
+    camera: str
+    training_recordings: tuple[str, ...]
+    training_steps: int
+
+    def __post_init__(self) -> None:
+        if (
+            self.base_model != MODEL_ID
+            or not self.source_revision
+            or not self.camera
+            or not self.training_recordings
+            or len(set(self.training_recordings)) != len(self.training_recordings)
+            or any(not recording for recording in self.training_recordings)
+            or self.training_steps <= 0
+        ):
+            raise ValueError("training artifact metadata is invalid")
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> TrainingArtifactMetadata:
+        if not isinstance(payload, dict):
+            raise ValueError("training artifact metadata is missing")
+        try:
+            recordings = payload["training_recordings"]
+            if not isinstance(recordings, (list, tuple)) or not all(
+                isinstance(recording, str) for recording in recordings
+            ):
+                raise ValueError("training recordings must be a string list")
+            return cls(
+                base_model=str(payload["base_model"]),
+                source_revision=str(payload["source_revision"]),
+                camera=str(payload["camera"]),
+                training_recordings=tuple(recordings),
+                training_steps=int(payload["training_steps"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("training artifact metadata is incomplete") from error
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "base_model": self.base_model,
+            "source_revision": self.source_revision,
+            "camera": self.camera,
+            "training_recordings": list(self.training_recordings),
+            "training_steps": self.training_steps,
+        }
+
+
+def training_report_path(artifact: Path) -> Path:
+    return artifact.with_suffix(artifact.suffix + ".json")
+
+
+def load_training_report_metadata(artifact: Path) -> TrainingArtifactMetadata:
+    report = training_report_path(artifact)
+    if not report.is_file():
+        raise ValueError(f"training report does not exist: {report}")
+    payload = json.loads(report.read_text())
+    if not isinstance(payload, dict):
+        raise ValueError(f"training report must be an object: {report}")
+    return TrainingArtifactMetadata.from_dict(payload.get("metadata"))

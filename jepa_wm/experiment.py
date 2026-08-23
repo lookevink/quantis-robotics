@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from jepa_wm.readiness import ActionControlDecision, ActionControlGate
-from jepa_wm.adapter_metadata import load_adapter_report_metadata
+from jepa_wm.training_artifact import load_training_report_metadata
 from sim.exploration import DOMAIN_DATASET_ID, DatasetSplit
 
 
@@ -205,7 +205,7 @@ def _validate_adapter_training_set(
     camera: str,
     training: Sequence[DomainRecording],
 ) -> None:
-    metadata = load_adapter_report_metadata(adapter)
+    metadata = load_training_report_metadata(adapter)
     expected_names = tuple(recording.name for recording in training)
     if metadata.camera != camera:
         raise ValueError("adapter camera does not match held-out reports")

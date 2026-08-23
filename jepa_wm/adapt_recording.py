@@ -15,19 +15,18 @@ import torch
 
 from jepa_wm.action import ActionSelectionBounds
 from jepa_wm.adapter import (
-    ActionAdapterMetadata,
     action_adapter_parameters,
     save_action_adapter,
 )
-from jepa_wm.adapter_metadata import adapter_report_path
 from jepa_wm.contract import MODEL_ID
-from jepa_wm.frames import video_batch
+from jepa_wm.frames import encode_clips
 from jepa_wm.model import load_headless_model
 from jepa_wm.rollout_scoring import (
     rollout_action_tensor,
     score_recorded_against_zero,
 )
 from jepa_wm.trajectory import RecordedRollout, load_rollouts
+from jepa_wm.training_artifact import TrainingArtifactMetadata, training_report_path
 
 
 TRAINING_BOUNDS = ActionSelectionBounds(minimum_action_norm=0.0)
@@ -61,20 +60,6 @@ class AdaptationConfig:
             "encoding_batch_size": self.encoding_batch_size,
             "seed": self.seed,
         }
-
-
-def _encode_clips(
-    model: Any,
-    clips: Sequence[Sequence[Path]],
-    *,
-    batch_size: int,
-) -> torch.Tensor:
-    encoded = []
-    with torch.inference_mode():
-        for start in range(0, len(clips), batch_size):
-            frames = video_batch(clips[start : start + batch_size])
-            encoded.append(model.encode(frames).cpu())
-    return torch.cat(encoded)
 
 
 def _load_training_rollouts(
@@ -127,12 +112,12 @@ def adapt_recordings(
         parameter.requires_grad_(True)
 
     encoding_started = monotonic()
-    context_latents = _encode_clips(
+    context_latents = encode_clips(
         model,
         [rollout.context_paths for rollout in rollouts],
         batch_size=config.encoding_batch_size,
     )
-    target_latents = _encode_clips(
+    target_latents = encode_clips(
         model,
         [rollout.target_clip for rollout in rollouts],
         batch_size=config.encoding_batch_size,
@@ -154,7 +139,6 @@ def adapt_recordings(
         context = context_latents[indices].to(device)
         target = target_latents[indices].to(device)
         action_batch = actions[:, indices].to(device)
-
         energies = score_recorded_against_zero(
             model,
             context,
@@ -172,7 +156,7 @@ def adapt_recordings(
     torch.cuda.synchronize(device)
     training_seconds = monotonic() - training_started
 
-    metadata = ActionAdapterMetadata(
+    metadata = TrainingArtifactMetadata(
         base_model=MODEL_ID,
         source_revision=os.environ.get("JEPA_WM_REVISION", "unknown"),
         camera=camera,
@@ -200,7 +184,7 @@ def adapt_recordings(
             3,
         ),
     }
-    report_path = adapter_report_path(output)
+    report_path = training_report_path(output)
     report["report"] = str(report_path.resolve())
     report_path.write_text(json.dumps(report, indent=2) + "\n")
     return report

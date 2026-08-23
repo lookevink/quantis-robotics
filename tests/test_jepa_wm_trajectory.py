@@ -61,6 +61,15 @@ class RecordedTrajectoryTest(unittest.TestCase):
                 (0,),
             )
             self.assertEqual(rollout.target.index, 3)
+            self.assertEqual(
+                rollout.context_pose.values,
+                (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5),
+            )
+            self.assertEqual(rollout.previous_action.values, (0.0,) * 7)
+            next_rollout = RolloutWindow(start_index=1, count=1, stride=1).select(
+                rollouts
+            )[0]
+            self.assertAlmostEqual(next_rollout.previous_action.values[0], 0.01)
             self.assertTrue(
                 all(abs(action.values[0] - 0.01) < 1e-12 for action in rollout.actions)
             )

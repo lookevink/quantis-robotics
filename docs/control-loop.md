@@ -60,8 +60,8 @@ small enough to train beside Isaac on the L4 and persists on EBS. The first
 nominal held-out run improved from a 10% base-model win rate to 50% after
 adaptation, which was still below the gate. The later whole-seed domain
 experiment described below reaches 97.5% across two unseen seeds. The
-worker-to-controller boundary nevertheless remains unwired until candidate
-search and safety checks are validated in simulation.
+worker-to-controller boundary remains unwired until the promoted proposal is
+wrapped in simulator safety checks.
 
 ### Reproducible domain adaptation proof
 
@@ -106,19 +106,29 @@ summary is:
 Both the live artifacts and a checksum-verified recovery copy are preserved by
 `./ops/aws.sh backup-state`; see the persistence inventory in the README.
 
+### Promoted inverse-action proposal
+
+The bounded CEM and empirical-prior implementations are reproducible, but CEM
+refinement lowered model energy without improving held-out action direction. It
+stays diagnostic-only. The promoted inverse head consumes frozen spatial JEPA
+features, current base-frame DROID pose, and the previous DROID action. Twelve
+training seeds produced 792 rollouts. After a four-frame warm-up, both unseen
+seeds passed 62/62 operational rollouts, for 124/124 aggregate, mean cosine
+`0.975956`, and mean sequence MSE `0.000212981`. The persisted readiness artifact
+explicitly scopes this to simulator-only inverse action and does not authorize
+live execution.
+
 ### Next control milestone
 
-1. Add bounded candidate generation and CEM refinement over the JEPA-WM
-   three-action horizon.
-2. Score candidates against explicit subgoal latents and verify that the
-   selected first action improves a held-out simulated scene more often than
-   zero, random, and scripted baselines.
-3. Reject stale observations and enforce workspace, velocity, joint, collision,
-   and force limits before an action reaches the articulation.
-4. Apply only the first bounded action, observe again, and replan. Pause on low
-   confidence or contradictory stage/goal evidence.
-5. Add stationary, failed-contact, recovery, and broader geometry variants
-   before treating the offline gate as evidence beyond this narrow Isaac domain.
+1. Keep Isaac and the resident JEPA worker in separate processes and exchange a
+   versioned observation/action envelope.
+2. Require four synchronized observations before inference and reject stale or
+   out-of-order observation IDs.
+3. Enforce workspace, per-step Cartesian, gripper, joint, collision, and force
+   limits before the first proposed action reaches the articulation.
+4. Apply only the first bounded action in Isaac, observe again, and replan.
+5. Capture simulator outcomes and compare proposal-only, zero, and scripted
+   baselines before enabling cable contact or insertion.
 
 ## Recommended process boundary
 
@@ -204,6 +214,7 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
    and validate a persistent frozen-backbone action adapter on a held-out run.
 10. [x] Collect varied Isaac dynamics data and reach at least a 75% held-out
     recorded-action win rate with positive mean improvement over zero.
-11. [ ] Allow the action-conditioned planner to propose bounded candidate
-   actions, validate them against baselines, and execute only through the
-   simulator safety gate.
+11. [x] Train a bounded inverse-action proposal and validate it on two complete
+    held-out seeds with strict provenance and an explicit warm-up boundary.
+12. [ ] Execute only the first proposal through the simulator safety gate,
+    observe again, and replan; learned commands remain disabled until then.

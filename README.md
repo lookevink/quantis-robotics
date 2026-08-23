@@ -28,18 +28,19 @@ recording dataset: per-camera frames + actions + state + manifest
 frozen V-JEPA 2 encoder → goal-progress/stage model
               │
               ▼
-DINOv3 + JEPA-WM + candidate 7D actions → predicted future latents
+DINOv3 + current pose + previous action → bounded 3×7D proposal
               │
               ▼
-planner → safety gate → Isaac motion controller (next milestone)
+JEPA-WM benchmark + readiness gate → Isaac bridge (next milestone)
 ```
 
 The bootstrap proves the simulation, capture, stage-recognition, and base
 JEPA-WM runtimes. The separate offline workflow additionally proves native
 three-action rollouts and persistent lightweight action adaptation. A
-whole-seed domain experiment now clears the offline held-out action gate. It
-still does not let JEPA command the arm: the next milestone is bounded
-candidate-action search and simulated closed-loop validation.
+whole-seed domain experiment now clears both the action-conditioning and
+inverse-action proposal gates. It still does not let JEPA command the arm: the
+next milestone is a simulator-only observation/action bridge with workspace,
+collision, and stale-observation interlocks.
 
 ## 1. AWS EC2 instance
 
@@ -405,12 +406,52 @@ The aggregate experiment report and held-out evidence are available at:
 /home/ubuntu/docker/isaac-sim/data/quantis/recordings/domain-20260823T113209Z-1400-held-01/jepa_wm/wrist_adapted_rollout_eval_000000_040.json
 ```
 
-The adapter is not connected to the arm. Passing this offline comparison says
-the model distinguishes the recorded domain actions from doing nothing; it
-does not show that the model can choose a novel action or recover from contact
-errors. The next milestone is bounded CEM candidate selection in simulation,
-with workspace, velocity, collision, and force gates around every proposed
-first action before any controller wiring is enabled.
+### Inverse-action proposal milestone
+
+The repository now has a deterministic bounded CEM implementation, empirical
+action priors, and a frozen-JEPA inverse-action proposal head. The first visual
+heads overfit or lost spatial direction. Adding spatial latent moments and the
+current DROID pose reached roughly 81% active-direction accuracy. Adding the
+previous DROID action—the arm's direction of travel—resolved the sweep
+turnarounds. The promoted head was trained over 792 three-action rollouts from
+12 complete training seeds and contains 659,989 trainable parameters; DINOv3
+and JEPA-WM remain frozen.
+
+After a required four-frame controller warm-up, both complete unseen seeds
+passed all 62 operational rollouts: 124/124 first-action gates, aggregate mean
+cosine `0.975956`, and mean sequence MSE `0.000212981`. Reproduce the held-out
+gate with:
+
+```bash
+./ops/aws.sh jepa-wm-proposal-eval \
+  domain-20260823T113209Z-1400-held-00 wrist 4 62 1 \
+  quantis_isaac_wrist_action_proposal_motion_state_12seed
+./ops/aws.sh jepa-wm-proposal-eval \
+  domain-20260823T113209Z-1400-held-01 wrist 4 62 1 \
+  quantis_isaac_wrist_action_proposal_motion_state_12seed
+./ops/aws.sh jepa-wm-proposal-summarize \
+  domain-20260823T113209Z-1400-held-00,domain-20260823T113209Z-1400-held-01 \
+  wrist 4 62 1 quantis_isaac_wrist_action_proposal_motion_state_12seed
+```
+
+The strict summary verifies whole-seed split provenance, recomputes every
+aggregate, and requires each seed to clear the thresholds. Artifacts persist at:
+
+```text
+/home/ubuntu/docker/jepa-wm/checkpoints/quantis_isaac_wrist_action_proposal_motion_state_12seed.pth
+/home/ubuntu/docker/jepa-wm/checkpoints/quantis_isaac_wrist_action_proposal_motion_state_12seed.pth.json
+/home/ubuntu/docker/jepa-wm/checkpoints/experiments/quantis_isaac_wrist_action_proposal_motion_state_12seed_readiness.json
+```
+
+A tight CEM search around the proposal lowered JEPA-WM latent energy but did
+not improve directional accuracy, so it remains an offline diagnostic rather
+than the promoted command path. No learned action is connected to Isaac yet.
+
+The adapter and proposal are not connected to the arm. Passing these offline
+comparisons is narrow evidence on seeded free-space exploration, not evidence
+of cable grasping, contact recovery, or insertion. The next milestone is the
+simulator-only bridge, with warm-up, freshness, workspace, velocity, joint,
+collision, and force gates around every proposed first action.
 
 ## Validation
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 import numpy as np
 from PIL import Image
@@ -30,3 +30,22 @@ def video_batch(clips: Sequence[Sequence[Path]]) -> torch.Tensor:
                 frames.append(np.asarray(rgb, dtype=np.uint8).copy())
         videos.append(np.stack(frames))
     return torch.from_numpy(np.stack(videos)).permute(0, 1, 4, 2, 3)
+
+
+def encode_clips(
+    model: Any,
+    clips: Sequence[Sequence[Path]],
+    *,
+    batch_size: int,
+) -> torch.Tensor:
+    if batch_size <= 0:
+        raise ValueError("encoding batch size must be positive")
+    encoded = []
+    with torch.inference_mode():
+        for start in range(0, len(clips), batch_size):
+            encoded.append(
+                model.encode(video_batch(clips[start : start + batch_size])).cpu()
+            )
+    if not encoded:
+        raise ValueError("at least one clip is required for encoding")
+    return torch.cat(encoded)
