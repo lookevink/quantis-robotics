@@ -17,6 +17,12 @@ dinov3_checkpoint_dir="${checkpoint_dir}/dinov3"
 dinov3_checkpoint="${dinov3_checkpoint_dir}/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth"
 dinov3_expected_checkpoint="${dinov3_checkpoint_dir}/dinov3_vitl16_pretrain_lvd1689m-7c1da9a5.pth"
 dinov3_cached_checkpoint="${cache_dir}/torch/hub/checkpoints/$(basename "${dinov3_checkpoint}")"
+control_run_dir="${jepa_wm_home}/run"
+control_socket="${control_run_dir}/control.sock"
+control_pid_file="${control_run_dir}/control.pid"
+control_proposal_file="${control_run_dir}/control.proposal"
+control_log="${jepa_wm_home}/logs/control-worker.log"
+control_frame_root="${HOME}/docker/isaac-sim/data/quantis"
 
 jepa_revision="${JEPA_WM_REVISION:-13cf1d9c7e476f53c17714d2e0f1dc239a883ce0}"
 dinov3_revision="${DINOV3_REVISION:-6876159a11b4df116f30f667f8c9888617df0751}"
@@ -427,6 +433,143 @@ summarize_action_proposal() {
     --output "${output}"
 }
 
+infer_replayed_control() {
+  local -A options=()
+  parse_named_options options \
+    "recording camera context-index observation-id proposal" "$@"
+  local recording_name="${options[recording]:-}"
+  local camera_name="${options[camera]:-wrist}"
+  local context_index="${options[context-index]:-4}"
+  local observation_id="${options[observation-id]:-1}"
+  local proposal_name="${options[proposal]:-quantis_isaac_${camera_name}_action_proposal}"
+  is_safe_identifier "${recording_name}" || die "invalid recording name"
+  is_safe_identifier "${camera_name}" || die "invalid camera name"
+  is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+  require_nonnegative_integer "context index" "${context_index}" || exit 1
+  require_positive_integer "observation ID" "${observation_id}" || exit 1
+  local recording="${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}"
+  local proposal="${checkpoint_dir}/${proposal_name}.pth"
+  [[ -f "${recording}/manifest.json" ]] \
+    || die "recording does not exist: ${recording_name}"
+  [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
+  control_worker_status >/dev/null
+  require_runtime
+  cd "${repo_dir}"
+  local request
+  local response
+  request="$(mktemp "${control_run_dir}/replay-request.XXXXXX.json")"
+  "${venv_dir}/bin/python" -m jepa_wm.control_replay \
+    --recording "${recording}" \
+    --camera "${camera_name}" \
+    --context-index "${context_index}" \
+    --observation-id "${observation_id}" \
+    --proposal "${proposal}" \
+    >"${request}"
+  response="$("${venv_dir}/bin/python" -m jepa_wm.control_client \
+    --socket "${control_socket}" \
+    --request "${request}")"
+  rm -f "${request}"
+  printf '%s\n' "${response}"
+}
+
+infer_control_session() {
+  local -A options=()
+  parse_named_options options "session" "$@"
+  local session_id="${options[session]:-}"
+  is_safe_identifier "${session_id}" || die "invalid control session"
+  local session="${control_frame_root}/control_sessions/${session_id}"
+  local request="${session}/request.json"
+  local response="${session}/response.json"
+  [[ -f "${request}" ]] || die "control session request does not exist: ${session_id}"
+  [[ ! -e "${response}" ]] || die "control session already has a response: ${session_id}"
+  control_worker_status >/dev/null
+  sudo chown -R "${USER}:${USER}" "${session}"
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.control_client \
+    --socket "${control_socket}" \
+    --request "${request}" \
+    --response "${response}"
+  sudo chmod -R a+rwX "${session}"
+}
+
+control_worker_is_running() {
+  [[ -S "${control_socket}" ]] \
+    && [[ -f "${control_pid_file}" ]] \
+    && [[ -f "${control_proposal_file}" ]] \
+    && [[ "$(<"${control_pid_file}")" =~ ^[0-9]+$ ]] \
+    && kill -0 "$(<"${control_pid_file}")" 2>/dev/null
+}
+
+control_worker_status() {
+  control_worker_is_running || die "control worker is not ready"
+  local worker_pid
+  worker_pid="$(<"${control_pid_file}")"
+  printf 'ready pid=%s proposal=%s socket=%s\n' \
+    "${worker_pid}" "$(<"${control_proposal_file}")" "${control_socket}"
+}
+
+stop_control_worker() {
+  if [[ ! -f "${control_pid_file}" ]]; then
+    rm -f "${control_socket}" "${control_proposal_file}"
+    printf 'control worker is already stopped\n'
+    return
+  fi
+  local worker_pid
+  worker_pid="$(<"${control_pid_file}")"
+  require_positive_integer "control worker PID" "${worker_pid}" || exit 1
+  if kill -0 "${worker_pid}" 2>/dev/null; then
+    tr '\0' ' ' <"/proc/${worker_pid}/cmdline" \
+      | grep -Fq 'jepa_wm.control_server' \
+      || die "refusing to stop an unexpected process: ${worker_pid}"
+    kill "${worker_pid}"
+    for _ in {1..20}; do
+      kill -0 "${worker_pid}" 2>/dev/null || break
+      sleep 0.25
+    done
+  fi
+  rm -f "${control_pid_file}" "${control_socket}" "${control_proposal_file}"
+  printf 'control worker stopped\n'
+}
+
+start_control_worker() {
+  local -A options=()
+  parse_named_options options "proposal" "$@"
+  local proposal_name="${options[proposal]:-quantis_isaac_wrist_action_proposal}"
+  is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+  local proposal="${checkpoint_dir}/${proposal_name}.pth"
+  [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
+  require_runtime
+  mkdir -p "${control_run_dir}" "$(dirname "${control_log}")"
+  if control_worker_is_running; then
+    [[ "$(<"${control_proposal_file}")" == "${proposal_name}" ]] \
+      || die "control worker is already running with another proposal"
+    control_worker_status
+    return
+  fi
+  rm -f "${control_socket}" "${control_pid_file}" "${control_proposal_file}"
+  cd "${repo_dir}"
+  nohup "${venv_dir}/bin/python" -m jepa_wm.control_server \
+    --source "${source_dir}" \
+    --checkpoint "${jepa_checkpoint}" \
+    --proposal "${proposal}" \
+    --socket "${control_socket}" \
+    --frame-root "${control_frame_root}" \
+    >"${control_log}" 2>&1 &
+  local worker_pid=$!
+  printf '%s\n' "${worker_pid}" >"${control_pid_file}"
+  printf '%s\n' "${proposal_name}" >"${control_proposal_file}"
+  for _ in {1..60}; do
+    if [[ -S "${control_socket}" ]]; then
+      control_worker_status
+      return
+    fi
+    kill -0 "${worker_pid}" 2>/dev/null \
+      || die "control worker exited during startup; inspect ${control_log}"
+    sleep 1
+  done
+  die "control worker did not become ready; inspect ${control_log}"
+}
+
 summarize_experiment() {
   local experiment_id="$1"
   local training_list="$2"
@@ -501,11 +644,26 @@ case "${1:-}" in
   proposal-summarize)
     summarize_action_proposal "${@:2}"
     ;;
+  control-infer-replay)
+    infer_replayed_control "${@:2}"
+    ;;
+  control-infer-session)
+    infer_control_session "${@:2}"
+    ;;
+  control-worker-start)
+    start_control_worker "${@:2}"
+    ;;
+  control-worker-status)
+    control_worker_status
+    ;;
+  control-worker-stop)
+    stop_control_worker
+    ;;
   summarize)
     summarize_experiment \
       "${2:-}" "${3:-}" "${4:-}" "${5:-wrist}" "${6:-40}"
     ;;
   *)
-    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, proposal-eval, proposal-summarize, or summarize"
+    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, proposal-eval, proposal-summarize, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, or summarize"
     ;;
 esac

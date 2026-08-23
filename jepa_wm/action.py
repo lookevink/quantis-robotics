@@ -125,6 +125,42 @@ class DroidPose:
         closedness = 1.0 - gripper_width_m / MAX_GRIPPER_WIDTH_M
         return cls((*relative_position.tolist(), *euler.tolist(), closedness))
 
+    def to_world_pose(
+        self,
+        base_position: Sequence[float],
+        base_orientation_wxyz: Sequence[float],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        base_position_values = np.asarray(base_position, dtype=np.float64)
+        base_quaternion = tuple(float(value) for value in base_orientation_wxyz)
+        if base_position_values.shape != (3,) or len(base_quaternion) != 4:
+            raise ValueError("base pose requires XYZ and WXYZ")
+        base_rotation = Rotation.from_quat(
+            (
+                base_quaternion[1],
+                base_quaternion[2],
+                base_quaternion[3],
+                base_quaternion[0],
+            )
+        )
+        position = base_position_values + base_rotation.apply(self.values[:3])
+        rotation = base_rotation * Rotation.from_euler("xyz", self.values[3:6])
+        xyzw = rotation.as_quat()
+        return position, np.asarray((xyzw[3], xyzw[0], xyzw[1], xyzw[2]))
+
+    def applied(self, action: DroidAction) -> DroidPose:
+        """Apply one base-frame delta action to this absolute pose."""
+
+        previous_rotation = Rotation.from_euler("xyz", self.values[3:6])
+        relative_rotation = Rotation.from_euler("xyz", action.values[3:6])
+        current_rotation = relative_rotation * previous_rotation
+        return DroidPose(
+            (
+                *(np.asarray(self.values[:3]) + np.asarray(action.values[:3])),
+                *current_rotation.as_euler("xyz"),
+                self.values[6] + action.values[6],
+            )
+        )
+
 
 @dataclass(frozen=True)
 class DroidAction:
@@ -134,6 +170,13 @@ class DroidAction:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "values", _validated_values("action", self.values))
+
+    def scaled(self, scale: float) -> DroidAction:
+        """Scale every action dimension while preserving its direction."""
+
+        if not isfinite(scale) or not 0.0 < scale <= 1.0:
+            raise ValueError("action scale must be between zero and one")
+        return DroidAction(tuple(value * scale for value in self.values))
 
 
 @dataclass(frozen=True)

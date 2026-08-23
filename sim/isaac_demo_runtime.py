@@ -36,6 +36,21 @@ class Actuators:
         width = float(self.finger_attributes[0].Get()) * 2.0
         return JointCommand(arm, width)
 
+    def actual_command(self) -> JointCommand:
+        positions = self.articulation.get_dof_positions()
+        if hasattr(positions, "cpu"):
+            positions = positions.cpu()
+        if hasattr(positions, "numpy"):
+            positions = positions.numpy()
+        values = np.asarray(positions, dtype=np.float64)
+        if values.ndim == 2 and values.shape[0] == 1:
+            values = values[0]
+        if values.shape != (9,) or not np.all(np.isfinite(values)):
+            raise RuntimeError(
+                f"articulation returned invalid Franka DOF positions: {values.shape}"
+            )
+        return JointCommand(values[:7].copy(), float(values[7] + values[8]))
+
     def apply(self, command: JointCommand) -> None:
         for attribute, target_degrees in zip(
             self.arm_attributes, np.rad2deg(command.arm_positions)

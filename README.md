@@ -31,16 +31,17 @@ frozen V-JEPA 2 encoder → goal-progress/stage model
 DINOv3 + current pose + previous action → bounded 3×7D proposal
               │
               ▼
-JEPA-WM benchmark + readiness gate → Isaac bridge (next milestone)
+resident Unix-socket worker → safety gate → first-action Isaac control
 ```
 
 The bootstrap proves the simulation, capture, stage-recognition, and base
 JEPA-WM runtimes. The separate offline workflow additionally proves native
 three-action rollouts and persistent lightweight action adaptation. A
-whole-seed domain experiment now clears both the action-conditioning and
-inverse-action proposal gates. It still does not let JEPA command the arm: the
-next milestone is a simulator-only observation/action bridge with workspace,
-collision, and stale-observation interlocks.
+whole-seed domain experiment clears both the action-conditioning and
+inverse-action proposal gates. A simulator-only bridge now executes one fresh,
+bounded proposal after workspace, joint, velocity, collision, force, and
+tracking interlocks. It does not yet run repeated replanning or control the
+cable task.
 
 ## 1. AWS EC2 instance
 
@@ -295,10 +296,9 @@ rejects stale observation IDs, pauses on unknown/unexpected/low-confidence
 predictions, and requires repeated confirmation before advancing.
 `python -m jepa.online_worker` is the separate JSONL prediction process; it keeps
 the encoder loaded and assigns a fresh monotonic ID to every 64-frame request.
-The worker-to-Isaac transport and live controller call site are intentionally not
-connected. A perturbed/misaligned evaluation must pass before enabling that
-connection. See [`docs/control-loop.md`](docs/control-loop.md) for the process
-boundary and remaining acceptance gates.
+This stage-classification worker remains separate from the action-conditioned
+control bridge. See [`docs/control-loop.md`](docs/control-loop.md) for both
+process boundaries and remaining acceptance gates.
 
 ## 7. Load action-conditioned JEPA-WM
 
@@ -318,9 +318,8 @@ online planner service will keep the model resident.
 On the `g6.2xlarge` L4 proof, the headless model used 2.01 GiB peak allocated
 VRAM, loaded in 10–12 seconds, and completed the warm single-action rollout in
 0.23–0.30 seconds. With Isaac streaming concurrently, total GPU use peaked at
-about 10.4 GiB of 23.0 GiB and Isaac remained healthy. The machine has enough
-capacity for an offline planner prototype, but model validity—not hardware—is
-the current blocker.
+about 10.4 GiB of 23.0 GiB and Isaac remained healthy. The resident action
+worker and Isaac therefore share this instance without another GPU.
 
 ### Offline action validation
 
@@ -445,13 +444,53 @@ aggregate, and requires each seed to clear the thresholds. Artifacts persist at:
 
 A tight CEM search around the proposal lowered JEPA-WM latent energy but did
 not improve directional accuracy, so it remains an offline diagnostic rather
-than the promoted command path. No learned action is connected to Isaac yet.
+than the promoted command path.
 
-The adapter and proposal are not connected to the arm. Passing these offline
-comparisons is narrow evidence on seeded free-space exploration, not evidence
-of cable grasping, contact recovery, or insertion. The next milestone is the
-simulator-only bridge, with warm-up, freshness, workspace, velocity, joint,
-collision, and force gates around every proposed first action.
+### Simulator-only one-action bridge
+
+Start the resident worker once, inspect it, and run one consume-once control
+session against a whole held-out reference trajectory:
+
+```bash
+./ops/aws.sh jepa-wm-control-worker-start \
+  quantis_isaac_wrist_action_proposal_motion_state_12seed
+./ops/aws.sh jepa-wm-control-worker-status
+./ops/aws.sh jepa-wm-control-step \
+  domain-20260823T113209Z-1400-held-00 11400 \
+  quantis_isaac_wrist_action_proposal_motion_state_12seed
+```
+
+Isaac validates that the goal recording is the matching whole held-out seed,
+then captures four synchronized warm-up observations and writes a versioned
+request. A session-derived nonce, response timestamp, and exact promoted
+checkpoint path bind the separate GPU worker's native three-action proposal to
+that request. Isaac consumes only a conservative quarter-scale first action
+(with a one-eighth fallback) after checking a final sub-two-second freshness
+deadline, Cartesian and gripper bounds, base-frame workspace, Franka joint
+limits and velocity, actual joint-state drift, and a live hand contact sensor.
+Tight IK is followed by measured joint and Cartesian action tracking; a
+tracking/contact failure is rolled back. The session is claimed before
+actuation, so an interrupted command cannot be replayed. Raw requests,
+responses, pre-state, post-state, contact readings, and the 512×512 post-action
+frame persist under:
+
+```text
+/home/ubuntu/docker/isaac-sim/data/quantis/control_sessions/<session>/
+```
+
+Two unseen one-step proofs passed the same conservative safety policy:
+
+- seed `11400`, session `step-20260823T153339Z-11400`: 1.883 s age,
+  translation/rotation cosine `0.9447`/`0.9300`, 0.059 mm translation error,
+  0 N contact;
+- seed `11401`, session `step-20260823T152202Z-11401`: 0.948 s age,
+  translation/rotation cosine `0.9926`/`0.9913`, 0.060 mm translation error,
+  0 N contact.
+
+This is narrow free-space execution evidence. It is not repeated closed-loop
+control and does not establish grasp, cable, contact-recovery, or insertion
+capability. Stop the worker independently with
+`./ops/aws.sh jepa-wm-control-worker-stop`.
 
 ## Validation
 

@@ -33,3 +33,18 @@ require_positive_integer() {
     return 1
   }
 }
+
+isaac_demo_code() {
+  local expression="$1"
+  printf \
+    "import sys,json,importlib; sys.path.insert(0,'/workspace') if '/workspace' not in sys.path else None; importlib.invalidate_caches(); import sim.runtime_loader as loader; importlib.reload(loader); demo=loader.reload_demo_runtime(); print(json.dumps(%s,indent=2))" \
+    "${expression}"
+}
+
+print_checked_isaac_response() {
+  local response="$1"
+  printf '%s\n' "${response}"
+  if grep -Eq '"status"[[:space:]]*:[[:space:]]*"error"' <<<"${response}"; then
+    return 1
+  fi
+}

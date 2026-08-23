@@ -115,18 +115,41 @@ features, current base-frame DROID pose, and the previous DROID action. Twelve
 training seeds produced 792 rollouts. After a four-frame warm-up, both unseen
 seeds passed 62/62 operational rollouts, for 124/124 aggregate, mean cosine
 `0.975956`, and mean sequence MSE `0.000212981`. The persisted readiness artifact
-explicitly scopes this to simulator-only inverse action and does not authorize
-live execution.
+explicitly scopes this to simulator-only inverse action.
+
+The first simulator-only execution boundary is now implemented. Isaac and the
+resident JEPA-WM worker exchange `quantis.jepa_wm_control.v1` JSON over a Unix
+socket and shared EBS-backed session directory. Isaac captures four warm-up
+frames, sends the current wrist frame, reference goal frame, base-frame DROID
+pose, and previous action, then consumes only the returned first action. Every
+session is single-use and persists its immutable request/response and measured
+outcome.
+
+Before actuation, the bridge proves that the goal recording has the same unseen
+seed and DROID/wrist-camera contract as the live variant. The request is bound
+to a unique session-derived nonce, an exact promoted-checkpoint path, and an
+ordered response timestamp. The gate then requires a final sub-two-second
+freshness check, four warm-up frames, bounded 7D action, workspace membership,
+Franka joint position/velocity limits, no live hand contact, and at most 2 N.
+The executor applies a direction-preserving quarter-scale first action (or a
+one-eighth fallback) and claims the session before motion, preventing replay
+after interruption. After actuation it requires measured joint tracking plus
+Cartesian translation/rotation direction and error; failures roll back.
+Sessions `step-20260823T153339Z-11400` and
+`step-20260823T152202Z-11401` passed on the two unseen seeds at 1.883 s and
+0.948 s respectively, with no contact. This validates one conservative
+free-space action only.
 
 ### Next control milestone
 
-1. Keep Isaac and the resident JEPA worker in separate processes and exchange a
+1. [x] Keep Isaac and the resident JEPA worker in separate processes and exchange a
    versioned observation/action envelope.
-2. Require four synchronized observations before inference and reject stale or
+2. [x] Require four synchronized observations before inference and reject stale or
    out-of-order observation IDs.
-3. Enforce workspace, per-step Cartesian, gripper, joint, collision, and force
+3. [x] Enforce workspace, per-step Cartesian, gripper, joint, collision, and force
    limits before the first proposed action reaches the articulation.
-4. Apply only the first bounded action in Isaac, observe again, and replan.
+4. [ ] Apply only the first bounded action in Isaac, observe again, and replan.
+   One action plus post-observation is proven; repeated replanning remains.
 5. Capture simulator outcomes and compare proposal-only, zero, and scripted
    baselines before enabling cable contact or insertion.
 
@@ -216,5 +239,8 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     recorded-action win rate with positive mean improvement over zero.
 11. [x] Train a bounded inverse-action proposal and validate it on two complete
     held-out seeds with strict provenance and an explicit warm-up boundary.
-12. [ ] Execute only the first proposal through the simulator safety gate,
-    observe again, and replan; learned commands remain disabled until then.
+12. [x] Execute only the first proposal through the simulator safety gate and
+    capture the measured post-action observation on two unseen seeds.
+13. [ ] Feed each accepted post-action observation back to the resident worker,
+    replan at 4 FPS, and compare bounded multi-step proposal, zero, and scripted
+    rollouts before approaching cable contact.

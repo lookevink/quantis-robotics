@@ -33,7 +33,7 @@ from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH, SOCKET_PATH
 from sim.recording import RecordingLabel, RecordingMoment
 
 
-def _apply_variant(stage: Any, plan: ExplorationPlan) -> None:
+def apply_variant(stage: Any, plan: ExplorationPlan) -> None:
     """Author seeded camera, task-geometry, and lighting changes in-session."""
 
     from pxr import Gf, UsdGeom
@@ -103,7 +103,7 @@ async def record_exploration_trajectory(
     await reset_stage()
     stage = omni.usd.get_context().get_stage()
     stage.SetEditTarget(stage.GetSessionLayer())
-    _apply_variant(stage, plan)
+    apply_variant(stage, plan)
     recorder = DemoRecorder(
         recording_id,
         fps=DROID_FPS,

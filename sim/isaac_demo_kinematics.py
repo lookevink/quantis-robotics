@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from jepa_wm.action import DroidPose, MAX_GRIPPER_WIDTH_M
 from sim.demo_sequence import DemoGeometry, Waypoint, build_demo_sequence
 from sim.isaac_demo_scene import (
     ARM_JOINT_TARGETS_DEGREES,
@@ -24,6 +25,16 @@ class SolvedWaypoint:
     waypoint: Waypoint
     arm_positions: np.ndarray
     hand_position: np.ndarray
+    position_error_m: float
+    orientation_error_rad: float
+
+
+@dataclass(frozen=True)
+class SolvedPose:
+    target_pose: DroidPose
+    arm_positions: np.ndarray
+    hand_position: np.ndarray
+    gripper_width_m: float
     position_error_m: float
     orientation_error_rad: float
 
@@ -46,23 +57,27 @@ def _task_geometry(stage: Any) -> DemoGeometry:
     )
 
 
-def solve_waypoints() -> tuple[SolvedWaypoint, ...]:
-    """Solve every task waypoint without advancing simulation physics."""
-
-    import omni.usd
+def _solver_for_stage(stage: Any) -> tuple[Any, np.ndarray, np.ndarray]:
     from isaacsim.robot_motion.motion_generation import LulaKinematicsSolver
     from isaacsim.robot_motion.motion_generation.interface_config_loader import (
         load_supported_lula_kinematics_solver_config,
     )
 
-    stage = omni.usd.get_context().get_stage()
     robot = stage.GetPrimAtPath(ROBOT_PATH)
     if not robot.IsValid():
         raise RuntimeError(f"robot prim is missing: {ROBOT_PATH}")
-
     solver = LulaKinematicsSolver(**load_supported_lula_kinematics_solver_config("Franka"))
     base_position, base_orientation = world_pose(robot)
     solver.set_robot_base_pose(base_position, base_orientation)
+    return solver, base_position, base_orientation
+
+
+def solve_waypoints() -> tuple[SolvedWaypoint, ...]:
+    """Solve every task waypoint without advancing simulation physics."""
+
+    import omni.usd
+    stage = omni.usd.get_context().get_stage()
+    solver, _, _ = _solver_for_stage(stage)
 
     warm_start = np.deg2rad(ARM_JOINT_TARGETS_DEGREES)
     hand_rotation = solver.compute_forward_kinematics("panda_hand", warm_start)[1]
@@ -110,6 +125,56 @@ def solve_waypoints() -> tuple[SolvedWaypoint, ...]:
         warm_start = arm_positions
 
     return tuple(solved)
+
+
+def solve_droid_pose(
+    target_pose: DroidPose,
+    warm_start: np.ndarray,
+) -> SolvedPose:
+    """Solve one base-frame DROID hand pose for a bounded control step."""
+
+    import omni.usd
+    from scipy.spatial.transform import Rotation
+
+    joints = np.asarray(warm_start, dtype=np.float64)
+    if joints.shape != (7,) or not np.all(np.isfinite(joints)):
+        raise ValueError("IK warm start must contain seven finite joint positions")
+    stage = omni.usd.get_context().get_stage()
+    solver, base_position, base_orientation = _solver_for_stage(stage)
+    target_position, target_orientation = target_pose.to_world_pose(
+        base_position, base_orientation
+    )
+    arm_positions, success = solver.compute_inverse_kinematics(
+        "panda_hand",
+        target_position,
+        target_orientation,
+        warm_start=joints,
+        position_tolerance=0.0001,
+        orientation_tolerance=0.001,
+    )
+    if not success:
+        raise RuntimeError("IK failed for proposed DROID pose")
+    achieved_position, achieved_rotation = solver.compute_forward_kinematics(
+        "panda_hand", arm_positions
+    )
+    target_xyzw = np.asarray(
+        (
+            target_orientation[1],
+            target_orientation[2],
+            target_orientation[3],
+            target_orientation[0],
+        )
+    )
+    return SolvedPose(
+        target_pose=target_pose,
+        arm_positions=arm_positions,
+        hand_position=achieved_position,
+        gripper_width_m=(1.0 - target_pose.values[6]) * MAX_GRIPPER_WIDTH_M,
+        position_error_m=float(np.linalg.norm(achieved_position - target_position)),
+        orientation_error_rad=_rotation_error(
+            achieved_rotation, Rotation.from_quat(target_xyzw).as_matrix()
+        ),
+    )
 
 
 def preflight_report() -> dict[str, Any]:

@@ -9,9 +9,10 @@ import json
 from pathlib import Path
 from typing import Any, Sequence
 
+from jepa_wm.domain_recording import DomainRecording
 from jepa_wm.readiness import ActionControlDecision, ActionControlGate
 from jepa_wm.training_artifact import load_training_report_metadata
-from sim.exploration import DOMAIN_DATASET_ID, DatasetSplit
+from sim.exploration import DatasetSplit
 
 
 EXPERIMENT_SCHEMA = "quantis.jepa_wm_domain_experiment.v1"
@@ -92,49 +93,6 @@ class EvaluationMetrics:
             improvement_sum=fsum(metric.improvement_sum for metric in metrics),
             recorded_action_wins=sum(metric.recorded_action_wins for metric in metrics),
         )
-
-
-@dataclass(frozen=True)
-class DomainRecording:
-    path: Path
-    name: str
-    split: DatasetSplit
-    seed: int
-
-    @classmethod
-    def from_path(
-        cls,
-        path: Path,
-        *,
-        expected_split: DatasetSplit,
-    ) -> DomainRecording:
-        path = path.resolve()
-        manifest_path = path / "manifest.json"
-        if not manifest_path.is_file():
-            raise ValueError(f"recording manifest does not exist: {manifest_path}")
-        manifest = json.loads(manifest_path.read_text())
-        metadata = manifest.get("metadata") if isinstance(manifest, dict) else None
-        if (
-            not isinstance(metadata, dict)
-            or metadata.get("dataset") != DOMAIN_DATASET_ID
-        ):
-            raise ValueError(f"recording is not a domain dataset: {path}")
-        try:
-            split = DatasetSplit(metadata.get("split"))
-        except ValueError as error:
-            raise ValueError(f"recording split is invalid: {path}") from error
-        seed = metadata.get("seed")
-        name = manifest.get("recording_id")
-        if split != expected_split:
-            raise ValueError(
-                f"recording {path.name} has split {split.value!r}, "
-                f"expected {expected_split.value!r}"
-            )
-        if not isinstance(seed, int) or seed < 0:
-            raise ValueError(f"recording seed is invalid: {path}")
-        if not isinstance(name, str) or name != path.name:
-            raise ValueError(f"recording identity does not match its directory: {path}")
-        return cls(path, name, split, seed)
 
 
 @dataclass(frozen=True)

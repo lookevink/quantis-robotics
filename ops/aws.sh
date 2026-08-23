@@ -238,17 +238,14 @@ isaac_python() {
     "printf '%%s\\n' %s | timeout %q nc -q 3 127.0.0.1 8226" \
     "${quoted_code}" "${timeout_seconds}"
   response="$(remote "${remote_command}")"
-  printf '%s\n' "${response}"
-  if grep -Eq '"status"[[:space:]]*:[[:space:]]*"error"' <<<"${response}"; then
-    return 1
-  fi
+  print_checked_isaac_response "${response}"
 }
 
 demo_python() {
   local expression="$1"
   local timeout_seconds="${2:-60}"
   sync_repo
-  isaac_python "import sys,json,importlib; sys.path.insert(0,'/workspace') if '/workspace' not in sys.path else None; importlib.invalidate_caches(); import jepa.contract as contract, jepa_wm.action as wm_action; importlib.reload(contract); importlib.reload(wm_action); import sim.recording as recording; importlib.reload(recording); import sim.recording_jobs as recording_jobs, sim.exploration as exploration, sim.isaac_demo_scene as scene, sim.isaac_demo_camera as camera, sim.isaac_demo_kinematics as kinematics; importlib.reload(recording_jobs); importlib.reload(exploration); importlib.reload(scene); importlib.reload(camera); importlib.reload(kinematics); import sim.isaac_demo_runtime as runtime; importlib.reload(runtime); import sim.isaac_exploration as isaac_exploration; importlib.reload(isaac_exploration); import sim.isaac_demo as demo; importlib.reload(demo); print(json.dumps(${expression},indent=2))" "${timeout_seconds}"
+  isaac_python "$(isaac_demo_code "${expression}")" "${timeout_seconds}"
 }
 
 wait_recording_job() {
@@ -311,6 +308,10 @@ Commands:
   jepa-wm-proposal-train RECORDING[,RECORDING...] [camera] [steps] [proposal]
   jepa-wm-proposal-eval RECORDING [camera] [start] [count] [stride] [proposal]
   jepa-wm-proposal-summarize RECORDING[,RECORDING...] [camera] [start] [count] [stride] [proposal]
+  jepa-wm-control-infer-replay RECORDING [camera] [context-index] [proposal]
+  jepa-wm-control-worker-start [proposal] | jepa-wm-control-worker-status | jepa-wm-control-worker-stop
+  jepa-wm-control-step REFERENCE_RECORDING SEED [proposal]
+  jepa-wm-control-apply SESSION
   jepa-wm-summarize EXPERIMENT TRAINING_CSV HELD_OUT_CSV [camera] [count]
   jepa-wm-milestone [train-count] [held-out-count] [steps] [base-seed]
   jepa-wm-eval-adapted RECORDING [camera] [start-index] [count] [stride]
@@ -572,6 +573,48 @@ case "${command}" in
     require_positive_integer "rollout stride" "${rollout_stride}" || exit 1
     sync_repo
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh proposal-summarize --recordings '${recording_names}' --camera '${camera_name}' --start-index '${start_index}' --count '${rollout_count}' --stride '${rollout_stride}' --proposal '${proposal_name}'"
+    ;;
+  jepa-wm-control-infer-replay)
+    recording_name="${2:-}"
+    camera_name="${3:-wrist}"
+    context_index="${4:-4}"
+    proposal_name="${5:-quantis_isaac_${camera_name}_action_proposal}"
+    is_safe_identifier "${recording_name}" || die "invalid recording name"
+    is_safe_identifier "${camera_name}" || die "invalid camera name"
+    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    require_nonnegative_integer "context index" "${context_index}" || exit 1
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-infer-replay --recording '${recording_name}' --camera '${camera_name}' --context-index '${context_index}' --observation-id '1' --proposal '${proposal_name}'"
+    ;;
+  jepa-wm-control-worker-start)
+    proposal_name="${2:-quantis_isaac_wrist_action_proposal}"
+    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --proposal '${proposal_name}'"
+    ;;
+  jepa-wm-control-worker-status)
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-status"
+    ;;
+  jepa-wm-control-worker-stop)
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-stop"
+    ;;
+  jepa-wm-control-step)
+    reference_name="${2:-}"
+    exploration_seed="${3:-}"
+    proposal_name="${4:-quantis_isaac_wrist_action_proposal}"
+    is_safe_identifier "${reference_name}" || die "invalid reference recording"
+    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    session_id="step-$(date -u +%Y%m%dT%H%M%SZ)-${exploration_seed}"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --proposal '${proposal_name}'"
+    remote "bash ~/quantis-robotics/ops/run_control_step.sh '${session_id}' '${reference_name}' '${exploration_seed}' '${proposal_name}'"
+    printf 'Control session: %s\n' "${session_id}"
+    ;;
+  jepa-wm-control-apply)
+    session_id="${2:-}"
+    is_safe_identifier "${session_id}" || die "invalid control session"
+    demo_python "await demo.apply_control_response('${session_id}')" 180
     ;;
   jepa-wm-summarize)
     experiment_id="${2:-}"

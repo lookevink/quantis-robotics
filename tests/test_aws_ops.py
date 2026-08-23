@@ -305,7 +305,7 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("rsync ", calls)
         self.assertIn("127.0.0.1 8226", calls)
-        self.assertIn("jepa.contract", calls)
+        self.assertIn("sim.runtime_loader", calls)
         self.assertIn("run_demo", calls)
 
     def test_demo_run_propagates_python_server_errors(self):
@@ -620,6 +620,49 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/jepa_wm.sh proposal-summarize", calls)
         self.assertIn("domain-held-00,domain-held-01", calls)
         self.assertIn("--start-index '4' --count '62' --stride '1'", calls)
+
+    def test_jepa_wm_control_replay_forwards_one_fresh_observation(self):
+        result, calls = self.run_command(
+            "jepa-wm-control-infer-replay",
+            arguments=(
+                "domain-held-00",
+                "wrist",
+                "4",
+                "quantis_isaac_wrist_action_proposal",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/jepa_wm.sh control-infer-replay", calls)
+        self.assertIn("--context-index '4' --observation-id '1'", calls)
+
+    def test_jepa_wm_control_worker_start_selects_the_promoted_proposal(self):
+        result, calls = self.run_command(
+            "jepa-wm-control-worker-start",
+            arguments=("quantis_isaac_wrist_action_proposal",),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/jepa_wm.sh control-worker-start", calls)
+        self.assertIn(
+            "--proposal 'quantis_isaac_wrist_action_proposal'",
+            calls,
+        )
+
+    def test_jepa_wm_control_step_keeps_inference_outside_isaac(self):
+        result, calls = self.run_command(
+            "jepa-wm-control-step",
+            arguments=(
+                "domain-held-00",
+                "11400",
+                "quantis_isaac_wrist_action_proposal",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/jepa_wm.sh control-worker-start", calls)
+        self.assertIn("ops/run_control_step.sh", calls)
+        self.assertIn("quantis_isaac_wrist_action_proposal", calls)
 
     def test_jepa_wm_summarize_forwards_the_whole_experiment(self):
         result, calls = self.run_command(

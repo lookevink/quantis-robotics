@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from jepa_wm.action import DroidAction
-from jepa_wm.experiment import DomainRecording
+from jepa_wm.domain_recording import DomainRecording
 from jepa_wm.planner import PlannerActionBounds
 from jepa_wm.planner_readiness import FirstActionGate, FirstActionSummary
 from jepa_wm.trajectory import DROID_ROLLOUT_PROTOCOL, RolloutWindow

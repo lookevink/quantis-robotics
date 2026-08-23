@@ -224,41 +224,47 @@ async def capture_cameras(
 ) -> dict[str, Any]:
     """Capture the presentation and wrist cameras from the current live pose."""
 
-    import omni.replicator.core as rep
     import omni.timeline
-    import omni.usd
-    from PIL import Image
 
-    stage = omni.usd.get_context().get_stage()
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
     captures = {}
 
     for spec in CAMERA_SPECS:
-        if not stage.GetPrimAtPath(spec.path).IsValid():
-            raise RuntimeError(f"camera prim is missing: {spec.path}")
-        render_product = rep.create.render_product(spec.path, spec.resolution)
-        annotator = rep.AnnotatorRegistry.get_annotator("rgb")
-        try:
-            annotator.attach([render_product])
-            pixels = (
-                await _wait_for_rgb(
-                    {spec.label: annotator},
-                    lambda: rep.orchestrator.step_async(rt_subframes=4),
-                )
-            )[spec.label]
-            path = destination / f"{spec.label}.png"
-            Image.fromarray(pixels[:, :, :3]).save(path)
-            captures[spec.label] = {
-                "camera": spec.path,
-                "path": str(path),
-                "shape": list(pixels.shape),
-            }
-        finally:
-            annotator.detach([render_product])
-            render_product.destroy()
+        captures[spec.label] = {
+            "camera": spec.path,
+            **await capture_camera_frame(spec, destination / f"{spec.label}.png"),
+        }
 
     return {
         "timeline_paused": not omni.timeline.get_timeline_interface().is_playing(),
         "captures": captures,
     }
+
+
+async def capture_camera_frame(spec: CameraSpec, path: Path) -> dict[str, Any]:
+    """Capture one current RGB observation to an explicit shared path."""
+
+    import omni.replicator.core as rep
+    import omni.usd
+    from PIL import Image
+
+    stage = omni.usd.get_context().get_stage()
+    if not stage.GetPrimAtPath(spec.path).IsValid():
+        raise RuntimeError(f"camera prim is missing: {spec.path}")
+    render_product = rep.create.render_product(spec.path, spec.resolution)
+    annotator = rep.AnnotatorRegistry.get_annotator("rgb")
+    try:
+        annotator.attach([render_product])
+        pixels = (
+            await _wait_for_rgb(
+                {spec.label: annotator},
+                lambda: rep.orchestrator.step_async(rt_subframes=4),
+            )
+        )[spec.label]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.fromarray(pixels[:, :, :3]).save(path, compress_level=1)
+        return {"path": str(path), "shape": list(pixels.shape)}
+    finally:
+        annotator.detach([render_product])
+        render_product.destroy()

@@ -63,6 +63,26 @@ class DroidActionTest(unittest.TestCase):
             atol=1e-7,
         )
 
+    def test_round_trips_a_base_relative_pose_to_world(self) -> None:
+        base_position = (1.0, 2.0, 0.5)
+        base_orientation = (0.70710678, 0.0, 0.0, 0.70710678)
+        world_position = (1.0, 2.4, 0.8)
+        world_orientation = (0.5, 0.5, 0.5, 0.5)
+        pose = DroidPose.from_world_poses(
+            base_position,
+            base_orientation,
+            world_position,
+            world_orientation,
+            0.04,
+        )
+
+        position, orientation = pose.to_world_pose(
+            base_position, base_orientation
+        )
+
+        np.testing.assert_allclose(position, world_position, atol=1e-7)
+        self.assertAlmostEqual(abs(float(np.dot(orientation, world_orientation))), 1.0)
+
     def test_computes_relative_translation_rotation_and_gripper_action(self) -> None:
         previous = DroidPose((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25))
         current = DroidPose((0.01, -0.02, 0.03, 0.0, 0.0, pi / 2, 0.75))
