@@ -663,9 +663,21 @@ report persists at:
 ```
 
 Before calibrated shadow reranking, the target frame and target pose are
-revalidated together against the exact reference telemetry. The next milestone
-is to add translation margin to the calibrated objective and repeat the
-calibration/trial split across whole held-out seeds.
+revalidated together against the exact reference telemetry. Every unresolved
+task axis must now clear a persisted minimum predicted error reduction: `0.1
+mm` translation, `0.001 rad` rotation, and `0.005` gripper closedness. The
+report records initial error, predicted error, predicted reduction, required
+reduction, maximum allowed error, and the resulting pass decision for both the
+direct and planned candidates. Legacy reports retain their original zero-margin
+interpretation when reloaded.
+
+Live shadow session `step-20260823T224924Z-11401` cleared all three margins. It
+predicted reductions of `0.218 mm` translation, `0.00233 rad` rotation, and
+`0.0419` gripper error, improved latent energy by `0.000182`, and passed the
+no-actuation simulator safety projection at quarter
+translation/rotation/gripper scale. It remained `shadow_only`; the planned
+candidate was not applied. The next milestone is to repeat calibration and
+reset-identical candidate trials across disjoint whole held-out seeds.
 Stop the worker independently with
 `./ops/aws.sh jepa-wm-control-worker-stop`.
 

@@ -25,7 +25,11 @@ from jepa_wm.planner_readiness import (
     FirstActionGate,
     FirstActionThresholds,
 )
-from jepa_wm.objective_calibration import CalibrationIdentity, TaskProgressObjective
+from jepa_wm.objective_calibration import (
+    CalibrationIdentity,
+    TaskProgressAssessment,
+    TaskProgressObjective,
+)
 
 
 CandidateScorer = Callable[[np.ndarray], np.ndarray]
@@ -406,9 +410,22 @@ class ShadowSearchEvidence:
 
     @property
     def passes_task_progress_gate(self) -> bool:
-        return self.task_progress is None or self.planned.task_penalty == 0.0
+        assessments = self.task_progress_assessments
+        return assessments is None or assessments["planned"].passed
+
+    @property
+    def task_progress_assessments(
+        self,
+    ) -> dict[str, TaskProgressAssessment] | None:
+        if self.task_progress is None:
+            return None
+        return {
+            "direct": self.task_progress.assess(self.direct.actions[0]),
+            "planned": self.task_progress.assess(self.planned.actions[0]),
+        }
 
     def to_dict(self) -> dict[str, Any]:
+        task_progress_assessments = self.task_progress_assessments
         return {
             "schema": "quantis_jepa_wm_shadow_search_v1",
             "observation_id": self.observation_id,
@@ -424,6 +441,14 @@ class ShadowSearchEvidence:
             "task_progress": (
                 self.task_progress.to_dict()
                 if self.task_progress is not None
+                else None
+            ),
+            "task_progress_assessments": (
+                {
+                    name: assessment.to_dict()
+                    for name, assessment in task_progress_assessments.items()
+                }
+                if task_progress_assessments is not None
                 else None
             ),
             "energy_improvement": self.energy_improvement,
@@ -478,6 +503,12 @@ class ShadowSearchEvidence:
             for name, expected in boolean_claims
         ):
             raise ValueError("shadow-search derived claims are inconsistent")
+        expected_assessments = evidence.to_dict()["task_progress_assessments"]
+        if (
+            "task_progress_assessments" in payload
+            and payload["task_progress_assessments"] != expected_assessments
+        ):
+            raise ValueError("shadow-search task-progress assessment is inconsistent")
         return evidence
 
 

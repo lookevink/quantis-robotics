@@ -10,6 +10,7 @@ from jepa_wm.objective_calibration import (
     ActionResponseCalibration,
     ActionResponseTrial,
     CalibrationIdentity,
+    TaskProgressMargins,
     TaskProgressObjective,
 )
 
@@ -177,6 +178,46 @@ class ObjectiveCalibrationTest(unittest.TestCase):
             calibration,
         ).penalty(farther_away)[0]
         self.assertGreater(farther_penalty, scores[0] - latent_energy[0])
+
+    def test_requires_meaningful_progress_on_every_unresolved_axis(self) -> None:
+        calibration = self._calibration()
+        start = DroidPose((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25))
+        target = DroidPose((0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25))
+        objective = TaskProgressObjective(
+            start,
+            target,
+            calibration,
+            minimum_progress=TaskProgressMargins(
+                translation_meters=1e-4,
+                rotation_radians=1e-3,
+                gripper_closedness=0.01,
+            ),
+        )
+        too_small = np.zeros((1, 3, 7), dtype=np.float64)
+        too_small[0, 0, 0] = 1e-4
+        meaningful = too_small.copy()
+        meaningful[0, 0, 0] = 4e-4
+
+        self.assertGreater(objective.penalty(too_small)[0], 0.0)
+        self.assertEqual(objective.penalty(meaningful)[0], 0.0)
+        assessment = objective.assess(DroidAction(tuple(meaningful[0, 0])))
+        self.assertTrue(assessment.passed)
+        self.assertAlmostEqual(assessment.required_reduction.translation_meters, 1e-4)
+        self.assertAlmostEqual(assessment.predicted_reduction.translation_meters, 2e-4)
+        self.assertEqual(TaskProgressObjective.from_dict(objective.to_dict()), objective)
+
+    def test_loads_legacy_objectives_with_zero_progress_margins(self) -> None:
+        objective = TaskProgressObjective(
+            DroidPose((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25)),
+            DroidPose((0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25)),
+            self._calibration(),
+        )
+        payload = objective.to_dict()
+        del payload["minimum_progress"]
+
+        loaded = TaskProgressObjective.from_dict(payload)
+
+        self.assertEqual(loaded.minimum_progress, TaskProgressMargins.legacy())
 
 
 if __name__ == "__main__":

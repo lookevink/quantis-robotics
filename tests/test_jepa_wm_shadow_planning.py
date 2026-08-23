@@ -218,11 +218,19 @@ class ShadowCandidatePlanningTest(unittest.TestCase):
         self.assertEqual(evidence.planned.task_penalty, 0.0)
         self.assertGreater(evidence.planned.actions[0].values[0], 0.0)
         self.assertGreater(evidence.planned.actions[0].values[6], 0.0)
-        self.assertEqual(ShadowSearchEvidence.from_dict(evidence.to_dict()), evidence)
+        payload = evidence.to_dict()
+        self.assertTrue(payload["task_progress_assessments"]["planned"]["passed"])
+        self.assertEqual(ShadowSearchEvidence.from_dict(payload), evidence)
         claims_tamper = evidence.to_dict()
         claims_tamper["passes_task_progress_gate"] = False
         with self.assertRaisesRegex(ValueError, "claims"):
             ShadowSearchEvidence.from_dict(claims_tamper)
+        assessment_tamper = evidence.to_dict()
+        assessment_tamper["task_progress_assessments"]["planned"][
+            "predicted_reduction"
+        ]["translation_meters"] += 1.0
+        with self.assertRaisesRegex(ValueError, "assessment"):
+            ShadowSearchEvidence.from_dict(assessment_tamper)
 
 
 if __name__ == "__main__":

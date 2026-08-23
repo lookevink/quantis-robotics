@@ -359,14 +359,34 @@ class ActionResponseCalibration:
 
 
 @dataclass(frozen=True)
-class TaskProgress:
+class TaskAxisValues:
     translation_meters: float
     rotation_radians: float
     gripper_closedness: float
 
+    @property
+    def values(self) -> tuple[float, float, float]:
+        return (
+            self.translation_meters,
+            self.rotation_radians,
+            self.gripper_closedness,
+        )
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "translation_meters": self.translation_meters,
+            "rotation_radians": self.rotation_radians,
+            "gripper_closedness": self.gripper_closedness,
+        }
+
 
 @dataclass(frozen=True)
-class TaskAxisTolerances:
+class TaskProgress(TaskAxisValues):
+    pass
+
+
+@dataclass(frozen=True)
+class TaskAxisTolerances(TaskAxisValues):
     translation_meters: float = 1e-4
     rotation_radians: float = 1e-3
     gripper_closedness: float = 0.01
@@ -382,13 +402,6 @@ class TaskAxisTolerances:
         ):
             raise ValueError("task-axis tolerances must be finite and positive")
 
-    def to_dict(self) -> dict[str, float]:
-        return {
-            "translation_meters": self.translation_meters,
-            "rotation_radians": self.rotation_radians,
-            "gripper_closedness": self.gripper_closedness,
-        }
-
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> TaskAxisTolerances:
         try:
@@ -399,6 +412,70 @@ class TaskAxisTolerances:
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("task-axis tolerances are incomplete") from error
+
+
+@dataclass(frozen=True)
+class TaskProgressMargins(TaskAxisValues):
+    """Minimum predicted error reduction required on each unresolved task axis."""
+
+    translation_meters: float = 1e-4
+    rotation_radians: float = 1e-3
+    gripper_closedness: float = 0.005
+
+    def __post_init__(self) -> None:
+        if not all(
+            isfinite(value) and value >= 0.0
+            for value in (
+                self.translation_meters,
+                self.rotation_radians,
+                self.gripper_closedness,
+            )
+        ):
+            raise ValueError("task-progress margins must be finite and nonnegative")
+
+    @classmethod
+    def legacy(cls) -> TaskProgressMargins:
+        return cls(0.0, 0.0, 0.0)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> TaskProgressMargins:
+        try:
+            return cls(
+                translation_meters=float(payload["translation_meters"]),
+                rotation_radians=float(payload["rotation_radians"]),
+                gripper_closedness=float(payload["gripper_closedness"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("task-progress margins are incomplete") from error
+
+
+@dataclass(frozen=True)
+class TaskProgressAssessment:
+    initial_error: TaskProgress
+    predicted_error: TaskProgress
+    predicted_reduction: TaskProgress
+    required_reduction: TaskProgress
+    maximum_error: TaskProgress
+
+    @property
+    def passed(self) -> bool:
+        return all(
+            predicted <= maximum + 1e-12
+            for predicted, maximum in zip(
+                self.predicted_error.values,
+                self.maximum_error.values,
+            )
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "initial_error": self.initial_error.to_dict(),
+            "predicted_error": self.predicted_error.to_dict(),
+            "predicted_reduction": self.predicted_reduction.to_dict(),
+            "required_reduction": self.required_reduction.to_dict(),
+            "maximum_error": self.maximum_error.to_dict(),
+            "passed": self.passed,
+        }
 
 
 def _axis_error(pose: DroidPose, target: DroidPose) -> TaskProgress:
@@ -419,12 +496,57 @@ class TaskProgressObjective:
     calibration: ActionResponseCalibration
     failure_penalty: float = 1.0
     tolerances: TaskAxisTolerances = TaskAxisTolerances()
+    minimum_progress: TaskProgressMargins = TaskProgressMargins()
 
     def __post_init__(self) -> None:
         if not self.calibration.ready_for_reranking:
             raise ValueError("action-response calibration is not ready for reranking")
         if not isfinite(self.failure_penalty) or self.failure_penalty <= 0.0:
             raise ValueError("task-progress failure penalty must be positive")
+
+    def assess(self, proposed_action: DroidAction) -> TaskProgressAssessment:
+        initial_error = _axis_error(self.start, self.target)
+        realized_action = self.calibration.apply(proposed_action)
+        predicted_error = _axis_error(self.start.applied(realized_action), self.target)
+        maximum_error = TaskProgress(
+            *(
+                (
+                    max(tolerance, before - margin)
+                    if before > tolerance
+                    else tolerance
+                )
+                for before, tolerance, margin in zip(
+                    initial_error.values,
+                    self.tolerances.values,
+                    self.minimum_progress.values,
+                )
+            )
+        )
+        predicted_reduction = TaskProgress(
+            *(
+                before - after
+                for before, after in zip(
+                    initial_error.values,
+                    predicted_error.values,
+                )
+            )
+        )
+        required_reduction = TaskProgress(
+            *(
+                max(before - maximum, 0.0)
+                for before, maximum in zip(
+                    initial_error.values,
+                    maximum_error.values,
+                )
+            )
+        )
+        return TaskProgressAssessment(
+            initial_error,
+            predicted_error,
+            predicted_reduction,
+            required_reduction,
+            maximum_error,
+        )
 
     def penalty(self, candidates: np.ndarray) -> np.ndarray:
         values = np.asarray(candidates, dtype=np.float64)
@@ -435,42 +557,21 @@ class TaskProgressObjective:
             or not np.all(np.isfinite(values))
         ):
             raise ValueError("task-progress scorer received invalid candidates")
-        initial_error = _axis_error(self.start, self.target)
-        initial = (
-            initial_error.translation_meters,
-            initial_error.rotation_radians,
-            initial_error.gripper_closedness,
-        )
-        tolerances = (
-            self.tolerances.translation_meters,
-            self.tolerances.rotation_radians,
-            self.tolerances.gripper_closedness,
-        )
         penalties = []
         for candidate in values:
-            action = self.calibration.apply(DroidAction(tuple(candidate[0])))
-            final_error = _axis_error(self.start.applied(action), self.target)
-            final = (
-                final_error.translation_meters,
-                final_error.rotation_radians,
-                final_error.gripper_closedness,
-            )
+            assessment = self.assess(DroidAction(tuple(candidate[0])))
             axis_penalties = []
-            for before, after, tolerance in zip(initial, final, tolerances):
-                if before > tolerance:
-                    regression = after - before
-                    axis_penalties.append(
-                        0.0
-                        if regression < 0.0
-                        else self.failure_penalty + regression / tolerance
-                    )
-                else:
-                    excess = after - tolerance
-                    axis_penalties.append(
-                        0.0
-                        if excess <= 0.0
-                        else self.failure_penalty + excess / tolerance
-                    )
+            for predicted_error, maximum_error, tolerance in zip(
+                assessment.predicted_error.values,
+                assessment.maximum_error.values,
+                self.tolerances.values,
+            ):
+                deficit = predicted_error - maximum_error
+                axis_penalties.append(
+                    0.0
+                    if deficit <= 1e-12
+                    else self.failure_penalty + deficit / tolerance
+                )
             penalties.append(sum(axis_penalties))
         return np.asarray(penalties, dtype=np.float64)
 
@@ -481,6 +582,7 @@ class TaskProgressObjective:
             "calibration": self.calibration.to_dict(),
             "failure_penalty": self.failure_penalty,
             "tolerances": self.tolerances.to_dict(),
+            "minimum_progress": self.minimum_progress.to_dict(),
         }
 
     @classmethod
@@ -494,6 +596,11 @@ class TaskProgressObjective:
                 ),
                 failure_penalty=float(payload["failure_penalty"]),
                 tolerances=TaskAxisTolerances.from_dict(payload["tolerances"]),
+                minimum_progress=(
+                    TaskProgressMargins.from_dict(payload["minimum_progress"])
+                    if payload.get("minimum_progress") is not None
+                    else TaskProgressMargins.legacy()
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("task-progress objective is incomplete") from error

@@ -292,4 +292,7 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     Calibration checkpoints retain reconstructible proposed/realized trials,
     require per-axis directional coverage, and are loaded through one manifest
     that binds proposal, adapter, and calibration. Target frame/pose identity is
-    revalidated against reference telemetry before every shadow search.
+    revalidated against reference telemetry before every shadow search. Every
+    unresolved axis must also clear a persisted minimum predicted reduction
+    (`0.1 mm` translation, `0.001 rad` rotation, `0.005` gripper closedness),
+    with before/after/required progress exposed as reconstructible evidence.
