@@ -21,6 +21,7 @@ control_run_dir="${jepa_wm_home}/run"
 control_socket="${control_run_dir}/control.sock"
 control_pid_file="${control_run_dir}/control.pid"
 control_proposal_file="${control_run_dir}/control.proposal"
+control_adapter_file="${control_run_dir}/control.adapter"
 control_log="${jepa_wm_home}/logs/control-worker.log"
 control_frame_root="${HOME}/docker/isaac-sim/data/quantis"
 
@@ -492,6 +493,36 @@ infer_control_session() {
   sudo chmod -R a+rwX "${session}"
 }
 
+infer_shadow_session() {
+  local -A options=()
+  parse_named_options options "session" "$@"
+  local session_id="${options[session]:-}"
+  is_safe_identifier "${session_id}" || die "invalid control session"
+  local session="${control_frame_root}/control_sessions/${session_id}"
+  local request="${session}/request.json"
+  local direct_response="${session}/response.json"
+  local shadow_response="${session}/shadow.json"
+  local adapter_name
+  [[ -f "${request}" ]] || die "control session request does not exist: ${session_id}"
+  [[ -f "${direct_response}" ]] \
+    || die "control session direct response does not exist: ${session_id}"
+  [[ ! -e "${shadow_response}" ]] \
+    || die "control session already has shadow evidence: ${session_id}"
+  control_worker_status >/dev/null
+  adapter_name="$(<"${control_adapter_file}")"
+  is_safe_identifier "${adapter_name}" || die "invalid resident adapter state"
+  sudo chown -R "${USER}:${USER}" "${session}"
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.control_client \
+    --socket "${control_socket}" \
+    --request "${request}" \
+    --direct-response "${direct_response}" \
+    --adapter "${checkpoint_dir}/${adapter_name}.pth" \
+    --shadow-request-output "${session}/shadow_request.json" \
+    --response "${shadow_response}"
+  sudo chmod -R a+rwX "${session}"
+}
+
 report_control_rollout() {
   local -A options=()
   parse_named_options options \
@@ -536,6 +567,7 @@ control_worker_is_running() {
   [[ -S "${control_socket}" ]] \
     && [[ -f "${control_pid_file}" ]] \
     && [[ -f "${control_proposal_file}" ]] \
+    && [[ -f "${control_adapter_file}" ]] \
     && [[ "$(<"${control_pid_file}")" =~ ^[0-9]+$ ]] \
     && kill -0 "$(<"${control_pid_file}")" 2>/dev/null
 }
@@ -544,13 +576,14 @@ control_worker_status() {
   control_worker_is_running || die "control worker is not ready"
   local worker_pid
   worker_pid="$(<"${control_pid_file}")"
-  printf 'ready pid=%s proposal=%s socket=%s\n' \
-    "${worker_pid}" "$(<"${control_proposal_file}")" "${control_socket}"
+  printf 'ready pid=%s proposal=%s adapter=%s socket=%s\n' \
+    "${worker_pid}" "$(<"${control_proposal_file}")" \
+    "$(<"${control_adapter_file}")" "${control_socket}"
 }
 
 stop_control_worker() {
   if [[ ! -f "${control_pid_file}" ]]; then
-    rm -f "${control_socket}" "${control_proposal_file}"
+    rm -f "${control_socket}" "${control_proposal_file}" "${control_adapter_file}"
     printf 'control worker is already stopped\n'
     return
   fi
@@ -567,37 +600,55 @@ stop_control_worker() {
       sleep 0.25
     done
   fi
-  rm -f "${control_pid_file}" "${control_socket}" "${control_proposal_file}"
+  rm -f \
+    "${control_pid_file}" "${control_socket}" \
+    "${control_proposal_file}" "${control_adapter_file}"
   printf 'control worker stopped\n'
 }
 
 start_control_worker() {
   local -A options=()
-  parse_named_options options "proposal" "$@"
+  parse_named_options options "proposal adapter" "$@"
   local proposal_name="${options[proposal]:-quantis_isaac_wrist_action_proposal}"
+  local adapter_name="${options[adapter]:-quantis_isaac_wrist_action_adapter}"
   is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+  is_safe_identifier "${adapter_name}" || die "invalid adapter name"
   local proposal="${checkpoint_dir}/${proposal_name}.pth"
+  local adapter="${checkpoint_dir}/${adapter_name}.pth"
   [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
+  [[ -s "${adapter}" ]] || die "action adapter does not exist: ${adapter_name}"
   require_runtime
   mkdir -p "${control_run_dir}" "$(dirname "${control_log}")"
+  if [[ -f "${control_pid_file}" ]] \
+    && [[ "$(<"${control_pid_file}")" =~ ^[0-9]+$ ]] \
+    && kill -0 "$(<"${control_pid_file}")" 2>/dev/null \
+    && ! control_worker_is_running; then
+    die "control worker is running with incomplete state; stop it before restart"
+  fi
   if control_worker_is_running; then
     [[ "$(<"${control_proposal_file}")" == "${proposal_name}" ]] \
       || die "control worker is already running with another proposal"
+    [[ "$(<"${control_adapter_file}")" == "${adapter_name}" ]] \
+      || die "control worker is already running with another adapter"
     control_worker_status
     return
   fi
-  rm -f "${control_socket}" "${control_pid_file}" "${control_proposal_file}"
+  rm -f \
+    "${control_socket}" "${control_pid_file}" \
+    "${control_proposal_file}" "${control_adapter_file}"
   cd "${repo_dir}"
   nohup "${venv_dir}/bin/python" -m jepa_wm.control_server \
     --source "${source_dir}" \
     --checkpoint "${jepa_checkpoint}" \
     --proposal "${proposal}" \
+    --adapter "${adapter}" \
     --socket "${control_socket}" \
     --frame-root "${control_frame_root}" \
     >"${control_log}" 2>&1 &
   local worker_pid=$!
   printf '%s\n' "${worker_pid}" >"${control_pid_file}"
   printf '%s\n' "${proposal_name}" >"${control_proposal_file}"
+  printf '%s\n' "${adapter_name}" >"${control_adapter_file}"
   for _ in {1..60}; do
     if [[ -S "${control_socket}" ]]; then
       control_worker_status
@@ -690,6 +741,9 @@ case "${1:-}" in
   control-infer-session)
     infer_control_session "${@:2}"
     ;;
+  control-shadow-session)
+    infer_shadow_session "${@:2}"
+    ;;
   control-rollout-report)
     report_control_rollout "${@:2}"
     ;;
@@ -707,6 +761,6 @@ case "${1:-}" in
       "${2:-}" "${3:-}" "${4:-}" "${5:-wrist}" "${6:-40}"
     ;;
   *)
-    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, proposal-eval, proposal-summarize, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-rollout-report, or summarize"
+    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, proposal-eval, proposal-summarize, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-rollout-report, or summarize"
     ;;
 esac

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import json
-from math import fsum
+from math import fsum, isfinite
 from pathlib import Path
 from typing import Any, Sequence, Union
 
@@ -15,12 +15,14 @@ from scipy.spatial.transform import Rotation
 from jepa_wm.action import DroidPose, action_between
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.control_safety import SimulatorSafetyLimits
+from jepa_wm.shadow_planning import ShadowSearchEvidence
 from sim.control_session import (
     ControlResult,
     ControlResultStatus,
     ControlSession,
     ControlSessionState,
 )
+from jepa_wm.shadow_safety import ShadowSafetyEvidence
 from sim.recording import validate_recording_id
 
 
@@ -121,11 +123,58 @@ class PoseError:
 
 
 @dataclass(frozen=True)
+class ControlStepTiming:
+    observation_age_seconds: float
+    inference_latency_seconds: float
+    command_age_seconds: float
+
+    def __post_init__(self) -> None:
+        values = (
+            self.observation_age_seconds,
+            self.inference_latency_seconds,
+            self.command_age_seconds,
+        )
+        if not all(isfinite(value) and value >= 0.0 for value in values) or not np.isclose(
+            self.observation_age_seconds,
+            self.inference_latency_seconds + self.command_age_seconds,
+            rtol=0.0,
+            atol=1e-6,
+        ):
+            raise ValueError("control timing evidence is inconsistent")
+
+    @classmethod
+    def from_step(
+        cls,
+        observation: ControlObservation,
+        response: ProposedControl,
+        result: ControlResult,
+    ) -> ControlStepTiming:
+        inference_latency = (
+            response.created_at_unix_seconds
+            - observation.captured_at_unix_seconds
+        )
+        return cls(
+            result.observation_age_seconds,
+            inference_latency,
+            result.observation_age_seconds - inference_latency,
+        )
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "observation_age_seconds": self.observation_age_seconds,
+            "inference_latency_seconds": self.inference_latency_seconds,
+            "command_age_seconds": self.command_age_seconds,
+        }
+
+
+@dataclass(frozen=True)
 class ControlStepSummary:
     state: ControlSessionState
     observation: ControlObservation
     response: ProposedControl
     result: ControlResult
+    shadow: ShadowSearchEvidence | None = None
+    shadow_safety: ShadowSafetyEvidence | None = None
 
     @classmethod
     def from_session(cls, session: ControlSession) -> ControlStepSummary:
@@ -133,14 +182,25 @@ class ControlStepSummary:
         response = session.load_response()
         result = session.load_result()
         limits = SimulatorSafetyLimits()
+        timing = ControlStepTiming.from_step(observation, response, result)
         if (
             response.observation_id != observation.observation_id
             or response.proposal != observation.expected_proposal
             or result.gate.observation_id != observation.observation_id
-            or result.inference_age_seconds > limits.maximum_observation_age_seconds
+            or (
+                result.status != ControlResultStatus.BLOCKED
+                and (
+                    timing.observation_age_seconds
+                    > limits.maximum_observation_age_seconds
+                    or timing.command_age_seconds
+                    > limits.maximum_command_age_seconds
+                )
+            )
             or response.created_at_unix_seconds < observation.captured_at_unix_seconds
             or response.created_at_unix_seconds
-            > observation.captured_at_unix_seconds + result.inference_age_seconds + 1e-6
+            > observation.captured_at_unix_seconds
+            + timing.observation_age_seconds
+            + 1e-6
         ):
             raise ValueError(
                 f"control step identity or freshness is invalid: {session.session_id}"
@@ -164,7 +224,13 @@ class ControlStepSummary:
                 raise ValueError(
                     f"post-action evidence is not bound to its response: {session.session_id}"
                 )
-        return cls(state, observation, response, result)
+        shadow = session.load_shadow() if session.shadow_path.is_file() else None
+        shadow_safety = (
+            session.load_shadow_safety()
+            if session.shadow_safety_path.is_file()
+            else None
+        )
+        return cls(state, observation, response, result, shadow, shadow_safety)
 
     @property
     def session_id(self) -> str:
@@ -178,13 +244,21 @@ class ControlStepSummary:
     def post_action_pose(self) -> DroidPose | None:
         return self.result.post_action.pose if self.result.post_action else None
 
+    @property
+    def timing(self) -> ControlStepTiming:
+        return ControlStepTiming.from_step(
+            self.observation,
+            self.response,
+            self.result,
+        )
+
     def to_dict(self) -> dict[str, Any]:
         tracking = self.result.post_action.tracking if self.result.post_action else None
         return {
             "session": self.session_id,
             "observation_id": self.observation.observation_id,
             "status": self.status.value,
-            "command_age_seconds": self.result.inference_age_seconds,
+            "timing": self.timing.to_dict(),
             "selected_action_scale": (
                 self.result.selected_action_scale.to_dict()
                 if self.result.selected_action_scale is not None
@@ -197,6 +271,12 @@ class ControlStepSummary:
             "contact_force_newtons": (
                 self.result.post_action.contact_force_newtons
                 if self.result.post_action is not None
+                else None
+            ),
+            "shadow_search": self.shadow.to_dict() if self.shadow is not None else None,
+            "shadow_safety": (
+                self.shadow_safety.to_dict()
+                if self.shadow_safety is not None
                 else None
             ),
         }
@@ -219,7 +299,7 @@ class IncompleteControlStepSummary:
             "session": self.session_id,
             "observation_id": None,
             "status": self.status.value,
-            "command_age_seconds": None,
+            "timing": None,
             "selected_action_scale": None,
             "translation_cosine": None,
             "rotation_cosine": None,
@@ -342,6 +422,11 @@ class ControlRolloutReport:
         ]
         if non_applied and non_applied != [len(self.steps) - 1]:
             raise ValueError("control rollout continued after a non-applied step")
+        shadow_adapters = {
+            step.shadow.adapter for step in complete if step.shadow is not None
+        }
+        if len(shadow_adapters) > 1:
+            raise ValueError("control rollout changed its shadow action adapter")
 
     @property
     def complete_steps(self) -> tuple[ControlStepSummary, ...]:
@@ -380,7 +465,13 @@ class ControlRolloutReport:
     def to_dict(self) -> dict[str, Any]:
         initial = self.initial_goal_error
         final = self.final_goal_error
-        ages = [step.result.inference_age_seconds for step in self.complete_steps]
+        timings = [step.timing for step in self.complete_steps]
+        shadows = [step.shadow for step in self.complete_steps if step.shadow is not None]
+        shadow_safety = [
+            step.shadow_safety
+            for step in self.complete_steps
+            if step.shadow_safety is not None
+        ]
         applied_count = len(self.applied_steps)
         return {
             "schema": ROLLOUT_SCHEMA,
@@ -401,8 +492,43 @@ class ControlRolloutReport:
                 if self.orchestration_failure is not None
                 else None
             ),
-            "mean_command_age_seconds": fsum(ages) / len(ages) if ages else None,
-            "maximum_command_age_seconds": max(ages) if ages else None,
+            "mean_observation_age_seconds": (
+                fsum(timing.observation_age_seconds for timing in timings)
+                / len(timings)
+                if timings
+                else None
+            ),
+            "maximum_observation_age_seconds": (
+                max(timing.observation_age_seconds for timing in timings)
+                if timings
+                else None
+            ),
+            "mean_inference_latency_seconds": (
+                fsum(timing.inference_latency_seconds for timing in timings)
+                / len(timings)
+                if timings
+                else None
+            ),
+            "mean_command_age_seconds": (
+                fsum(timing.command_age_seconds for timing in timings) / len(timings)
+                if timings
+                else None
+            ),
+            "shadow_searches": len(shadows),
+            "shadow_adapter": str(shadows[0].adapter) if shadows else None,
+            "shadow_gate_passes": sum(shadow.passes_shadow_gate for shadow in shadows),
+            "shadow_safety_evaluations": len(shadow_safety),
+            "shadow_safety_passes": sum(evidence.passed for evidence in shadow_safety),
+            "mean_shadow_energy_improvement": (
+                fsum(shadow.energy_improvement for shadow in shadows) / len(shadows)
+                if shadows
+                else None
+            ),
+            "mean_shadow_planning_seconds": (
+                fsum(shadow.planning_seconds for shadow in shadows) / len(shadows)
+                if shadows
+                else None
+            ),
             "initial_goal_error": initial.to_dict() if initial else None,
             "final_goal_error": final.to_dict() if final else None,
             "translation_progress_meters": (

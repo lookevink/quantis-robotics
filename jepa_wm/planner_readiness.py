@@ -48,6 +48,26 @@ class FirstActionThresholds:
                 "minimum active cosine must be between negative and positive one"
             )
 
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "recorded_translation_activity": self.recorded_translation_activity,
+            "recorded_rotation_activity": self.recorded_rotation_activity,
+            "recorded_gripper_activity": self.recorded_gripper_activity,
+            "maximum_stationary_translation": self.maximum_stationary_translation,
+            "maximum_stationary_rotation": self.maximum_stationary_rotation,
+            "maximum_stationary_gripper": self.maximum_stationary_gripper,
+            "minimum_active_cosine": self.minimum_active_cosine,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> FirstActionThresholds:
+        if not isinstance(payload, dict):
+            raise ValueError("first-action thresholds must be an object")
+        try:
+            return cls(**{key: float(payload[key]) for key in cls.__dataclass_fields__})
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("first-action thresholds are incomplete") from error
+
 
 @dataclass(frozen=True)
 class FirstActionDecision:
@@ -66,6 +86,24 @@ class FirstActionDecision:
             "cosine": self.cosine,
             "reasons": [reason.value for reason in self.reasons],
         }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> FirstActionDecision:
+        if not isinstance(payload, dict):
+            raise ValueError("first-action decision must be an object")
+        try:
+            decision = cls(
+                recorded_action_is_active=bool(payload["recorded_action_is_active"]),
+                cosine=float(payload["cosine"]),
+                reasons=tuple(
+                    FirstActionReason(reason) for reason in payload["reasons"]
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("first-action decision is incomplete") from error
+        if payload.get("passed") is not decision.passed:
+            raise ValueError("first-action decision pass result is inconsistent")
+        return decision
 
 
 @dataclass(frozen=True)

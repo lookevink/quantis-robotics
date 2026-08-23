@@ -648,6 +648,10 @@ class AwsLifecycleTests(unittest.TestCase):
             "--proposal 'quantis_isaac_wrist_action_proposal'",
             calls,
         )
+        self.assertIn(
+            "--adapter 'quantis_isaac_wrist_action_adapter'",
+            calls,
+        )
 
     def test_jepa_wm_control_step_keeps_inference_outside_isaac(self):
         result, calls = self.run_command(

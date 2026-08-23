@@ -128,8 +128,9 @@ outcome.
 Before actuation, the bridge proves that the goal recording has the same unseen
 seed and DROID/wrist-camera contract as the live variant. The request is bound
 to a unique session-derived nonce, an exact promoted-checkpoint path, and an
-ordered response timestamp. The gate then requires a final sub-two-second
-freshness check, four warm-up frames, bounded 7D action, workspace membership,
+ordered response timestamp. The gate then requires final simulator-only
+freshness checks—3.0 seconds from the synchronized observation and 2.5 seconds
+from the model response—four warm-up frames, bounded 7D action, workspace membership,
 Franka joint position/velocity limits, no live hand contact, and at most 2 N.
 The executor tries bounded translation/rotation/gripper scale profiles, applies
 only the first profile whose pose, IK branch, joint velocity, and remaining
@@ -139,14 +140,14 @@ fallbacks. After actuation it requires measured joint tracking plus Cartesian
 translation/rotation direction and error; failures roll back.
 Sessions `step-20260823T153339Z-11400` and
 `step-20260823T152202Z-11401` passed on the two unseen seeds at 1.883 s and
-0.948 s respectively, with no contact.
+0.948 s observation age respectively, with no contact.
 
 Repeated receding-horizon execution is also proven in narrow free space.
 Rollout `rollout-20260823T155348Z-11401` generated three distinct fresh
 observations, inferred three native proposals in the resident worker, consumed
 only each first action, measured each result, and fed the new pose/frame/action
-back into the next request. All three actions passed with 0 N contact; mean age
-was `1.322 s`, and translation/rotation goal error improved by `0.519 mm` and
+back into the next request. All three actions passed with 0 N contact; mean
+observation age was `1.322 s`, and translation/rotation goal error improved by `0.519 mm` and
 `0.001793 rad`. The persisted `quantis.jepa_wm_control_rollout.v1` report
 separates requested, attempted, and applied steps and validates chain, goal,
 proposal, observation-ID, capture-order, warm-up, and previous-action
@@ -165,10 +166,13 @@ as terminal evidence. This does not validate cable contact or insertion.
    limits before the first proposed action reaches the articulation.
 4. [x] Apply only the first bounded action in Isaac, observe again, and replan.
    A three-step held-out canary passed with fresh single-use requests and 0 N
-   contact.
-5. [ ] Run bounded candidate search in shadow mode and compare its predicted
-   energy, direction, and realized goal progress against direct-proposal, zero,
-   and scripted baselines before granting it command authority.
+contact.
+5. [x] Run bounded proposal-centered candidate search in shadow mode and record
+   predicted energy, direction, and no-actuation Isaac safety. Held-out rollout
+   `rollout-20260823T203534Z-11401` passed all three search and safety gates with
+   mean latent-energy improvement `0.000221416`.
+6. [ ] Compare realized goal progress against direct-proposal, zero, and
+   scripted baselines before granting the candidate planner command authority.
 
 ## Recommended process boundary
 

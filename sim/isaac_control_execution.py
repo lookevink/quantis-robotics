@@ -12,11 +12,13 @@ from jepa.contract import ObservationStage
 from jepa_wm.action import DROID_FPS, DroidActionScale, DroidPose, action_between
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.control_safety import (
+    ACTION_SCALES,
     ControlGateDecision,
     ControlGateReason,
     SimulatorControlGate,
     SimulatorSafetyLimits,
     SimulatorSafetyState,
+    SafetyProjectionAttempt,
 )
 from jepa_wm.control_tracking import evaluate_action_tracking
 from sim.control_session import (
@@ -25,7 +27,6 @@ from sim.control_session import (
     ControlSession,
     CONTROL_ROOT,
     PostActionEvidence,
-    SafetyProjectionAttempt,
 )
 from sim.demo_sequence import Phase
 from sim.isaac_control_runtime import contact_sensor, read_contact
@@ -40,16 +41,6 @@ from sim.isaac_demo_runtime import (
 )
 from sim.isaac_demo_scene import ROBOT_PATH
 from sim.recording import RecordingLabel, RecordingMoment
-
-
-# Preserve translational goal progress while damping the rotations that can
-# jump to a distant Franka IK branch. If this is unsafe, reduce every component.
-ACTION_SCALES = (
-    DroidActionScale(1.0, 0.25, 0.25),
-    DroidActionScale(0.5, 0.125, 0.125),
-    DroidActionScale.uniform(0.25),
-    DroidActionScale.uniform(0.125),
-)
 
 
 @dataclass(frozen=True)
@@ -112,13 +103,13 @@ def project_control_candidate(
         decision = context.evaluate(
             candidate, current_joints, now_unix_seconds=now_unix_seconds
         )
-        return SafetyProjectionAttempt(scale, decision, 0.0), None
+        return SafetyProjectionAttempt(scale, decision, 0.0, current_joints), None
 
     preliminary = context.evaluate(
         candidate, current_joints, now_unix_seconds=now_unix_seconds
     )
     if not preliminary.passed:
-        return SafetyProjectionAttempt(scale, preliminary, 0.0), None
+        return SafetyProjectionAttempt(scale, preliminary, 0.0, current_joints), None
     try:
         solved = solve(candidate_pose, context.current.arm_positions)
     except (RuntimeError, ValueError):
@@ -127,7 +118,7 @@ def project_control_candidate(
             candidate_pose,
             (ControlGateReason.IK_SOLUTION_FAILED,),
         )
-        return SafetyProjectionAttempt(scale, decision, 0.0), None
+        return SafetyProjectionAttempt(scale, decision, 0.0, current_joints), None
     decision = context.evaluate(
         candidate,
         tuple(solved.arm_positions),
@@ -136,7 +127,12 @@ def project_control_candidate(
     maximum_joint_delta = float(
         np.max(np.abs(solved.arm_positions - context.current.arm_positions))
     )
-    attempt = SafetyProjectionAttempt(scale, decision, maximum_joint_delta)
+    attempt = SafetyProjectionAttempt(
+        scale,
+        decision,
+        maximum_joint_delta,
+        tuple(solved.arm_positions),
+    )
     return attempt, SafeProjection(candidate, solved, decision) if decision.passed else None
 
 
@@ -184,9 +180,10 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
     )
     sensor = contact_sensor(stage, create=False)
     timeline = omni.timeline.get_timeline_interface()
-    timeline.play()
     try:
-        await omni.kit.app.get_app().next_update_async()
+        # Follow-up capture leaves the stage synchronized and paused. Read the
+        # live articulation/contact state without spending a render tick from
+        # the command freshness budget; start time only after the final gate.
         collision_detected, contact_force = read_contact(sensor)
         limits = SimulatorSafetyLimits()
         safety = ExecutionSafetyContext(
@@ -228,6 +225,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         execution_error = None
         if decision.passed and candidate is not None:
             try:
+                timeline.play()
                 attachment = prepare_plug(stage)
                 target = JointCommand(solved.arm_positions, solved.gripper_width_m)
                 await move_joint_command(
@@ -301,7 +299,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             gate=decision,
             projection_attempts=tuple(attempts),
             selected_action_scale=selected_scale,
-            inference_age_seconds=pre_action_age_seconds,
+            observation_age_seconds=pre_action_age_seconds,
             ik_position_error_m=(solved.position_error_m if solved is not None else None),
             ik_orientation_error_rad=(
                 solved.orientation_error_rad if solved is not None else None

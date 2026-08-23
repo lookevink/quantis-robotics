@@ -5,21 +5,31 @@ from pathlib import Path
 import tempfile
 import unittest
 
+import numpy as np
+
 from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
+from jepa_wm.action_prior import ActionPriorConfig
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.control_rollout import (
     ControlRolloutReport,
     OrchestrationFailure,
     OrchestrationOperation,
 )
-from jepa_wm.control_safety import ControlGateDecision
+from jepa_wm.control_safety import ControlGateDecision, SafetyProjectionAttempt
 from jepa_wm.control_tracking import ActionTrackingDecision
+from jepa_wm.planner import CEMConfig
+from jepa_wm.planner_readiness import FirstActionThresholds
+from jepa_wm.shadow_planning import (
+    ShadowPlanningRequest,
+    ShadowSearchConfig,
+    plan_shadow_candidates,
+)
+from jepa_wm.shadow_safety import ShadowSafetyEvidence
 from sim.control_session import (
     ControlResult,
     ControlResultStatus,
     ControlSessionState,
     PostActionEvidence,
-    SafetyProjectionAttempt,
 )
 
 
@@ -84,7 +94,11 @@ class ControlRolloutTest(unittest.TestCase):
             ControlResultStatus.APPLIED,
             session_id,
             gate,
-            (SafetyProjectionAttempt(scale, gate, 0.01),),
+            (
+                SafetyProjectionAttempt(
+                    scale, gate, 0.01, state.current_joint_positions
+                ),
+            ),
             scale,
             1.0,
             0.0,
@@ -183,6 +197,107 @@ class ControlRolloutTest(unittest.TestCase):
             self.assertTrue(report["all_steps_applied"])
             self.assertEqual(report["applied_steps"], 2)
             self.assertAlmostEqual(report["translation_progress_meters"], 0.02)
+
+    def test_summarizes_shadow_search_and_counterfactual_safety(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._write_reference(root)
+            self._write_step(
+                root,
+                "session-0",
+                previous_session_id=None,
+                pose_x=0.40,
+                post_x=0.41,
+            )
+            session = root / "control_sessions" / "session-0"
+            response = ProposedControl.from_dict(
+                json.loads((session / "response.json").read_text())
+            )
+            observation = ControlObservation.from_dict(
+                json.loads((session / "request.json").read_text())
+            )
+            target = np.asarray([action.values for action in response.actions]) * 0.8
+            shadow = plan_shadow_candidates(
+                observation_id=response.observation_id,
+                direct_actions=response.actions,
+                score=lambda candidates: np.square(
+                    candidates - target[None, :, :]
+                ).sum(axis=(1, 2)),
+                proposal=response.proposal,
+                adapter=Path("/tmp/adapter.pth"),
+                config=ShadowSearchConfig(
+                    planner=CEMConfig(iterations=5, samples=160, elites=12, seed=7),
+                    prior=ActionPriorConfig(penalty_weight=1e-12),
+                    first_action_thresholds=FirstActionThresholds(
+                        minimum_active_cosine=-1.0
+                    ),
+                ),
+            )
+            (session / "shadow_request.json").write_text(
+                json.dumps(
+                    ShadowPlanningRequest(
+                        observation,
+                        response,
+                        Path("/tmp/adapter.pth"),
+                    ).to_dict()
+                )
+            )
+            (session / "shadow.json").write_text(json.dumps(shadow.to_dict()))
+            scale = DroidActionScale(1.0, 0.25, 0.25)
+            gate = ControlGateDecision(
+                response.observation_id,
+                observation.pose.applied(scale.apply(shadow.planned.actions[0])),
+                (),
+            )
+            safety = ShadowSafetyEvidence(
+                response.observation_id,
+                response.created_at_unix_seconds + 1.0,
+                response.created_at_unix_seconds,
+                shadow.planned.actions,
+                (
+                    SafetyProjectionAttempt(
+                        scale,
+                        gate,
+                        0.0,
+                        (0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5),
+                    ),
+                ),
+                scale,
+            )
+            (session / "shadow_safety.json").write_text(
+                json.dumps(safety.to_dict())
+            )
+
+            report = self._report(root, ("session-0",), requested_steps=1)
+
+            self.assertEqual(report["shadow_searches"], 1)
+            self.assertEqual(
+                report["shadow_gate_passes"], int(shadow.passes_shadow_gate)
+            )
+            self.assertEqual(report["shadow_safety_passes"], 1)
+            self.assertGreater(report["mean_shadow_energy_improvement"], 0.0)
+
+            safety_path = session / "shadow_safety.json"
+            safety_payload = json.loads(safety_path.read_text())
+            safety_payload["attempts"][0]["gate"]["next_pose"][0] += 0.01
+            safety_path.write_text(json.dumps(safety_payload))
+            with self.assertRaisesRegex(ValueError, "gate evidence"):
+                self._report(root, ("session-0",), requested_steps=1)
+            safety_path.write_text(json.dumps(safety.to_dict()))
+
+            safety_payload = safety.to_dict()
+            safety_payload["counterfactual_as_of_unix_seconds"] += 0.01
+            safety_path.write_text(json.dumps(safety_payload))
+            with self.assertRaisesRegex(ValueError, "not bound"):
+                self._report(root, ("session-0",), requested_steps=1)
+            safety_path.write_text(json.dumps(safety.to_dict()))
+
+            shadow_request_path = session / "shadow_request.json"
+            shadow_request = json.loads(shadow_request_path.read_text())
+            shadow_request["expected_adapter"] = "/tmp/other-adapter.pth"
+            shadow_request_path.write_text(json.dumps(shadow_request))
+            with self.assertRaisesRegex(ValueError, "not bound"):
+                self._report(root, ("session-0",), requested_steps=1)
 
     def test_preserves_requested_count_when_a_rollout_stops_early(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -358,11 +473,53 @@ class ControlRolloutTest(unittest.TestCase):
             )
             result_path = root / "control_sessions" / "session-0" / "result.json"
             payload = json.loads(result_path.read_text())
-            payload["inference_age_seconds"] = 2.1
+            payload["observation_age_seconds"] = 3.1
             result_path.write_text(json.dumps(payload))
 
             with self.assertRaisesRegex(ValueError, "freshness"):
                 self._report(root, ("session-0",), requested_steps=1)
+
+    def test_reports_a_stale_step_that_the_gate_safely_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._write_reference(root)
+            self._write_step(
+                root,
+                "session-0",
+                previous_session_id=None,
+                pose_x=0.40,
+                post_x=0.41,
+            )
+            result_path = root / "control_sessions" / "session-0" / "result.json"
+            payload = json.loads(result_path.read_text())
+            payload["status"] = "blocked"
+            payload["gate"]["passed"] = False
+            payload["gate"]["reasons"] = ["stale_observation"]
+            for attempt in payload["safety_projection_attempts"]:
+                attempt["gate"]["passed"] = False
+                attempt["gate"]["reasons"] = ["stale_observation"]
+            payload["selected_action_scale"] = None
+            payload["observation_age_seconds"] = 3.0
+            for field in (
+                "raw_proposed_action",
+                "commanded_action",
+                "actual_action",
+                "action_tracking",
+                "post_action_pose",
+                "post_action_joint_positions",
+                "maximum_joint_tracking_error_rad",
+                "post_action_contact_force_newtons",
+                "post_action_collision_detected",
+                "post_action_frame",
+            ):
+                payload.pop(field)
+            result_path.write_text(json.dumps(payload))
+
+            report = self._report(root, ("session-0",), requested_steps=2)
+
+            self.assertEqual(report["complete_steps"], 1)
+            self.assertEqual(report["applied_steps"], 0)
+            self.assertEqual(report["steps"][0]["status"], "blocked")
 
 
 if __name__ == "__main__":

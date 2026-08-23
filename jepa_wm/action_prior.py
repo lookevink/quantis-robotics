@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -49,6 +50,23 @@ class ActionPriorConfig:
                 actions.std(axis=0),
                 self.standard_deviation_floors[None, :],
             ),
+        )
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "minimum_translation_std": self.minimum_translation_std,
+            "minimum_rotation_std": self.minimum_rotation_std,
+            "minimum_gripper_std": self.minimum_gripper_std,
+            "penalty_weight": self.penalty_weight,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> ActionPriorConfig:
+        return cls(
+            minimum_translation_std=float(payload["minimum_translation_std"]),
+            minimum_rotation_std=float(payload["minimum_rotation_std"]),
+            minimum_gripper_std=float(payload["minimum_gripper_std"]),
+            penalty_weight=float(payload["penalty_weight"]),
         )
 
 

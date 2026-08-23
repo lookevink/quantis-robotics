@@ -71,7 +71,8 @@ first_session="${rollout_id}-00"
 sessions="${first_session}"
 current_phase="initial_control_step"
 bash "${repo_dir}/ops/run_control_step.sh" \
-  "${first_session}" "${reference_name}" "${exploration_seed}" "${proposal_name}"
+  "${first_session}" "${reference_name}" "${exploration_seed}" \
+  "${proposal_name}" deferred
 previous_session="${first_session}"
 current_phase="initial_status"
 status="$(step_status "${first_session}")"
@@ -92,5 +93,10 @@ for (( index = 1; index < step_count; index++ )); do
   previous_session="${session_id}"
   current_phase="followup_status_${suffix}"
   status="$(step_status "${session_id}")"
+done
+current_phase="shadow_evidence"
+IFS=',' read -r -a shadow_sessions <<<"${sessions}"
+for session_id in "${shadow_sessions[@]}"; do
+  capture_shadow_control_evidence "${repo_dir}" "${session_id}"
 done
 current_phase="complete"

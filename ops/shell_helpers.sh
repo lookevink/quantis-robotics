@@ -71,3 +71,19 @@ isaac_server_call() {
     | timeout "${timeout_seconds}" nc -N 127.0.0.1 8226)"
   print_checked_isaac_response "${response}"
 }
+
+capture_shadow_control_evidence() {
+  local repository="$1"
+  local session_id="$2"
+  if ! bash "${repository}/ops/jepa_wm.sh" \
+    control-shadow-session --session "${session_id}"; then
+    printf 'warning: shadow planning failed for control session %s\n' \
+      "${session_id}" >&2
+    return 0
+  fi
+  if ! isaac_server_call \
+    "await demo.evaluate_shadow_candidate('${session_id}')" 180; then
+    printf 'warning: shadow safety evaluation failed for control session %s\n' \
+      "${session_id}" >&2
+  fi
+}

@@ -454,7 +454,8 @@ session against a whole held-out reference trajectory:
 
 ```bash
 ./ops/aws.sh jepa-wm-control-worker-start \
-  quantis_isaac_wrist_action_proposal_motion_state_12seed
+  quantis_isaac_wrist_action_proposal_motion_state_12seed \
+  quantis_isaac_wrist_action_adapter
 ./ops/aws.sh jepa-wm-control-worker-status
 ./ops/aws.sh jepa-wm-control-step \
   domain-20260823T113209Z-1400-held-00 11400 \
@@ -474,8 +475,9 @@ then captures four synchronized warm-up observations and writes a versioned
 request. A session-derived nonce, response timestamp, and exact promoted
 checkpoint path bind the separate GPU worker's native three-action proposal to
 that request. Isaac consumes only a conservative first action after checking a
-final sub-two-second freshness
-deadline, Cartesian and gripper bounds, base-frame workspace, Franka joint
+final simulator-only freshness deadlines (3.0 seconds from the synchronized
+observation and 2.5 seconds from the model response), Cartesian and gripper
+bounds, base-frame workspace, Franka joint
 limits and velocity, actual joint-state drift, and a live hand contact sensor.
 The live selector tries bounded translation/rotation/gripper scale profiles in
 order and accepts the first profile that clears the same gate and IK branch;
@@ -492,15 +494,15 @@ frame persist under:
 
 Two unseen one-step proofs passed the same conservative safety policy:
 
-- seed `11400`, session `step-20260823T153339Z-11400`: 1.883 s age,
+- seed `11400`, session `step-20260823T153339Z-11400`: 1.883 s observation age,
   translation/rotation cosine `0.9447`/`0.9300`, 0.059 mm translation error,
   0 N contact;
-- seed `11401`, session `step-20260823T152202Z-11401`: 0.948 s age,
+- seed `11401`, session `step-20260823T152202Z-11401`: 0.948 s observation age,
   translation/rotation cosine `0.9926`/`0.9913`, 0.060 mm translation error,
   0 N contact.
 
 The first repeated canary, `rollout-20260823T155348Z-11401`, then completed all
-three fresh observe-infer-apply cycles on unseen seed `11401`. Mean command age
+three fresh observe-infer-apply cycles on unseen seed `11401`. Mean observation age
 was `1.322 s` (maximum `1.525 s`), all three steps measured 0 N contact, and the
 terminal observation reduced translation error by `0.519 mm`, rotation error by
 `0.001793 rad`, and gripper-closedness error from `0.4746` to `0.4094`. Its
@@ -520,8 +522,37 @@ terminal report when capture, inference, transport, or execution orchestration
 fails, including the incomplete final attempt rather than silently losing it.
 
 This remains narrow free-space execution evidence. The scale profiles are a
-small deterministic safety projection set, not JEPA-WM candidate search. It
-does not establish grasp, cable, contact-recovery, or insertion capability.
+small deterministic command-safety projection set. Each completed session
+now also triggers a separate proposal-centered CEM search over 256 bounded
+three-action candidates. The adapted JEPA-WM ranks candidates by terminal
+latent goal energy plus a proposal prior; a strict first-action direction gate
+and a 1 mm / 4 mrad / 0.02-gripper trust region constrain the comparison. The
+winning candidate is labeled `shadow_only`, then Isaac counterfactually runs
+its first action through the same pose, IK, workspace, joint, collision, and
+force projection without moving the robot. `shadow.json` and
+`shadow_safety.json` persist beside the command evidence, and rollout reports
+aggregate energy improvement, planning time, direction-gate passes, and safety
+passes. This path has no command authority and does not delay the direct
+proposal's freshness deadline.
+
+Held-out rollout `rollout-20260823T203534Z-11401` proved the isolated shadow
+path on AWS. All three direct actions applied with 0 N contact before any CEM
+work began. Mean direct inference was `0.328 s`; mean/max observation age was
+`1.366`/`2.013 s`, and mean response-to-actuation command age was `1.038 s`.
+All three 256-candidate searches then improved latent energy
+and retained first-action direction, with mean improvement `0.000221416`; all
+three winners passed the no-actuation Isaac safety projection. The direct
+rollout improved gripper-closedness error by `0.1104`, but translation and
+rotation error worsened by `0.755 mm` and `0.002142 rad`, so the shadow candidate still has no command
+authority. The validated aggregate report persists at:
+
+```text
+/home/ubuntu/docker/isaac-sim/data/quantis/control_rollouts/rollout-20260823T203534Z-11401/report.json
+```
+
+This does not establish grasp, cable, contact-recovery, or insertion
+capability; direct/zero/scripted counterfactual outcome comparison remains the
+promotion gate.
 Stop the worker independently with
 `./ops/aws.sh jepa-wm-control-worker-stop`.
 

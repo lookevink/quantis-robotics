@@ -5,15 +5,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import json
-from math import isfinite
+from math import isclose, isfinite
 from pathlib import Path
 from typing import Any
 
-from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
+from jepa_wm.action import DROID_FPS, DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
-from jepa_wm.control_safety import ControlGateDecision
+from jepa_wm.control_safety import (
+    ControlGateDecision,
+    ControlGateReason,
+    SafetyProjectionAttempt,
+    SimulatorControlGate,
+    SimulatorSafetyState,
+)
 from jepa_wm.control_tracking import ActionTrackingDecision
 from jepa_wm.persistence import write_json_atomic
+from jepa_wm.shadow_planning import ShadowPlanningRequest, ShadowSearchEvidence
+from jepa_wm.shadow_safety import ShadowSafetyEvidence
 from sim.recording import validate_recording_id
 
 
@@ -98,40 +106,6 @@ class ControlSessionState:
 
 
 @dataclass(frozen=True)
-class SafetyProjectionAttempt:
-    scale: DroidActionScale
-    gate: ControlGateDecision
-    maximum_joint_delta_rad: float
-
-    def __post_init__(self) -> None:
-        if (
-            not isfinite(self.maximum_joint_delta_rad)
-            or self.maximum_joint_delta_rad < 0.0
-        ):
-            raise ValueError("safety projection evidence is invalid")
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "scale": self.scale.to_dict(),
-            "gate": self.gate.to_dict(),
-            "maximum_joint_delta_rad": self.maximum_joint_delta_rad,
-        }
-
-    @classmethod
-    def from_dict(cls, payload: Any) -> SafetyProjectionAttempt:
-        if not isinstance(payload, dict):
-            raise ValueError("safety projection attempt must be an object")
-        try:
-            return cls(
-                DroidActionScale.from_payload(payload["scale"]),
-                ControlGateDecision.from_dict(payload["gate"]),
-                float(payload["maximum_joint_delta_rad"]),
-            )
-        except (KeyError, TypeError, ValueError) as error:
-            raise ValueError("safety projection attempt is incomplete") from error
-
-
-@dataclass(frozen=True)
 class PostActionEvidence:
     raw_proposed_action: DroidAction
     commanded_action: DroidAction
@@ -210,7 +184,7 @@ class ControlResult:
     gate: ControlGateDecision
     projection_attempts: tuple[SafetyProjectionAttempt, ...]
     selected_action_scale: DroidActionScale | None
-    inference_age_seconds: float
+    observation_age_seconds: float
     ik_position_error_m: float | None
     ik_orientation_error_rad: float | None
     pre_action_contact_force_newtons: float
@@ -246,7 +220,7 @@ class ControlResult:
         scalars = tuple(
             value
             for value in (
-                self.inference_age_seconds,
+                self.observation_age_seconds,
                 self.ik_position_error_m,
                 self.ik_orientation_error_rad,
                 self.pre_action_contact_force_newtons,
@@ -269,7 +243,7 @@ class ControlResult:
                 if self.selected_action_scale is not None
                 else None
             ),
-            "inference_age_seconds": self.inference_age_seconds,
+            "observation_age_seconds": self.observation_age_seconds,
             "ik_position_error_m": self.ik_position_error_m,
             "ik_orientation_error_rad": self.ik_orientation_error_rad,
             "pre_action_contact_force_newtons": self.pre_action_contact_force_newtons,
@@ -307,7 +281,12 @@ class ControlResult:
                     if selected_scale is not None
                     else None
                 ),
-                inference_age_seconds=float(payload["inference_age_seconds"]),
+                observation_age_seconds=float(
+                    payload.get(
+                        "observation_age_seconds",
+                        payload.get("inference_age_seconds"),
+                    )
+                ),
                 ik_position_error_m=(
                     float(payload["ik_position_error_m"])
                     if payload.get("ik_position_error_m") is not None
@@ -390,6 +369,18 @@ class ControlSession:
         return self.path / "result.json"
 
     @property
+    def shadow_path(self) -> Path:
+        return self.path / "shadow.json"
+
+    @property
+    def shadow_request_path(self) -> Path:
+        return self.path / "shadow_request.json"
+
+    @property
+    def shadow_safety_path(self) -> Path:
+        return self.path / "shadow_safety.json"
+
+    @property
     def execution_path(self) -> Path:
         return self.path / "execution_started.json"
 
@@ -450,6 +441,112 @@ class ControlSession:
             raise ValueError(
                 f"control session has no valid response: {self.session_id}"
             ) from error
+
+    def load_shadow(self) -> ShadowSearchEvidence:
+        try:
+            shadow_request = ShadowPlanningRequest.from_dict(
+                json.loads(self.shadow_request_path.read_text())
+            )
+            evidence = ShadowSearchEvidence.from_dict(
+                json.loads(self.shadow_path.read_text())
+            )
+        except (FileNotFoundError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError(
+                f"control session has no valid shadow evidence: {self.session_id}"
+            ) from error
+        observation, _ = self.load_capture()
+        response = self.load_response()
+        if (
+            shadow_request.observation != observation
+            or shadow_request.direct_control != response
+            or evidence.observation_id != observation.observation_id
+            or evidence.proposal != response.proposal
+            or evidence.direct.actions != response.actions
+            or evidence.adapter != shadow_request.expected_adapter
+        ):
+            raise ValueError("shadow evidence is not bound to its control session")
+        return evidence
+
+    def load_shadow_safety(self) -> ShadowSafetyEvidence:
+        try:
+            evidence = ShadowSafetyEvidence.from_dict(
+                json.loads(self.shadow_safety_path.read_text())
+            )
+        except (FileNotFoundError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError(
+                f"control session has no valid shadow safety evidence: {self.session_id}"
+            ) from error
+        self._validate_shadow_safety_binding(evidence)
+        return evidence
+
+    def _validate_shadow_safety_binding(
+        self, evidence: ShadowSafetyEvidence
+    ) -> None:
+        shadow = self.load_shadow()
+        observation, state = self.load_capture()
+        response = self.load_response()
+        if (
+            evidence.observation_id != shadow.observation_id
+            or evidence.planned_actions != shadow.planned.actions
+            or not isclose(
+                evidence.counterfactual_as_of_unix_seconds,
+                response.created_at_unix_seconds,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            )
+        ):
+            raise ValueError("shadow safety evidence is not bound to its search")
+        current_joints = state.current_joint_positions
+        for attempt in evidence.attempts:
+            scaled_action = attempt.scale.apply(shadow.planned.actions[0])
+            candidate = ProposedControl(
+                observation.observation_id,
+                response.created_at_unix_seconds,
+                (scaled_action, *shadow.planned.actions[1:]),
+                response.proposal,
+            )
+            safety_state = SimulatorSafetyState(
+                observed_joint_positions=current_joints,
+                current_joint_positions=current_joints,
+                proposed_joint_positions=attempt.proposed_joint_positions,
+                control_period_seconds=1.0 / DROID_FPS,
+                contact_force_newtons=state.contact_force_newtons,
+                collision_detected=state.collision_detected,
+            )
+            expected_gate = SimulatorControlGate().evaluate(
+                observation,
+                candidate,
+                safety_state,
+                now_unix_seconds=evidence.counterfactual_as_of_unix_seconds,
+            )
+            expected_delta = max(
+                abs(proposed - current)
+                for proposed, current in zip(
+                    attempt.proposed_joint_positions, current_joints
+                )
+            )
+            if not isclose(
+                attempt.maximum_joint_delta_rad,
+                expected_delta,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            ):
+                raise ValueError("shadow safety joint delta is inconsistent")
+            if attempt.gate.reasons == (ControlGateReason.IK_SOLUTION_FAILED,):
+                try:
+                    expected_pose = observation.pose.applied(scaled_action)
+                except ValueError as error:
+                    raise ValueError("shadow IK failure pose is invalid") from error
+                if not expected_gate.passed or attempt.gate.next_pose != expected_pose:
+                    raise ValueError("shadow IK failure evidence is inconsistent")
+            elif attempt.gate != expected_gate:
+                raise ValueError("shadow safety gate evidence is inconsistent")
+
+    def write_shadow_safety(self, evidence: ShadowSafetyEvidence) -> None:
+        if self.shadow_safety_path.exists():
+            raise ValueError(f"shadow safety was already evaluated: {self.session_id}")
+        self._validate_shadow_safety_binding(evidence)
+        write_json_atomic(self.shadow_safety_path, evidence.to_dict())
 
     def claim_execution(self) -> None:
         try:

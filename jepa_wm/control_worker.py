@@ -3,20 +3,37 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import json
 from pathlib import Path
 import sys
 from time import time
-from typing import Protocol, TextIO
+from typing import Any, Protocol, TextIO
 
 from jepa_wm.action import DroidAction
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
+from jepa_wm.shadow_planning import (
+    SHADOW_REQUEST_SCHEMA,
+    ShadowPlanningRequest,
+    ShadowSearchEvidence,
+    plan_shadow_candidates,
+)
 
 
 class ControlPredictor(Protocol):
     def predict(self, observation: ControlObservation) -> ProposedControl:
         ...
 
+    def plan_shadow(self, request: ShadowPlanningRequest) -> ShadowSearchEvidence:
+        ...
+
+
+@dataclass(frozen=True)
+class EncodedObservationCache:
+    observation_id: int
+    context: Any
+    target: Any
+    control: ProposedControl
 
 class FrozenProposalPredictor:
     """Keep frozen JEPA-WM and the promoted proposal resident on one GPU."""
@@ -27,6 +44,7 @@ class FrozenProposalPredictor:
         checkpoint: Path,
         proposal: Path,
         *,
+        adapter: Path | None = None,
         frame_root: Path | None = None,
     ) -> None:
         import torch
@@ -38,12 +56,19 @@ class FrozenProposalPredictor:
             raise RuntimeError("control inference requires CUDA")
         self._torch = torch
         self._device = torch.device("cuda", torch.cuda.current_device())
-        self._model = load_headless_model(source, checkpoint, device=self._device)
+        self._model = load_headless_model(
+            source,
+            checkpoint,
+            device=self._device,
+            adapter=adapter.resolve() if adapter is not None else None,
+        )
         self._proposal, _ = load_action_proposal(
             proposal.resolve(), device=self._device
         )
         self._proposal_path = proposal.resolve()
+        self._adapter_path = adapter.resolve() if adapter is not None else None
         self._frame_root = frame_root.resolve() if frame_root is not None else None
+        self._latest: EncodedObservationCache | None = None
 
     def _frame_path(self, path: Path) -> Path:
         if path.is_absolute():
@@ -54,9 +79,8 @@ class FrozenProposalPredictor:
         resolved.relative_to(self._frame_root)
         return resolved
 
-    def predict(self, observation: ControlObservation) -> ProposedControl:
+    def _encode_observation(self, observation: ControlObservation):
         from jepa_wm.frames import encode_clips
-        from jepa_wm.planner import PlannerActionBounds
 
         if observation.expected_proposal.resolve() != self._proposal_path:
             raise ValueError(
@@ -64,10 +88,7 @@ class FrozenProposalPredictor:
             )
         context_frame = self._frame_path(observation.context_frame)
         target_frame = self._frame_path(observation.target_frame)
-        for name, path in (
-            ("context", context_frame),
-            ("target", target_frame),
-        ):
+        for name, path in (("context", context_frame), ("target", target_frame)):
             if not path.is_file():
                 raise ValueError(f"control {name} frame does not exist: {path}")
         context = encode_clips(
@@ -76,6 +97,12 @@ class FrozenProposalPredictor:
         target = encode_clips(
             self._model, ((target_frame,),), batch_size=1
         ).to(self._device)
+        return context, target
+
+    def predict(self, observation: ControlObservation) -> ProposedControl:
+        from jepa_wm.planner import PlannerActionBounds
+
+        context, target = self._encode_observation(observation)
         pose = self._torch.tensor(
             (observation.pose.values,),
             device=self._device,
@@ -97,7 +124,7 @@ class FrozenProposalPredictor:
                 .cpu()
                 .numpy()
             )[0]
-        return ProposedControl(
+        control = ProposedControl(
             observation_id=observation.observation_id,
             created_at_unix_seconds=time(),
             actions=tuple(
@@ -105,6 +132,42 @@ class FrozenProposalPredictor:
                 for action in actions
             ),
             proposal=self._proposal_path,
+        )
+        self._latest = EncodedObservationCache(
+            observation.observation_id,
+            context,
+            target,
+            control,
+        )
+        return control
+
+    def plan_shadow(self, request: ShadowPlanningRequest) -> ShadowSearchEvidence:
+        from jepa_wm.planning_scoring import LatentGoalScorer
+
+        if self._adapter_path is None:
+            raise RuntimeError("shadow planning requires an adapted action encoder")
+        if request.expected_adapter.resolve() != self._adapter_path:
+            raise ValueError("shadow request expects a different action adapter")
+        if (
+            self._latest is not None
+            and request.observation.observation_id == self._latest.observation_id
+            and request.direct_control == self._latest.control
+        ):
+            context, target = self._latest.context, self._latest.target
+        else:
+            context, target = self._encode_observation(request.observation)
+        scorer = LatentGoalScorer(
+            self._model,
+            context,
+            target,
+            device=self._device,
+        )
+        return plan_shadow_candidates(
+            observation_id=request.observation.observation_id,
+            direct_actions=request.direct_control.actions,
+            score=scorer,
+            proposal=self._proposal_path,
+            adapter=self._adapter_path,
         )
 
 
@@ -116,9 +179,12 @@ def serve_jsonl(
     for line in input_stream:
         if not line.strip():
             continue
-        observation = ControlObservation.from_dict(json.loads(line))
-        proposal = predictor.predict(observation)
-        output_stream.write(json.dumps(proposal.to_dict(), separators=(",", ":")))
+        payload = json.loads(line)
+        if payload.get("schema") == SHADOW_REQUEST_SCHEMA:
+            response = predictor.plan_shadow(ShadowPlanningRequest.from_dict(payload))
+        else:
+            response = predictor.predict(ControlObservation.from_dict(payload))
+        output_stream.write(json.dumps(response.to_dict(), separators=(",", ":")))
         output_stream.write("\n")
         output_stream.flush()
 
@@ -128,6 +194,7 @@ def main() -> None:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--proposal", type=Path, required=True)
+    parser.add_argument("--adapter", type=Path)
     parser.add_argument("--frame-root", type=Path)
     args = parser.parse_args()
     serve_jsonl(
@@ -137,6 +204,7 @@ def main() -> None:
             args.source,
             args.checkpoint,
             args.proposal,
+            adapter=args.adapter,
             frame_root=args.frame_root,
         ),
     )

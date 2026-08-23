@@ -41,6 +41,7 @@ def main() -> None:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--proposal", type=Path, required=True)
+    parser.add_argument("--adapter", type=Path)
     parser.add_argument("--socket", type=Path, required=True)
     parser.add_argument("--frame-root", type=Path)
     args = parser.parse_args()
@@ -48,6 +49,7 @@ def main() -> None:
         args.source,
         args.checkpoint,
         args.proposal,
+        adapter=args.adapter,
         frame_root=args.frame_root,
     )
     with ControlUnixServer(args.socket, predictor) as server:

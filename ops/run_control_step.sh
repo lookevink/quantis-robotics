@@ -8,6 +8,7 @@ session_id="${1:-}"
 reference_name="${2:-}"
 exploration_seed="${3:-}"
 proposal_name="${4:-}"
+shadow_mode="${5:-immediate}"
 
 is_safe_identifier "${session_id}" || {
   printf 'error: invalid control session\n' >&2
@@ -22,6 +23,10 @@ is_safe_identifier "${proposal_name}" || {
   printf 'error: invalid proposal name\n' >&2
   exit 1
 }
+[[ "${shadow_mode}" == "immediate" || "${shadow_mode}" == "deferred" ]] || {
+  printf 'error: shadow mode must be immediate or deferred\n' >&2
+  exit 1
+}
 
 cd "${repo_dir}"
 isaac_server_call \
@@ -29,3 +34,6 @@ isaac_server_call \
   180 true
 bash "${repo_dir}/ops/jepa_wm.sh" control-infer-session --session "${session_id}"
 isaac_server_call "await demo.apply_control_response('${session_id}')" 180
+if [[ "${shadow_mode}" == "immediate" ]]; then
+  capture_shadow_control_evidence "${repo_dir}" "${session_id}"
+fi

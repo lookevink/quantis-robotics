@@ -125,7 +125,7 @@ class SimulatorControlGateTest(unittest.TestCase):
                 collision_detected=True,
                 contact_force_newtons=3.0,
             ),
-            now_unix_seconds=103.0,
+            now_unix_seconds=104.0,
         )
 
         self.assertEqual(
@@ -142,6 +142,16 @@ class SimulatorControlGateTest(unittest.TestCase):
                 ControlGateReason.FORCE_LIMIT_EXCEEDED,
             },
         )
+
+    def test_allows_the_measured_paused_simulator_handoff_budget(self) -> None:
+        decision = SimulatorControlGate().evaluate(
+            _observation(),
+            _proposal(created_at_unix_seconds=100.5),
+            _state(),
+            now_unix_seconds=102.9,
+        )
+
+        self.assertTrue(decision.passed)
 
     def test_round_trips_versioned_observation_and_proposal(self) -> None:
         observation = _observation()

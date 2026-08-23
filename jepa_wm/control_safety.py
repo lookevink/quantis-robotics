@@ -8,7 +8,7 @@ from math import isfinite
 from time import time
 from typing import Any, Sequence
 
-from jepa_wm.action import DroidPose
+from jepa_wm.action import DroidActionScale, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.planner import PlannerActionBounds
 
@@ -18,6 +18,14 @@ FRANKA_LOWER_JOINT_LIMITS = (
 )
 FRANKA_UPPER_JOINT_LIMITS = (
     2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973,
+)
+
+# Ordered fail-closed projections shared by execution and evidence validation.
+ACTION_SCALES = (
+    DroidActionScale(1.0, 0.25, 0.25),
+    DroidActionScale(0.5, 0.125, 0.125),
+    DroidActionScale.uniform(0.25),
+    DroidActionScale.uniform(0.125),
 )
 
 
@@ -60,7 +68,8 @@ class SimulatorSafetyLimits:
     maximum_joint_velocity_radians_per_second: float = 0.5
     maximum_observation_joint_drift_radians: float = 0.002
     maximum_contact_force_newtons: float = 2.0
-    maximum_observation_age_seconds: float = 2.0
+    maximum_observation_age_seconds: float = 3.0
+    maximum_command_age_seconds: float = 2.5
     minimum_warmup_frames: int = 4
     action_bounds: PlannerActionBounds = PlannerActionBounds()
 
@@ -78,6 +87,7 @@ class SimulatorSafetyLimits:
             self.maximum_observation_joint_drift_radians,
             self.maximum_contact_force_newtons,
             self.maximum_observation_age_seconds,
+            self.maximum_command_age_seconds,
         )
         if not all(isfinite(value) and value > 0.0 for value in scalars):
             raise ValueError("simulator safety limits must be finite and positive")
@@ -141,6 +151,50 @@ class ControlGateDecision:
         }
 
 
+@dataclass(frozen=True)
+class SafetyProjectionAttempt:
+    scale: DroidActionScale
+    gate: ControlGateDecision
+    maximum_joint_delta_rad: float
+    proposed_joint_positions: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            not isfinite(self.maximum_joint_delta_rad)
+            or self.maximum_joint_delta_rad < 0.0
+        ):
+            raise ValueError("safety projection evidence is invalid")
+        object.__setattr__(
+            self,
+            "proposed_joint_positions",
+            _finite_tuple(
+                "proposed joint positions", self.proposed_joint_positions, 7
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "scale": self.scale.to_dict(),
+            "gate": self.gate.to_dict(),
+            "maximum_joint_delta_rad": self.maximum_joint_delta_rad,
+            "proposed_joint_positions": list(self.proposed_joint_positions),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> SafetyProjectionAttempt:
+        if not isinstance(payload, dict):
+            raise ValueError("safety projection attempt must be an object")
+        try:
+            return cls(
+                DroidActionScale.from_payload(payload["scale"]),
+                ControlGateDecision.from_dict(payload["gate"]),
+                float(payload["maximum_joint_delta_rad"]),
+                tuple(payload["proposed_joint_positions"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("safety projection attempt is incomplete") from error
+
+
 class SimulatorControlGate:
     def __init__(self, limits: SimulatorSafetyLimits = SimulatorSafetyLimits()):
         self.limits = limits
@@ -169,7 +223,7 @@ class SimulatorControlGate:
             proposal.created_at_unix_seconds < observation.captured_at_unix_seconds
             or proposal.created_at_unix_seconds > now
             or now - proposal.created_at_unix_seconds
-            > self.limits.maximum_observation_age_seconds
+            > self.limits.maximum_command_age_seconds
         ):
             reasons.append(ControlGateReason.COMMAND_TIME_INVALID)
         if observation.warmup_frames < self.limits.minimum_warmup_frames:
