@@ -150,7 +150,10 @@ was `1.322 s`, and translation/rotation goal error improved by `0.519 mm` and
 `0.001793 rad`. The persisted `quantis.jepa_wm_control_rollout.v1` report
 separates requested, attempted, and applied steps and validates chain, goal,
 proposal, observation-ID, capture-order, warm-up, and previous-action
-provenance. This does not validate cable contact or insertion.
+provenance. Follow-up capture rejects a live articulation that no longer matches
+the preceding measured pose/joints and samples RGB plus state at one update
+boundary. The rollout exit finalizer persists incomplete orchestration attempts
+as terminal evidence. This does not validate cable contact or insertion.
 
 ### Next control milestone
 

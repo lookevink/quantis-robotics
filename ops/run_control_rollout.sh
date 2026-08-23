@@ -44,7 +44,7 @@ finalize_rollout() {
   if [[ -n "${sessions}" ]]; then
     if (( command_status != 0 )); then
       error_arguments=(
-        --orchestration-error "${current_phase}:exit_${command_status}"
+        --orchestration-failure "${current_phase}:exit_${command_status}"
       )
     fi
     set +e

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 import json
 from math import fsum
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Sequence, Union
 
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -25,7 +26,75 @@ from sim.recording import validate_recording_id
 
 ROLLOUT_SCHEMA = "quantis.jepa_wm_control_rollout.v1"
 MAX_CONTROL_ROLLOUT_STEPS = 8
-ORCHESTRATION_FAILED = "orchestration_failed"
+
+
+class IncompleteStepStatus(str, Enum):
+    ORCHESTRATION_FAILED = "orchestration_failed"
+
+
+class OrchestrationOperation(str, Enum):
+    INITIAL_CONTROL_STEP = "initial_control_step"
+    INITIAL_STATUS = "initial_status"
+    FOLLOWUP_CAPTURE = "followup_capture"
+    FOLLOWUP_INFERENCE = "followup_inference"
+    FOLLOWUP_APPLY = "followup_apply"
+    FOLLOWUP_STATUS = "followup_status"
+
+    @property
+    def requires_step_index(self) -> bool:
+        return self in (
+            OrchestrationOperation.FOLLOWUP_CAPTURE,
+            OrchestrationOperation.FOLLOWUP_INFERENCE,
+            OrchestrationOperation.FOLLOWUP_APPLY,
+            OrchestrationOperation.FOLLOWUP_STATUS,
+        )
+
+    @classmethod
+    def parse_phase(
+        cls, encoded_phase: str
+    ) -> tuple[OrchestrationOperation, int | None]:
+        for operation in cls:
+            if not operation.requires_step_index and encoded_phase == operation.value:
+                return operation, None
+            prefix = f"{operation.value}_"
+            if operation.requires_step_index and encoded_phase.startswith(prefix):
+                encoded_index = encoded_phase[len(prefix) :]
+                if encoded_index.isdigit():
+                    return operation, int(encoded_index)
+        raise ValueError("control rollout orchestration phase is malformed")
+
+
+@dataclass(frozen=True)
+class OrchestrationFailure:
+    operation: OrchestrationOperation
+    exit_code: int
+    step_index: int | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.exit_code, bool)
+            or not 1 <= self.exit_code <= 255
+            or self.operation.requires_step_index != (self.step_index is not None)
+            or (self.step_index is not None and self.step_index <= 0)
+        ):
+            raise ValueError("control rollout orchestration failure is invalid")
+
+    @classmethod
+    def parse(cls, value: str) -> OrchestrationFailure:
+        try:
+            phase, encoded_exit_code = value.rsplit(":exit_", 1)
+            exit_code = int(encoded_exit_code)
+            operation, step_index = OrchestrationOperation.parse_phase(phase)
+            return cls(operation, exit_code, step_index)
+        except (TypeError, ValueError) as error:
+            raise ValueError("control rollout orchestration failure is malformed") from error
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "operation": self.operation.value,
+            "step_index": self.step_index,
+            "exit_code": self.exit_code,
+        }
 
 
 @dataclass(frozen=True)
@@ -136,32 +205,30 @@ class ControlStepSummary:
 @dataclass(frozen=True)
 class IncompleteControlStepSummary:
     session_id: str
-    reason: str
+    failure: OrchestrationFailure
 
     def __post_init__(self) -> None:
         validate_recording_id(self.session_id)
-        if not self.reason:
-            raise ValueError("incomplete control step requires a reason")
 
     @property
-    def status(self) -> str:
-        return ORCHESTRATION_FAILED
+    def status(self) -> IncompleteStepStatus:
+        return IncompleteStepStatus.ORCHESTRATION_FAILED
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "session": self.session_id,
             "observation_id": None,
-            "status": self.status,
+            "status": self.status.value,
             "command_age_seconds": None,
             "selected_action_scale": None,
             "translation_cosine": None,
             "rotation_cosine": None,
             "contact_force_newtons": None,
-            "reason": self.reason,
+            "failure": self.failure.to_dict(),
         }
 
 
-RolloutStep = ControlStepSummary | IncompleteControlStepSummary
+RolloutStep = Union[ControlStepSummary, IncompleteControlStepSummary]
 
 
 def _target_pose(
@@ -199,7 +266,7 @@ class ControlRolloutReport:
     requested_steps: int
     steps: tuple[RolloutStep, ...]
     target_pose: DroidPose | None
-    orchestration_error: str | None = None
+    orchestration_failure: OrchestrationFailure | None = None
 
     def __post_init__(self) -> None:
         validate_recording_id(self.rollout_id)
@@ -220,11 +287,11 @@ class ControlRolloutReport:
             if isinstance(step, IncompleteControlStepSummary)
         ]
         if incomplete and (
-            incomplete != [len(self.steps) - 1] or self.orchestration_error is None
+            incomplete != [len(self.steps) - 1]
+            or self.orchestration_failure is None
+            or self.steps[incomplete[0]].failure != self.orchestration_failure
         ):
             raise ValueError("control rollout has an invalid incomplete step")
-        if self.orchestration_error is not None and not self.orchestration_error:
-            raise ValueError("control rollout orchestration error is empty")
         complete = self.complete_steps
         if not complete:
             if self.target_pose is not None:
@@ -327,9 +394,13 @@ class ControlRolloutReport:
             "applied_steps": applied_count,
             "all_steps_applied": (
                 applied_count == self.requested_steps
-                and self.orchestration_error is None
+                and self.orchestration_failure is None
             ),
-            "orchestration_error": self.orchestration_error,
+            "orchestration_failure": (
+                self.orchestration_failure.to_dict()
+                if self.orchestration_failure is not None
+                else None
+            ),
             "mean_command_age_seconds": fsum(ages) / len(ages) if ages else None,
             "maximum_command_age_seconds": max(ages) if ages else None,
             "initial_goal_error": initial.to_dict() if initial else None,
@@ -358,7 +429,7 @@ class ControlRolloutReport:
         seed: int,
         proposal: Path,
         requested_steps: int,
-        orchestration_error: str | None = None,
+        orchestration_failure: OrchestrationFailure | None = None,
     ) -> ControlRolloutReport:
         if not session_ids:
             raise ValueError("control rollout sessions must be non-empty")
@@ -367,10 +438,12 @@ class ControlRolloutReport:
             session = ControlSession.at(data_root / "control_sessions", session_id)
             try:
                 summaries.append(ControlStepSummary.from_session(session))
-            except ValueError as error:
-                if orchestration_error is None or index != len(session_ids) - 1:
+            except ValueError:
+                if orchestration_failure is None or index != len(session_ids) - 1:
                     raise
-                summaries.append(IncompleteControlStepSummary(session_id, str(error)))
+                summaries.append(
+                    IncompleteControlStepSummary(session_id, orchestration_failure)
+                )
         complete = tuple(
             step for step in summaries if isinstance(step, ControlStepSummary)
         )
@@ -387,5 +460,5 @@ class ControlRolloutReport:
             requested_steps=requested_steps,
             steps=tuple(summaries),
             target_pose=target,
-            orchestration_error=orchestration_error,
+            orchestration_failure=orchestration_failure,
         )

@@ -13,6 +13,7 @@ from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.control_safety import ControlGateDecision
 from jepa_wm.control_tracking import ActionTrackingDecision
+from jepa_wm.persistence import write_json_atomic
 from sim.recording import validate_recording_id
 
 
@@ -397,12 +398,6 @@ class ControlSession:
             raise ValueError(f"control session already exists: {self.session_id}")
         self.path.mkdir(parents=True)
 
-    @staticmethod
-    def _write_json(path: Path, payload: dict[str, Any]) -> None:
-        temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_text(json.dumps(payload, indent=2) + "\n")
-        temporary.replace(path)
-
     def write_capture(
         self, observation: ControlObservation, state: ControlSessionState
     ) -> None:
@@ -410,8 +405,8 @@ class ControlSession:
             self.create()
         elif self.request_path.exists() or self.state_path.exists():
             raise ValueError(f"control session capture already exists: {self.session_id}")
-        self._write_json(self.request_path, observation.to_dict())
-        self._write_json(self.state_path, state.to_dict())
+        write_json_atomic(self.request_path, observation.to_dict())
+        write_json_atomic(self.state_path, state.to_dict())
 
     def load_capture(self) -> tuple[ControlObservation, ControlSessionState]:
         try:
@@ -424,9 +419,6 @@ class ControlSession:
         if state.session_id != self.session_id:
             raise ValueError("control state belongs to a different session")
         return observation, state
-
-    def result_status(self) -> ControlResultStatus:
-        return self.load_result().status
 
     def load_result(self) -> ControlResult:
         try:
@@ -472,4 +464,4 @@ class ControlSession:
     def write_result(self, result: ControlResult) -> None:
         if result.session_id != self.session_id:
             raise ValueError("control result belongs to a different session")
-        self._write_json(self.result_path, result.to_dict())
+        write_json_atomic(self.result_path, result.to_dict())

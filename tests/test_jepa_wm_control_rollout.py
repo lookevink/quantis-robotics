@@ -7,7 +7,11 @@ import unittest
 
 from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
-from jepa_wm.control_rollout import ControlRolloutReport
+from jepa_wm.control_rollout import (
+    ControlRolloutReport,
+    OrchestrationFailure,
+    OrchestrationOperation,
+)
 from jepa_wm.control_safety import ControlGateDecision
 from jepa_wm.control_tracking import ActionTrackingDecision
 from sim.control_session import (
@@ -110,7 +114,7 @@ class ControlRolloutTest(unittest.TestCase):
         sessions: tuple[str, ...],
         *,
         requested_steps: int,
-        orchestration_error: str | None = None,
+        orchestration_failure: OrchestrationFailure | None = None,
     ) -> dict:
         return ControlRolloutReport.from_sessions(
             root,
@@ -120,8 +124,23 @@ class ControlRolloutTest(unittest.TestCase):
             seed=11400,
             proposal=Path("/tmp/proposal.pth"),
             requested_steps=requested_steps,
-            orchestration_error=orchestration_error,
+            orchestration_failure=orchestration_failure,
         ).to_dict()
+
+    def _write_reference(self, root: Path) -> None:
+        reference = root / "recordings" / "reference"
+        reference.mkdir(parents=True)
+        (reference / "steps.jsonl").write_text(
+            json.dumps(
+                {
+                    "index": 7,
+                    "end_effector_pose": [
+                        0.43, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5
+                    ],
+                }
+            )
+            + "\n"
+        )
 
     def test_summarizes_a_provenance_bound_rollout_and_goal_progress(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -198,9 +217,7 @@ class ControlRolloutTest(unittest.TestCase):
     def test_rejects_target_or_observation_identity_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            reference = root / "recordings" / "reference"
-            reference.mkdir(parents=True)
-            (reference / "steps.jsonl").write_text("")
+            self._write_reference(root)
             self._write_step(
                 root,
                 "session-0",
@@ -230,9 +247,7 @@ class ControlRolloutTest(unittest.TestCase):
     def test_rejects_a_changed_target_frame(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            reference = root / "recordings" / "reference"
-            reference.mkdir(parents=True)
-            (reference / "steps.jsonl").write_text("")
+            self._write_reference(root)
             self._write_step(
                 root,
                 "session-0",
@@ -260,9 +275,7 @@ class ControlRolloutTest(unittest.TestCase):
     def test_rejects_a_non_monotonic_warmup_chain(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            reference = root / "recordings" / "reference"
-            reference.mkdir(parents=True)
-            (reference / "steps.jsonl").write_text("")
+            self._write_reference(root)
             self._write_step(
                 root,
                 "session-0",
@@ -296,13 +309,29 @@ class ControlRolloutTest(unittest.TestCase):
                 root,
                 ("session-0",),
                 requested_steps=3,
-                orchestration_error="capture:exit_1",
+                orchestration_failure=OrchestrationFailure(
+                    OrchestrationOperation.INITIAL_CONTROL_STEP,
+                    1,
+                ),
             )
 
             self.assertEqual(report["attempted_steps"], 1)
             self.assertEqual(report["complete_steps"], 0)
             self.assertEqual(report["applied_steps"], 0)
             self.assertEqual(report["steps"][0]["status"], "orchestration_failed")
+            self.assertEqual(
+                report["orchestration_failure"]["operation"],
+                "initial_control_step",
+            )
+
+    def test_parses_followup_failure_step_identity_explicitly(self) -> None:
+        failure = OrchestrationFailure.parse("followup_capture_03:exit_124")
+
+        self.assertEqual(failure.operation, OrchestrationOperation.FOLLOWUP_CAPTURE)
+        self.assertEqual(failure.step_index, 3)
+        self.assertEqual(failure.exit_code, 124)
+        with self.assertRaisesRegex(ValueError, "malformed"):
+            OrchestrationFailure.parse("followup_capture:exit_1")
 
     def test_rejects_a_stale_persisted_result(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

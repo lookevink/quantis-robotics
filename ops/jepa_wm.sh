@@ -495,7 +495,7 @@ infer_control_session() {
 report_control_rollout() {
   local -A options=()
   parse_named_options options \
-    "rollout reference seed proposal sessions requested-steps orchestration-error" \
+    "rollout reference seed proposal sessions requested-steps orchestration-failure" \
     "$@"
   local rollout_id="${options[rollout]:-}"
   local reference_name="${options[reference]:-}"
@@ -503,7 +503,7 @@ report_control_rollout() {
   local proposal_name="${options[proposal]:-}"
   local sessions="${options[sessions]:-}"
   local requested_steps="${options[requested-steps]:-}"
-  local orchestration_error="${options[orchestration-error]:-}"
+  local orchestration_failure="${options[orchestration-failure]:-}"
   is_safe_identifier "${rollout_id}" || die "invalid control rollout"
   is_safe_identifier "${reference_name}" || die "invalid reference recording"
   require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
@@ -515,8 +515,8 @@ report_control_rollout() {
   local proposal="${checkpoint_dir}/${proposal_name}.pth"
   local -a error_arguments=()
   [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
-  if [[ -n "${orchestration_error}" ]]; then
-    error_arguments=(--orchestration-error "${orchestration_error}")
+  if [[ -n "${orchestration_failure}" ]]; then
+    error_arguments=(--orchestration-failure "${orchestration_failure}")
   fi
   sudo install -d -o "${USER}" -g "${USER}" "${report_dir}"
   cd "${repo_dir}"

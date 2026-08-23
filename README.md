@@ -513,7 +513,11 @@ validated report persists at:
 The report distinguishes originally requested, actually attempted, and applied
 steps and validates the single-use session chain, unique observation IDs, fixed
 goal/proposal provenance, ordered capture times, warm-up progression, and
-previous-action continuity.
+previous-action continuity. Each follow-up first verifies that the live joints
+and end-effector still match the preceding measured result, then captures RGB
+and state at the same update boundary. An exit finalizer also persists a typed
+terminal report when capture, inference, transport, or execution orchestration
+fails, including the incomplete final attempt rather than silently losing it.
 
 This remains narrow free-space execution evidence. The scale profiles are a
 small deterministic safety projection set, not JEPA-WM candidate search. It
