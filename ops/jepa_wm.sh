@@ -716,13 +716,14 @@ rollout_session_list() {
 report_control_baselines() {
   local -A options=()
   parse_named_options options \
-    "experiment reference seed requested-steps direct-rollout zero-rollout scripted-rollout direct-proposal" \
+    "experiment reference seed requested-steps direct-rollout direct-sessions zero-rollout scripted-rollout direct-proposal" \
     "$@"
   local experiment_id="${options[experiment]:-}"
   local reference_name="${options[reference]:-}"
   local exploration_seed="${options[seed]:-}"
   local requested_steps="${options[requested-steps]:-}"
   local direct_rollout="${options[direct-rollout]:-}"
+  local direct_sessions="${options[direct-sessions]:-}"
   local zero_rollout="${options[zero-rollout]:-}"
   local scripted_rollout="${options[scripted-rollout]:-}"
   local direct_proposal_name="${options[direct-proposal]:-}"
@@ -734,6 +735,12 @@ report_control_baselines() {
   require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
   require_positive_integer "requested steps" "${requested_steps}" || exit 1
   (( requested_steps <= 8 )) || die "control rollout is capped at eight steps"
+  if [[ -z "${direct_sessions}" ]]; then
+    direct_sessions="$(rollout_session_list "${direct_rollout}" "${requested_steps}")"
+  else
+    is_safe_identifier_list "${direct_sessions}" \
+      || die "invalid direct baseline session list"
+  fi
   local direct_proposal="${checkpoint_dir}/${direct_proposal_name}.pth"
   [[ -s "${direct_proposal}" ]] \
     || die "action proposal does not exist: ${direct_proposal_name}"
@@ -747,7 +754,7 @@ report_control_baselines() {
     --seed "${exploration_seed}" \
     --requested-steps "${requested_steps}" \
     --direct-rollout "${direct_rollout}" \
-    --direct-sessions "$(rollout_session_list "${direct_rollout}" "${requested_steps}")" \
+    --direct-sessions "${direct_sessions}" \
     --direct-proposal "${direct_proposal}" \
     --zero-rollout "${zero_rollout}" \
     --zero-sessions "$(rollout_session_list "${zero_rollout}" "${requested_steps}")" \

@@ -296,3 +296,6 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     unresolved axis must also clear a persisted minimum predicted reduction
     (`0.1 mm` translation, `0.001 rad` rotation, `0.005` gripper closedness),
     with before/after/required progress exposed as reconstructible evidence.
+    A calibration fit only on seed 11400 now transfers to seed 11401: its
+    isolated candidate beat direct and zero on all axes, while the remaining
+    scripted-translation miss keeps promotion closed.

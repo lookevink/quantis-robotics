@@ -314,7 +314,8 @@ Commands:
   jepa-wm-control-step REFERENCE_RECORDING SEED [artifacts]
   jepa-wm-control-rollout REFERENCE_RECORDING SEED STEPS [artifacts]
   jepa-wm-control-baseline REFERENCE_RECORDING SEED STEPS zero|scripted
-  jepa-wm-control-baselines EXPERIMENT DIRECT ZERO SCRIPTED REFERENCE SEED STEPS [direct-proposal]
+  jepa-wm-control-baselines EXPERIMENT DIRECT ZERO SCRIPTED REFERENCE SEED STEPS [direct-proposal] [direct-sessions]
+  jepa-wm-control-calibration-collect CALIBRATION REFERENCE SEED TRIALS [artifacts]
   jepa-wm-control-candidate REFERENCE_RECORDING SEED SOURCE_SESSION BASELINE_EXPERIMENT
   jepa-wm-objective-calibrate CALIBRATION SESSION[,SESSION...]
   jepa-wm-control-rollout-report ROLLOUT SESSION[,SESSION...] REQUESTED_STEPS REFERENCE SEED [proposal] [policy]
@@ -672,16 +673,42 @@ case "${command}" in
     exploration_seed="${7:-}"
     step_count="${8:-3}"
     proposal_name="${9:-quantis_isaac_wrist_action_proposal}"
+    direct_sessions="${10:-}"
     for identifier in \
       "${experiment_id}" "${direct_rollout}" "${zero_rollout}" \
       "${scripted_rollout}" "${reference_name}" "${proposal_name}"; do
       is_safe_identifier "${identifier}" || die "invalid baseline comparison identifier"
     done
+    if [[ -n "${direct_sessions}" ]]; then
+      is_safe_identifier_list "${direct_sessions}" \
+        || die "invalid direct baseline session list"
+    fi
     require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
     require_positive_integer "step count" "${step_count}" || exit 1
     (( step_count <= 8 )) || die "control rollout is capped at eight steps"
     sync_repo
-    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-baseline-report --experiment '${experiment_id}' --reference '${reference_name}' --seed '${exploration_seed}' --requested-steps '${step_count}' --direct-rollout '${direct_rollout}' --zero-rollout '${zero_rollout}' --scripted-rollout '${scripted_rollout}' --direct-proposal '${proposal_name}'"
+    direct_sessions_argument=""
+    if [[ -n "${direct_sessions}" ]]; then
+      direct_sessions_argument=" --direct-sessions '${direct_sessions}'"
+    fi
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-baseline-report --experiment '${experiment_id}' --reference '${reference_name}' --seed '${exploration_seed}' --requested-steps '${step_count}' --direct-rollout '${direct_rollout}' --zero-rollout '${zero_rollout}' --scripted-rollout '${scripted_rollout}' --direct-proposal '${proposal_name}'${direct_sessions_argument}"
+    ;;
+  jepa-wm-control-calibration-collect)
+    calibration_name="${2:-}"
+    reference_name="${3:-}"
+    exploration_seed="${4:-}"
+    trial_count="${5:-6}"
+    artifacts_name="${6:-quantis_wrist_control}"
+    for identifier in "${calibration_name}" "${reference_name}" "${artifacts_name}"; do
+      is_safe_identifier "${identifier}" || die "invalid calibration collection identifier"
+    done
+    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+    require_positive_integer "trial count" "${trial_count}" || exit 1
+    (( trial_count >= 3 && trial_count <= 12 )) \
+      || die "control calibration requires 3 to 12 trials"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --artifacts '${artifacts_name}'"
+    remote "bash ~/quantis-robotics/ops/run_control_calibration.sh '${calibration_name}' '${reference_name}' '${exploration_seed}' '${trial_count}' '${artifacts_name}'"
     ;;
   jepa-wm-control-candidate)
     reference_name="${2:-}"

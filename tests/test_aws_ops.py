@@ -762,6 +762,43 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("--requested-steps '3'", calls)
         self.assertIn("--direct-proposal 'quantis_isaac_wrist_action_proposal'", calls)
 
+    def test_jepa_wm_control_baselines_can_bind_an_explicit_source_session(self):
+        result, calls = self.run_command(
+            "jepa-wm-control-baselines",
+            arguments=(
+                "baseline-proof",
+                "source-direct",
+                "zero-rollout",
+                "scripted-rollout",
+                "domain-held-00",
+                "11400",
+                "1",
+                "quantis_isaac_wrist_action_proposal",
+                "source-step-00",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--direct-sessions 'source-step-00'", calls)
+
+    def test_jepa_wm_control_calibration_collection_is_repeatable(self):
+        result, calls = self.run_command(
+            "jepa-wm-control-calibration-collect",
+            arguments=(
+                "seed-11400-calibration",
+                "domain-held-00",
+                "11400",
+                "6",
+                "quantis_calibrated_control",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("control-worker-start", calls)
+        self.assertIn("ops/run_control_calibration.sh", calls)
+        self.assertIn("'seed-11400-calibration'", calls)
+        self.assertIn("'6'", calls)
+
     def test_jepa_wm_control_candidate_is_explicitly_bound_to_one_shadow_source(self):
         result, calls = self.run_command(
             "jepa-wm-control-candidate",
