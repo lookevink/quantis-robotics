@@ -20,6 +20,7 @@ def reload_demo_runtime() -> ModuleType:
     for module_name in (
         "jepa.contract",
         "jepa_wm.action",
+        "jepa_wm.control_policy",
         "jepa_wm.planner",
         "jepa_wm.action_prior",
         "jepa_wm.planner_readiness",
@@ -28,7 +29,9 @@ def reload_demo_runtime() -> ModuleType:
         "jepa_wm.control_tracking",
         "jepa_wm.shadow_planning",
         "jepa_wm.shadow_safety",
+        "jepa_wm.trial_equivalence",
         "sim.recording",
+        "jepa_wm.experimental_candidate",
         "sim.recording_jobs",
         "sim.exploration",
         "jepa_wm.domain_recording",

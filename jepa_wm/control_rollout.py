@@ -241,6 +241,10 @@ class ControlStepSummary:
         return self.result.status
 
     @property
+    def is_applied(self) -> bool:
+        return self.status is ControlResultStatus.APPLIED and self.post_action_pose is not None
+
+    @property
     def post_action_pose(self) -> DroidPose | None:
         return self.result.post_action.pose if self.result.post_action else None
 

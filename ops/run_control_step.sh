@@ -32,7 +32,7 @@ validate_control_policy "${policy}" || exit 1
 
 cd "${repo_dir}"
 isaac_server_call \
-  "await demo.capture_control_observation('${session_id}','${reference_name}',${exploration_seed},'${proposal_name}')" \
+  "await demo.capture_control_observation('${session_id}','${reference_name}',${exploration_seed},'${proposal_name}','${policy}')" \
   180 true
 respond_to_control_session "${repo_dir}" "${session_id}" "${policy}"
 isaac_server_call "await demo.apply_control_response('${session_id}')" 180

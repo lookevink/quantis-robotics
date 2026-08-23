@@ -23,6 +23,7 @@ from sim.control_session import (
     QUANTIS_DATA_ROOT,
     RECORDING_ROOT,
     ControlCaptureResult,
+    ControlExecutionPolicy,
     ControlSession,
     ControlSessionState,
 )
@@ -71,6 +72,7 @@ async def capture_control_observation(
     reference_recording: str,
     seed: int,
     proposal_name: str,
+    execution_policy: str = ControlExecutionPolicy.DIRECT.value,
 ) -> dict[str, Any]:
     """Replay four safe warm-up frames and persist one live wrist observation."""
 
@@ -82,6 +84,7 @@ async def capture_control_observation(
     from isaacsim.core.simulation_manager import SimulationManager
 
     validate_recording_id(proposal_name)
+    policy = ControlExecutionPolicy(execution_policy)
     session = ControlSession.at(CONTROL_ROOT, session_id)
     if session.path.exists():
         raise ValueError(f"control session already exists: {session_id}")
@@ -191,6 +194,7 @@ async def capture_control_observation(
         current_joint_positions=tuple(actual_warmup.arm_positions),
         collision_detected=collision_detected,
         contact_force_newtons=contact_force,
+        execution_policy=policy,
     )
     session.write_capture(observation, state)
     return ControlCaptureResult(

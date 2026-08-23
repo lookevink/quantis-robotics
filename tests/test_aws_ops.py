@@ -204,6 +204,10 @@ class AwsLifecycleTests(unittest.TestCase):
                     isaac_data / "quantis/control_baselines/proof/report.json",
                     "control-baseline",
                 ),
+                (
+                    isaac_data / "quantis/control_candidates/proof/report.json",
+                    "control-candidate",
+                ),
                 (checkpoints / "model.pth", "checkpoint"),
             ):
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -247,6 +251,10 @@ class AwsLifecycleTests(unittest.TestCase):
             self.assertEqual(
                 (backup / "isaac/control_baselines/proof/report.json").read_text(),
                 "control-baseline",
+            )
+            self.assertEqual(
+                (backup / "isaac/control_candidates/proof/report.json").read_text(),
+                "control-candidate",
             )
             self.assertEqual(
                 (backup / "jepa-wm/checkpoints/model.pth").read_text(),
@@ -741,6 +749,23 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("--scripted-rollout 'scripted-rollout'", calls)
         self.assertIn("--requested-steps '3'", calls)
         self.assertIn("--direct-proposal 'quantis_isaac_wrist_action_proposal'", calls)
+
+    def test_jepa_wm_control_candidate_is_explicitly_bound_to_one_shadow_source(self):
+        result, calls = self.run_command(
+            "jepa-wm-control-candidate",
+            arguments=(
+                "domain-held-00",
+                "11400",
+                "direct-rollout-00",
+                "baseline-proof",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/run_candidate_trial.sh", calls)
+        self.assertIn("'direct-rollout-00'", calls)
+        self.assertIn("control-candidate-report", calls)
+        self.assertIn("--baseline-experiment 'baseline-proof'", calls)
 
     def test_jepa_wm_summarize_forwards_the_whole_experiment(self):
         result, calls = self.run_command(

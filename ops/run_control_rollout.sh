@@ -28,6 +28,11 @@ require_positive_integer "step count" "${step_count}" || exit 1
   exit 1
 }
 validate_control_policy "${policy}" || exit 1
+expected_proposal="$(control_proposal_for_policy "${policy}" "${proposal_name}")"
+[[ "${proposal_name}" == "${expected_proposal}" ]] || {
+  printf 'error: proposal does not match control policy\n' >&2
+  exit 1
+}
 
 step_status() {
   "${venv_python}" -m jepa_wm.control_rollout_cli status \
@@ -55,6 +60,7 @@ finalize_rollout() {
       --reference "${reference_name}" \
       --seed "${exploration_seed}" \
       --proposal "${proposal_name}" \
+      --policy "${policy}" \
       --sessions "${sessions}" \
       --requested-steps "${step_count}" \
       "${error_arguments[@]}"

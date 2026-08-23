@@ -155,6 +155,7 @@ The command copies without deleting older backup files:
 | `/home/ubuntu/docker/isaac-sim/data/quantis/control_sessions` | `/mnt/quantis-assets/quantis-state/isaac/control_sessions` |
 | `/home/ubuntu/docker/isaac-sim/data/quantis/control_rollouts` | `/mnt/quantis-assets/quantis-state/isaac/control_rollouts` |
 | `/home/ubuntu/docker/isaac-sim/data/quantis/control_baselines` | `/mnt/quantis-assets/quantis-state/isaac/control_baselines` |
+| `/home/ubuntu/docker/isaac-sim/data/quantis/control_candidates` | `/mnt/quantis-assets/quantis-state/isaac/control_candidates` |
 | `/home/ubuntu/docker/jepa-wm/checkpoints` | `/mnt/quantis-assets/quantis-state/jepa-wm/checkpoints` |
 
 The backup command fails closed unless `/mnt/quantis-assets` is the exact mount
@@ -167,7 +168,7 @@ includes reusable/result stages, synchronized recordings, control-session and
 rollout evidence, realized-baseline reports, evaluation reports, DINOv3 and
 JEPA-WM checkpoints, and the Isaac action adapter. Source code is preserved
 separately in this Git repository. Bootstrap does not restore this backup
-automatically; after replacing or terminating the instance, copy these six
+automatically; after replacing or terminating the instance, copy these seven
 trees back to their corresponding live paths before starting Isaac or JEPA-WM.
 
 ### GPU capacity after a stop
@@ -586,6 +587,40 @@ The strict report persists at:
 This does not establish grasp, cable, contact-recovery, or insertion
 capability. The next gate is an isolated reset-identical trial of the shadow
 CEM winner, followed by repetition across whole held-out seeds.
+
+That isolated trial is available as an explicitly non-production command:
+
+```bash
+./ops/aws.sh jepa-wm-control-candidate \
+  domain-20260823T113209Z-1400-held-01 11401 \
+  rollout-20260823T203534Z-11401-00 \
+  baseline-proof-20260823-11401
+```
+
+The command resets Isaac, captures a fresh observation under the reserved
+`experimental_shadow_candidate` identity, and accepts a prior shadow winner
+only when its source search and no-actuation safety evidence passed and the new
+reset matches the source pose, all seven joints, target, action history,
+collision state, and contact force. The fresh execution still passes the full
+live safety/freshness/IK/tracking gate. Its binding is labeled
+`reset_trial_only`; a missing binding blocks execution, and a normal session
+rejects the experimental artifact.
+
+Candidate experiment `candidate-proof-20260823T213129Z-11401` applied safely at
+`0.815 s` observation age with 0 N contact, but failed the realized outcome
+gate. It worsened translation error by `0.565 mm` and rotation error by
+`0.000672 rad`; it beat neither zero nor direct on those axes and also trailed
+direct gripper progress. The CEM source had improved predicted latent energy by
+`0.000125954`, demonstrating that this model objective is not yet aligned with
+realized task-space progress. Production authority remains false. The strict
+report persists at:
+
+```text
+/home/ubuntu/docker/isaac-sim/data/quantis/control_candidates/candidate-proof-20260823T213129Z-11401/report.json
+```
+
+The next milestone is to calibrate/rerank the planner objective using realized
+task-space outcomes, then repeat isolated trials across whole held-out seeds.
 Stop the worker independently with
 `./ops/aws.sh jepa-wm-control-worker-stop`.
 

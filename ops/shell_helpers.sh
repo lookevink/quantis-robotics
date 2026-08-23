@@ -34,25 +34,65 @@ require_positive_integer() {
   }
 }
 
+load_control_policy_descriptor() {
+  local policy="$1"
+  local direct_proposal="${2:-direct-proposal}"
+  case "${policy}" in
+    direct)
+      CONTROL_POLICY_PROPOSAL="${direct_proposal}"
+      CONTROL_POLICY_REQUIRES_CHECKPOINT=true
+      CONTROL_POLICY_RESPONDER=direct
+      ;;
+    zero|scripted)
+      CONTROL_POLICY_PROPOSAL="baseline_${policy}"
+      CONTROL_POLICY_REQUIRES_CHECKPOINT=false
+      CONTROL_POLICY_RESPONDER=baseline
+      ;;
+    reset_trial_candidate)
+      CONTROL_POLICY_PROPOSAL=experimental_shadow_candidate
+      CONTROL_POLICY_REQUIRES_CHECKPOINT=false
+      CONTROL_POLICY_RESPONDER=candidate
+      ;;
+    *)
+      printf 'error: unsupported control policy: %s\n' "${policy}" >&2
+      return 1
+      ;;
+  esac
+}
+
 validate_control_policy() {
-  [[ "$1" == "direct" || "$1" == "zero" || "$1" == "scripted" ]] || {
-    printf 'error: control policy must be direct, zero, or scripted\n' >&2
-    return 1
-  }
+  load_control_policy_descriptor "$1" "${2:-direct-proposal}"
+}
+
+control_proposal_for_policy() {
+  load_control_policy_descriptor "$1" "${2:-direct-proposal}" || return 1
+  printf '%s\n' "${CONTROL_POLICY_PROPOSAL}"
 }
 
 respond_to_control_session() {
   local repository="$1"
   local session_id="$2"
   local policy="$3"
-  validate_control_policy "${policy}" || return 1
-  if [[ "${policy}" == "direct" ]]; then
-    bash "${repository}/ops/jepa_wm.sh" \
-      control-infer-session --session "${session_id}"
-  else
-    bash "${repository}/ops/jepa_wm.sh" control-baseline-session \
-      --session "${session_id}" --policy "${policy}"
-  fi
+  local source_session_id="${4:-}"
+  load_control_policy_descriptor "${policy}" || return 1
+  case "${CONTROL_POLICY_RESPONDER}" in
+    direct)
+      bash "${repository}/ops/jepa_wm.sh" \
+        control-infer-session --session "${session_id}"
+      ;;
+    baseline)
+      bash "${repository}/ops/jepa_wm.sh" control-baseline-session \
+        --session "${session_id}" --policy "${policy}"
+      ;;
+    candidate)
+      is_safe_identifier "${source_session_id}" || {
+        printf 'error: candidate policy requires a source session\n' >&2
+        return 1
+      }
+      bash "${repository}/ops/jepa_wm.sh" control-candidate-session \
+        --session "${session_id}" --source-session "${source_session_id}"
+      ;;
+  esac
 }
 
 isaac_demo_code() {

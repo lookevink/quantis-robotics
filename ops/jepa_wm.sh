@@ -547,15 +547,41 @@ persist_baseline_session() {
   sudo chmod -R a+rwX "${session}"
 }
 
+persist_experimental_candidate() {
+  local -A options=()
+  parse_named_options options "session source-session" "$@"
+  local session_id="${options[session]:-}"
+  local source_session_id="${options[source-session]:-}"
+  is_safe_identifier "${session_id}" || die "invalid candidate control session"
+  is_safe_identifier "${source_session_id}" || die "invalid candidate source session"
+  local session="${control_frame_root}/control_sessions/${session_id}"
+  local source_session="${control_frame_root}/control_sessions/${source_session_id}"
+  [[ -f "${session}/request.json" ]] \
+    || die "candidate session request does not exist: ${session_id}"
+  [[ ! -e "${session}/response.json" ]] \
+    || die "candidate session already has a response: ${session_id}"
+  [[ -f "${source_session}/shadow.json" \
+    && -f "${source_session}/shadow_safety.json" ]] \
+    || die "candidate source has no complete shadow evidence: ${source_session_id}"
+  sudo chown -R "${USER}:${USER}" "${session}" "${source_session}"
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.experimental_candidate_cli \
+    --data-root "${control_frame_root}" \
+    --session "${session_id}" \
+    --source-session "${source_session_id}"
+  sudo chmod -R a+rwX "${session}"
+}
+
 report_control_rollout() {
   local -A options=()
   parse_named_options options \
-    "rollout reference seed proposal sessions requested-steps orchestration-failure" \
+    "rollout reference seed proposal policy sessions requested-steps orchestration-failure" \
     "$@"
   local rollout_id="${options[rollout]:-}"
   local reference_name="${options[reference]:-}"
   local exploration_seed="${options[seed]:-}"
   local proposal_name="${options[proposal]:-}"
+  local policy="${options[policy]:-direct}"
   local sessions="${options[sessions]:-}"
   local requested_steps="${options[requested-steps]:-}"
   local orchestration_failure="${options[orchestration-failure]:-}"
@@ -563,14 +589,17 @@ report_control_rollout() {
   is_safe_identifier "${reference_name}" || die "invalid reference recording"
   require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
   is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+  load_control_policy_descriptor "${policy}" "${proposal_name}" \
+    || die "invalid control policy"
+  [[ "${proposal_name}" == "${CONTROL_POLICY_PROPOSAL}" ]] \
+    || die "proposal does not match control policy"
   is_safe_identifier_list "${sessions}" || die "invalid control session list"
   require_positive_integer "requested steps" "${requested_steps}" || exit 1
   (( requested_steps <= 8 )) || die "control rollout is capped at eight steps"
   local report_dir="${control_frame_root}/control_rollouts/${rollout_id}"
   local proposal="${checkpoint_dir}/${proposal_name}.pth"
   local -a error_arguments=()
-  if [[ "${proposal_name}" != "baseline_zero" \
-    && "${proposal_name}" != "baseline_scripted" ]]; then
+  if [[ "${CONTROL_POLICY_REQUIRES_CHECKPOINT}" == "true" ]]; then
     [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
   fi
   if [[ -n "${orchestration_failure}" ]]; then
@@ -587,6 +616,31 @@ report_control_rollout() {
     --sessions "${sessions}" \
     --requested-steps "${requested_steps}" \
     "${error_arguments[@]}" \
+    --output "${report_dir}/report.json"
+}
+
+report_candidate_trial() {
+  local -A options=()
+  parse_named_options options \
+    "experiment baseline-experiment candidate-session source-session" "$@"
+  local experiment_id="${options[experiment]:-}"
+  local baseline_experiment_id="${options[baseline-experiment]:-}"
+  local candidate_session_id="${options[candidate-session]:-}"
+  local source_session_id="${options[source-session]:-}"
+  for identifier in \
+    "${experiment_id}" "${baseline_experiment_id}" \
+    "${candidate_session_id}" "${source_session_id}"; do
+    is_safe_identifier "${identifier}" || die "invalid candidate trial identifier"
+  done
+  local report_dir="${control_frame_root}/control_candidates/${experiment_id}"
+  sudo install -d -o "${USER}" -g "${USER}" "${report_dir}"
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.candidate_trial_cli \
+    --data-root "${control_frame_root}" \
+    --experiment-id "${experiment_id}" \
+    --baseline-experiment-id "${baseline_experiment_id}" \
+    --candidate-session "${candidate_session_id}" \
+    --source-session "${source_session_id}" \
     --output "${report_dir}/report.json"
 }
 
@@ -832,11 +886,17 @@ case "${1:-}" in
   control-baseline-session)
     persist_baseline_session "${@:2}"
     ;;
+  control-candidate-session)
+    persist_experimental_candidate "${@:2}"
+    ;;
   control-rollout-report)
     report_control_rollout "${@:2}"
     ;;
   control-baseline-report)
     report_control_baselines "${@:2}"
+    ;;
+  control-candidate-report)
+    report_candidate_trial "${@:2}"
     ;;
   control-worker-start)
     start_control_worker "${@:2}"
@@ -852,6 +912,6 @@ case "${1:-}" in
       "${2:-}" "${3:-}" "${4:-}" "${5:-wrist}" "${6:-40}"
     ;;
   *)
-    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, proposal-eval, proposal-summarize, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-rollout-report, control-baseline-report, or summarize"
+    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, proposal-eval, proposal-summarize, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, control-candidate-report, or summarize"
     ;;
 esac

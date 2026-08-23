@@ -19,9 +19,17 @@ from jepa_wm.control_safety import (
     SimulatorSafetyState,
 )
 from jepa_wm.control_tracking import ActionTrackingDecision
+from jepa_wm.control_policy import ControlExecutionPolicy
+from jepa_wm.experimental_candidate import (
+    CandidateExecutionEvidence,
+    CandidateSourceEvidence,
+    CandidateTrialContext,
+    ExperimentalCandidateBinding,
+)
 from jepa_wm.persistence import write_json_atomic
 from jepa_wm.shadow_planning import ShadowPlanningRequest, ShadowSearchEvidence
 from jepa_wm.shadow_safety import ShadowSafetyEvidence
+from jepa_wm.trial_equivalence import TrialResetState
 from sim.recording import validate_recording_id
 
 
@@ -52,6 +60,7 @@ class ControlSessionState:
     collision_detected: bool
     contact_force_newtons: float
     previous_session_id: str | None = None
+    execution_policy: ControlExecutionPolicy = ControlExecutionPolicy.DIRECT
 
     @classmethod
     def from_dict(cls, payload: Any) -> ControlSessionState:
@@ -72,6 +81,9 @@ class ControlSessionState:
                     str(payload["previous_session_id"])
                     if payload.get("previous_session_id") is not None
                     else None
+                ),
+                execution_policy=ControlExecutionPolicy(
+                    payload.get("execution_policy", ControlExecutionPolicy.DIRECT.value)
                 ),
             )
         except (KeyError, TypeError, ValueError) as error:
@@ -102,6 +114,7 @@ class ControlSessionState:
             "collision_detected": self.collision_detected,
             "contact_force_newtons": self.contact_force_newtons,
             "previous_session_id": self.previous_session_id,
+            "execution_policy": self.execution_policy.value,
         }
 
 
@@ -384,6 +397,10 @@ class ControlSession:
     def execution_path(self) -> Path:
         return self.path / "execution_started.json"
 
+    @property
+    def candidate_binding_path(self) -> Path:
+        return self.path / "experimental_candidate.json"
+
     def create(self) -> None:
         if self.path.exists():
             raise ValueError(f"control session already exists: {self.session_id}")
@@ -432,6 +449,13 @@ class ControlSession:
             proposal = self.load_response()
         except FileNotFoundError as error:
             raise ValueError(f"control session is incomplete: {self.session_id}") from error
+        is_candidate = (
+            state.execution_policy is ControlExecutionPolicy.RESET_TRIAL_CANDIDATE
+        )
+        if is_candidate:
+            self.load_candidate_binding(proposal)
+        elif self.candidate_binding_path.exists():
+            raise ValueError("non-experimental session contains a candidate binding")
         return observation, proposal, state
 
     def load_response(self) -> ProposedControl:
@@ -454,6 +478,80 @@ class ControlSession:
         ):
             raise ValueError("control response is not bound to its session")
         write_json_atomic(self.response_path, response.to_dict())
+
+    def _validate_candidate_binding(
+        self,
+        binding: ExperimentalCandidateBinding,
+        response: ProposedControl | None,
+    ) -> None:
+        observation, state = self.load_capture()
+        source = ControlSession.at(self.path.parent, binding.source_session_id)
+        source_observation, source_state = source.load_capture()
+        shadow = source.load_shadow()
+        safety = source.load_shadow_safety()
+        if (
+            binding.execution_session_id != self.session_id
+            or binding.source_session_id != source.session_id
+        ):
+            raise ValueError("experimental candidate is not bound to its source trial")
+        binding.validate_execution(
+            CandidateSourceEvidence(
+                CandidateTrialContext(
+                    source_observation,
+                    TrialResetState(
+                        source_observation.pose,
+                        source_state.current_joint_positions,
+                        source_state.collision_detected,
+                        source_state.contact_force_newtons,
+                    ),
+                    source_state.execution_policy,
+                    source_state.reference_recording,
+                    source_state.seed,
+                    source_state.previous_session_id,
+                ),
+                shadow,
+                safety,
+            ),
+            CandidateExecutionEvidence(
+                CandidateTrialContext(
+                    observation,
+                    TrialResetState(
+                        observation.pose,
+                        state.current_joint_positions,
+                        state.collision_detected,
+                        state.contact_force_newtons,
+                    ),
+                    state.execution_policy,
+                    state.reference_recording,
+                    state.seed,
+                    state.previous_session_id,
+                ),
+                response,
+            ),
+        )
+
+    def write_candidate_binding(self, binding: ExperimentalCandidateBinding) -> None:
+        if self.candidate_binding_path.exists():
+            raise ValueError(
+                f"control session already has candidate evidence: {self.session_id}"
+            )
+        self._validate_candidate_binding(binding, None)
+        write_json_atomic(self.candidate_binding_path, binding.to_dict())
+
+    def load_candidate_binding(
+        self,
+        response: ProposedControl | None = None,
+    ) -> ExperimentalCandidateBinding:
+        try:
+            binding = ExperimentalCandidateBinding.from_dict(
+                json.loads(self.candidate_binding_path.read_text())
+            )
+        except (FileNotFoundError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError(
+                f"control session has no valid candidate evidence: {self.session_id}"
+            ) from error
+        self._validate_candidate_binding(binding, response or self.load_response())
+        return binding
 
     def load_shadow(self) -> ShadowSearchEvidence:
         try:

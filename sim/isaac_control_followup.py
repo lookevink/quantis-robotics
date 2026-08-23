@@ -145,6 +145,7 @@ async def capture_followup_observation(
         collision_detected=collision_detected,
         contact_force_newtons=contact_force,
         previous_session_id=previous_session_id,
+        execution_policy=previous_state.execution_policy,
     )
     session.write_capture(observation, state)
     return ControlCaptureResult(

@@ -178,10 +178,15 @@ contact.
    inferred counterfactuals. Direct beat zero only on gripper closure and was
    worse on translation and rotation, so the gate failed and candidate
    authority remains false.
-7. [ ] Execute the shadow CEM winner only as an explicitly isolated
-   reset-identical experimental policy, compare its realized outcome against
-   the three established policies, then repeat on whole held-out seeds before
-   considering command authority.
+7. [x] Execute the shadow CEM winner only as an explicitly isolated
+   reset-identical experimental policy and compare its realized outcome against
+   the three established policies. Candidate trial
+   `candidate-proof-20260823T213129Z-11401` applied safely with 0 N contact but
+   worsened translation/rotation error and failed every direct-comparison axis;
+   production authority remains false.
+8. [ ] Calibrate or rerank predicted latent energy against realized task-space
+   progress, then repeat isolated trials across whole held-out seeds before
+   considering candidate command authority.
 
 ## Recommended process boundary
 
@@ -276,6 +281,6 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     before approaching cable contact. Three-step reset-identical trials now
     establish the comparison, and its failed direct baseline gate prevents
     premature promotion.
-14. [ ] Run the shadow CEM winner as a no-production-authority experimental
-    policy and establish repeatable realized improvement on whole held-out
-    seeds.
+14. [ ] Establish repeatable realized shadow-candidate improvement on whole
+    held-out seeds. The first no-production-authority trial executed safely but
+    failed its task-space outcome gate, exposing planner-objective misalignment.
