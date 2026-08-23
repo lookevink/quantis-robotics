@@ -49,8 +49,8 @@ class AwsLifecycleTests(unittest.TestCase):
                 fake_command = temp_path / command_name
                 fake_command.write_text(
                     "#!/usr/bin/env bash\n"
-                    "printf '%s %s\\n' \"$(basename \"$0\")\" \"$*\" >> \"${FAKE_AWS_LOG}\"\n"
-                    "if [[ \"$(basename \"$0\")\" == ssh && -n \"${FAKE_SSH_RESPONSE:-}\" ]]; then\n"
+                    'printf \'%s %s\\n\' "$(basename "$0")" "$*" >> "${FAKE_AWS_LOG}"\n'
+                    'if [[ "$(basename "$0")" == ssh && -n "${FAKE_SSH_RESPONSE:-}" ]]; then\n'
                     "  printf '%s\\n' \"${FAKE_SSH_RESPONSE}\"\n"
                     "fi\n"
                 )
@@ -144,9 +144,7 @@ class AwsLifecycleTests(unittest.TestCase):
     def test_demo_run_propagates_python_server_errors(self):
         result, _ = self.run_command(
             "demo-run",
-            extra_env={
-                "FAKE_SSH_RESPONSE": '{"status":"error","evalue":"bad motion"}'
-            },
+            extra_env={"FAKE_SSH_RESPONSE": '{"status":"error","evalue":"bad motion"}'},
         )
 
         self.assertNotEqual(result.returncode, 0)
@@ -160,6 +158,21 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/wait_demo_recording.sh", calls)
         self.assertIn("ops/encode_demo_recording.sh", calls)
         self.assertRegex(calls, r"demo-[0-9]{8}T[0-9]{6}Z")
+
+    def test_demo_dashboard_records_scores_and_renders_one_recording(self):
+        result, calls = self.run_command(
+            "demo-dashboard",
+            arguments=("demo-reference", "wrist", "wrist"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("start_recording", calls)
+        self.assertIn("ops/wait_demo_recording.sh", calls)
+        self.assertIn("ops/encode_demo_recording.sh", calls)
+        self.assertIn("ops/jepa_stages.sh report 'demo-reference'", calls)
+        self.assertIn("ops/render_demo_dashboard.sh", calls)
+        recording_ids = set(__import__("re").findall(r"demo-[0-9]{8}T[0-9]{6}Z", calls))
+        self.assertEqual(len(recording_ids), 1)
 
     def test_jepa_embed_forwards_recording_and_camera(self):
         result, calls = self.run_command(
@@ -197,10 +210,44 @@ class AwsLifecycleTests(unittest.TestCase):
             calls,
         )
 
+    def test_jepa_wm_smoke_syncs_and_runs_on_the_remote_host(self):
+        result, calls = self.run_command("jepa-wm-smoke")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("rsync ", calls)
+        self.assertIn("ops/jepa_wm.sh smoke", calls)
+
+    def test_jepa_wm_install_forwards_the_gated_checkpoint_url(self):
+        result, calls = self.run_command(
+            "jepa-wm-install",
+            extra_env={
+                "DINOV3_CHECKPOINT_URL": "https://weights.example/dinov3-vitl.pth"
+            },
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "DINOV3_CHECKPOINT_URL=https://weights.example/dinov3-vitl.pth",
+            calls,
+        )
+
+    def test_jepa_wm_status_queries_the_installed_runtime_without_syncing(self):
+        result, calls = self.run_command("jepa-wm-status")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("rsync ", calls)
+        self.assertIn("ops/jepa_wm.sh status", calls)
+
     def test_remote_bootstrap_installs_python_server_client(self):
         bootstrap = REMOTE_BOOTSTRAP.read_text()
         self.assertIn("netcat-openbsd", bootstrap)
         self.assertIn("ffmpeg", bootstrap)
+
+    def test_remote_bootstrap_provisions_jepa_wm(self):
+        bootstrap = REMOTE_BOOTSTRAP.read_text()
+
+        self.assertIn('jepa_wm.sh" install', bootstrap)
+        self.assertIn('jepa_wm.sh" smoke', bootstrap)
 
 
 if __name__ == "__main__":

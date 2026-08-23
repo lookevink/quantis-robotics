@@ -41,7 +41,10 @@ class RecordingWriterTest(unittest.TestCase):
                 Path(temp_dir),
                 recording_id="demo-20260822T031500Z",
                 fps=8,
-                cameras=("presentation", "wrist"),
+                camera_resolutions={
+                    "presentation": (1920, 1080),
+                    "wrist": (1920, 1080),
+                },
             )
             frame_paths = writer.frame_paths()
             for path in frame_paths.values():
@@ -73,8 +76,13 @@ class RecordingWriterTest(unittest.TestCase):
             self.assertEqual(manifest["fps"], 8)
             self.assertEqual(manifest["frames"], 1)
             self.assertEqual(
-                manifest["stage_frames"], {"approaching_cable": 1}
+                manifest["resolutions"],
+                {
+                    "presentation": [1920, 1080],
+                    "wrist": [1920, 1080],
+                },
             )
+            self.assertEqual(manifest["stage_frames"], {"approaching_cable": 1})
             self.assertEqual(
                 manifest["videos"],
                 {
@@ -102,7 +110,10 @@ class RecordingWriterTest(unittest.TestCase):
                     Path(temp_dir),
                     recording_id="../escape",
                     fps=8,
-                    cameras=("presentation", "wrist"),
+                    camera_resolutions={
+                        "presentation": (1920, 1080),
+                        "wrist": (1920, 1080),
+                    },
                 )
 
 

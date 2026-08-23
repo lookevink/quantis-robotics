@@ -135,6 +135,8 @@ configure_container_runtime
 configure_host_firewall
 prepare_persistent_directories
 download_assets
+bash "$(dirname "${BASH_SOURCE[0]}")/jepa_wm.sh" install
 verify_isaac_runtime
+bash "$(dirname "${BASH_SOURCE[0]}")/jepa_wm.sh" smoke
 
 printf 'Remote bootstrap complete. If group membership changed, reconnect SSH before starting Isaac Sim.\n'

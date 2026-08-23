@@ -156,7 +156,8 @@ remote_with_config() {
     ISAAC_STREAM_PORT \
     DOWNLOAD_PHYSICALAI_DATASET \
     HF_DOWNLOAD_MAX_WORKERS \
-    QUANTIS_ASSET_HOME; do
+    QUANTIS_ASSET_HOME \
+    DINOV3_CHECKPOINT_URL; do
     if declare -p "${name}" >/dev/null 2>&1; then
       printf -v assignment '%q' "${name}=${!name}"
       remote_command+=" ${assignment}"
@@ -250,9 +251,11 @@ Commands:
   ssh | sync | remote-bootstrap
   isaac-start | isaac-stop | isaac-status | isaac-logs
   demo-reset | demo-preflight | demo-run | demo-capture | demo-record
+  demo-dashboard REFERENCE [primary-camera] [jepa-camera]
   capture-smoke | jepa-embed [source-name] [camera]
   jepa-stage-embed [recording-name] [camera]
   jepa-stage-report REFERENCE QUERY [camera]
+  jepa-wm-install | jepa-wm-smoke | jepa-wm-status
 EOF
   exit 0
 fi
@@ -324,6 +327,21 @@ case "${command}" in
     remote "bash ~/quantis-robotics/ops/wait_demo_recording.sh '${recording_id}'"
     remote "bash ~/quantis-robotics/ops/encode_demo_recording.sh '${recording_id}'"
     ;;
+  demo-dashboard)
+    reference_name="${2:-}"
+    primary_camera="${3:-wrist}"
+    jepa_camera="${4:-wrist}"
+    is_safe_identifier "${reference_name}" || die "invalid reference recording name"
+    is_safe_identifier "${primary_camera}" || die "invalid primary camera name"
+    is_safe_identifier "${jepa_camera}" || die "invalid JEPA camera name"
+    recording_id="demo-$(date -u +%Y%m%dT%H%M%SZ)"
+    demo_python "demo.start_recording('${recording_id}')"
+    remote "DEMO_RECORDING_TIMEOUT_SECONDS=2400 bash ~/quantis-robotics/ops/wait_demo_recording.sh '${recording_id}'"
+    remote "bash ~/quantis-robotics/ops/encode_demo_recording.sh '${recording_id}'"
+    remote "bash ~/quantis-robotics/ops/jepa_stages.sh report '${reference_name}' '${recording_id}' '${jepa_camera}'"
+    remote "bash ~/quantis-robotics/ops/render_demo_dashboard.sh '${recording_id}' '${primary_camera}' '${jepa_camera}'"
+    printf 'Recording ID: %s\n' "${recording_id}"
+    ;;
   capture-smoke)
     remote_with_config 'bash ~/quantis-robotics/ops/isaac_container.sh capture-smoke'
     ;;
@@ -352,6 +370,17 @@ case "${command}" in
     is_safe_identifier "${camera_name}" || die "invalid JEPA camera name"
     sync_repo
     remote "bash ~/quantis-robotics/ops/jepa_stages.sh report '${reference_name}' '${query_name}' '${camera_name}'"
+    ;;
+  jepa-wm-install)
+    sync_repo
+    remote_with_config "bash ~/quantis-robotics/ops/jepa_wm.sh install"
+    ;;
+  jepa-wm-smoke)
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh smoke"
+    ;;
+  jepa-wm-status)
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh status"
     ;;
   *)
     die "unknown command: ${command} (run $0 help)"

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -18,13 +19,26 @@ from sim.recording import RecordingSnapshot, RecordingWriter
 
 RECORDING_ROOT = "/isaac-sim/.local/share/ov/data/quantis/recordings"
 RECORDING_JOB_ROOT = "/isaac-sim/.local/share/ov/data/quantis/recording_jobs"
+DEMO_RESOLUTION = (1920, 1080)
+DEMO_FPS = 12
+
+
+@dataclass(frozen=True)
+class CameraSpec:
+    label: str
+    path: str
+    resolution: tuple[int, int]
+
+
 CAMERA_SPECS = (
-    ("presentation", PRESENTATION_CAMERA_PATH),
-    ("wrist", WRIST_CAMERA_PATH),
+    CameraSpec("presentation", PRESENTATION_CAMERA_PATH, DEMO_RESOLUTION),
+    CameraSpec("wrist", WRIST_CAMERA_PATH, DEMO_RESOLUTION),
 )
 
 
-def _look_at_rotation(eye: np.ndarray, target: np.ndarray, up: np.ndarray) -> np.ndarray:
+def _look_at_rotation(
+    eye: np.ndarray, target: np.ndarray, up: np.ndarray
+) -> np.ndarray:
     forward = target - eye
     forward /= np.linalg.norm(forward)
     camera_z = -forward
@@ -32,6 +46,35 @@ def _look_at_rotation(eye: np.ndarray, target: np.ndarray, up: np.ndarray) -> np
     camera_x /= np.linalg.norm(camera_x)
     camera_y = np.cross(camera_z, camera_x)
     return np.column_stack((camera_x, camera_y, camera_z))
+
+
+async def _wait_for_rgb(
+    annotators: Mapping[str, Any],
+    advance: Any,
+    *,
+    advance_before_first_read: bool = True,
+    max_attempts: int = 8,
+) -> dict[str, np.ndarray]:
+    """Read all annotators after advancing until every RGB frame is complete."""
+
+    pixels_by_camera: dict[str, np.ndarray] = {}
+    last_shapes: dict[str, tuple[int, ...]] = {}
+    for attempt in range(max_attempts):
+        if advance_before_first_read or attempt > 0:
+            await advance()
+        pixels_by_camera = {
+            label: np.asarray(annotator.get_data())
+            for label, annotator in annotators.items()
+        }
+        last_shapes = {
+            label: pixels.shape for label, pixels in pixels_by_camera.items()
+        }
+        if all(
+            pixels.ndim == 3 and pixels.shape[2] >= 3 and pixels.size
+            for pixels in pixels_by_camera.values()
+        ):
+            return pixels_by_camera
+    raise RuntimeError(f"cameras did not produce complete RGB frames: {last_shapes}")
 
 
 def configure_wrist_camera() -> dict[str, Any]:
@@ -48,9 +91,7 @@ def configure_wrist_camera() -> dict[str, Any]:
     translation = np.array([0.16, 0.08, -0.20], dtype=np.float64)
     gripper_center = np.array([0.0, 0.0, 0.10], dtype=np.float64)
     orientation = matrix_to_wxyz(
-        _look_at_rotation(
-            translation, gripper_center, np.array([1.0, 0.0, 0.0])
-        )
+        _look_at_rotation(translation, gripper_center, np.array([1.0, 0.0, 0.0]))
     )
 
     xform = UsdGeom.Xformable(camera)
@@ -68,7 +109,7 @@ def configure_wrist_camera() -> dict[str, Any]:
 class DemoRecorder:
     """Capture both demo cameras and synchronized robot state per update."""
 
-    def __init__(self, recording_id: str, *, fps: int = 8) -> None:
+    def __init__(self, recording_id: str, *, fps: int = DEMO_FPS) -> None:
         import omni.replicator.core as rep
 
         self._rep = rep
@@ -76,16 +117,16 @@ class DemoRecorder:
             Path(RECORDING_ROOT),
             recording_id=recording_id,
             fps=fps,
-            cameras=tuple(label for label, _ in CAMERA_SPECS),
+            camera_resolutions={spec.label: spec.resolution for spec in CAMERA_SPECS},
         )
         self._render_products: dict[str, Any] = {}
         self._annotators: dict[str, Any] = {}
-        for label, camera_path in CAMERA_SPECS:
-            render_product = rep.create.render_product(camera_path, (640, 480))
+        for spec in CAMERA_SPECS:
+            render_product = rep.create.render_product(spec.path, spec.resolution)
             annotator = rep.AnnotatorRegistry.get_annotator("rgb")
             annotator.attach([render_product])
-            self._render_products[label] = render_product
-            self._annotators[label] = annotator
+            self._render_products[spec.label] = render_product
+            self._annotators[spec.label] = annotator
 
     @property
     def output_dir(self) -> Path:
@@ -95,41 +136,50 @@ class DemoRecorder:
     def frame_count(self) -> int:
         return self._writer.frame_count
 
+    @property
+    def fps(self) -> int:
+        return self._writer.fps
+
     def stage_frame_count(self, stage: ObservationStage) -> int:
         return self._writer.stage_frame_count(stage)
 
     @property
     def video_paths(self) -> dict[str, Path]:
         return {
-            camera: self.output_dir / f"{camera}.mp4"
-            for camera in self._writer.cameras
+            camera: self.output_dir / f"{camera}.mp4" for camera in self._writer.cameras
         }
 
     async def initialize(self) -> None:
         """Warm Replicator before Isaac creates the physics articulation view."""
 
         await self._rep.orchestrator.step_async(
-            rt_subframes=1,
+            rt_subframes=4,
             pause_timeline=True,
             delta_time=0.0,
         )
 
-    async def capture(self, snapshot: RecordingSnapshot) -> None:
+    async def capture(
+        self,
+        snapshot: RecordingSnapshot,
+        *,
+        advance: bool = True,
+    ) -> None:
         import omni.kit.app
         from PIL import Image
 
         # The render products capture while the timeline is playing. A normal
         # Kit update keeps the physics view intact and advances their RGB data;
         # invoking Replicator's explicit step here would take over the timeline.
-        await omni.kit.app.get_app().next_update_async()
+        app = omni.kit.app.get_app()
+        pixels_by_camera = await _wait_for_rgb(
+            self._annotators,
+            app.next_update_async,
+            advance_before_first_read=advance,
+        )
+
         frame_paths = self._writer.frame_paths()
-        for label, annotator in self._annotators.items():
-            pixels = annotator.get_data()
-            if pixels.size == 0:
-                raise RuntimeError(f"camera produced an empty frame: {label}")
-            Image.fromarray(pixels[:, :, :3]).save(
-                frame_paths[label], compress_level=1
-            )
+        for label, pixels in pixels_by_camera.items():
+            Image.fromarray(pixels[:, :, :3]).save(frame_paths[label], compress_level=1)
         self._writer.add_step(snapshot)
 
     def finish(self) -> Path:
@@ -165,19 +215,23 @@ async def capture_cameras(
     destination.mkdir(parents=True, exist_ok=True)
     captures = {}
 
-    for label, camera_path in CAMERA_SPECS:
-        if not stage.GetPrimAtPath(camera_path).IsValid():
-            raise RuntimeError(f"camera prim is missing: {camera_path}")
-        render_product = rep.create.render_product(camera_path, (640, 480))
+    for spec in CAMERA_SPECS:
+        if not stage.GetPrimAtPath(spec.path).IsValid():
+            raise RuntimeError(f"camera prim is missing: {spec.path}")
+        render_product = rep.create.render_product(spec.path, spec.resolution)
         annotator = rep.AnnotatorRegistry.get_annotator("rgb")
         try:
             annotator.attach([render_product])
-            await rep.orchestrator.step_async(rt_subframes=4)
-            pixels = annotator.get_data()
-            path = destination / f"{label}.png"
+            pixels = (
+                await _wait_for_rgb(
+                    {spec.label: annotator},
+                    lambda: rep.orchestrator.step_async(rt_subframes=4),
+                )
+            )[spec.label]
+            path = destination / f"{spec.label}.png"
             Image.fromarray(pixels[:, :, :3]).save(path)
-            captures[label] = {
-                "camera": camera_path,
+            captures[spec.label] = {
+                "camera": spec.path,
                 "path": str(path),
                 "shape": list(pixels.shape),
             }

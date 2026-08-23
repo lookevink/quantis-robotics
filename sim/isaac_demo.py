@@ -49,7 +49,9 @@ class Actuators:
 
     def current_command(self) -> JointCommand:
         arm = np.deg2rad(
-            np.array([attribute.Get() for attribute in self.arm_attributes], dtype=np.float64)
+            np.array(
+                [attribute.Get() for attribute in self.arm_attributes], dtype=np.float64
+            )
         )
         width = float(self.finger_attributes[0].Get()) * 2.0
         return JointCommand(arm, width)
@@ -205,9 +207,10 @@ async def _move_targets(
 
     app = omni.kit.app.get_app()
     hand = omni.usd.get_context().get_stage().GetPrimAtPath(f"{ROBOT_PATH}/panda_hand")
-    # RTX livestream updates are heavier than physics ticks. Eight authored
-    # targets per second remain visually smooth while PhysX steps in between.
-    frames = max(1, ceil(duration_seconds * 8.0))
+    # Keep recorded motion samples aligned with the video manifest. Non-recorded
+    # interactive runs retain the original lightweight eight authored targets.
+    authored_fps = recorder.fps if recorder is not None else 8
+    frames = max(1, ceil(duration_seconds * authored_fps))
 
     for frame in range(1, frames + 1):
         blend = _smoothstep(frame / frames)
@@ -221,7 +224,8 @@ async def _move_targets(
         attachment.follow(world_pose(hand)[0])
         if recorder is not None:
             await recorder.capture(
-                _recording_snapshot(phase, stage, command, attachment)
+                _recording_snapshot(phase, stage, command, attachment),
+                advance=False,
             )
 
 
@@ -249,7 +253,8 @@ async def _settle_at_target(
         attachment.follow(hand_position)
         if recorder is not None:
             await recorder.capture(
-                _recording_snapshot(phase, stage, command, attachment)
+                _recording_snapshot(phase, stage, command, attachment),
+                advance=False,
             )
         if error <= tolerance_m:
             return error
@@ -424,7 +429,9 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
                 {
                     "phase": waypoint.phase.value,
                     "duration_seconds": duration,
-                    "target_degrees": np.rad2deg(current.arm_positions).round(3).tolist(),
+                    "target_degrees": np.rad2deg(current.arm_positions)
+                    .round(3)
+                    .tolist(),
                     "gripper_width_m": current.gripper_width_m,
                     "settle_error_m": settle_error,
                 }
@@ -462,9 +469,7 @@ async def record_demo(recording_id: str) -> dict[str, Any]:
         **result,
         "recording_id": recording_id,
         "output_directory": str(output_dir),
-        "videos": {
-            camera: str(path) for camera, path in recorder.video_paths.items()
-        },
+        "videos": {camera: str(path) for camera, path in recorder.video_paths.items()},
     }
 
 

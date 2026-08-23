@@ -25,13 +25,20 @@ Isaac Sim 6.0.1
 recording dataset: per-camera frames + actions + state + manifest
               │
               ▼
-frozen V-JEPA 2 encoder → goal-progress/stage model (next milestone)
+frozen V-JEPA 2 encoder → goal-progress/stage model
               │
               ▼
-high-level subgoal → Isaac motion controller
+DINOv3 + JEPA-WM + candidate 7D actions → predicted future latents
+              │
+              ▼
+planner → safety gate → Isaac motion controller (next milestone)
 ```
 
-The current bootstrap proves simulation, capture, and JEPA inference. Closing the loop from JEPA output back into Isaac control is the next milestone. Action-conditioned world-model planning comes after that simpler stage/subgoal loop works.
+The current bootstrap proves simulation, capture, stage recognition, and one
+action-conditioned JEPA-WM latent rollout. It does not yet let JEPA command the
+arm. The next milestone is to score candidate action sequences against a visual
+goal, pass the selected action through the existing safety gate, and execute it
+through Isaac's controller.
 
 ## 1. AWS EC2 instance
 
@@ -62,7 +69,7 @@ Check and start that instance when necessary:
 
 ## 2. Bootstrap the remote host
 
-The idempotent bootstrap starts the instance, restricts SSH and WebRTC ingress to your current public IP, syncs this repository, installs Docker and the NVIDIA container runtime, downloads the assets, pulls Isaac Sim, and runs a rendered-frame smoke test:
+The idempotent bootstrap starts the instance, restricts SSH and WebRTC ingress to your current public IP, syncs this repository, installs Docker and the NVIDIA container runtime, downloads the assets, pulls Isaac Sim, provisions JEPA-WM, and verifies both runtimes:
 
 ```bash
 ./ops/aws.sh bootstrap
@@ -70,6 +77,21 @@ The idempotent bootstrap starts the instance, restricts SSH and WebRTC ingress t
 ./ops/aws.sh isaac-status
 ./ops/aws.sh isaac-logs
 ```
+
+JEPA-WM uses the public DROID checkpoint and Meta's gated DINOv3 ViT-L/16
+LVD-1689M encoder weights. After Meta approves access, put the signed checkpoint
+URL in `.env` with quotes so its `&` characters are not interpreted by the
+shell:
+
+```bash
+DINOV3_CHECKPOINT_URL='https://dinov3.llamameta.net/...'
+```
+
+The signed URL is forwarded only to the remote installer; it is not synced into
+the repository. It is required on the first bootstrap only. Sources, virtual
+environment, caches, and checkpoints persist at
+`/home/ubuntu/docker/jepa-wm`, so later bootstraps and EC2 stop/start cycles do
+not download the models again.
 
 Bootstrap stores persistent content under `QUANTIS_ASSET_HOME` (configured as `/mnt/quantis-assets` for a separate EBS volume), which is mounted read-only inside the container at `/assets`:
 
@@ -132,10 +154,10 @@ The ordered sequence is `ready → pre-grasp → grasp → pre-insertion → ins
 
 This is deliberately a deterministic coordinate/constraint demo. Plug collision is disabled while attached, and the final seating position is enforced geometrically. It does **not** yet model grasp force, insertion force, deformable cable dynamics, or collision-aware path planning. Those belong in the later force/contact-control milestone.
 
-`demo-capture` renders 640×480 RGB verification frames from `/World/ShotCam` and the arm-mounted `/World/Franka_R/panda_hand/WristCamera` into Isaac's persistent data directory at `/isaac-sim/.local/share/ov/data/quantis/captures`.
+`demo-capture` renders 1920×1080 RGB verification frames from `/World/ShotCam` and the arm-mounted `/World/Franka_R/panda_hand/WristCamera` into Isaac's persistent data directory at `/isaac-sim/.local/share/ov/data/quantis/captures`.
 
 `demo-record` resets and runs the complete sequence while recording both cameras
-at 640×480 and 8 FPS. Long captures run as a simulator background job; the AWS
+at 1920×1080 and 12 FPS. Long captures run as a simulator background job; the AWS
 wrapper polls its atomic result file and encodes only after successful completion,
 so an idle Python-server socket cannot strand the MP4 step. It then encodes
 `presentation.mp4` and `wrist.mp4` on the EC2 host. Each timestamped directory
@@ -147,6 +169,20 @@ and `manifest.json` under:
 ```
 
 The same directory is visible inside Isaac Sim at `/isaac-sim/.local/share/ov/data/quantis/recordings/demo-<UTC timestamp>`. This is on the persistent EBS-backed Isaac data mount, so recordings survive container and instance restarts.
+
+Create the 2560×1440 presentation dashboard with a full-resolution wrist-camera
+view and a synchronized metrics panel by naming a separate JEPA reference run:
+
+```bash
+./ops/aws.sh demo-dashboard demo-<reference UTC timestamp> wrist wrist
+```
+
+The metrics panel displays the recorded task phase, offline JEPA stage
+classification, cosine similarity and margin, joint positions, gripper width,
+plug position, and attachment state. It explicitly labels the controller as
+scripted position control; the demo does not report torque or claim JEPA control.
+The final `dashboard.mp4` is written beside the source camera videos and lossless
+frame streams.
 
 ## 5. Capture training data
 
@@ -220,6 +256,28 @@ connected. A perturbed/misaligned evaluation must pass before enabling that
 connection. See [`docs/control-loop.md`](docs/control-loop.md) for the process
 boundary and remaining acceptance gates.
 
+## 7. Load action-conditioned JEPA-WM
+
+The same EC2 L4 now hosts the official DROID JEPA-WM and Isaac Sim. Check the
+persistent installation or run a real encoder-plus-predictor rollout with:
+
+```bash
+./ops/aws.sh jepa-wm-status
+./ops/aws.sh jepa-wm-smoke
+```
+
+`jepa-wm-smoke` loads DINOv3 ViT-L/16, loads the epoch-315 DROID predictor,
+encodes one 256×256 observation, and predicts the next latent state conditioned
+on one zero-valued 7D action. The process exits after reporting JSON; the future
+online planner service will keep the model resident.
+
+On the `g6.2xlarge` L4 proof, the headless model used 2.01 GiB peak allocated
+VRAM, loaded in 10–12 seconds, and completed the warm single-action rollout in
+0.23–0.30 seconds. With Isaac streaming concurrently, total GPU use peaked at
+about 10.4 GiB of 23.0 GiB and Isaac remained healthy. This is enough capacity
+for the next planner prototype on one machine; candidate batching and planning
+latency still need a separate benchmark before claiming real-time control.
+
 ## Validation
 
 Local checks do not require Isaac Sim:
@@ -237,3 +295,5 @@ Local checks do not require Isaac Sim:
 - [Isaac Sim livestream clients](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/manual_livestream_clients.html)
 - [Isaac Sim Replicator workflows](https://docs.isaacsim.omniverse.nvidia.com/latest/replicator_tutorials/tutorial_replicator_sdg_workflows.html)
 - [Official V-JEPA 2 repository](https://github.com/facebookresearch/vjepa2)
+- [Official JEPA-WMs repository](https://github.com/facebookresearch/jepa-wms)
+- [Official DINOv3 repository](https://github.com/facebookresearch/dinov3)

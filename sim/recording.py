@@ -7,7 +7,7 @@ import re
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from jepa.contract import ObservationStage
 from sim.demo_sequence import Phase
@@ -41,7 +41,9 @@ class RecordingLabel:
     def __post_init__(self) -> None:
         has_phase = self.phase is not None
         if (self.moment == RecordingMoment.INITIAL) == has_phase:
-            raise ValueError("initial has no task phase; every other moment requires one")
+            raise ValueError(
+                "initial has no task phase; every other moment requires one"
+            )
 
     @property
     def value(self) -> str:
@@ -86,11 +88,12 @@ class RecordingWriter:
         *,
         recording_id: str,
         fps: int,
-        cameras: Sequence[str],
+        camera_resolutions: Mapping[str, tuple[int, int]],
     ) -> None:
         validate_recording_id(recording_id)
         if fps <= 0:
             raise ValueError("fps must be positive")
+        cameras = tuple(camera_resolutions)
         if not cameras or len(set(cameras)) != len(cameras):
             raise ValueError("cameras must be non-empty and unique")
         if any(not _SAFE_NAME.fullmatch(camera) for camera in cameras):
@@ -98,7 +101,13 @@ class RecordingWriter:
 
         self.recording_id = recording_id
         self.fps = int(fps)
-        self.cameras = tuple(cameras)
+        self.camera_resolutions = dict(camera_resolutions)
+        self.cameras = tuple(self.camera_resolutions)
+        if any(
+            width <= 0 or height <= 0
+            for width, height in self.camera_resolutions.values()
+        ):
+            raise ValueError("camera resolutions must be positive")
         self.output_dir = root / recording_id
         self.output_dir.mkdir(parents=True, exist_ok=False)
         for camera in self.cameras:
@@ -125,7 +134,9 @@ class RecordingWriter:
         frames = self.frame_paths()
         missing = [str(path) for path in frames.values() if not path.is_file()]
         if missing:
-            raise ValueError(f"camera frames must exist before adding a step: {missing}")
+            raise ValueError(
+                f"camera frames must exist before adding a step: {missing}"
+            )
         self._steps.append(
             RecordingStep(
                 index=index,
@@ -166,6 +177,9 @@ class RecordingWriter:
             "frames": len(self._steps),
             "stage_frames": stage_frames,
             "cameras": list(self.cameras),
+            "resolutions": {
+                camera: list(self.camera_resolutions[camera]) for camera in self.cameras
+            },
             "videos": {camera: f"{camera}.mp4" for camera in self.cameras},
         }
         (self.output_dir / "manifest.json").write_text(
