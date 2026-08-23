@@ -23,20 +23,9 @@ is_safe_identifier "${proposal_name}" || {
   exit 1
 }
 
-isaac_call() {
-  local expression="$1"
-  local timeout_seconds="$2"
-  local code
-  local response
-  code="$(isaac_demo_code "${expression}")"
-  response="$(printf '%s\n' "${code}" \
-    | timeout "${timeout_seconds}" nc -N 127.0.0.1 8226)"
-  print_checked_isaac_response "${response}"
-}
-
 cd "${repo_dir}"
-isaac_call \
+isaac_server_call \
   "await demo.capture_control_observation('${session_id}','${reference_name}',${exploration_seed},'${proposal_name}')" \
-  180
+  180 true
 bash "${repo_dir}/ops/jepa_wm.sh" control-infer-session --session "${session_id}"
-isaac_call "await demo.apply_control_response('${session_id}')" 180
+isaac_server_call "await demo.apply_control_response('${session_id}')" 180

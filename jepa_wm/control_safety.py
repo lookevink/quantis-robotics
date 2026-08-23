@@ -112,6 +112,26 @@ class ControlGateDecision:
     def passed(self) -> bool:
         return not self.reasons
 
+    @classmethod
+    def from_dict(cls, payload: Any) -> ControlGateDecision:
+        if not isinstance(payload, dict):
+            raise ValueError("control gate decision must be an object")
+        try:
+            decision = cls(
+                observation_id=int(payload["observation_id"]),
+                next_pose=DroidPose(tuple(payload["next_pose"])),
+                reasons=tuple(ControlGateReason(reason) for reason in payload["reasons"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("control gate decision is incomplete") from error
+        if (
+            isinstance(decision.observation_id, bool)
+            or decision.observation_id <= 0
+            or payload.get("passed") is not decision.passed
+        ):
+            raise ValueError("control gate decision is inconsistent")
+        return decision
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "observation_id": self.observation_id,

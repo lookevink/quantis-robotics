@@ -41,10 +41,33 @@ isaac_demo_code() {
     "${expression}"
 }
 
+isaac_loaded_demo_code() {
+  local expression="$1"
+  printf \
+    "import json; import sim.isaac_demo as demo; print(json.dumps(%s,indent=2))" \
+    "${expression}"
+}
+
 print_checked_isaac_response() {
   local response="$1"
   printf '%s\n' "${response}"
   if grep -Eq '"status"[[:space:]]*:[[:space:]]*"error"' <<<"${response}"; then
     return 1
   fi
+}
+
+isaac_server_call() {
+  local expression="$1"
+  local timeout_seconds="$2"
+  local reload_runtime="${3:-false}"
+  local code
+  local response
+  if [[ "${reload_runtime}" == "true" ]]; then
+    code="$(isaac_demo_code "${expression}")"
+  else
+    code="$(isaac_loaded_demo_code "${expression}")"
+  fi
+  response="$(printf '%s\n' "${code}" \
+    | timeout "${timeout_seconds}" nc -N 127.0.0.1 8226)"
+  print_checked_isaac_response "${response}"
 }

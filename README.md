@@ -31,16 +31,17 @@ frozen V-JEPA 2 encoder → goal-progress/stage model
 DINOv3 + current pose + previous action → bounded 3×7D proposal
               │
               ▼
-resident Unix-socket worker → safety gate → first-action Isaac control
+    resident Unix-socket worker → safety gate → first-action receding-horizon control
 ```
 
 The bootstrap proves the simulation, capture, stage-recognition, and base
 JEPA-WM runtimes. The separate offline workflow additionally proves native
 three-action rollouts and persistent lightweight action adaptation. A
 whole-seed domain experiment clears both the action-conditioning and
-inverse-action proposal gates. A simulator-only bridge now executes one fresh,
-bounded proposal after workspace, joint, velocity, collision, force, and
-tracking interlocks. It does not yet run repeated replanning or control the
+inverse-action proposal gates. A simulator-only bridge now repeatedly captures,
+infers, executes only the first fresh bounded proposal, measures the outcome,
+and replans after workspace, joint, velocity, collision, force, and tracking
+interlocks. It does not yet use JEPA-WM candidate-energy search or control the
 cable task.
 
 ## 1. AWS EC2 instance
@@ -446,7 +447,7 @@ A tight CEM search around the proposal lowered JEPA-WM latent energy but did
 not improve directional accuracy, so it remains an offline diagnostic rather
 than the promoted command path.
 
-### Simulator-only one-action bridge
+### Simulator-only closed-loop bridge
 
 Start the resident worker once, inspect it, and run one consume-once control
 session against a whole held-out reference trajectory:
@@ -460,14 +461,25 @@ session against a whole held-out reference trajectory:
   quantis_isaac_wrist_action_proposal_motion_state_12seed
 ```
 
+Run a bounded repeated rollout on the same live Isaac stage with:
+
+```bash
+./ops/aws.sh jepa-wm-control-rollout \
+  domain-20260823T113209Z-1400-held-01 11401 3 \
+  quantis_isaac_wrist_action_proposal_motion_state_12seed
+```
+
 Isaac validates that the goal recording is the matching whole held-out seed,
 then captures four synchronized warm-up observations and writes a versioned
 request. A session-derived nonce, response timestamp, and exact promoted
 checkpoint path bind the separate GPU worker's native three-action proposal to
-that request. Isaac consumes only a conservative quarter-scale first action
-(with a one-eighth fallback) after checking a final sub-two-second freshness
+that request. Isaac consumes only a conservative first action after checking a
+final sub-two-second freshness
 deadline, Cartesian and gripper bounds, base-frame workspace, Franka joint
 limits and velocity, actual joint-state drift, and a live hand contact sensor.
+The live selector tries bounded translation/rotation/gripper scale profiles in
+order and accepts the first profile that clears the same gate and IK branch;
+uniform quarter- and one-eighth-scale profiles remain fallbacks.
 Tight IK is followed by measured joint and Cartesian action tracking; a
 tracking/contact failure is rolled back. The session is claimed before
 actuation, so an interrupted command cannot be replayed. Raw requests,
@@ -487,9 +499,26 @@ Two unseen one-step proofs passed the same conservative safety policy:
   translation/rotation cosine `0.9926`/`0.9913`, 0.060 mm translation error,
   0 N contact.
 
-This is narrow free-space execution evidence. It is not repeated closed-loop
-control and does not establish grasp, cable, contact-recovery, or insertion
-capability. Stop the worker independently with
+The first repeated canary, `rollout-20260823T155348Z-11401`, then completed all
+three fresh observe-infer-apply cycles on unseen seed `11401`. Mean command age
+was `1.322 s` (maximum `1.525 s`), all three steps measured 0 N contact, and the
+terminal observation reduced translation error by `0.519 mm`, rotation error by
+`0.001793 rad`, and gripper-closedness error from `0.4746` to `0.4094`. Its
+validated report persists at:
+
+```text
+/home/ubuntu/docker/isaac-sim/data/quantis/control_rollouts/rollout-20260823T155348Z-11401/report.json
+```
+
+The report distinguishes originally requested, actually attempted, and applied
+steps and validates the single-use session chain, unique observation IDs, fixed
+goal/proposal provenance, ordered capture times, warm-up progression, and
+previous-action continuity.
+
+This remains narrow free-space execution evidence. The scale profiles are a
+small deterministic safety projection set, not JEPA-WM candidate search. It
+does not establish grasp, cable, contact-recovery, or insertion capability.
+Stop the worker independently with
 `./ops/aws.sh jepa-wm-control-worker-stop`.
 
 ## Validation

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from hashlib import sha256
 import json
-from pathlib import Path
 from time import time
 from typing import Any
 
@@ -28,6 +26,7 @@ from sim.control_session import (
     ControlSession,
     ControlSessionState,
 )
+from sim.control_identity import control_proposal_path, observation_id_for_session
 from sim.demo_sequence import Phase
 from sim.exploration import DatasetSplit, build_exploration_plan
 from sim.isaac_control_runtime import contact_sensor, read_contact
@@ -44,14 +43,6 @@ from sim.isaac_demo_runtime import (
 from sim.isaac_demo_scene import ROBOT_PATH
 from sim.isaac_exploration import apply_variant
 from sim.recording import RecordingLabel, RecordingMoment, validate_recording_id
-
-
-PROPOSAL_ROOT = Path("/home/ubuntu/docker/jepa-wm/checkpoints")
-
-
-def _observation_id(session_id: str) -> int:
-    identifier = int.from_bytes(sha256(session_id.encode()).digest()[:8], "big")
-    return identifier or 1
 
 
 def _validated_reference(name: str, seed: int) -> DomainRecording:
@@ -181,13 +172,13 @@ async def capture_control_observation(
     if not target.is_file():
         raise ValueError(f"control target frame does not exist: {target}")
     observation = ControlObservation(
-        observation_id=_observation_id(session_id),
+        observation_id=observation_id_for_session(session_id),
         captured_at_unix_seconds=time(),
         context_frame=(output / "wrist" / f"frame_{warmup.frames:06d}.png").relative_to(
             QUANTIS_DATA_ROOT
         ),
         target_frame=target.relative_to(QUANTIS_DATA_ROOT),
-        expected_proposal=PROPOSAL_ROOT / f"{proposal_name}.pth",
+        expected_proposal=control_proposal_path(proposal_name),
         pose=DroidPose(tuple(context_step["end_effector_pose"])),
         previous_action=DroidAction(tuple(context_step["action_from_previous"])),
         warmup_frames=warmup.frames,

@@ -5,7 +5,8 @@ import unittest
 from unittest.mock import patch
 
 from jepa_wm.action import ACTION_RECORDING_CONTRACT, DROID_FPS
-from sim.isaac_control_capture import _observation_id, _validated_reference
+from sim.control_identity import observation_id_for_session
+from sim.isaac_control_capture import _validated_reference
 
 
 class ControlCaptureContractTest(unittest.TestCase):
@@ -30,8 +31,11 @@ class ControlCaptureContractTest(unittest.TestCase):
         return recording
 
     def test_binds_observation_identity_to_the_session(self) -> None:
-        self.assertGreater(_observation_id("session-a"), 0)
-        self.assertNotEqual(_observation_id("session-a"), _observation_id("session-b"))
+        self.assertGreater(observation_id_for_session("session-a"), 0)
+        self.assertNotEqual(
+            observation_id_for_session("session-a"),
+            observation_id_for_session("session-b"),
+        )
 
     def test_accepts_only_the_matching_held_out_droid_reference(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

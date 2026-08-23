@@ -10,12 +10,20 @@ from jepa_wm.action import (
     ActionRecordingContract,
     ActionSelectionBounds,
     DroidAction,
+    DroidActionScale,
     DroidPose,
     action_between,
 )
 
 
 class DroidActionTest(unittest.TestCase):
+    def test_scales_translation_rotation_and_gripper_independently(self) -> None:
+        action = DroidAction((1.0,) * 7)
+
+        scaled = DroidActionScale(1.0, 0.25, 0.125).apply(action)
+
+        self.assertEqual(scaled.values, (1.0, 1.0, 1.0, 0.25, 0.25, 0.25, 0.125))
+
     def test_round_trips_the_recording_contract(self) -> None:
         payload = ACTION_RECORDING_CONTRACT.to_dict()
 

@@ -9,7 +9,7 @@ from typing import Any, Callable
 import numpy as np
 
 from jepa.contract import ObservationStage
-from jepa_wm.action import DROID_FPS, DroidPose, action_between
+from jepa_wm.action import DROID_FPS, DroidActionScale, DroidPose, action_between
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.control_safety import (
     ControlGateDecision,
@@ -42,10 +42,14 @@ from sim.isaac_demo_scene import ROBOT_PATH
 from sim.recording import RecordingLabel, RecordingMoment
 
 
-# Start conservatively: the full inverse-model rotation can jump to a distant
-# Franka IK branch, while quarter scale has remained on the observed branch.
-# If that is still unsafe, only reduce further; never search back upward.
-ACTION_SCALES = (0.25, 0.125)
+# Preserve translational goal progress while damping the rotations that can
+# jump to a distant Franka IK branch. If this is unsafe, reduce every component.
+ACTION_SCALES = (
+    DroidActionScale(1.0, 0.25, 0.25),
+    DroidActionScale(0.5, 0.125, 0.125),
+    DroidActionScale.uniform(0.25),
+    DroidActionScale.uniform(0.125),
+)
 
 
 @dataclass(frozen=True)
@@ -89,12 +93,12 @@ class SafeProjection:
 def project_control_candidate(
     context: ExecutionSafetyContext,
     proposal: ProposedControl,
-    scale: float,
+    scale: DroidActionScale,
     *,
     solve: Callable[[DroidPose, np.ndarray], SolvedPose] = solve_droid_pose,
     now_unix_seconds: float | None = None,
 ) -> tuple[SafetyProjectionAttempt, SafeProjection | None]:
-    candidate_action = proposal.first_action.scaled(scale)
+    candidate_action = scale.apply(proposal.first_action)
     candidate = ProposedControl(
         observation_id=proposal.observation_id,
         created_at_unix_seconds=proposal.created_at_unix_seconds,
@@ -221,64 +225,75 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
 
         status = ControlResultStatus.BLOCKED
         post_action = None
+        execution_error = None
         if decision.passed and candidate is not None:
-            attachment = prepare_plug(stage)
-            target = JointCommand(solved.arm_positions, solved.gripper_width_m)
-            await move_joint_command(
-                actuators,
-                current,
-                target,
-                attachment,
-                frame_count=1,
-                phase=RecordingLabel(RecordingMoment.MOTION, Phase.READY),
-                stage=ObservationStage.APPROACHING_CABLE,
-                recorder=None,
-                sample_period_seconds=1.0 / DROID_FPS,
-            )
-            for _ in range(8):
+            try:
+                attachment = prepare_plug(stage)
+                target = JointCommand(solved.arm_positions, solved.gripper_width_m)
+                await move_joint_command(
+                    actuators,
+                    current,
+                    target,
+                    attachment,
+                    frame_count=1,
+                    phase=RecordingLabel(RecordingMoment.MOTION, Phase.READY),
+                    stage=ObservationStage.APPROACHING_CABLE,
+                    recorder=None,
+                    sample_period_seconds=1.0 / DROID_FPS,
+                )
+                for _ in range(8):
+                    actual = actuators.actual_command()
+                    if np.max(
+                        np.abs(actual.arm_positions - solved.arm_positions)
+                    ) <= 0.01:
+                        break
+                    await omni.kit.app.get_app().next_update_async()
                 actual = actuators.actual_command()
-                if np.max(np.abs(actual.arm_positions - solved.arm_positions)) <= 0.01:
-                    break
-                await omni.kit.app.get_app().next_update_async()
-            actual = actuators.actual_command()
-            post_collision, post_force = read_contact(sensor)
-            post_snapshot = recording_snapshot(
-                RecordingLabel(RecordingMoment.MOTION, Phase.READY),
-                ObservationStage.APPROACHING_CABLE,
-                actual,
-                attachment,
-            )
-            actual_action = action_between(
-                observation.pose, post_snapshot.end_effector_pose
-            )
-            tracking = evaluate_action_tracking(candidate.first_action, actual_action)
-            capture = await capture_camera_frame(
-                JEPA_WM_CAMERA_SPECS[0], session.path / "post_action.png"
-            )
-            joint_tracking_error = float(
-                np.max(np.abs(actual.arm_positions - solved.arm_positions))
-            )
-            post_action = PostActionEvidence(
-                proposal.first_action,
-                candidate.first_action,
-                actual_action,
-                tracking,
-                post_snapshot.end_effector_pose,
-                tuple(actual.arm_positions),
-                joint_tracking_error,
-                post_force,
-                post_collision,
-                capture,
-            )
-            status = ControlResultStatus.APPLIED
-            if joint_tracking_error > 0.01 or not tracking.passed:
+                post_collision, post_force = read_contact(sensor)
+                post_snapshot = recording_snapshot(
+                    RecordingLabel(RecordingMoment.MOTION, Phase.READY),
+                    ObservationStage.APPROACHING_CABLE,
+                    actual,
+                    attachment,
+                )
+                actual_action = action_between(
+                    observation.pose, post_snapshot.end_effector_pose
+                )
+                tracking = evaluate_action_tracking(
+                    candidate.first_action, actual_action
+                )
+                capture = await capture_camera_frame(
+                    JEPA_WM_CAMERA_SPECS[0], session.path / "post_action.png"
+                )
+                joint_tracking_error = float(
+                    np.max(np.abs(actual.arm_positions - solved.arm_positions))
+                )
+                post_action = PostActionEvidence(
+                    proposal.first_action,
+                    candidate.first_action,
+                    actual_action,
+                    tracking,
+                    post_snapshot.end_effector_pose,
+                    tuple(actual.arm_positions),
+                    joint_tracking_error,
+                    post_force,
+                    post_collision,
+                    capture,
+                )
+                status = ControlResultStatus.APPLIED
+            except Exception as error:
                 actuators.apply(current)
-                await omni.kit.app.get_app().next_update_async()
-                status = ControlResultStatus.ROLLED_BACK_TRACKING
-            elif post_collision or post_force > limits.maximum_contact_force_newtons:
-                actuators.apply(current)
-                await omni.kit.app.get_app().next_update_async()
-                status = ControlResultStatus.ROLLED_BACK_CONTACT
+                status = ControlResultStatus.ROLLED_BACK_EXECUTION
+                execution_error = f"{type(error).__name__}: {error}"
+            if post_action is not None:
+                if joint_tracking_error > 0.01 or not tracking.passed:
+                    actuators.apply(current)
+                    await omni.kit.app.get_app().next_update_async()
+                    status = ControlResultStatus.ROLLED_BACK_TRACKING
+                elif post_collision or post_force > limits.maximum_contact_force_newtons:
+                    actuators.apply(current)
+                    await omni.kit.app.get_app().next_update_async()
+                    status = ControlResultStatus.ROLLED_BACK_CONTACT
 
         result = ControlResult(
             status=status,
@@ -293,6 +308,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             ),
             pre_action_contact_force_newtons=contact_force,
             post_action=post_action,
+            execution_error=execution_error,
         )
         session.write_result(result)
         return result.to_dict()

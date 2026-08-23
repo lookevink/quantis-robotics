@@ -246,6 +246,7 @@ async def capture_camera_frame(spec: CameraSpec, path: Path) -> dict[str, Any]:
     """Capture one current RGB observation to an explicit shared path."""
 
     import omni.replicator.core as rep
+    import omni.kit.app
     import omni.usd
     from PIL import Image
 
@@ -259,7 +260,7 @@ async def capture_camera_frame(spec: CameraSpec, path: Path) -> dict[str, Any]:
         pixels = (
             await _wait_for_rgb(
                 {spec.label: annotator},
-                lambda: rep.orchestrator.step_async(rt_subframes=4),
+                omni.kit.app.get_app().next_update_async,
             )
         )[spec.label]
         path.parent.mkdir(parents=True, exist_ok=True)

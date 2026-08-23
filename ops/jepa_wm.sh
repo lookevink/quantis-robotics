@@ -492,6 +492,46 @@ infer_control_session() {
   sudo chmod -R a+rwX "${session}"
 }
 
+report_control_rollout() {
+  local -A options=()
+  parse_named_options options \
+    "rollout reference seed proposal sessions requested-steps orchestration-error" \
+    "$@"
+  local rollout_id="${options[rollout]:-}"
+  local reference_name="${options[reference]:-}"
+  local exploration_seed="${options[seed]:-}"
+  local proposal_name="${options[proposal]:-}"
+  local sessions="${options[sessions]:-}"
+  local requested_steps="${options[requested-steps]:-}"
+  local orchestration_error="${options[orchestration-error]:-}"
+  is_safe_identifier "${rollout_id}" || die "invalid control rollout"
+  is_safe_identifier "${reference_name}" || die "invalid reference recording"
+  require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+  is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+  is_safe_identifier_list "${sessions}" || die "invalid control session list"
+  require_positive_integer "requested steps" "${requested_steps}" || exit 1
+  (( requested_steps <= 8 )) || die "control rollout is capped at eight steps"
+  local report_dir="${control_frame_root}/control_rollouts/${rollout_id}"
+  local proposal="${checkpoint_dir}/${proposal_name}.pth"
+  local -a error_arguments=()
+  [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
+  if [[ -n "${orchestration_error}" ]]; then
+    error_arguments=(--orchestration-error "${orchestration_error}")
+  fi
+  sudo install -d -o "${USER}" -g "${USER}" "${report_dir}"
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.control_rollout_cli report \
+    --data-root "${control_frame_root}" \
+    --rollout-id "${rollout_id}" \
+    --reference-recording "${reference_name}" \
+    --seed "${exploration_seed}" \
+    --proposal "${proposal}" \
+    --sessions "${sessions}" \
+    --requested-steps "${requested_steps}" \
+    "${error_arguments[@]}" \
+    --output "${report_dir}/report.json"
+}
+
 control_worker_is_running() {
   [[ -S "${control_socket}" ]] \
     && [[ -f "${control_pid_file}" ]] \
@@ -650,6 +690,9 @@ case "${1:-}" in
   control-infer-session)
     infer_control_session "${@:2}"
     ;;
+  control-rollout-report)
+    report_control_rollout "${@:2}"
+    ;;
   control-worker-start)
     start_control_worker "${@:2}"
     ;;
@@ -664,6 +707,6 @@ case "${1:-}" in
       "${2:-}" "${3:-}" "${4:-}" "${5:-wrist}" "${6:-40}"
     ;;
   *)
-    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, proposal-eval, proposal-summarize, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, or summarize"
+    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, proposal-eval, proposal-summarize, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-rollout-report, or summarize"
     ;;
 esac

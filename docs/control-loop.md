@@ -131,14 +131,26 @@ to a unique session-derived nonce, an exact promoted-checkpoint path, and an
 ordered response timestamp. The gate then requires a final sub-two-second
 freshness check, four warm-up frames, bounded 7D action, workspace membership,
 Franka joint position/velocity limits, no live hand contact, and at most 2 N.
-The executor applies a direction-preserving quarter-scale first action (or a
-one-eighth fallback) and claims the session before motion, preventing replay
-after interruption. After actuation it requires measured joint tracking plus
-Cartesian translation/rotation direction and error; failures roll back.
+The executor tries bounded translation/rotation/gripper scale profiles, applies
+only the first profile whose pose, IK branch, joint velocity, and remaining
+safety evidence pass, and claims the session before motion, preventing replay
+after interruption. Uniform quarter- and one-eighth-scale actions remain
+fallbacks. After actuation it requires measured joint tracking plus Cartesian
+translation/rotation direction and error; failures roll back.
 Sessions `step-20260823T153339Z-11400` and
 `step-20260823T152202Z-11401` passed on the two unseen seeds at 1.883 s and
-0.948 s respectively, with no contact. This validates one conservative
-free-space action only.
+0.948 s respectively, with no contact.
+
+Repeated receding-horizon execution is also proven in narrow free space.
+Rollout `rollout-20260823T155348Z-11401` generated three distinct fresh
+observations, inferred three native proposals in the resident worker, consumed
+only each first action, measured each result, and fed the new pose/frame/action
+back into the next request. All three actions passed with 0 N contact; mean age
+was `1.322 s`, and translation/rotation goal error improved by `0.519 mm` and
+`0.001793 rad`. The persisted `quantis.jepa_wm_control_rollout.v1` report
+separates requested, attempted, and applied steps and validates chain, goal,
+proposal, observation-ID, capture-order, warm-up, and previous-action
+provenance. This does not validate cable contact or insertion.
 
 ### Next control milestone
 
@@ -148,10 +160,12 @@ free-space action only.
    out-of-order observation IDs.
 3. [x] Enforce workspace, per-step Cartesian, gripper, joint, collision, and force
    limits before the first proposed action reaches the articulation.
-4. [ ] Apply only the first bounded action in Isaac, observe again, and replan.
-   One action plus post-observation is proven; repeated replanning remains.
-5. Capture simulator outcomes and compare proposal-only, zero, and scripted
-   baselines before enabling cable contact or insertion.
+4. [x] Apply only the first bounded action in Isaac, observe again, and replan.
+   A three-step held-out canary passed with fresh single-use requests and 0 N
+   contact.
+5. [ ] Run bounded candidate search in shadow mode and compare its predicted
+   energy, direction, and realized goal progress against direct-proposal, zero,
+   and scripted baselines before granting it command authority.
 
 ## Recommended process boundary
 
@@ -242,5 +256,6 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
 12. [x] Execute only the first proposal through the simulator safety gate and
     capture the measured post-action observation on two unseen seeds.
 13. [ ] Feed each accepted post-action observation back to the resident worker,
-    replan at 4 FPS, and compare bounded multi-step proposal, zero, and scripted
-    rollouts before approaching cable contact.
+    replan, and compare bounded multi-step proposal, zero, and scripted rollouts
+    before approaching cable contact. The live feedback/replanning half is
+    proven for three safe steps; controlled baseline comparison remains.

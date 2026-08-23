@@ -174,9 +174,59 @@ class DroidAction:
     def scaled(self, scale: float) -> DroidAction:
         """Scale every action dimension while preserving its direction."""
 
-        if not isfinite(scale) or not 0.0 < scale <= 1.0:
-            raise ValueError("action scale must be between zero and one")
-        return DroidAction(tuple(value * scale for value in self.values))
+        return DroidActionScale.uniform(scale).apply(self)
+
+
+@dataclass(frozen=True)
+class DroidActionScale:
+    """Independent safety scales for translation, rotation, and gripper."""
+
+    translation: float
+    rotation: float
+    gripper: float
+
+    def __post_init__(self) -> None:
+        values = (self.translation, self.rotation, self.gripper)
+        if not all(isfinite(value) and 0.0 < value <= 1.0 for value in values):
+            raise ValueError("action scales must be finite and between zero and one")
+
+    @classmethod
+    def uniform(cls, scale: float) -> DroidActionScale:
+        return cls(scale, scale, scale)
+
+    @classmethod
+    def from_payload(cls, payload: Any) -> DroidActionScale:
+        if isinstance(payload, bool):
+            raise ValueError("action scale is invalid")
+        if isinstance(payload, (int, float)):
+            return cls.uniform(float(payload))
+        if not isinstance(payload, Mapping):
+            raise ValueError("action scale is invalid")
+        try:
+            return cls(
+                float(payload["translation"]),
+                float(payload["rotation"]),
+                float(payload["gripper"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("action scale is incomplete") from error
+
+    def apply(self, action: DroidAction) -> DroidAction:
+        scales = (
+            (self.translation,) * 3
+            + (self.rotation,) * 3
+            + (self.gripper,)
+        )
+        return DroidAction(
+            tuple(value * scale for value, scale in zip(action.values, scales))
+        )
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "translation": self.translation,
+            "rotation": self.rotation,
+            "gripper": self.gripper,
+        }
 
 
 @dataclass(frozen=True)

@@ -27,6 +27,7 @@ def reload_demo_runtime() -> ModuleType:
     import sim.isaac_control_runtime as control_runtime
     import sim.isaac_control_capture as control_capture
     import sim.isaac_control_execution as control_execution
+    import sim.isaac_control_followup as control_followup
     import sim.isaac_control_bridge as control_bridge
     import sim.isaac_demo as demo
 
@@ -51,6 +52,7 @@ def reload_demo_runtime() -> ModuleType:
         control_runtime,
         control_capture,
         control_execution,
+        control_followup,
         control_bridge,
         demo,
     ):

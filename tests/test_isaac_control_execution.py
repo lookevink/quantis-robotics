@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from jepa_wm.action import DroidAction, DroidPose
+from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.control_safety import ControlGateReason, SimulatorSafetyLimits
 from sim.isaac_control_execution import (
@@ -66,7 +66,10 @@ class ControlProjectionTest(unittest.TestCase):
         self.assertEqual(len(attempts), 2)
         self.assertIn(ControlGateReason.IK_SOLUTION_FAILED, attempts[0].gate.reasons)
         self.assertIsNotNone(selected)
-        self.assertEqual(attempts[1].scale, 0.125)
+        self.assertEqual(
+            attempts[1].scale,
+            DroidActionScale(0.5, 0.125, 0.125),
+        )
 
 
 if __name__ == "__main__":

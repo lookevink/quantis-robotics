@@ -664,6 +664,22 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/run_control_step.sh", calls)
         self.assertIn("quantis_isaac_wrist_action_proposal", calls)
 
+    def test_jepa_wm_control_rollout_forwards_a_bounded_step_count(self):
+        result, calls = self.run_command(
+            "jepa-wm-control-rollout",
+            arguments=(
+                "domain-held-00",
+                "11400",
+                "3",
+                "quantis_isaac_wrist_action_proposal",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/run_control_rollout.sh", calls)
+        self.assertIn("'3'", calls)
+        self.assertIn("quantis_isaac_wrist_action_proposal", calls)
+
     def test_jepa_wm_summarize_forwards_the_whole_experiment(self):
         result, calls = self.run_command(
             "jepa-wm-summarize",

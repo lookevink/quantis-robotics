@@ -311,6 +311,8 @@ Commands:
   jepa-wm-control-infer-replay RECORDING [camera] [context-index] [proposal]
   jepa-wm-control-worker-start [proposal] | jepa-wm-control-worker-status | jepa-wm-control-worker-stop
   jepa-wm-control-step REFERENCE_RECORDING SEED [proposal]
+  jepa-wm-control-rollout REFERENCE_RECORDING SEED STEPS [proposal]
+  jepa-wm-control-rollout-report ROLLOUT SESSION[,SESSION...] REQUESTED_STEPS REFERENCE SEED [proposal]
   jepa-wm-control-apply SESSION
   jepa-wm-summarize EXPERIMENT TRAINING_CSV HELD_OUT_CSV [camera] [count]
   jepa-wm-milestone [train-count] [held-out-count] [steps] [base-seed]
@@ -610,6 +612,39 @@ case "${command}" in
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --proposal '${proposal_name}'"
     remote "bash ~/quantis-robotics/ops/run_control_step.sh '${session_id}' '${reference_name}' '${exploration_seed}' '${proposal_name}'"
     printf 'Control session: %s\n' "${session_id}"
+    ;;
+  jepa-wm-control-rollout)
+    reference_name="${2:-}"
+    exploration_seed="${3:-}"
+    step_count="${4:-3}"
+    proposal_name="${5:-quantis_isaac_wrist_action_proposal}"
+    is_safe_identifier "${reference_name}" || die "invalid reference recording"
+    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+    require_positive_integer "step count" "${step_count}" || exit 1
+    (( step_count <= 8 )) || die "control rollout is capped at eight steps"
+    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    rollout_id="rollout-$(date -u +%Y%m%dT%H%M%SZ)-${exploration_seed}"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --proposal '${proposal_name}'"
+    remote "bash ~/quantis-robotics/ops/run_control_rollout.sh '${rollout_id}' '${reference_name}' '${exploration_seed}' '${step_count}' '${proposal_name}'"
+    printf 'Control rollout: %s\n' "${rollout_id}"
+    ;;
+  jepa-wm-control-rollout-report)
+    rollout_id="${2:-}"
+    sessions="${3:-}"
+    requested_steps="${4:-}"
+    reference_name="${5:-}"
+    exploration_seed="${6:-}"
+    proposal_name="${7:-quantis_isaac_wrist_action_proposal}"
+    is_safe_identifier "${rollout_id}" || die "invalid control rollout"
+    is_safe_identifier_list "${sessions}" || die "invalid control session list"
+    require_positive_integer "requested steps" "${requested_steps}" || exit 1
+    (( requested_steps <= 8 )) || die "control rollout is capped at eight steps"
+    is_safe_identifier "${reference_name}" || die "invalid reference recording"
+    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-rollout-report --rollout '${rollout_id}' --reference '${reference_name}' --seed '${exploration_seed}' --proposal '${proposal_name}' --sessions '${sessions}' --requested-steps '${requested_steps}'"
     ;;
   jepa-wm-control-apply)
     session_id="${2:-}"

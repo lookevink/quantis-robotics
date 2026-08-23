@@ -57,6 +57,36 @@ class ActionTrackingDecision:
     def passed(self) -> bool:
         return not self.reasons
 
+    @classmethod
+    def from_dict(cls, payload: Any) -> ActionTrackingDecision:
+        if not isinstance(payload, dict):
+            raise ValueError("action tracking decision must be an object")
+        try:
+            decision = cls(
+                translation_cosine=float(payload["translation_cosine"]),
+                rotation_cosine=float(payload["rotation_cosine"]),
+                translation_error_meters=float(payload["translation_error_meters"]),
+                rotation_error_radians=float(payload["rotation_error_radians"]),
+                gripper_error=float(payload["gripper_error"]),
+                reasons=tuple(
+                    ActionTrackingReason(reason) for reason in payload["reasons"]
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("action tracking decision is incomplete") from error
+        if not all(
+            isfinite(value)
+            for value in (
+                decision.translation_cosine,
+                decision.rotation_cosine,
+                decision.translation_error_meters,
+                decision.rotation_error_radians,
+                decision.gripper_error,
+            )
+        ) or payload.get("passed") is not decision.passed:
+            raise ValueError("action tracking decision is inconsistent")
+        return decision
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "passed": self.passed,
