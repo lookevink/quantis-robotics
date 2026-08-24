@@ -298,10 +298,9 @@ class ProposalEvaluationEvidence:
         return cls(recording, report.resolve(), metrics)
 
 
-def summarize_proposal_readiness(
+def build_proposal_readiness(
     proposal: Path,
     evaluation_reports: Sequence[Path],
-    output: Path,
     thresholds: ProposalReadinessThresholds = ProposalReadinessThresholds(),
 ) -> dict[str, Any]:
     proposal = proposal.resolve()
@@ -353,9 +352,23 @@ def summarize_proposal_readiness(
         "passed": passed,
         "scope": "simulator-only inverse-action proposal; no live execution",
     }
-    output = output.resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(summary, indent=2) + "\n")
+    return summary
+
+
+def summarize_proposal_readiness(
+    proposal: Path,
+    evaluation_reports: Sequence[Path],
+    output: Path,
+    thresholds: ProposalReadinessThresholds = ProposalReadinessThresholds(),
+) -> dict[str, Any]:
+    from jepa_wm.persistence import write_json_atomic
+
+    summary = build_proposal_readiness(
+        proposal,
+        evaluation_reports,
+        thresholds,
+    )
+    write_json_atomic(output.resolve(), summary)
     return summary
 
 

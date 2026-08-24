@@ -722,7 +722,26 @@ The workflow reuses only recordings that already pass the strict v9 validator,
 fails closed on an invalid existing artifact, keeps TRAIN seeds `2600–2611`
 disjoint from HELD_OUT seeds `12600–12601`, and recovery-backs up on every exit.
 Rerun the same command after an interruption to continue without recapturing
-completed recordings.
+validated recordings.
+
+Once the corpus is complete, run the insertion proposal milestone against the
+same stable experiment identity:
+
+```bash
+./ops/jepa_wm_insertion_milestone.sh \
+  3000 2600 contact-insertion-v9-2600
+```
+
+The insertion proposal deliberately starts at context `21`, the validated
+fixed-joint attachment observation. It covers all 88 native three-action
+rollouts through context `108` and the seated hold. The promoted grasp proposal
+remains responsible for acquisition; this checkpoint trains retreat,
+alignment, insertion, and stop/hold behavior. Training and held-out evaluation
+include stationary actions, bind pose/action-history/goal-delta/task-progress
+conditioning to the proposal SHA-256, and require both held-out recordings to
+reconstruct the exact contact-aware v9 task. A failed two-seed readiness gate
+exits nonzero but is still recovery-backed up. Passing this offline gate does
+not by itself authorize live insertion or filming.
 
 The first grasp-domain JEPA-WM action adapter used all 1,980 bounded rollouts
 from the 20 training recordings. In a fixed eight-context CEM diagnostic it

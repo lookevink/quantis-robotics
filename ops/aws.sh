@@ -423,6 +423,9 @@ Commands:
   jepa-wm-proposal-summarize RECORDING[,RECORDING...] [camera] [start] [count] [stride] [proposal]
   jepa-wm-grasp-proposal-eval RECORDING PROPOSAL
   jepa-wm-grasp-proposal-summarize RECORDING[,RECORDING...] PROPOSAL
+  jepa-wm-insertion-proposal-train RECORDING[,RECORDING...] [steps] PROPOSAL [hidden-dimension learning-rate weight-decay seed]
+  jepa-wm-insertion-proposal-eval RECORDING PROPOSAL
+  jepa-wm-insertion-proposal-summarize RECORDING[,RECORDING...] PROPOSAL EXPERIMENT BASE_SEED
   jepa-wm-control-infer-replay RECORDING [camera] [context-index] [proposal]
   jepa-wm-control-worker-configure NAME PROPOSAL ADAPTER [CALIBRATION] [translation-margin rotation-margin gripper-margin] [planner-seed iterations samples elites]
   jepa-wm-control-worker-start [artifacts] | jepa-wm-control-worker-status | jepa-wm-control-worker-stop
@@ -774,6 +777,45 @@ case "${command}" in
     is_safe_identifier "${proposal_name}" || die "invalid proposal name"
     sync_repo
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh grasp-proposal-summarize --recordings '${recording_names}' --proposal '${proposal_name}'"
+    ;;
+  jepa-wm-insertion-proposal-train)
+    recording_names="${2:-}"
+    training_steps="${3:-3000}"
+    proposal_name="${4:-}"
+    hidden_dimension="${5:-256}"
+    learning_rate="${6:-0.001}"
+    weight_decay="${7:-0.0001}"
+    training_seed="${8:-2600}"
+    is_safe_identifier_list "${recording_names}" || die "invalid recording list"
+    require_positive_integer "training steps" "${training_steps}" || exit 1
+    require_positive_integer "hidden dimension" "${hidden_dimension}" || exit 1
+    require_nonnegative_number "learning rate" "${learning_rate}" || exit 1
+    require_nonnegative_number "weight decay" "${weight_decay}" || exit 1
+    require_nonnegative_integer "training seed" "${training_seed}" || exit 1
+    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-proposal-train --recordings '${recording_names}' --steps '${training_steps}' --proposal '${proposal_name}' --hidden-dimension '${hidden_dimension}' --learning-rate '${learning_rate}' --weight-decay '${weight_decay}' --seed '${training_seed}'"
+    ;;
+  jepa-wm-insertion-proposal-eval)
+    recording_name="${2:-}"
+    proposal_name="${3:-}"
+    is_safe_identifier "${recording_name}" || die "invalid recording name"
+    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-proposal-eval --recording '${recording_name}' --proposal '${proposal_name}'"
+    ;;
+  jepa-wm-insertion-proposal-summarize)
+    recording_names="${2:-}"
+    proposal_name="${3:-}"
+    experiment_id="${4:-}"
+    base_seed="${5:-}"
+    is_safe_identifier_list "${recording_names}" \
+      || die "invalid held-out recording list"
+    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    is_safe_identifier "${experiment_id}" || die "invalid experiment ID"
+    require_nonnegative_integer "base seed" "${base_seed}" || exit 1
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-proposal-summarize --recordings '${recording_names}' --proposal '${proposal_name}' --experiment '${experiment_id}' --base-seed '${base_seed}'"
     ;;
   jepa-wm-control-infer-replay)
     recording_name="${2:-}"

@@ -11,13 +11,22 @@ from typing import Any
 from jepa_wm.contract import MODEL_ID
 
 
-def _validate_artifact_identity(path: Path, fingerprint: str) -> None:
+def validate_artifact_fingerprint(fingerprint: str) -> str:
     if (
-        not path.is_absolute()
-        or len(fingerprint) != 64
+        len(fingerprint) != 64
         or any(character not in "0123456789abcdef" for character in fingerprint)
     ):
+        raise ValueError("training artifact fingerprint is invalid")
+    return fingerprint
+
+
+def _validate_artifact_identity(path: Path, fingerprint: str) -> None:
+    if not path.is_absolute():
         raise ValueError("training artifact identity is invalid")
+    try:
+        validate_artifact_fingerprint(fingerprint)
+    except ValueError as error:
+        raise ValueError("training artifact identity is invalid") from error
 
 
 @dataclass(frozen=True)
@@ -158,6 +167,25 @@ def artifact_fingerprint(artifact: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def proposal_training_selection_fingerprint(payload: Any) -> str:
+    """Fingerprint the exact rollout-selection contract used for proposal training."""
+
+    if not isinstance(payload, dict) or set(payload) != {
+        "window",
+        "selection_bounds",
+        "recording_selections",
+        "rollouts",
+    }:
+        raise ValueError("proposal training selection contract is invalid")
+    canonical = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode()
+    return sha256(canonical).hexdigest()
 
 
 def load_training_report(artifact: Path) -> dict[str, Any]:

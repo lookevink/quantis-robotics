@@ -30,6 +30,7 @@ from jepa_wm.trajectory import RecordedRollout, RolloutWindow, load_rollouts
 from jepa_wm.training_artifact import (
     TrainingArtifactMetadata,
     artifact_fingerprint,
+    proposal_training_selection_fingerprint,
     training_report_path,
 )
 
@@ -380,19 +381,31 @@ def train_action_proposal(
         training_recordings=tuple(recording.name for recording in recordings),
         training_steps=config.steps,
     )
-    save_action_proposal(proposal, output, metadata)
+    training_selection = {
+        "window": window.to_dict() if window is not None else None,
+        "selection_bounds": TRAINING_BOUNDS.to_dict(),
+        "recording_selections": [
+            selection.to_dict() for selection in recording_selections
+        ],
+        "rollouts": len(rollouts),
+    }
+    selection_fingerprint = proposal_training_selection_fingerprint(
+        training_selection
+    )
+    save_action_proposal(
+        proposal,
+        output,
+        metadata,
+        training_selection_fingerprint=selection_fingerprint,
+    )
     report = {
         "status": "trained",
         "proposal": str(output.resolve()),
         "proposal_fingerprint": artifact_fingerprint(output),
         "metadata": metadata.to_dict(),
         "config": asdict(config),
-        "rollouts": len(rollouts),
-        "window": window.to_dict() if window is not None else None,
-        "selection_bounds": TRAINING_BOUNDS.to_dict(),
-        "recording_selections": [
-            selection.to_dict() for selection in recording_selections
-        ],
+        **training_selection,
+        "training_selection_fingerprint": selection_fingerprint,
         "conditioning": proposal.conditioning.to_dict(),
         "trainable_parameters": sum(
             parameter.numel() for parameter in proposal.parameters()

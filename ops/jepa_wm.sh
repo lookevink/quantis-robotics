@@ -23,10 +23,6 @@ control_pid_file="${control_run_dir}/control.pid"
 control_artifacts_file="${control_run_dir}/control.artifacts"
 control_log="${jepa_wm_home}/logs/control-worker.log"
 control_frame_root="${HOME}/docker/isaac-sim/data/quantis"
-grasp_window_start=69
-grasp_window_count=30
-grasp_window_stride=1
-
 jepa_revision="${JEPA_WM_REVISION:-13cf1d9c7e476f53c17714d2e0f1dc239a883ce0}"
 dinov3_revision="${DINOV3_REVISION:-6876159a11b4df116f30f667f8c9888617df0751}"
 uv_version="${JEPA_WM_UV_VERSION:-0.8.15}"
@@ -63,6 +59,29 @@ parse_named_options() {
     target["${option_name}"]="$2"
     shift 2
   done
+}
+
+task_proposal_window() {
+  local task_name="$1"
+  require_runtime
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.task_windows "${task_name}"
+}
+
+task_proposal_setting() {
+  local task_name="$1"
+  local setting="$2"
+  case "${task_name}:${setting}" in
+    grasp:seed) printf '234\n' ;;
+    insertion:seed) printf '2600\n' ;;
+    grasp:inactive_gripper) printf '0\n' ;;
+    insertion:inactive_gripper) printf '0.01\n' ;;
+    grasp:readiness_module) printf 'jepa_wm.grasp_proposal_readiness\n' ;;
+    insertion:readiness_module) printf 'jepa_wm.insertion_proposal_readiness\n' ;;
+    grasp:readiness_suffix) printf 'grasp_readiness\n' ;;
+    insertion:readiness_suffix) printf 'insertion_readiness\n' ;;
+    *) die "unsupported task proposal setting: ${task_name}:${setting}" ;;
+  esac
 }
 
 download_file() {
@@ -409,8 +428,13 @@ train_action_proposal() {
     "${window_arguments[@]}"
 }
 
-train_grasp_action_proposal() {
+train_task_action_proposal() {
+  local task_name="$1"
+  shift
   local -A options=()
+  local window_start window_count window_stride
+  read -r window_start window_count window_stride \
+    <<<"$(task_proposal_window "${task_name}")"
   parse_named_options options \
     "recordings steps proposal hidden-dimension learning-rate weight-decay seed goal-consistency-weight first-action-weight active-direction-weight inactive-gripper-weight first-gripper-weight" "$@"
   train_action_proposal \
@@ -421,15 +445,23 @@ train_grasp_action_proposal() {
     --hidden-dimension "${options[hidden-dimension]:-256}" \
     --learning-rate "${options[learning-rate]:-0.001}" \
     --weight-decay "${options[weight-decay]:-0.0001}" \
-    --seed "${options[seed]:-234}" \
+    --seed "${options[seed]:-$(task_proposal_setting "${task_name}" seed)}" \
     --goal-consistency-weight "${options[goal-consistency-weight]:-1.0}" \
     --first-action-weight "${options[first-action-weight]:-1.0}" \
     --active-direction-weight "${options[active-direction-weight]:-0.1}" \
-    --inactive-gripper-weight "${options[inactive-gripper-weight]:-0}" \
+    --inactive-gripper-weight "${options[inactive-gripper-weight]:-$(task_proposal_setting "${task_name}" inactive_gripper)}" \
     --first-gripper-weight "${options[first-gripper-weight]:-1.0}" \
-    --start-index "${grasp_window_start}" \
-    --count "${grasp_window_count}" \
-    --stride "${grasp_window_stride}"
+    --start-index "${window_start}" \
+    --count "${window_count}" \
+    --stride "${window_stride}"
+}
+
+train_grasp_action_proposal() {
+  train_task_action_proposal grasp "$@"
+}
+
+train_insertion_action_proposal() {
+  train_task_action_proposal insertion "$@"
 }
 
 evaluate_action_proposal() {
@@ -475,17 +507,30 @@ evaluate_action_proposal() {
     "${stationary_arguments[@]}"
 }
 
-evaluate_grasp_action_proposal() {
+evaluate_task_action_proposal() {
+  local task_name="$1"
+  shift
   local -A options=()
+  local window_start window_count window_stride
+  read -r window_start window_count window_stride \
+    <<<"$(task_proposal_window "${task_name}")"
   parse_named_options options "recording proposal" "$@"
   evaluate_action_proposal \
     --recording "${options[recording]:-}" \
     --camera wrist \
-    --start-index "${grasp_window_start}" \
-    --count "${grasp_window_count}" \
-    --stride "${grasp_window_stride}" \
+    --start-index "${window_start}" \
+    --count "${window_count}" \
+    --stride "${window_stride}" \
     --proposal "${options[proposal]:-}" \
     --include-stationary true
+}
+
+evaluate_grasp_action_proposal() {
+  evaluate_task_action_proposal grasp "$@"
+}
+
+evaluate_insertion_action_proposal() {
+  evaluate_task_action_proposal insertion "$@"
 }
 
 proposal_evaluation_report_name() {
@@ -508,6 +553,7 @@ run_action_proposal_summary() {
   local proposal_name="$6"
   local readiness_module="$7"
   local output_suffix="$8"
+  shift 8
   is_safe_identifier_list "${recording_list}" || die "invalid recording list"
   is_safe_identifier "${camera_name}" || die "invalid camera name"
   is_safe_identifier "${proposal_name}" || die "invalid proposal name"
@@ -535,6 +581,7 @@ run_action_proposal_summary() {
   "${venv_dir}/bin/python" -m "${readiness_module}" \
     --proposal "${proposal}" \
     "${arguments[@]}" \
+    "$@" \
     --output "${output}"
 }
 
@@ -554,13 +601,43 @@ summarize_action_proposal() {
     jepa_wm.proposal_readiness readiness
 }
 
-summarize_grasp_action_proposal() {
+summarize_task_action_proposal() {
+  local task_name="$1"
+  shift
   local -A options=()
-  parse_named_options options "recordings proposal" "$@"
+  local window_start window_count window_stride
+  read -r window_start window_count window_stride \
+    <<<"$(task_proposal_window "${task_name}")"
+  parse_named_options options "recordings proposal experiment base-seed" "$@"
+  local -a task_arguments=()
+  if [[ "${task_name}" == "insertion" ]]; then
+    local experiment_id="${options[experiment]:-}"
+    local base_seed="${options[base-seed]:-}"
+    is_safe_identifier "${experiment_id}" || die "invalid experiment ID"
+    require_nonnegative_integer "base seed" "${base_seed}" || exit 1
+    local roster="${checkpoint_dir}/experiments/${experiment_id}_insertion_corpus.json"
+    mkdir -p "$(dirname "${roster}")"
+    cd "${repo_dir}"
+    "${venv_dir}/bin/python" -m jepa_wm.insertion_corpus create \
+      --experiment-id "${experiment_id}" --base-seed "${base_seed}" \
+      --output "${roster}"
+    task_arguments=(--roster "${roster}")
+  fi
   run_action_proposal_summary \
     "${options[recordings]:-}" wrist \
-    "${grasp_window_start}" "${grasp_window_count}" "${grasp_window_stride}" \
-    "${options[proposal]:-}" jepa_wm.grasp_proposal_readiness grasp_readiness
+    "${window_start}" "${window_count}" "${window_stride}" \
+    "${options[proposal]:-}" \
+    "$(task_proposal_setting "${task_name}" readiness_module)" \
+    "$(task_proposal_setting "${task_name}" readiness_suffix)" \
+    "${task_arguments[@]}"
+}
+
+summarize_grasp_action_proposal() {
+  summarize_task_action_proposal grasp "$@"
+}
+
+summarize_insertion_action_proposal() {
+  summarize_task_action_proposal insertion "$@"
 }
 
 infer_replayed_control() {
@@ -1136,17 +1213,26 @@ case "${1:-}" in
   grasp-proposal-train)
     train_grasp_action_proposal "${@:2}"
     ;;
+  insertion-proposal-train)
+    train_insertion_action_proposal "${@:2}"
+    ;;
   proposal-eval)
     evaluate_action_proposal "${@:2}"
     ;;
   grasp-proposal-eval)
     evaluate_grasp_action_proposal "${@:2}"
     ;;
+  insertion-proposal-eval)
+    evaluate_insertion_action_proposal "${@:2}"
+    ;;
   proposal-summarize)
     summarize_action_proposal "${@:2}"
     ;;
   grasp-proposal-summarize)
     summarize_grasp_action_proposal "${@:2}"
+    ;;
+  insertion-proposal-summarize)
+    summarize_insertion_action_proposal "${@:2}"
     ;;
   control-infer-replay)
     infer_replayed_control "${@:2}"
@@ -1198,6 +1284,6 @@ case "${1:-}" in
       "${2:-}" "${3:-}" "${4:-}" "${5:-wrist}" "${6:-40}"
     ;;
   *)
-    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, grasp-proposal-train, proposal-eval, grasp-proposal-eval, proposal-summarize, grasp-proposal-summarize, control-worker-configure, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, grasp-control-summarize, control-candidate-report, control-candidate-summarize, control-objective-calibrate, or summarize"
+    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, grasp-proposal-train, insertion-proposal-train, proposal-eval, grasp-proposal-eval, insertion-proposal-eval, proposal-summarize, grasp-proposal-summarize, insertion-proposal-summarize, control-worker-configure, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, grasp-control-summarize, control-candidate-report, control-candidate-summarize, control-objective-calibrate, or summarize"
     ;;
 esac

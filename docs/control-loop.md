@@ -440,4 +440,9 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     then train/evaluate insertion-conditioned proposal and world-model
     artifacts. The resumable `ops/jepa_wm_insertion_corpus.sh` workflow owns
     the split/seed roster, strict per-recording validation, and exit backup. No
-    current insertion artifact grants JEPA control or filming.
+    current insertion artifact grants JEPA control or filming. The offline
+    proposal boundary is now prepared: `ops/jepa_wm_insertion_milestone.sh`
+    reuses that corpus, trains contexts 21–108 after fixed-joint acquisition,
+    evaluates both whole held-out seeds, preserves a negative readiness result,
+    and recovery-backs up on every exit. Corpus collection is still in progress;
+    the readiness gate has not run yet.

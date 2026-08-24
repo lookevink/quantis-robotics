@@ -57,6 +57,14 @@ class ContactInsertionRecordingContract:
     def span(self, segment: ContactInsertionSegment) -> ContactInsertionSpan:
         return next(span for span in self.spans if span.segment is segment)
 
+    def start_index(self, segment: ContactInsertionSegment) -> int:
+        start = 0
+        for span in self.spans:
+            if span.segment is segment:
+                return start
+            start += span.frames
+        raise ValueError(f"unknown insertion segment: {segment.value}")
+
     @property
     def insertion_steps(self) -> int:
         return self.span(ContactInsertionSegment.INSERT).frames

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import asdict, dataclass
 from enum import Enum
 from math import isfinite
@@ -12,6 +11,7 @@ from typing import Any, Mapping, Sequence
 
 from jepa.contract import ObservationStage
 from jepa_wm.action import ACTION_RECORDING_CONTRACT, DroidPose, action_between
+from jepa_wm.identifiers import validate_safe_identifier
 from sim.demo_sequence import Phase
 
 
@@ -20,16 +20,15 @@ RECORDING_SCHEMA_V6 = "quantis.demo_recording.v6"
 RECORDING_SCHEMA_V7 = "quantis.demo_recording.v7"
 RECORDING_SCHEMA_V8 = "quantis.demo_recording.v8"
 RECORDING_SCHEMA = "quantis.demo_recording.v9"
-_SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def validate_recording_id(recording_id: str) -> None:
-    if not _SAFE_NAME.fullmatch(recording_id):
+    try:
+        validate_safe_identifier(recording_id)
+    except ValueError as error:
         raise ValueError(
             "recording_id must contain only letters, numbers, dot, dash, or underscore"
-        )
-
-
+        ) from error
 class RecordingMoment(str, Enum):
     INITIAL = "initial"
     MOTION = "motion"
@@ -164,8 +163,11 @@ class RecordingWriter:
         cameras = tuple(camera_resolutions)
         if not cameras or len(set(cameras)) != len(cameras):
             raise ValueError("cameras must be non-empty and unique")
-        if any(not _SAFE_NAME.fullmatch(camera) for camera in cameras):
-            raise ValueError("camera names must be safe path components")
+        try:
+            for camera in cameras:
+                validate_safe_identifier(camera)
+        except ValueError as error:
+            raise ValueError("camera names must be safe path components") from error
 
         self.recording_id = recording_id
         self.fps = int(fps)

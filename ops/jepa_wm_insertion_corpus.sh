@@ -15,12 +15,18 @@ training_count="${1:-12}"
 held_out_count="${2:-2}"
 base_seed="${3:-2600}"
 experiment_id="${4:-contact-insertion-v9-${base_seed}}"
+roster_path="${INSERTION_CORPUS_ROSTER:-/tmp/${experiment_id}_insertion_corpus.json}"
 require_positive_integer "training recording count" "${training_count}" || exit 1
 require_positive_integer "held-out recording count" "${held_out_count}" || exit 1
 require_nonnegative_integer "base seed" "${base_seed}" || exit 1
 is_safe_identifier "${experiment_id}" || die "experiment ID must be a safe identifier"
 (( training_count == 12 )) || die "insertion corpus requires exactly 12 TRAIN seeds"
 (( held_out_count == 2 )) || die "insertion corpus requires exactly two HELD_OUT seeds"
+cd "${repo_root}"
+python3 -m jepa_wm.insertion_corpus create \
+  --experiment-id "${experiment_id}" \
+  --base-seed "${base_seed}" \
+  --output "${roster_path}"
 
 backup_on_exit() {
   local status=$?
@@ -72,21 +78,21 @@ capture_recording() {
     "${recording_id}" "${split}" "${seed}"
 }
 
-training_recordings=()
-held_out_recordings=()
-for ((index = 0; index < training_count; index++)); do
-  printf -v recording_id '%s-train-%02d' "${experiment_id}" "${index}"
-  training_recordings+=("${recording_id}")
-  capture_recording "${recording_id}" "$((base_seed + index))" train
-done
-for ((index = 0; index < held_out_count; index++)); do
-  printf -v recording_id '%s-held-%02d' "${experiment_id}" "${index}"
-  held_out_recordings+=("${recording_id}")
-  capture_recording \
-    "${recording_id}" "$((base_seed + 10000 + index))" held_out
-done
+while IFS=$'\t' read -r recording_id seed split; do
+  capture_recording "${recording_id}" "${seed}" "${split}"
+done < <(
+  python3 -m jepa_wm.insertion_corpus show \
+    --roster "${roster_path}" --format tsv
+)
+training_recordings="$(
+  python3 -m jepa_wm.insertion_corpus show \
+    --roster "${roster_path}" --format train-csv
+)"
+held_out_recordings="$(
+  python3 -m jepa_wm.insertion_corpus show \
+    --roster "${roster_path}" --format held-out-csv
+)"
 
-printf 'Insertion corpus: %s\nTRAIN: %s\nHELD_OUT: %s\n' \
-  "${experiment_id}" \
-  "$(IFS=,; printf '%s' "${training_recordings[*]}")" \
-  "$(IFS=,; printf '%s' "${held_out_recordings[*]}")"
+printf 'Insertion corpus: %s\nRoster: %s\nTRAIN: %s\nHELD_OUT: %s\n' \
+  "${experiment_id}" "${roster_path}" \
+  "${training_recordings}" "${held_out_recordings}"

@@ -17,6 +17,7 @@ from jepa_wm.proprioception import DroidValueNormalization, ScalarNormalization
 from jepa_wm.training_artifact import (
     ProposalConditioningCapabilities,
     TrainingArtifactMetadata,
+    validate_artifact_fingerprint,
 )
 
 if TYPE_CHECKING:
@@ -529,7 +530,11 @@ def save_action_proposal(
     proposal: ActionProposalNetwork,
     path: Path,
     metadata: TrainingArtifactMetadata,
+    *,
+    training_selection_fingerprint: str | None = None,
 ) -> None:
+    if training_selection_fingerprint is not None:
+        validate_artifact_fingerprint(training_selection_fingerprint)
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
@@ -542,18 +547,24 @@ def save_action_proposal(
             "conditioning": proposal.conditioning.to_dict(),
             "conditioning_residual": proposal.conditioning_residual,
             "conditioned_gripper_head": proposal.conditioned_gripper_head,
+            "training_selection_fingerprint": training_selection_fingerprint,
             "state_dict": proposal.state_dict(),
         },
         path,
     )
 
 
-def load_action_proposal(
+def load_action_proposal_with_training_selection(
     path: Path,
     *,
     device: torch.device,
-) -> tuple[ActionProposalNetwork, TrainingArtifactMetadata]:
+) -> tuple[ActionProposalNetwork, TrainingArtifactMetadata, str | None]:
     payload = torch.load(path, map_location=device, weights_only=True)
+    selection_fingerprint = payload.get("training_selection_fingerprint")
+    if selection_fingerprint is not None:
+        if not isinstance(selection_fingerprint, str):
+            raise ValueError("proposal training selection fingerprint is invalid")
+        validate_artifact_fingerprint(selection_fingerprint)
     schema = payload.get("schema")
     if schema not in (
         LEGACY_PROPOSAL_SCHEMA,
@@ -694,4 +705,16 @@ def load_action_proposal(
     ).to(device)
     proposal.load_state_dict(state, strict=True)
     proposal.eval()
+    return proposal, metadata, selection_fingerprint
+
+
+def load_action_proposal(
+    path: Path,
+    *,
+    device: torch.device,
+) -> tuple[ActionProposalNetwork, TrainingArtifactMetadata]:
+    proposal, metadata, _ = load_action_proposal_with_training_selection(
+        path,
+        device=device,
+    )
     return proposal, metadata

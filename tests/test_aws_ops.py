@@ -834,6 +834,45 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/jepa_wm.sh grasp-proposal-summarize", summary_calls)
         self.assertIn("grasp-held-00,grasp-held-01", summary_calls)
 
+    def test_jepa_wm_insertion_proposal_commands_bind_the_post_attachment_window(self):
+        trained, training_calls = self.run_command(
+            "jepa-wm-insertion-proposal-train",
+            arguments=(
+                "insert-train-00,insert-train-01",
+                "3000",
+                "insertion-proposal",
+                "256",
+                "0.001",
+                "0.0001",
+                "2600",
+            ),
+        )
+        evaluated, evaluation_calls = self.run_command(
+            "jepa-wm-insertion-proposal-eval",
+            arguments=("insert-held-00", "insertion-proposal"),
+        )
+        summarized, summary_calls = self.run_command(
+            "jepa-wm-insertion-proposal-summarize",
+            arguments=(
+                "insert-held-00,insert-held-01",
+                "insertion-proposal",
+                "insert-v9-2600",
+                "2600",
+            ),
+        )
+
+        self.assertEqual(trained.returncode, 0, trained.stderr)
+        self.assertIn("ops/jepa_wm.sh insertion-proposal-train", training_calls)
+        self.assertIn("--hidden-dimension '256'", training_calls)
+        self.assertIn("--seed '2600'", training_calls)
+        self.assertEqual(evaluated.returncode, 0, evaluated.stderr)
+        self.assertIn("ops/jepa_wm.sh insertion-proposal-eval", evaluation_calls)
+        self.assertIn("insert-held-00", evaluation_calls)
+        self.assertEqual(summarized.returncode, 0, summarized.stderr)
+        self.assertIn("ops/jepa_wm.sh insertion-proposal-summarize", summary_calls)
+        self.assertIn("insert-held-00,insert-held-01", summary_calls)
+        self.assertIn("--experiment 'insert-v9-2600' --base-seed '2600'", summary_calls)
+
     def test_jepa_wm_control_replay_forwards_one_fresh_observation(self):
         result, calls = self.run_command(
             "jepa-wm-control-infer-replay",

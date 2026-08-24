@@ -7,6 +7,13 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+import numpy as np
+
+try:
+    import torch
+except ModuleNotFoundError:
+    torch = None
+
 from jepa_wm.action import DroidAction
 from jepa_wm.grasp_proposal_readiness import (
     validate_grasp_evaluation_window,
@@ -20,16 +27,46 @@ from jepa_wm.training_artifact import (
     artifact_fingerprint,
 )
 
+if torch is not None:
+    from jepa_wm.proposal import (
+        ActionProposalNetwork,
+        ProposalConditioning,
+        save_action_proposal,
+    )
+    from jepa_wm.proprioception import DroidValueNormalization, ScalarNormalization
+
 
 class GraspProposalReadinessTest(unittest.TestCase):
+    @unittest.skipIf(torch is None, "PyTorch is required for checkpoint binding")
     def test_binds_conditioning_to_the_checkpoint_fingerprint(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             proposal = Path(temp_dir) / "proposal.pth"
-            proposal.write_bytes(b"goal-conditioned-checkpoint")
+            normalization = DroidValueNormalization(
+                np.zeros(7, dtype=np.float32),
+                np.ones(7, dtype=np.float32),
+            )
+            metadata = TrainingArtifactMetadata(
+                "jepa_wm_droid", "revision", "wrist", ("train-00",), 3000
+            )
+            checkpoint = ActionProposalNetwork(
+                feature_dimension=2,
+                horizon=3,
+                hidden_dimension=4,
+                action_mean=torch.zeros((3, 7)),
+                action_standard_deviation=torch.ones((3, 7)),
+                conditioning=ProposalConditioning(
+                    pose=normalization,
+                    previous_action=normalization,
+                    goal_delta=normalization,
+                    task_progress=ScalarNormalization(69.0, 1.0),
+                ),
+            )
+            save_action_proposal(checkpoint, proposal, metadata)
             proposal.with_suffix(".pth.json").write_text(
                 json.dumps(
                     {
                         "proposal_fingerprint": artifact_fingerprint(proposal),
+                        "metadata": metadata.to_dict(),
                         "conditioning": {
                             "proprioception": True,
                             "action_history": True,
@@ -44,7 +81,7 @@ class GraspProposalReadinessTest(unittest.TestCase):
                 validate_grasp_proposal_identity(proposal).fingerprint,
                 artifact_fingerprint(proposal),
             )
-            proposal.write_bytes(b"replaced-checkpoint")
+            proposal.write_bytes(proposal.read_bytes() + b"replaced-checkpoint")
             with self.assertRaisesRegex(ValueError, "fingerprint"):
                 validate_grasp_proposal_identity(proposal)
 
@@ -59,15 +96,17 @@ class GraspProposalReadinessTest(unittest.TestCase):
                 "context_index": 69 + offset,
                 "target_index": 72 + offset,
                 "goal_delta": list(rollout.goal_action.values),
+                "recorded_actions": [list(rollout.goal_action.values)] * 3,
             }
             for offset in range(30)
         ]
         with patch(
-            "jepa_wm.grasp_proposal_readiness.load_rollout_at",
+            "jepa_wm.task_proposal_readiness.load_rollout_at",
             side_effect=lambda *args, context_index, **kwargs: SimpleNamespace(
                 context=(SimpleNamespace(index=context_index),),
                 target=SimpleNamespace(index=context_index + 3),
                 goal_action=rollout.goal_action,
+                actions=(rollout.goal_action,) * 3,
             ),
         ):
             validate_grasp_goal_deltas(Path("/tmp/held-out"), results)
