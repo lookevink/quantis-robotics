@@ -330,7 +330,7 @@ benchmark_planner() {
 train_action_proposal() {
   local -A options=()
   parse_named_options options \
-    "recordings camera steps proposal start-index count stride hidden-dimension learning-rate weight-decay seed" "$@"
+    "recordings camera steps proposal start-index count stride hidden-dimension learning-rate weight-decay seed goal-consistency-weight first-action-weight active-direction-weight inactive-gripper-weight first-gripper-weight" "$@"
   local recording_list="${options[recordings]:-}"
   local camera_name="${options[camera]:-wrist}"
   local training_steps="${options[steps]:-2000}"
@@ -342,6 +342,11 @@ train_action_proposal() {
   local learning_rate="${options[learning-rate]:-0.001}"
   local weight_decay="${options[weight-decay]:-0.0001}"
   local training_seed="${options[seed]:-234}"
+  local goal_consistency_weight="${options[goal-consistency-weight]:-1.0}"
+  local first_action_weight="${options[first-action-weight]:-1.0}"
+  local active_direction_weight="${options[active-direction-weight]:-0.1}"
+  local inactive_gripper_weight="${options[inactive-gripper-weight]:-0.01}"
+  local first_gripper_weight="${options[first-gripper-weight]:-1.0}"
   is_safe_identifier_list "${recording_list}" || die "invalid recording list"
   is_safe_identifier "${camera_name}" || die "invalid camera name"
   is_safe_identifier "${proposal_name}" || die "invalid proposal name"
@@ -350,6 +355,16 @@ train_action_proposal() {
   require_nonnegative_integer "training seed" "${training_seed}" || exit 1
   require_nonnegative_number "learning rate" "${learning_rate}" || exit 1
   require_nonnegative_number "weight decay" "${weight_decay}" || exit 1
+  require_nonnegative_number "goal consistency weight" \
+    "${goal_consistency_weight}" || exit 1
+  require_nonnegative_number "first action weight" \
+    "${first_action_weight}" || exit 1
+  require_nonnegative_number "active direction weight" \
+    "${active_direction_weight}" || exit 1
+  require_nonnegative_number "inactive gripper weight" \
+    "${inactive_gripper_weight}" || exit 1
+  require_nonnegative_number "first gripper weight" \
+    "${first_gripper_weight}" || exit 1
   local -a window_arguments=()
   if [[ -n "${start_index}${rollout_count}${rollout_stride}" ]]; then
     require_nonnegative_integer "start index" "${start_index}" || exit 1
@@ -386,22 +401,32 @@ train_action_proposal() {
     --learning-rate "${learning_rate}" \
     --weight-decay "${weight_decay}" \
     --seed "${training_seed}" \
+    --goal-consistency-weight "${goal_consistency_weight}" \
+    --first-action-weight "${first_action_weight}" \
+    --active-direction-weight "${active_direction_weight}" \
+    --inactive-gripper-weight "${inactive_gripper_weight}" \
+    --first-gripper-weight "${first_gripper_weight}" \
     "${window_arguments[@]}"
 }
 
 train_grasp_action_proposal() {
   local -A options=()
   parse_named_options options \
-    "recordings steps proposal hidden-dimension learning-rate weight-decay seed" "$@"
+    "recordings steps proposal hidden-dimension learning-rate weight-decay seed goal-consistency-weight first-action-weight active-direction-weight inactive-gripper-weight first-gripper-weight" "$@"
   train_action_proposal \
     --recordings "${options[recordings]:-}" \
     --camera wrist \
     --steps "${options[steps]:-3000}" \
     --proposal "${options[proposal]:-}" \
-    --hidden-dimension "${options[hidden-dimension]:-128}" \
+    --hidden-dimension "${options[hidden-dimension]:-256}" \
     --learning-rate "${options[learning-rate]:-0.001}" \
     --weight-decay "${options[weight-decay]:-0.0001}" \
     --seed "${options[seed]:-234}" \
+    --goal-consistency-weight "${options[goal-consistency-weight]:-1.0}" \
+    --first-action-weight "${options[first-action-weight]:-1.0}" \
+    --active-direction-weight "${options[active-direction-weight]:-0.1}" \
+    --inactive-gripper-weight "${options[inactive-gripper-weight]:-0}" \
+    --first-gripper-weight "${options[first-gripper-weight]:-1.0}" \
     --start-index "${grasp_window_start}" \
     --count "${grasp_window_count}" \
     --stride "${grasp_window_stride}"

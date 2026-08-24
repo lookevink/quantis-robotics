@@ -599,7 +599,7 @@ case "${command}" in
     recording_names="${2:-}"
     training_steps="${3:-3000}"
     proposal_name="${4:-}"
-    hidden_dimension="${5:-128}"
+    hidden_dimension="${5:-256}"
     learning_rate="${6:-0.001}"
     weight_decay="${7:-0.0001}"
     training_seed="${8:-234}"

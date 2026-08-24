@@ -25,7 +25,8 @@ if TYPE_CHECKING:
 
 
 LEGACY_PROPOSAL_SCHEMA = "quantis.jepa_wm_action_proposal.v1"
-PROPOSAL_SCHEMA = "quantis.jepa_wm_action_proposal.v2"
+PREVIOUS_PROPOSAL_SCHEMA = "quantis.jepa_wm_action_proposal.v2"
+PROPOSAL_SCHEMA = "quantis.jepa_wm_action_proposal.v3"
 
 
 @dataclass(frozen=True)
@@ -259,6 +260,8 @@ class ActionProposalNetwork(torch.nn.Module):
         action_standard_deviation: torch.Tensor,
         feature_mode: ProposalFeatureMode = ProposalFeatureMode.SPATIAL_MOMENTS,
         conditioning: ProposalConditioning = ProposalConditioning(),
+        conditioning_residual: bool = False,
+        conditioned_gripper_head: bool = False,
     ) -> None:
         super().__init__()
         if feature_dimension <= 0 or horizon <= 0 or hidden_dimension <= 0:
@@ -275,6 +278,12 @@ class ActionProposalNetwork(torch.nn.Module):
         self.hidden_dimension = hidden_dimension
         self.feature_mode = ProposalFeatureMode.parse(feature_mode)
         self.conditioning = conditioning
+        self.conditioning_residual = bool(conditioning_residual)
+        self.conditioned_gripper_head = bool(conditioned_gripper_head)
+        if (
+            self.conditioning_residual or self.conditioned_gripper_head
+        ) and conditioning.input_dimension == 0:
+            raise ValueError("conditioning heads require proposal conditioning")
         input_dimension = (
             feature_dimension * self.feature_mode.multiplier
             + conditioning.input_dimension
@@ -311,10 +320,34 @@ class ActionProposalNetwork(torch.nn.Module):
         else:
             task_progress_mean = torch.zeros(1)
             task_progress_standard_deviation = torch.ones(1)
+        shared_action_dimensions = (
+            ACTION_DIMENSIONS - 1
+            if self.conditioned_gripper_head
+            else ACTION_DIMENSIONS
+        )
+        shared_output_dimension = horizon * shared_action_dimensions
         self.network = torch.nn.Sequential(
             torch.nn.Linear(input_dimension, hidden_dimension),
             torch.nn.GELU(),
-            torch.nn.Linear(hidden_dimension, horizon * ACTION_DIMENSIONS),
+            torch.nn.Linear(hidden_dimension, shared_output_dimension),
+        )
+        self.conditioning_network = (
+            torch.nn.Sequential(
+                torch.nn.Linear(conditioning.input_dimension, hidden_dimension),
+                torch.nn.GELU(),
+                torch.nn.Linear(hidden_dimension, shared_output_dimension),
+            )
+            if self.conditioning_residual
+            else None
+        )
+        self.gripper_network = (
+            torch.nn.Sequential(
+                torch.nn.Linear(conditioning.input_dimension, hidden_dimension),
+                torch.nn.GELU(),
+                torch.nn.Linear(hidden_dimension, horizon),
+            )
+            if self.conditioned_gripper_head
+            else None
         )
         self.register_buffer("action_mean", action_mean.clone().float())
         self.register_buffer(
@@ -369,6 +402,7 @@ class ActionProposalNetwork(torch.nn.Module):
         inputs: ProposalInputs = ProposalInputs(),
     ) -> torch.Tensor:
         features = proposal_features(context, target, self.feature_mode)
+        conditioning_features = []
         expected_features = self.feature_dimension * self.feature_mode.multiplier
         if features.shape[-1] != expected_features:
             raise ValueError(
@@ -381,6 +415,7 @@ class ActionProposalNetwork(torch.nn.Module):
             standardized_pose = (
                 pose.to(device=features.device, dtype=features.dtype) - self.pose_mean
             ) / self.pose_standard_deviation
+            conditioning_features.append(standardized_pose)
             features = torch.cat((features, standardized_pose), dim=-1)
         elif inputs.pose is not None:
             raise ValueError("proposal checkpoint does not accept proprioception")
@@ -398,6 +433,7 @@ class ActionProposalNetwork(torch.nn.Module):
                 previous_action.to(device=features.device, dtype=features.dtype)
                 - self.previous_action_mean
             ) / self.previous_action_standard_deviation
+            conditioning_features.append(standardized_previous_action)
             features = torch.cat((features, standardized_previous_action), dim=-1)
         elif inputs.previous_action is not None:
             raise ValueError("proposal checkpoint does not accept action history")
@@ -416,6 +452,7 @@ class ActionProposalNetwork(torch.nn.Module):
                 goal_delta.to(device=features.device, dtype=features.dtype)
                 - self.goal_delta_mean
             ) / self.goal_delta_standard_deviation
+            conditioning_features.append(standardized_goal_delta)
             features = torch.cat((features, standardized_goal_delta), dim=-1)
         elif inputs.goal_delta is not None:
             raise ValueError("proposal checkpoint does not accept goal conditioning")
@@ -433,10 +470,33 @@ class ActionProposalNetwork(torch.nn.Module):
                 task_progress.to(device=features.device, dtype=features.dtype)
                 - self.task_progress_mean
             ) / self.task_progress_standard_deviation
+            conditioning_features.append(standardized_task_progress)
             features = torch.cat((features, standardized_task_progress), dim=-1)
         elif inputs.task_progress is not None:
             raise ValueError("proposal checkpoint does not accept task progress")
-        return self.network(features).reshape(-1, self.horizon, ACTION_DIMENSIONS)
+        predicted = self.network(features)
+        conditioning_values = (
+            torch.cat(conditioning_features, dim=-1)
+            if self.conditioning_network is not None
+            or self.gripper_network is not None
+            else None
+        )
+        if self.conditioning_network is not None:
+            predicted = predicted + self.conditioning_network(conditioning_values)
+        predicted_actions = predicted.reshape(
+            -1,
+            self.horizon,
+            ACTION_DIMENSIONS - int(self.conditioned_gripper_head),
+        )
+        if self.gripper_network is not None:
+            predicted_actions = torch.cat(
+                (
+                    predicted_actions[:, :, :6],
+                    self.gripper_network(conditioning_values).unsqueeze(-1),
+                ),
+                dim=-1,
+            )
+        return predicted_actions
 
     def forward(
         self,
@@ -480,6 +540,8 @@ def save_action_proposal(
             "hidden_dimension": proposal.hidden_dimension,
             "feature_mode": proposal.feature_mode.value,
             "conditioning": proposal.conditioning.to_dict(),
+            "conditioning_residual": proposal.conditioning_residual,
+            "conditioned_gripper_head": proposal.conditioned_gripper_head,
             "state_dict": proposal.state_dict(),
         },
         path,
@@ -493,7 +555,11 @@ def load_action_proposal(
 ) -> tuple[ActionProposalNetwork, TrainingArtifactMetadata]:
     payload = torch.load(path, map_location=device, weights_only=True)
     schema = payload.get("schema")
-    if schema not in (LEGACY_PROPOSAL_SCHEMA, PROPOSAL_SCHEMA):
+    if schema not in (
+        LEGACY_PROPOSAL_SCHEMA,
+        PREVIOUS_PROPOSAL_SCHEMA,
+        PROPOSAL_SCHEMA,
+    ):
         raise ValueError("action proposal schema is unsupported")
     metadata_payload = payload.get("metadata")
     if not isinstance(metadata_payload, dict):
@@ -503,6 +569,29 @@ def load_action_proposal(
     if not isinstance(raw_state, dict):
         raise ValueError("action proposal state is missing")
     state = dict(raw_state)
+    conditioned_gripper_head = bool(
+        payload.get("conditioned_gripper_head", False)
+    )
+    if schema == PREVIOUS_PROPOSAL_SCHEMA and conditioned_gripper_head:
+        horizon = int(payload["horizon"])
+        cartesian_rows = [
+            step * ACTION_DIMENSIONS + axis
+            for step in range(horizon)
+            for axis in range(ACTION_DIMENSIONS - 1)
+        ]
+        for prefix in ("network.2", "conditioning_network.2"):
+            for suffix in ("weight", "bias"):
+                key = f"{prefix}.{suffix}"
+                if key not in state:
+                    if prefix == "conditioning_network.2" and not bool(
+                        payload.get("conditioning_residual", False)
+                    ):
+                        continue
+                    raise ValueError("v2 gripper-head proposal state is incomplete")
+                values = state[key]
+                if values.shape[0] != horizon * ACTION_DIMENSIONS:
+                    raise ValueError("v2 gripper-head proposal state is invalid")
+                state[key] = values[cartesian_rows]
     if "goal_mean" in state or "goal_standard_deviation" in state:
         if "goal_delta_mean" in state or "goal_delta_standard_deviation" in state:
             raise ValueError("action proposal has conflicting goal-delta state")
@@ -600,6 +689,8 @@ def load_action_proposal(
             payload.get("feature_mode", ProposalFeatureMode.GLOBAL.value)
         ),
         conditioning=conditioning,
+        conditioning_residual=bool(payload.get("conditioning_residual", False)),
+        conditioned_gripper_head=conditioned_gripper_head,
     ).to(device)
     proposal.load_state_dict(state, strict=True)
     proposal.eval()

@@ -510,6 +510,32 @@ metric now averages cosine only across active labels because cosine is
 undefined for a zero vector, while stationary labels still face the unchanged
 translation/rotation/gripper hold gate.
 
+The promoted grasp proposal separates gripper timing from visual pose motion.
+Its frozen JEPA features and current pose/history/goal/task-progress inputs
+still predict the six Cartesian action axes, while a conditioning-only gripper
+head prevents seed-specific visual features from closing one step early. The
+5.1 MB h256 checkpoint
+`grasp-20260824T041009Z-2400_task20_gripper_head_h256_s3000` cleared the strict
+offline gate on both untouched held-out seeds: 60/60 first-action gates,
+60/60 active-direction gates, aggregate active cosine `0.9769`, and mean
+sequence MSE `0.00001145`. Its readiness artifact is:
+
+```text
+/home/ubuntu/docker/jepa-wm/checkpoints/experiments/grasp-20260824T041009Z-2400_task20_gripper_head_h256_s3000_grasp_readiness.json
+```
+
+The first four-step live rollout is preserved as
+`rollout-20260824T101920Z-12400`. All four JEPA actions passed freshness, IK,
+joint, tracking, force, contact, and collision gates; all four shadow searches
+and counterfactual safety projections also passed. It reduced translation error
+by `5.95 mm`, rotation error by `0.000868 rad`, and gripper error by `0.1041`,
+but did not attach the connector. The safety selector scaled gripper commands
+to one-quarter or one-eighth alongside pose corrections, leaving final
+closedness at `0.5541`; therefore `reach_and_grasp.passed` is false with
+`no_attachment_transition`. This is meaningful closed-loop progress, not task
+completion or demo authority. The next checkpoint must decouple bounded
+gripper scaling from pose/IK scaling and repeat the attachment gate.
+
 The first grasp-domain JEPA-WM action adapter used all 1,980 bounded rollouts
 from the 20 training recordings. In a fixed eight-context CEM diagnostic it
 lowered latent energy below both zero and recorded actions on every context,

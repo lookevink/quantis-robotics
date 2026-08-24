@@ -17,6 +17,7 @@ from jepa_wm.action import ActionSelectionBounds
 from jepa_wm.contract import MODEL_ID
 from jepa_wm.frames import encode_clips
 from jepa_wm.model import load_headless_model
+from jepa_wm.planner_readiness import FirstActionThresholds
 from jepa_wm.proposal import (
     ActionProposalNetwork,
     ProposalConditioning,
@@ -49,6 +50,30 @@ class TrainingRecordingSelection:
 
 
 @dataclass(frozen=True)
+class ProposalLossWeights:
+    action_mse: float = 1.0
+    goal_consistency: float = 1.0
+    first_action_mse: float = 1.0
+    active_direction: float = 0.1
+    inactive_gripper: float = 0.01
+    first_gripper_mse: float = 1.0
+
+    def __post_init__(self) -> None:
+        if any(
+            not np.isfinite(value) or value < 0.0
+            for value in (
+                self.action_mse,
+                self.goal_consistency,
+                self.first_action_mse,
+                self.active_direction,
+                self.inactive_gripper,
+                self.first_gripper_mse,
+            )
+        ):
+            raise ValueError("proposal loss weights must be finite and non-negative")
+
+
+@dataclass(frozen=True)
 class ProposalTrainingConfig:
     steps: int = 2000
     batch_size: int = 32
@@ -57,6 +82,9 @@ class ProposalTrainingConfig:
     hidden_dimension: int = 128
     encoding_batch_size: int = 4
     seed: int = 234
+    loss_weights: ProposalLossWeights = ProposalLossWeights()
+    conditioning_residual: bool = True
+    conditioned_gripper_head: bool = True
 
     def __post_init__(self) -> None:
         dimensions = (
@@ -67,8 +95,148 @@ class ProposalTrainingConfig:
         )
         if any(value <= 0 for value in dimensions) or self.seed < 0:
             raise ValueError("proposal training dimensions must be positive")
-        if self.learning_rate <= 0 or self.weight_decay < 0:
+        if (
+            self.learning_rate <= 0
+            or self.weight_decay < 0
+        ):
             raise ValueError("proposal optimizer values are invalid")
+
+
+@dataclass(frozen=True)
+class ProposalLoss:
+    action_mse: torch.Tensor
+    goal_consistency_mse: torch.Tensor
+    first_action_mse: torch.Tensor
+    active_direction_loss: torch.Tensor
+    inactive_gripper_loss: torch.Tensor
+    first_gripper_mse: torch.Tensor
+
+    def total(self, weights: ProposalLossWeights) -> torch.Tensor:
+        return (
+            weights.action_mse * self.action_mse
+            + weights.goal_consistency * self.goal_consistency_mse
+            + weights.first_action_mse * self.first_action_mse
+            + weights.active_direction * self.active_direction_loss
+            + weights.inactive_gripper * self.inactive_gripper_loss
+            + weights.first_gripper_mse * self.first_gripper_mse
+        )
+
+
+@dataclass(frozen=True)
+class ProposalLossSnapshot:
+    action_mse: float
+    goal_consistency_mse: float
+    first_action_mse: float
+    active_direction_loss: float
+    inactive_gripper_loss: float
+    first_gripper_mse: float
+
+    @classmethod
+    def from_loss(cls, loss: ProposalLoss) -> ProposalLossSnapshot:
+        return cls(
+            *(float(value.detach().cpu()) for value in loss.__dict__.values())
+        )
+
+    @staticmethod
+    def report(
+        initial: ProposalLossSnapshot,
+        final: ProposalLossSnapshot,
+    ) -> dict[str, float]:
+        return {
+            **{
+                f"initial_{name}": value
+                for name, value in initial.__dict__.items()
+            },
+            **{
+                f"final_{name}": value
+                for name, value in final.__dict__.items()
+            },
+        }
+
+
+def proposal_loss(
+    predicted_standardized_actions: torch.Tensor,
+    target_standardized_actions: torch.Tensor,
+    goal_delta: torch.Tensor,
+    *,
+    action_mean: torch.Tensor,
+    action_standard_deviation: torch.Tensor,
+    goal_standard_deviation: torch.Tensor,
+    thresholds: FirstActionThresholds = FirstActionThresholds(),
+) -> ProposalLoss:
+    if (
+        predicted_standardized_actions.shape != target_standardized_actions.shape
+        or predicted_standardized_actions.ndim != 3
+        or predicted_standardized_actions.shape[-1] != 7
+        or goal_delta.shape != (predicted_standardized_actions.shape[0], 7)
+        or action_mean.shape != predicted_standardized_actions.shape[1:]
+        or action_standard_deviation.shape != action_mean.shape
+        or goal_standard_deviation.shape != (7,)
+    ):
+        raise ValueError("proposal loss tensors do not match the action horizon")
+    predicted_actions = (
+        predicted_standardized_actions * action_standard_deviation + action_mean
+    )
+    target_actions = (
+        target_standardized_actions * action_standard_deviation + action_mean
+    )
+    predicted_additive_goal = torch.cat(
+        (predicted_actions[:, :, :3].sum(dim=1), predicted_actions[:, :, 6:].sum(dim=1)),
+        dim=1,
+    )
+    additive_goal_delta = torch.cat((goal_delta[:, :3], goal_delta[:, 6:]), dim=1)
+    additive_goal_standard_deviation = torch.cat(
+        (goal_standard_deviation[:3], goal_standard_deviation[6:])
+    )
+    standardized_goal_error = (
+        predicted_additive_goal - additive_goal_delta
+    ) / additive_goal_standard_deviation
+    recorded_first = target_actions[:, 0]
+    planned_first = predicted_actions[:, 0]
+    active = (
+        torch.linalg.vector_norm(recorded_first[:, :3], dim=1)
+        > thresholds.recorded_translation_activity
+    ) | (
+        torch.linalg.vector_norm(recorded_first[:, 3:6], dim=1)
+        > thresholds.recorded_rotation_activity
+    ) | (
+        torch.abs(recorded_first[:, 6])
+        > thresholds.recorded_gripper_activity
+    )
+    cosine = torch.nn.functional.cosine_similarity(
+        recorded_first, planned_first, dim=1, eps=1e-12
+    )
+    active_weights = active.to(dtype=cosine.dtype)
+    direction_loss = (
+        ((1.0 - cosine) * active_weights).sum()
+        / torch.clamp_min(active_weights.sum(), 1.0)
+    )
+    inactive_gripper = (
+        torch.abs(recorded_first[:, 6])
+        <= thresholds.recorded_gripper_activity
+    ).to(dtype=planned_first.dtype)
+    inactive_gripper_loss = (
+        torch.square(
+            planned_first[:, 6] / thresholds.maximum_stationary_gripper
+        )
+        * inactive_gripper
+    ).sum() / torch.clamp_min(inactive_gripper.sum(), 1.0)
+    return ProposalLoss(
+        torch.nn.functional.mse_loss(
+            predicted_standardized_actions, target_standardized_actions
+        ),
+        torch.mean(torch.square(standardized_goal_error)),
+        torch.nn.functional.mse_loss(
+            predicted_standardized_actions[:, 0],
+            target_standardized_actions[:, 0],
+        ),
+        direction_loss,
+        inactive_gripper_loss,
+        torch.nn.functional.mse_loss(
+            predicted_standardized_actions[:, 0, 6],
+            target_standardized_actions[:, 0, 6],
+        ),
+    )
 
 
 def _training_rollouts(
@@ -166,6 +334,8 @@ def train_action_proposal(
             goal_delta=goal_delta_normalization,
             task_progress=task_progress_normalization,
         ),
+        conditioning_residual=config.conditioning_residual,
+        conditioned_gripper_head=config.conditioned_gripper_head,
     ).to(device)
     optimizer = torch.optim.AdamW(
         proposal.parameters(),
@@ -174,6 +344,7 @@ def train_action_proposal(
     )
     generator = torch.Generator(device="cpu").manual_seed(config.seed)
     losses = []
+    component_history = []
     training_started = monotonic()
     proposal.train()
     for _ in range(config.steps):
@@ -186,14 +357,20 @@ def train_action_proposal(
         predicted = proposal.standardized_actions(
             contexts[indices].to(device), targets[indices].to(device), inputs
         )
-        loss = torch.nn.functional.mse_loss(
+        components = proposal_loss(
             predicted,
             standardized_actions[indices].to(device),
+            inputs.goal_delta,
+            action_mean=proposal.action_mean,
+            action_standard_deviation=proposal.action_standard_deviation,
+            goal_standard_deviation=proposal.goal_delta_standard_deviation,
         )
+        loss = components.total(config.loss_weights)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
         losses.append(float(loss.detach().cpu()))
+        component_history.append(ProposalLossSnapshot.from_loss(components))
     torch.cuda.synchronize(device)
     training_seconds = monotonic() - training_started
     metadata = TrainingArtifactMetadata(
@@ -223,6 +400,9 @@ def train_action_proposal(
         "initial_loss": losses[0],
         "final_loss": losses[-1],
         "minimum_loss": float(np.min(losses)),
+        **ProposalLossSnapshot.report(
+            component_history[0], component_history[-1]
+        ),
         "encoding_seconds": round(encoding_seconds, 3),
         "training_seconds": round(training_seconds, 3),
     }
@@ -252,6 +432,41 @@ def main() -> None:
         "--weight-decay", type=float, default=ProposalTrainingConfig.weight_decay
     )
     parser.add_argument("--seed", type=int, default=ProposalTrainingConfig.seed)
+    parser.add_argument(
+        "--goal-consistency-weight",
+        type=float,
+        default=ProposalLossWeights.goal_consistency,
+    )
+    parser.add_argument(
+        "--first-action-weight",
+        type=float,
+        default=ProposalLossWeights.first_action_mse,
+    )
+    parser.add_argument(
+        "--active-direction-weight",
+        type=float,
+        default=ProposalLossWeights.active_direction,
+    )
+    parser.add_argument(
+        "--inactive-gripper-weight",
+        type=float,
+        default=ProposalLossWeights.inactive_gripper,
+    )
+    parser.add_argument(
+        "--first-gripper-weight",
+        type=float,
+        default=ProposalLossWeights.first_gripper_mse,
+    )
+    parser.add_argument(
+        "--conditioning-residual",
+        action=argparse.BooleanOptionalAction,
+        default=ProposalTrainingConfig.conditioning_residual,
+    )
+    parser.add_argument(
+        "--conditioned-gripper-head",
+        action=argparse.BooleanOptionalAction,
+        default=ProposalTrainingConfig.conditioned_gripper_head,
+    )
     parser.add_argument("--start-index", type=int)
     parser.add_argument("--count", type=int)
     parser.add_argument("--stride", type=int)
@@ -280,6 +495,15 @@ def main() -> None:
                     learning_rate=args.learning_rate,
                     weight_decay=args.weight_decay,
                     seed=args.seed,
+                    loss_weights=ProposalLossWeights(
+                        goal_consistency=args.goal_consistency_weight,
+                        first_action_mse=args.first_action_weight,
+                        active_direction=args.active_direction_weight,
+                        inactive_gripper=args.inactive_gripper_weight,
+                        first_gripper_mse=args.first_gripper_weight,
+                    ),
+                    conditioning_residual=args.conditioning_residual,
+                    conditioned_gripper_head=args.conditioned_gripper_head,
                 ),
                 window=window,
             ),
