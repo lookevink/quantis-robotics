@@ -8,6 +8,8 @@ from pathlib import Path
 from jepa_wm.action import DroidAction, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.trajectory import (
+    RecordedFrame,
+    RecordedRollout,
     RolloutProtocol,
     RolloutWindow,
     load_rollouts,
@@ -21,6 +23,25 @@ class RecordedTrajectoryTest(unittest.TestCase):
             RolloutWindow(start_index=4, count=3, stride=2).context_indices,
             (4, 6, 8),
         )
+
+    def test_window_rejects_a_missing_exact_context_instead_of_backfilling(self) -> None:
+        pose = DroidPose((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5))
+        action = DroidAction((0.0,) * 7)
+
+        def rollout(index: int) -> RecordedRollout:
+            return RecordedRollout(
+                context=(RecordedFrame(index, Path(f"frame-{index}.png")),),
+                context_pose=pose,
+                previous_action=action,
+                target=RecordedFrame(index + 3, Path(f"frame-{index + 3}.png")),
+                target_pose=pose,
+                actions=(action, action, action),
+            )
+
+        with self.assertRaisesRegex(ValueError, "missing required rollout context 6"):
+            RolloutWindow(start_index=4, count=3, stride=2).select(
+                (rollout(4), rollout(7), rollout(8))
+            )
 
     def test_loads_native_context_actions_and_terminal_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -32,6 +32,12 @@ RecordingValidator = Callable[[Path, str], None]
 
 
 @dataclass(frozen=True)
+class TaskProposalArtifactEvidence:
+    identity: ProposalArtifactIdentity
+    metadata: TrainingArtifactMetadata
+
+
+@dataclass(frozen=True)
 class TaskCorpusExpectation:
     recording: str
     split: str
@@ -79,9 +85,12 @@ class TaskProposalReadinessPolicy:
                 "goal-delta, and task-progress conditioning"
             )
 
-    def validate_proposal_identity(self, proposal: Path) -> ProposalArtifactIdentity:
+    def _validate_proposal_identity(
+        self,
+        proposal: Path,
+        payload: dict[str, object],
+    ) -> ProposalArtifactIdentity:
         proposal = proposal.resolve()
-        payload = self.training_report(proposal)
         self.validate_conditioning(payload)
         from jepa_wm.proposal import load_action_proposal_with_training_selection
         import torch
@@ -133,6 +142,13 @@ class TaskProposalReadinessPolicy:
             )
         return identity
 
+    def validate_proposal_identity(self, proposal: Path) -> ProposalArtifactIdentity:
+        proposal = proposal.resolve()
+        return self._validate_proposal_identity(
+            proposal,
+            self.training_report(proposal),
+        )
+
     def validate_training_window(self, proposal: Path) -> None:
         if self.training_report(proposal).get("window") != self.window.to_dict():
             raise ValueError(
@@ -140,12 +156,11 @@ class TaskProposalReadinessPolicy:
                 f"{self.window_description}"
             )
 
-    def validate_training_selection(
+    def _validate_training_selection(
         self,
-        proposal: Path,
+        payload: dict[str, object],
         metadata: TrainingArtifactMetadata,
     ) -> None:
-        payload = self.training_report(proposal)
         if payload.get("window") != self.window.to_dict():
             raise ValueError(
                 f"{self.task_name} proposal training must select "
@@ -170,6 +185,21 @@ class TaskProposalReadinessPolicy:
             raise ValueError(
                 f"{self.task_name} proposal training selection evidence is invalid"
             )
+
+    def validate_training_selection(
+        self,
+        proposal: Path,
+        metadata: TrainingArtifactMetadata,
+    ) -> None:
+        self._validate_training_selection(self.training_report(proposal), metadata)
+
+    def validate_proposal(self, proposal: Path) -> TaskProposalArtifactEvidence:
+        proposal = proposal.resolve()
+        payload = self.training_report(proposal)
+        identity = self._validate_proposal_identity(proposal, payload)
+        metadata = TrainingArtifactMetadata.from_dict(payload.get("metadata"))
+        self._validate_training_selection(payload, metadata)
+        return TaskProposalArtifactEvidence(identity, metadata)
 
     def validate_goal_deltas(self, recording: Path, results: object) -> None:
         if not isinstance(results, list) or len(results) != self.window.count:

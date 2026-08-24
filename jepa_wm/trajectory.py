@@ -117,18 +117,15 @@ class RolloutWindow:
     def select(
         self, rollouts: tuple[RecordedRollout, ...]
     ) -> tuple[RecordedRollout, ...]:
-        selected = tuple(
-            rollout
-            for rollout in rollouts
-            if rollout.context[0].index >= self.start_index
-            and (rollout.context[0].index - self.start_index) % self.stride == 0
-        )[: self.count]
-        if len(selected) != self.count:
+        by_context = {rollout.context[0].index: rollout for rollout in rollouts}
+        if len(by_context) != len(rollouts):
+            raise ValueError("recording contains duplicate rollout contexts")
+        try:
+            return tuple(by_context[index] for index in self.context_indices)
+        except KeyError as error:
             raise ValueError(
-                f"recording has only {len(selected)} qualifying rollouts, "
-                f"expected {self.count}"
-            )
-        return selected
+                f"recording is missing required rollout context {error.args[0]}"
+            ) from error
 
 
 def _read_object(path: Path) -> dict[str, Any]:

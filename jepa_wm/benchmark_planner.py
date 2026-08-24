@@ -25,7 +25,13 @@ from jepa_wm.contract import MODEL_ID
 from jepa_wm.domain_recording import DomainRecording
 from jepa_wm.frames import video_batch
 from jepa_wm.model import load_headless_model
-from jepa_wm.planner import CEMConfig, CEMPlanner, PlannerActionBounds
+from jepa_wm.planner import (
+    CandidateTrustRegion,
+    CEMConfig,
+    CEMPlanner,
+    PlannerActionBounds,
+    ProposalCenteredBounds,
+)
 from jepa_wm.planning_scoring import LatentGoalScorer
 from jepa_wm.planner_report import (
     CandidateEvaluation,
@@ -36,6 +42,7 @@ from jepa_wm.planner_report import (
     PlannerRunSummary,
     PlannerTimings,
 )
+from jepa_wm.planner_policy import PlannerTaskPolicy
 from jepa_wm.proposal import ProposalInputs, load_action_proposal
 from jepa_wm.trajectory import RolloutWindow, load_rollouts
 from jepa_wm.training_artifact import (
@@ -157,6 +164,7 @@ class EffectiveBenchmarkIdentity:
     planner_config: CEMConfig
     scoring_batch_size: int
     initialization: BenchmarkInitialization
+    task_policy: PlannerTaskPolicy = PlannerTaskPolicy()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -184,6 +192,7 @@ class EffectiveBenchmarkIdentity:
                 "kind": self.initialization.kind.value,
                 "prior": self.initialization.prior.to_dict(),
             },
+            "task_policy": self.task_policy.to_dict(),
         }
 
     @property
@@ -244,6 +253,7 @@ def benchmark_recording(
     prior_config: ActionPriorConfig = ActionPriorConfig(),
     proposal: Path | None = None,
     proposal_prior_config: ActionPriorConfig = PROPOSAL_REFINEMENT_PRIOR,
+    task_policy: PlannerTaskPolicy = PlannerTaskPolicy(),
     expected_split: DatasetSplit = DatasetSplit.HELD_OUT,
 ) -> dict[str, Any]:
     if not torch.cuda.is_available():
@@ -368,7 +378,19 @@ def benchmark_recording(
             seed=planner_config.seed + rollout.context[0].index,
             minimum_standard_deviation=planner_config.minimum_standard_deviation,
         )
-        result = CEMPlanner(config, planner_bounds).plan(
+        candidate_bounds = (
+            ProposalCenteredBounds(
+                proposed_actions,
+                planner_bounds,
+                task_policy.proposal_trust_region,
+            )
+            if (
+                proposed_actions is not None
+                and task_policy.proposal_trust_region is not None
+            )
+            else planner_bounds
+        )
+        result = CEMPlanner(config, candidate_bounds).plan(
             planning_objective,
             initial_distribution=prior.distribution,
         )
@@ -454,6 +476,7 @@ def benchmark_recording(
         planner_config=planner_config,
         scoring_batch_size=scoring_batch_size,
         initialization=initialization_config,
+        task_policy=task_policy,
     )
     output_path = domain_recording.path / "jepa_wm" / (
         f"{camera}_cem_benchmark_"
@@ -483,6 +506,7 @@ def benchmark_recording(
             training_action_library=len(action_library.sequences),
             prior_penalty_weight=initialization_config.prior.penalty_weight,
             initialization=initialization_config.kind,
+            task_policy=task_policy,
         ),
         bounds=planner_bounds,
         timings=PlannerTimings(

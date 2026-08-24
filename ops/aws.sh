@@ -419,6 +419,7 @@ Commands:
   jepa-wm-insertion-adapt RECORDING[,RECORDING...] STEPS ADAPTER
   jepa-wm-insertion-wm-eval RECORDING ADAPTER
   jepa-wm-insertion-wm-summarize RECORDING[,RECORDING...] ADAPTER EXPERIMENT BASE_SEED
+  jepa-wm-insertion-plan-benchmark RECORDING ADAPTER PROPOSAL
   jepa-wm-plan-benchmark RECORDING [camera] [start] [count] [stride] [iterations] [samples] [elites] [adapter] [proposal]
   jepa-wm-proposal-train RECORDING[,RECORDING...] [camera] [steps] [proposal]
   jepa-wm-grasp-proposal-train RECORDING[,RECORDING...] [steps] PROPOSAL [hidden-dimension learning-rate weight-decay seed]
@@ -731,6 +732,16 @@ case "${command}" in
     require_positive_integer "planner elites" "${planner_elites}" || exit 1
     sync_repo
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh plan-benchmark --recording '${recording_name}' --camera '${camera_name}' --start-index '${start_index}' --count '${rollout_count}' --stride '${rollout_stride}' --iterations '${planner_iterations}' --samples '${planner_samples}' --elites '${planner_elites}' --adapter '${adapter_name}' --proposal '${proposal_name}'"
+    ;;
+  jepa-wm-insertion-plan-benchmark)
+    recording_name="${2:-}"
+    adapter_name="${3:-}"
+    proposal_name="${4:-}"
+    is_safe_identifier "${recording_name}" || die "invalid recording name"
+    is_safe_identifier "${adapter_name}" || die "invalid adapter name"
+    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-plan-benchmark --recording '${recording_name}' --adapter '${adapter_name}' --proposal '${proposal_name}'"
     ;;
   jepa-wm-proposal-train)
     recording_names="${2:-}"

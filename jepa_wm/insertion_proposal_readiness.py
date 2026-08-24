@@ -11,6 +11,7 @@ from jepa_wm.insertion_corpus import InsertionCorpusRoster
 from jepa_wm.insertion_recording import ContactInsertionEvidence
 from jepa_wm.task_proposal_readiness import (
     TaskCorpusExpectation,
+    TaskProposalArtifactEvidence,
     TaskProposalReadinessPolicy,
 )
 from jepa_wm.task_windows import INSERTION_PROPOSAL_WINDOW
@@ -49,6 +50,12 @@ def validate_insertion_proposal_identity(
     proposal: Path,
 ) -> ProposalArtifactIdentity:
     return INSERTION_READINESS.validate_proposal_identity(proposal)
+
+
+def validate_insertion_proposal(
+    proposal: Path,
+) -> TaskProposalArtifactEvidence:
+    return INSERTION_READINESS.validate_proposal(proposal)
 
 
 def validate_insertion_training_selection(

@@ -14,7 +14,13 @@ import numpy as np
 from jepa_wm.action import ActionSelectionBounds, DroidAction
 from jepa_wm.domain_recording import DomainRecording
 from jepa_wm.planner import CEMConfig, PlannerActionBounds
-from jepa_wm.planner_readiness import FirstActionDecision, evaluate_first_actions
+from jepa_wm.planner_policy import PlannerTaskPolicy
+from jepa_wm.planner_readiness import (
+    FirstActionDecision,
+    FirstActionGate,
+    FirstActionThresholds,
+    evaluate_first_actions,
+)
 from jepa_wm.trajectory import RolloutWindow
 from jepa_wm.training_artifact import ArtifactIdentity, TrainingArtifactIdentity
 
@@ -80,18 +86,22 @@ class PlannerRolloutEvaluation:
     def improvement_over_recorded(self) -> float:
         return self.recorded_energy - self.planned_candidate.energy
 
-    @property
-    def first_action_decision(self) -> FirstActionDecision:
+    def first_action_decision(
+        self,
+        gate: FirstActionGate | None = None,
+    ) -> FirstActionDecision:
         return evaluate_first_actions(
             [DroidAction(tuple(self.recorded_actions[0]))],
             [DroidAction(tuple(self.planned_candidate.actions[0]))],
+            gate,
         ).decisions[0]
 
     @property
     def first_action_cosine(self) -> float:
-        return self.first_action_decision.cosine
+        return self.first_action_decision().cosine
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, gate: FirstActionGate | None = None) -> dict[str, Any]:
+        first_action = self.first_action_decision(gate)
         library = (
             self.initial_candidate
             if self.initialization is PlannerInitialization.LIBRARY
@@ -121,8 +131,8 @@ class PlannerRolloutEvaluation:
             "refinement_improvement": self.refinement_improvement,
             "improvement_over_zero": self.improvement_over_zero,
             "improvement_over_recorded": self.improvement_over_recorded,
-            "first_action_cosine": self.first_action_cosine,
-            "first_action_gate": self.first_action_decision.to_dict(),
+            "first_action_cosine": first_action.cosine,
+            "first_action_gate": first_action.to_dict(),
         }
 
 
@@ -186,6 +196,7 @@ class PlannerRunSummary:
     training_action_library: int
     prior_penalty_weight: float
     initialization: PlannerInitialization
+    task_policy: PlannerTaskPolicy = PlannerTaskPolicy()
 
     def __post_init__(self) -> None:
         if self.training_action_library <= 0:
@@ -200,6 +211,7 @@ class PlannerRunSummary:
             "training_action_library": self.training_action_library,
             "prior_penalty_weight": self.prior_penalty_weight,
             "initialization": self.initialization.value,
+            "task_policy": self.task_policy.to_dict(),
         }
 
 
@@ -244,6 +256,9 @@ class PlannerBenchmarkReport:
             raise ValueError("planner benchmark requires at least one evaluation")
 
     def to_dict(self) -> dict[str, Any]:
+        first_action_gate = FirstActionGate(
+            self.planner.task_policy.first_action_thresholds
+        )
         summary = evaluate_first_actions(
             [
                 DroidAction(tuple(evaluation.recorded_actions[0]))
@@ -253,6 +268,7 @@ class PlannerBenchmarkReport:
                 DroidAction(tuple(evaluation.planned_candidate.actions[0]))
                 for evaluation in self.evaluations
             ],
+            first_action_gate,
         )
         return {
             "schema": REPORT_SCHEMA,
@@ -282,7 +298,10 @@ class PlannerBenchmarkReport:
             "mean_first_action_cosine": summary.mean_cosine,
             **summary.to_dict(),
             **self.timings.to_dict(),
-            "results": [evaluation.to_dict() for evaluation in self.evaluations],
+            "results": [
+                evaluation.to_dict(first_action_gate)
+                for evaluation in self.evaluations
+            ],
         }
 
     def write(self, output: Path) -> dict[str, Any]:

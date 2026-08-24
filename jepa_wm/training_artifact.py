@@ -104,6 +104,14 @@ ProposalArtifactIdentity = ArtifactIdentity
 
 
 @dataclass(frozen=True)
+class TrainingCorpusIdentity:
+    base_model: str
+    source_revision: str
+    camera: str
+    training_recordings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class TrainingArtifactIdentity(ArtifactIdentity):
     metadata: TrainingArtifactMetadata
 
@@ -175,6 +183,15 @@ class TrainingArtifactMetadata:
             "training_recordings": list(self.training_recordings),
             "training_steps": self.training_steps,
         }
+
+    @property
+    def corpus_identity(self) -> TrainingCorpusIdentity:
+        return TrainingCorpusIdentity(
+            self.base_model,
+            self.source_revision,
+            self.camera,
+            self.training_recordings,
+        )
 
 
 def training_report_path(artifact: Path) -> Path:

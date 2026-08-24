@@ -749,6 +749,25 @@ class AwsLifecycleTests(unittest.TestCase):
             calls,
         )
 
+    def test_jepa_wm_insertion_plan_benchmark_uses_pinned_task_entrypoint(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-plan-benchmark",
+            arguments=(
+                "contact-insertion-held-00",
+                "insertion-adapter",
+                "insertion-proposal",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("rsync ", calls)
+        self.assertIn(
+            "ops/jepa_wm.sh insertion-plan-benchmark "
+            "--recording 'contact-insertion-held-00' "
+            "--adapter 'insertion-adapter' --proposal 'insertion-proposal'",
+            calls,
+        )
+
     def test_jepa_wm_proposal_train_forwards_recording_set_and_checkpoint_name(self):
         result, calls = self.run_command(
             "jepa-wm-proposal-train",

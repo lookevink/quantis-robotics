@@ -11,14 +11,16 @@ from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 
-from jepa_wm.action import ACTION_DIMENSIONS, DroidAction
+from jepa_wm.action import DroidAction
 from jepa_wm.action_prior import ActionPriorConfig, EmpiricalActionPrior
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.planner import (
+    CandidateTrustRegion,
     CEMConfig,
     CEMPlanner,
     PlannerActionBounds,
     PlannerDistribution,
+    ProposalCenteredBounds,
 )
 from jepa_wm.planner_readiness import (
     FirstActionDecision,
@@ -105,116 +107,6 @@ class ShadowPlanningRequest:
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("shadow planning request is incomplete") from error
-
-
-@dataclass(frozen=True)
-class CandidateTrustRegion:
-    """Maximum per-step departure from the direct proposal."""
-
-    maximum_translation_deviation: float = 0.001
-    maximum_rotation_deviation: float = 0.004
-    maximum_gripper_deviation: float = 0.02
-
-    def __post_init__(self) -> None:
-        values = (
-            self.maximum_translation_deviation,
-            self.maximum_rotation_deviation,
-            self.maximum_gripper_deviation,
-        )
-        if not all(isfinite(value) and value > 0.0 for value in values):
-            raise ValueError("candidate trust-region limits must be finite and positive")
-
-    @property
-    def standard_deviation_ceiling(self) -> np.ndarray:
-        return np.asarray(
-            (
-                *(self.maximum_translation_deviation,) * 3,
-                *(self.maximum_rotation_deviation,) * 3,
-                self.maximum_gripper_deviation,
-            ),
-            dtype=np.float64,
-        )
-
-    def to_dict(self) -> dict[str, float]:
-        return {
-            "maximum_translation_deviation": self.maximum_translation_deviation,
-            "maximum_rotation_deviation": self.maximum_rotation_deviation,
-            "maximum_gripper_deviation": self.maximum_gripper_deviation,
-        }
-
-    @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> CandidateTrustRegion:
-        return cls(
-            maximum_translation_deviation=float(
-                payload["maximum_translation_deviation"]
-            ),
-            maximum_rotation_deviation=float(payload["maximum_rotation_deviation"]),
-            maximum_gripper_deviation=float(payload["maximum_gripper_deviation"]),
-        )
-
-
-class ProposalCenteredBounds:
-    """Intersection of global action limits and a direct-proposal trust region."""
-
-    def __init__(
-        self,
-        center: np.ndarray,
-        global_bounds: PlannerActionBounds,
-        trust_region: CandidateTrustRegion,
-    ) -> None:
-        values = np.asarray(center, dtype=np.float64)
-        if (
-            values.ndim != 2
-            or values.shape[1] != ACTION_DIMENSIONS
-            or not np.all(np.isfinite(values))
-        ):
-            raise ValueError("candidate center must have finite shape [horizon, 7]")
-        center_actions = tuple(DroidAction(tuple(row)) for row in values)
-        if not global_bounds.accepts(center_actions):
-            raise ValueError("direct proposal is outside global planner bounds")
-        self.center = values.copy()
-        self.global_bounds = global_bounds
-        self.trust_region = trust_region
-
-    @property
-    def initial_standard_deviation(self) -> np.ndarray:
-        return np.minimum(
-            self.global_bounds.initial_standard_deviation,
-            self.trust_region.standard_deviation_ceiling,
-        )
-
-    def clip(self, candidates: np.ndarray) -> np.ndarray:
-        bounded = self.global_bounds.clip(candidates)
-        if bounded.shape[1:] != self.center.shape:
-            raise ValueError("candidate actions do not match the proposal horizon")
-        translation_delta = bounded[:, :, :3] - self.center[None, :, :3]
-        self._clip_vector_norm(
-            translation_delta,
-            self.trust_region.maximum_translation_deviation,
-        )
-        bounded[:, :, :3] = self.center[None, :, :3] + translation_delta
-
-        rotation_delta = bounded[:, :, 3:6] - self.center[None, :, 3:6]
-        self._clip_vector_norm(
-            rotation_delta,
-            self.trust_region.maximum_rotation_deviation,
-        )
-        bounded[:, :, 3:6] = self.center[None, :, 3:6] + rotation_delta
-
-        np.clip(
-            bounded[:, :, 6],
-            self.center[None, :, 6]
-            - self.trust_region.maximum_gripper_deviation,
-            self.center[None, :, 6]
-            + self.trust_region.maximum_gripper_deviation,
-            out=bounded[:, :, 6],
-        )
-        return self.global_bounds.clip(bounded)
-
-    @staticmethod
-    def _clip_vector_norm(vectors: np.ndarray, maximum_norm: float) -> None:
-        norms = np.linalg.norm(vectors, axis=2, keepdims=True)
-        vectors *= np.minimum(1.0, maximum_norm / np.maximum(norms, 1e-12))
 
 
 @dataclass(frozen=True)
