@@ -30,6 +30,10 @@ class ExplorationPlanTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cadence is invalid"):
             validate_sample_times((1.0, 1.30), 0.25)
 
+    def test_rejects_non_finite_sample_times(self) -> None:
+        with self.assertRaises(ValueError):
+            validate_sample_times((1.0, float("nan")), 0.25)
+
     def test_seeded_plan_excites_every_joint_and_returns_to_origin(self) -> None:
         plan = build_exploration_plan(1200, DatasetSplit.TRAIN)
 

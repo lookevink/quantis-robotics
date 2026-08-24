@@ -14,7 +14,7 @@ from jepa_wm.action import ACTION_RECORDING_CONTRACT, DroidPose, action_between
 from sim.demo_sequence import Phase
 
 
-RECORDING_SCHEMA = "quantis.demo_recording.v3"
+RECORDING_SCHEMA = "quantis.demo_recording.v5"
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -64,8 +64,11 @@ class RecordingSnapshot:
     arm_positions: Sequence[float]
     gripper_width_m: float
     plug_position: Sequence[float]
+    plug_orientation_wxyz: Sequence[float]
     plug_attached: bool
     end_effector_pose: DroidPose
+    end_effector_world_position: Sequence[float]
+    gripper_frame_world_position: Sequence[float]
     simulation_time_seconds: float | None = None
 
 
@@ -79,8 +82,11 @@ class RecordingStep:
     arm_positions: list[float]
     gripper_width_m: float
     plug_position: list[float]
+    plug_orientation_wxyz: list[float]
     plug_attached: bool
     end_effector_pose: list[float]
+    end_effector_world_position: list[float]
+    gripper_frame_world_position: list[float]
     action_from_previous: list[float] | None
     simulation_time_seconds: float | None
 
@@ -165,8 +171,17 @@ class RecordingWriter:
                 arm_positions=[float(value) for value in snapshot.arm_positions],
                 gripper_width_m=float(snapshot.gripper_width_m),
                 plug_position=[float(value) for value in snapshot.plug_position],
+                plug_orientation_wxyz=[
+                    float(value) for value in snapshot.plug_orientation_wxyz
+                ],
                 plug_attached=bool(snapshot.plug_attached),
                 end_effector_pose=list(end_effector_pose.values),
+                end_effector_world_position=[
+                    float(value) for value in snapshot.end_effector_world_position
+                ],
+                gripper_frame_world_position=[
+                    float(value) for value in snapshot.gripper_frame_world_position
+                ],
                 action_from_previous=(
                     list(action.values) if action is not None else None
                 ),

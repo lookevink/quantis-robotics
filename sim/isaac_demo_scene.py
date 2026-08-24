@@ -8,6 +8,10 @@ import numpy as np
 
 
 ROBOT_PATH = "/World/Franka_R"
+RIGHT_GRIPPER_OFFSET_IN_HAND_METERS = np.array(
+    [0.0, 0.0, 0.10],
+    dtype=np.float64,
+)
 PLUG_PATH = "/World/RJ45_Plug"
 SOCKET_PATH = "/World/RJ45_Socket"
 PRESENTATION_CAMERA_PATH = "/World/ShotCam"

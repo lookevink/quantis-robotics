@@ -44,6 +44,25 @@ class DemoSequenceTest(unittest.TestCase):
         )
         self.assertEqual(hand_displacement, plug_displacement)
 
+    def test_grasps_behind_the_tip_while_seating_the_tip_at_the_socket(self) -> None:
+        sequence = build_demo_sequence(
+            self.geometry,
+            grasp_offset_m=0.04,
+        )
+
+        grasp = sequence[2].target_position
+        insert = sequence[4].target_position
+        self.assertAlmostEqual(
+            grasp[0] - self.geometry.plug_position[0],
+            0.04,
+        )
+        self.assertAlmostEqual(
+            insert[0] - self.geometry.socket_position[0],
+            0.04,
+        )
+        self.assertEqual(grasp[1:], self.geometry.plug_position[1:])
+        self.assertEqual(insert[1:], self.geometry.socket_position[1:])
+
     def test_approaches_from_the_positive_x_side(self) -> None:
         sequence = build_demo_sequence(
             self.geometry,

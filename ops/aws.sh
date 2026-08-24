@@ -329,6 +329,34 @@ record_seeded_job() {
   wait_recording_job "${recording_id}"
 }
 
+validate_recording_split() {
+  local recording_id="$1"
+  local dataset_split="$2"
+  is_safe_identifier "${recording_id}" || die "invalid recording name"
+  [[ "${dataset_split}" == "train" || "${dataset_split}" == "held_out" ]] \
+    || die "dataset split must be train or held_out"
+}
+
+record_seeded_task() {
+  local starter="$1"
+  local recording_id="$2"
+  local exploration_seed="$3"
+  local dataset_split="$4"
+  validate_recording_split "${recording_id}" "${dataset_split}"
+  require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+  record_seeded_job "${starter}" \
+    "${recording_id}" "${exploration_seed}" "${dataset_split}"
+}
+
+validate_task_recording() {
+  local module="$1"
+  local recording_id="$2"
+  local dataset_split="$3"
+  validate_recording_split "${recording_id}" "${dataset_split}"
+  sync_repo
+  remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m ${module} ~/docker/isaac-sim/data/quantis/recordings/'${recording_id}' '${dataset_split}'"
+}
+
 command="${1:-help}"
 if [[ "${command}" == "help" ]]; then
   cat <<'EOF'
@@ -346,7 +374,9 @@ Commands:
   demo-record-actions             Capture a short 4 FPS JEPA-WM trajectory
   demo-record-exploration RECORDING SEED train|held_out
   demo-record-grasp RECORDING SEED train|held_out
+  demo-record-insertion RECORDING SEED train|held_out
   jepa-wm-grasp-validate RECORDING train|held_out
+  jepa-wm-insertion-validate RECORDING train|held_out
   demo-dashboard REFERENCE [primary-camera] [jepa-camera]
   capture-smoke | jepa-embed [source-name] [camera]
   jepa-stage-embed [recording-name] [camera]
@@ -471,35 +501,19 @@ case "${command}" in
     printf 'Recording ID: %s\n' "${recording_id}"
     ;;
   demo-record-exploration)
-    recording_id="${2:-}"
-    exploration_seed="${3:-}"
-    dataset_split="${4:-}"
-    is_safe_identifier "${recording_id}" || die "invalid recording name"
-    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
-    [[ "${dataset_split}" == "train" || "${dataset_split}" == "held_out" ]] \
-      || die "dataset split must be train or held_out"
-    record_seeded_job start_exploration_recording \
-      "${recording_id}" "${exploration_seed}" "${dataset_split}"
+    record_seeded_task start_exploration_recording "${2:-}" "${3:-}" "${4:-}"
     ;;
   demo-record-grasp)
-    recording_id="${2:-}"
-    exploration_seed="${3:-}"
-    dataset_split="${4:-}"
-    is_safe_identifier "${recording_id}" || die "invalid recording name"
-    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
-    [[ "${dataset_split}" == "train" || "${dataset_split}" == "held_out" ]] \
-      || die "dataset split must be train or held_out"
-    record_seeded_job start_grasp_recording \
-      "${recording_id}" "${exploration_seed}" "${dataset_split}"
+    record_seeded_task start_grasp_recording "${2:-}" "${3:-}" "${4:-}"
+    ;;
+  demo-record-insertion)
+    record_seeded_task start_insertion_recording "${2:-}" "${3:-}" "${4:-}"
     ;;
   jepa-wm-grasp-validate)
-    recording_id="${2:-}"
-    dataset_split="${3:-}"
-    is_safe_identifier "${recording_id}" || die "invalid recording name"
-    [[ "${dataset_split}" == "train" || "${dataset_split}" == "held_out" ]] \
-      || die "dataset split must be train or held_out"
-    sync_repo
-    remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.grasp_recording_cli ~/docker/isaac-sim/data/quantis/recordings/'${recording_id}' '${dataset_split}'"
+    validate_task_recording jepa_wm.grasp_recording_cli "${2:-}" "${3:-}"
+    ;;
+  jepa-wm-insertion-validate)
+    validate_task_recording jepa_wm.insertion_recording_cli "${2:-}" "${3:-}"
     ;;
   demo-dashboard)
     reference_name="${2:-}"

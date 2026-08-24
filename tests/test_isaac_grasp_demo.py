@@ -57,8 +57,11 @@ class GraspReplayResetTest(unittest.TestCase):
             self.joints,
             0.04,
             plug or self.plug,
+            (1.0, 0.0, 0.0, 0.0),
             False,
             pose or self.pose,
+            (0.4, -0.2, 0.5),
+            (0.3, -0.2, 0.5),
         )
 
     def test_accepts_the_exact_recreated_source_reset(self) -> None:

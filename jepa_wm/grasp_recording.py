@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 from math import isfinite
 from pathlib import Path
 
@@ -11,7 +10,7 @@ import numpy as np
 
 from jepa_wm.domain_recording import DomainRecording
 from jepa_wm.grasp_contract import GRASP_TASK_ID
-from sim.exploration import DatasetSplit, validate_sample_times
+from sim.exploration import DatasetSplit
 
 
 @dataclass(frozen=True)
@@ -40,25 +39,11 @@ class GraspDemonstrationEvidence:
             path,
             expected_split=DatasetSplit(expected_split),
         )
-        manifest = json.loads((recording.path / "manifest.json").read_text())
+        manifest = recording.manifest
         metadata = manifest.get("metadata")
         if not isinstance(metadata, dict) or metadata.get("task") != GRASP_TASK_ID:
             raise ValueError("recording is not a reach-and-grasp demonstration")
-        steps = tuple(
-            json.loads(line)
-            for line in (recording.path / "steps.jsonl").read_text().splitlines()
-            if line
-        )
-        if len(steps) != manifest.get("frames"):
-            raise ValueError("grasp demonstration frame count is inconsistent")
-        sample_times = tuple(
-            float(step["simulation_time_seconds"])
-            for step in steps
-            if step.get("simulation_time_seconds") is not None
-        )
-        if len(sample_times) != len(steps):
-            raise ValueError("grasp demonstration simulation times are incomplete")
-        validate_sample_times(sample_times, 1.0 / float(manifest["fps"]))
+        steps = recording.load_steps()
         acquisition_index = next(
             (
                 index

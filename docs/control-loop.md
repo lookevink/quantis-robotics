@@ -409,3 +409,17 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     `0.0011 mm` maximum gripper error, zero contact force, and no collision.
     The source task retained the connector for `58.508 mm`; insertion and
     production authority remain explicitly unproven.
+17. [x] Correct the insertion grasp and validate a scripted geometry baseline.
+    The Lula `right_gripper` frame now targets `40 mm` behind the connector tip,
+    while the insertion endpoint compensates by the same offset so the tip
+    terminates at the socket. Held-out artifact
+    `insert-20260824-held-12402-v5` contains 124 true-4-FPS observations and
+    independently reconstructs `40.005 mm` clasp clearance, `0.0022 mm` depth
+    error, `0.1075 mm` lateral error, zero orientation error, and four seated
+    observations. It is kinematic-only; v1/v2/v3 remain negative evidence.
+18. [ ] Establish contact-aware scripted insertion. Enable accurate connector
+    and receptacle collision/contact evidence during the insertion segment,
+    preserve at least `30 mm` exposed tip, and require bounded force,
+    orientation, depth, lateral error, and retained seating. Only after this
+    baseline passes should we collect 12 training and two disjoint held-out
+    insertion recordings for JEPA-WM.

@@ -645,6 +645,34 @@ connector at action 1 and retained it across eight observations for
 truthful reach-and-grasp visualization, not evidence of cable insertion or
 production authority.
 
+### Reach-and-insert geometry checkpoint
+
+Insertion now uses a gripper target `40 mm` behind the connector tip. The hand
+endpoint is offset by the same amount at the socket, so the connector tip—not
+the palm or finger-link origin—is the quantity that seats. The corrected
+six-phase baseline is IK-reachable and completed on the live scene with at most
+`0.105 mm` hand settle error.
+
+The first independently validated held-out artifact is
+`insert-20260824-held-12402-v5`. It contains 124 true-4-FPS wrist observations
+covering the action-rich exploration prefix, rearward grasp, alignment,
+insertion, and a four-observation seated hold. Raw schema-v5 telemetry
+reconstructs `40.005 mm` of gripper-frame clearance, `0.0022 mm` insertion-depth
+error, `0.1075 mm` lateral error, and zero orientation error. Validate it with:
+
+```bash
+./ops/aws.sh jepa-wm-insertion-validate \
+  insert-20260824-held-12402-v5 held_out
+```
+
+This is deliberately a `kinematic_scripted_baseline`: plug collision remains
+disabled while attached and seating is not force/compliance evidence. The v1
+artifact was rejected because palm-frame telemetry could not prove clasp
+clearance, v2 failed safely on a recorder type error, and v3 was rejected
+because USD finger-link origins are not the Lula gripper frame. All remain
+preserved as negative evidence. The next gate is contact-aware scripted
+insertion before collecting the 12-train/2-held-out JEPA-WM insertion corpus.
+
 The first grasp-domain JEPA-WM action adapter used all 1,980 bounded rollouts
 from the 20 training recordings. In a fixed eight-context CEM diagnostic it
 lowered latent energy below both zero and recorded actions on every context,

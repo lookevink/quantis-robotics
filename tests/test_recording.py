@@ -69,8 +69,11 @@ class RecordingWriterTest(unittest.TestCase):
                     arm_positions=[0.1, 0.2],
                     gripper_width_m=0.07,
                     plug_position=[-0.02, -0.25, 1.32],
+                    plug_orientation_wxyz=[1.0, 0.0, 0.0, 0.0],
                     plug_attached=False,
                     end_effector_pose=DroidPose((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.125)),
+                    end_effector_world_position=[0.2, -0.25, 1.4],
+                    gripper_frame_world_position=[0.1, -0.25, 1.4],
                     simulation_time_seconds=1.0,
                 )
             )
@@ -83,8 +86,11 @@ class RecordingWriterTest(unittest.TestCase):
                     arm_positions=[0.2, 0.3],
                     gripper_width_m=0.03,
                     plug_position=[-0.02, -0.25, 1.32],
+                    plug_orientation_wxyz=[1.0, 0.0, 0.0, 0.0],
                     plug_attached=False,
                     end_effector_pose=DroidPose((0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.625)),
+                    end_effector_world_position=[0.19, -0.25, 1.4],
+                    gripper_frame_world_position=[0.09, -0.25, 1.4],
                     simulation_time_seconds=1.125,
                 )
             )
@@ -152,6 +158,15 @@ class RecordingWriterTest(unittest.TestCase):
             self.assertEqual(step["phase"], "ready")
             self.assertEqual(step["stage"], "approaching_cable")
             self.assertFalse(step["plug_attached"])
+            self.assertEqual(step["plug_orientation_wxyz"], [1.0, 0.0, 0.0, 0.0])
+            self.assertEqual(
+                step["end_effector_world_position"],
+                [0.2, -0.25, 1.4],
+            )
+            self.assertEqual(
+                step["gripper_frame_world_position"],
+                [0.1, -0.25, 1.4],
+            )
             self.assertIsNone(step["action_from_previous"])
             np.testing.assert_allclose(
                 steps[1]["action_from_previous"],

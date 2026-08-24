@@ -7,6 +7,8 @@ from enum import Enum
 from math import isfinite
 from typing import Sequence
 
+from jepa_wm.insertion_contract import REARWARD_GRASP_OFFSET_METERS
+
 
 Vector3 = tuple[float, float, float]
 
@@ -54,15 +56,12 @@ def _add(left: Sequence[float], right: Sequence[float]) -> Vector3:
     return tuple(left[index] + right[index] for index in range(3))  # type: ignore[return-value]
 
 
-def _subtract(left: Sequence[float], right: Sequence[float]) -> Vector3:
-    return tuple(left[index] - right[index] for index in range(3))  # type: ignore[return-value]
-
-
 def build_demo_sequence(
     geometry: DemoGeometry,
     *,
     approach_clearance_m: float = 0.10,
     insertion_clearance_m: float = 0.03,
+    grasp_offset_m: float = REARWARD_GRASP_OFFSET_METERS,
     open_width_m: float = 0.07,
     grasp_width_m: float = 0.018,
 ) -> tuple[Waypoint, ...]:
@@ -70,14 +69,18 @@ def build_demo_sequence(
 
     if geometry.socket_position[0] >= geometry.plug_position[0]:
         raise ValueError("socket must be on the negative X side of the plug")
-    if approach_clearance_m <= 0 or insertion_clearance_m <= 0:
-        raise ValueError("clearances must be positive")
+    if (
+        approach_clearance_m <= 0
+        or insertion_clearance_m <= 0
+        or grasp_offset_m <= 0
+    ):
+        raise ValueError("clearances and grasp offset must be positive")
     if not 0 <= grasp_width_m < open_width_m:
         raise ValueError("grasp width must be non-negative and smaller than open width")
 
-    grasp = geometry.plug_position
-    plug_to_socket = _subtract(geometry.socket_position, geometry.plug_position)
-    insert = _add(grasp, plug_to_socket)
+    grasp_offset = (grasp_offset_m, 0.0, 0.0)
+    grasp = _add(geometry.plug_position, grasp_offset)
+    insert = _add(geometry.socket_position, grasp_offset)
     pre_grasp = _add(grasp, (approach_clearance_m, 0.0, 0.0))
     pre_insert = _add(insert, (insertion_clearance_m, 0.0, 0.0))
 

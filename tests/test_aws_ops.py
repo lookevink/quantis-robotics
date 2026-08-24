@@ -421,6 +421,18 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("2400", calls)
         self.assertIn("train", calls)
 
+    def test_demo_record_insertion_forwards_seed_and_dataset_split(self):
+        result, calls = self.run_command(
+            "demo-record-insertion",
+            arguments=("insert-20260824-held-12402", "12402", "held_out"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("start_insertion_recording", calls)
+        self.assertIn("insert-20260824-held-12402", calls)
+        self.assertIn("12402", calls)
+        self.assertIn("held_out", calls)
+
     def test_grasp_recording_validation_runs_against_persistent_data(self):
         result, calls = self.run_command(
             "jepa-wm-grasp-validate",
@@ -430,6 +442,17 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("jepa_wm.grasp_recording_cli", calls)
         self.assertIn("grasp-20260824-held-11401", calls)
+        self.assertIn("held_out", calls)
+
+    def test_insertion_recording_validation_runs_against_persistent_data(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-validate",
+            arguments=("insert-20260824-held-12402", "held_out"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("jepa_wm.insertion_recording_cli", calls)
+        self.assertIn("insert-20260824-held-12402", calls)
         self.assertIn("held_out", calls)
 
     def test_demo_dashboard_records_scores_and_renders_one_recording(self):

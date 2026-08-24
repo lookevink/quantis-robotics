@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from math import isfinite
 import random
 
 
@@ -91,7 +92,13 @@ def validate_sample_times(
 ) -> None:
     if len(sample_times) < 2:
         raise ValueError("at least two simulation sample times are required")
-    if sample_period_seconds <= 0.0 or tolerance_seconds < 0.0:
+    if (
+        not isfinite(sample_period_seconds)
+        or sample_period_seconds <= 0.0
+        or not isfinite(tolerance_seconds)
+        or tolerance_seconds < 0.0
+        or not all(isfinite(sample_time) for sample_time in sample_times)
+    ):
         raise ValueError("sample period must be positive and tolerance non-negative")
     for previous, current in zip(sample_times, sample_times[1:]):
         delta = current - previous

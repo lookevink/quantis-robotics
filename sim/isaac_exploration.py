@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any
 
 import numpy as np
@@ -9,6 +10,12 @@ import numpy as np
 from jepa.contract import ObservationStage
 from jepa_wm.action import DROID_FPS
 from jepa_wm.grasp_contract import GRASP_TASK_ID
+from jepa_wm.insertion_contract import (
+    INSERTION_AXIS,
+    INSERTION_TASK_ID,
+    KINEMATIC_INSERTION_MODE,
+    REARWARD_GRASP_OFFSET_METERS,
+)
 from sim.demo_sequence import Phase
 from sim.exploration import (
     DatasetSplit,
@@ -34,6 +41,12 @@ from sim.isaac_demo_runtime import (
 )
 from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH, SOCKET_PATH, world_pose
 from sim.recording import RecordingLabel, RecordingMoment
+
+
+class ExplorationRecordingMode(str, Enum):
+    DOMAIN = "domain_exploration"
+    GRASP = GRASP_TASK_ID
+    INSERTION = INSERTION_TASK_ID
 
 
 def apply_variant(stage: Any, plan: ExplorationPlan) -> None:
@@ -180,12 +193,74 @@ async def _record_successful_grasp(
     return current, tuple(sample_times)
 
 
+async def _record_successful_insertion(
+    actuators: Actuators,
+    current: JointCommand,
+    attachment: PlugAttachment,
+    recorder: DemoRecorder,
+    sample_period_seconds: float,
+) -> tuple[JointCommand, tuple[float, ...]]:
+    """Record alignment, insertion, and an attached seated hold."""
+
+    solved = solve_waypoints()
+    pre_insertion = JointCommand(
+        solved[3].arm_positions,
+        solved[3].waypoint.gripper_width_m,
+    )
+    inserted = JointCommand(
+        solved[4].arm_positions,
+        solved[4].waypoint.gripper_width_m,
+    )
+    sample_times = []
+    for command, frames, label, stage in (
+        (
+            pre_insertion,
+            8,
+            RecordingLabel(RecordingMoment.MOTION, Phase.PRE_INSERTION),
+            ObservationStage.CABLE_GRASPED,
+        ),
+        (
+            pre_insertion,
+            2,
+            RecordingLabel(RecordingMoment.SETTLE, Phase.PRE_INSERTION),
+            ObservationStage.ALIGNED_WITH_SOCKET,
+        ),
+        (
+            inserted,
+            8,
+            RecordingLabel(RecordingMoment.MOTION, Phase.INSERT),
+            ObservationStage.ALIGNED_WITH_SOCKET,
+        ),
+        (
+            inserted,
+            4,
+            RecordingLabel(RecordingMoment.SETTLE, Phase.INSERT),
+            ObservationStage.PLUG_SEATED,
+        ),
+    ):
+        sample_times.extend(
+            await move_joint_command(
+                actuators,
+                current,
+                command,
+                attachment,
+                frame_count=frames,
+                phase=label,
+                stage=stage,
+                recorder=recorder,
+                sample_period_seconds=sample_period_seconds,
+            )
+        )
+        current = command
+    return current, tuple(sample_times)
+
+
 async def record_exploration_trajectory(
     recording_id: str,
     seed: int,
     split: DatasetSplit,
     *,
-    include_successful_grasp: bool = False,
+    mode: ExplorationRecordingMode = ExplorationRecordingMode.DOMAIN,
 ) -> dict[str, Any]:
     """Capture a seeded, true-4-FPS wrist rollout for domain adaptation."""
 
@@ -204,10 +279,19 @@ async def record_exploration_trajectory(
     apply_variant(stage, plan)
     metadata = {
         **plan.metadata(),
-        "task": (
-            GRASP_TASK_ID if include_successful_grasp else "domain_exploration"
-        ),
+        "task": mode.value,
     }
+    if mode is ExplorationRecordingMode.INSERTION:
+        socket_position, socket_orientation = world_pose(
+            stage.GetPrimAtPath(SOCKET_PATH)
+        )
+        metadata["insertion_target"] = {
+            "socket_position": socket_position.tolist(),
+            "socket_orientation_wxyz": socket_orientation.tolist(),
+            "insertion_axis": list(INSERTION_AXIS),
+            "grasp_offset_meters": REARWARD_GRASP_OFFSET_METERS,
+            "evidence_mode": KINEMATIC_INSERTION_MODE,
+        }
     recorder = DemoRecorder(
         recording_id,
         fps=DROID_FPS,
@@ -273,7 +357,10 @@ async def record_exploration_trajectory(
                 )
             )
             current = command
-        if include_successful_grasp:
+        if mode in (
+            ExplorationRecordingMode.GRASP,
+            ExplorationRecordingMode.INSERTION,
+        ):
             current, grasp_times = await _record_successful_grasp(
                 actuators,
                 current,
@@ -282,6 +369,15 @@ async def record_exploration_trajectory(
                 plan.sample_period_seconds,
             )
             sample_times.extend(grasp_times)
+        if mode is ExplorationRecordingMode.INSERTION:
+            current, insertion_times = await _record_successful_insertion(
+                actuators,
+                current,
+                attachment,
+                recorder,
+                plan.sample_period_seconds,
+            )
+            sample_times.extend(insertion_times)
         validate_sample_times(tuple(sample_times), plan.sample_period_seconds)
         completed = True
     except Exception:
@@ -315,5 +411,20 @@ async def record_grasp_trajectory(
         recording_id,
         seed,
         split,
-        include_successful_grasp=True,
+        mode=ExplorationRecordingMode.GRASP,
+    )
+
+
+async def record_insertion_trajectory(
+    recording_id: str,
+    seed: int,
+    split: DatasetSplit,
+) -> dict[str, Any]:
+    """Capture exploration plus rearward grasp, alignment, and insertion."""
+
+    return await record_exploration_trajectory(
+        recording_id,
+        seed,
+        split,
+        mode=ExplorationRecordingMode.INSERTION,
     )

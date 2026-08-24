@@ -10,7 +10,13 @@ import numpy as np
 
 from jepa.contract import ObservationStage
 from jepa_wm.action import DroidPose
-from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH, STAGE_PATH, world_pose
+from sim.isaac_demo_scene import (
+    PLUG_PATH,
+    RIGHT_GRIPPER_OFFSET_IN_HAND_METERS,
+    ROBOT_PATH,
+    STAGE_PATH,
+    world_pose,
+)
 from sim.recording import RecordingLabel, RecordingSnapshot
 
 
@@ -183,12 +189,27 @@ def recording_snapshot(
     hand_position, hand_orientation = world_pose(attachment.hand_prim)
     robot = attachment.hand_prim.GetStage().GetPrimAtPath(ROBOT_PATH)
     base_position, base_orientation = world_pose(robot)
+    plug_position, plug_orientation = world_pose(attachment.prim)
+    from scipy.spatial.transform import Rotation
+
+    hand_xyzw = np.asarray(
+        (
+            hand_orientation[1],
+            hand_orientation[2],
+            hand_orientation[3],
+            hand_orientation[0],
+        )
+    )
+    gripper_frame_position = hand_position + Rotation.from_quat(hand_xyzw).apply(
+        RIGHT_GRIPPER_OFFSET_IN_HAND_METERS
+    )
     return RecordingSnapshot(
         phase=phase,
         stage=stage,
         arm_positions=command.arm_positions,
         gripper_width_m=command.gripper_width_m,
-        plug_position=world_pose(attachment.prim)[0],
+        plug_position=plug_position,
+        plug_orientation_wxyz=plug_orientation,
         plug_attached=attachment.attached,
         end_effector_pose=DroidPose.from_world_poses(
             base_position,
@@ -197,6 +218,8 @@ def recording_snapshot(
             hand_orientation,
             command.gripper_width_m,
         ),
+        end_effector_world_position=hand_position,
+        gripper_frame_world_position=gripper_frame_position,
         simulation_time_seconds=omni.timeline.get_timeline_interface().get_current_time(),
     )
 

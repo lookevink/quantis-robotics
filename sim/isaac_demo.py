@@ -388,3 +388,23 @@ def start_grasp_recording(
             dataset_split,
         ),
     )
+
+
+def start_insertion_recording(
+    recording_id: str,
+    seed: int,
+    split: str,
+) -> dict[str, Any]:
+    """Start a seeded rearward-grasp and insertion trajectory in the background."""
+
+    from sim.isaac_exploration import record_insertion_trajectory
+
+    dataset_split = DatasetSplit(split)
+    return _RECORDING_JOBS.start(
+        recording_id,
+        lambda job_recording_id: record_insertion_trajectory(
+            job_recording_id,
+            seed,
+            dataset_split,
+        ),
+    )
