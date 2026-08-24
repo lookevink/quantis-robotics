@@ -6,6 +6,7 @@ from jepa_wm.action import DroidAction, DroidActionScale
 from jepa_wm.candidate_demo import CandidateDemoMetadata
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.planner import CEMConfig
+from jepa_wm.replay_verification import ReplayVerification
 
 
 class CandidateDemoMetadataTest(unittest.TestCase):
@@ -21,11 +22,7 @@ class CandidateDemoMetadataTest(unittest.TestCase):
             planner=CEMConfig(iterations=5, samples=128, elites=12, seed=237),
             energy_improvement=0.00014,
             actual_action=DroidAction((0.002, 0.0, 0.0, 0.001, 0.0, 0.0, 0.03)),
-            tracking_passed=True,
-            maximum_replay_joint_error_rad=0.001,
-            maximum_replay_gripper_error_m=0.0002,
-            maximum_replay_contact_force_newtons=0.0,
-            replay_collision_detected=False,
+            replay=ReplayVerification(0.001, 0.0002, 0.0, False),
         )
 
         restored = CandidateDemoMetadata.from_dict(metadata.to_dict())
@@ -46,11 +43,7 @@ class CandidateDemoMetadataTest(unittest.TestCase):
                 planner=CEMConfig(iterations=5, samples=128, elites=12, seed=237),
                 energy_improvement=0.00014,
                 actual_action=DroidAction((0.0,) * 7),
-                tracking_passed=True,
-                maximum_replay_joint_error_rad=0.001,
-                maximum_replay_gripper_error_m=0.0002,
-                maximum_replay_contact_force_newtons=0.0,
-                replay_collision_detected=False,
+                replay=ReplayVerification(0.001, 0.0002, 0.0, False),
             )
 
 

@@ -9,6 +9,7 @@ from typing import Any, Mapping
 from jepa_wm.action import DroidAction, DroidActionScale
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.planner import CEMConfig
+from jepa_wm.replay_verification import ReplayVerification
 from sim.recording import validate_recording_id
 
 
@@ -27,30 +28,21 @@ class CandidateDemoMetadata:
     planner: CEMConfig
     energy_improvement: float
     actual_action: DroidAction
-    tracking_passed: bool
-    maximum_replay_joint_error_rad: float
-    maximum_replay_gripper_error_m: float
-    maximum_replay_contact_force_newtons: float
-    replay_collision_detected: bool
+    replay: ReplayVerification
 
     def __post_init__(self) -> None:
         for value in (self.report_id, self.candidate_session, self.source_session):
             validate_recording_id(value)
-        scalars = (
-            self.energy_improvement,
-            self.maximum_replay_joint_error_rad,
-            self.maximum_replay_gripper_error_m,
-            self.maximum_replay_contact_force_newtons,
-        )
         if (
             self.policy is not ControlExecutionPolicy.RESET_TRIAL_CANDIDATE
             or self.seed < 0
             or self.candidates_scored <= 0
             or self.candidates_scored
             != self.planner.iterations * self.planner.samples
-            or not all(isfinite(value) and value >= 0.0 for value in scalars)
-            or not isinstance(self.tracking_passed, bool)
-            or not isinstance(self.replay_collision_detected, bool)
+            or not isfinite(self.energy_improvement)
+            or self.energy_improvement < 0.0
+            or not self.replay.tracking_passed
+            or not self.replay.safety_passed
         ):
             raise ValueError("candidate demo metadata is invalid")
 
@@ -76,13 +68,8 @@ class CandidateDemoMetadata:
             "planner": self.planner.to_dict(),
             "energy_improvement": self.energy_improvement,
             "actual_action": list(self.actual_action.values),
-            "tracking_passed": self.tracking_passed,
-            "maximum_replay_joint_error_rad": self.maximum_replay_joint_error_rad,
-            "maximum_replay_gripper_error_m": self.maximum_replay_gripper_error_m,
-            "maximum_replay_contact_force_newtons": (
-                self.maximum_replay_contact_force_newtons
-            ),
-            "replay_collision_detected": self.replay_collision_detected,
+            "tracking_passed": self.replay.tracking_passed,
+            **self.replay.to_dict(),
         }
 
     @classmethod
@@ -119,17 +106,7 @@ class CandidateDemoMetadata:
                 planner=planner,
                 energy_improvement=float(payload["energy_improvement"]),
                 actual_action=DroidAction(tuple(payload["actual_action"])),
-                tracking_passed=payload["tracking_passed"],
-                maximum_replay_joint_error_rad=float(
-                    payload["maximum_replay_joint_error_rad"]
-                ),
-                maximum_replay_gripper_error_m=float(
-                    payload["maximum_replay_gripper_error_m"]
-                ),
-                maximum_replay_contact_force_newtons=float(
-                    payload["maximum_replay_contact_force_newtons"]
-                ),
-                replay_collision_detected=payload["replay_collision_detected"],
+                replay=ReplayVerification.from_dict(payload),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("candidate demo metadata is incomplete") from error

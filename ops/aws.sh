@@ -22,6 +22,7 @@ ssh_user="${AWS_SSH_USER:-ubuntu}"
 security_group_id="${AWS_SECURITY_GROUP_ID:-}"
 signal_port="${ISAAC_SIGNAL_PORT:-49100}"
 stream_port="${ISAAC_STREAM_PORT:-47998}"
+cloudwatch_agent_policy_arn="arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
 ssh_transport_options=(
   -o StrictHostKeyChecking=accept-new
   -o ServerAliveInterval=15
@@ -174,6 +175,42 @@ remote_with_config() {
   remote "${remote_command} $1"
 }
 
+instance_role_name() {
+  local profile_arn
+  local profile_name
+  local role_name
+  profile_arn="$(instance_value 'IamInstanceProfile.Arn')"
+  profile_name="${profile_arn##*/}"
+  role_name="$(aws_cli iam get-instance-profile \
+    --instance-profile-name "${profile_name}" \
+    --query 'InstanceProfile.Roles[0].RoleName' --output text)"
+  [[ -n "${role_name}" && "${role_name}" != "None" ]] \
+    || die "instance profile ${profile_name} has no IAM role"
+  printf '%s\n' "${role_name}"
+}
+
+enable_cloudwatch() {
+  local role_name
+  role_name="$(instance_role_name)"
+  aws_cli iam attach-role-policy \
+    --role-name "${role_name}" \
+    --policy-arn "${cloudwatch_agent_policy_arn}"
+  sync_repo
+  remote 'bash ~/quantis-robotics/ops/cloudwatch_agent.sh enable'
+  printf 'CloudWatch agent enabled on %s with role %s.\n' \
+    "${instance_id}" "${role_name}" >&2
+}
+
+cloudwatch_status() {
+  remote 'bash ~/quantis-robotics/ops/cloudwatch_agent.sh status'
+  aws_cli cloudwatch list-metrics \
+    --namespace CWAgent \
+    --dimensions "Name=InstanceId,Value=${instance_id}" \
+    --recently-active PT3H \
+    --query 'sort_by(Metrics,&MetricName)[].MetricName' \
+    --output text
+}
+
 sync_repo() {
   require_private_key
   local option
@@ -248,6 +285,15 @@ demo_python() {
   isaac_python "$(isaac_demo_code "${expression}")" "${timeout_seconds}"
 }
 
+finish_demo_recording() {
+  local recording_id="$1"
+  remote "bash ~/quantis-robotics/ops/encode_demo_recording.sh '${recording_id}'"
+  remote "bash ~/quantis-robotics/ops/render_demo_dashboard.sh '${recording_id}' wrist wrist"
+  printf 'Recording ID: %s\n' "${recording_id}"
+  printf 'Remote video: %s/%s/dashboard.mp4\n' \
+    "/home/ubuntu/docker/isaac-sim/data/quantis/recordings" "${recording_id}"
+}
+
 wait_recording_job() {
   local recording_id="$1"
   local timeout_seconds="${DEMO_RECORDING_TIMEOUT_SECONDS:-2400}"
@@ -290,6 +336,7 @@ Usage: ./ops/aws.sh COMMAND
 
 Commands:
   ensure-running | status | ip | firewall-webrtc | backup-state
+  cloudwatch-enable | cloudwatch-status
   bootstrap                      Start, secure, sync, and bootstrap the host
   up                             Start, secure, sync, and start Isaac Sim
   down                           Stop the EC2 instance
@@ -331,6 +378,7 @@ Commands:
   jepa-wm-control-rollout-report ROLLOUT SESSION[,SESSION...] REQUESTED_STEPS REFERENCE SEED [proposal] [policy]
   jepa-wm-control-apply SESSION
   jepa-wm-candidate-film STRICT_REPORT [recording]
+  jepa-wm-grasp-film READINESS SEED [recording]
   jepa-wm-summarize EXPERIMENT TRAINING_CSV HELD_OUT_CSV [camera] [count]
   jepa-wm-milestone [train-count] [held-out-count] [steps] [base-seed]
   jepa-wm-eval-adapted RECORDING [camera] [start-index] [count] [stride]
@@ -390,6 +438,12 @@ case "${command}" in
   backup-state)
     sync_repo
     remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh'
+    ;;
+  cloudwatch-enable)
+    enable_cloudwatch
+    ;;
+  cloudwatch-status)
+    cloudwatch_status
     ;;
   demo-preflight)
     demo_python 'demo.preflight_report()'
@@ -883,9 +937,23 @@ case "${command}" in
     is_safe_identifier "${recording_id}" || die "invalid recording name"
     demo_python \
       "await demo.record_candidate_demo('${candidate_report}', '${recording_id}')" 1200
-    remote "bash ~/quantis-robotics/ops/encode_demo_recording.sh '${recording_id}'"
-    remote "bash ~/quantis-robotics/ops/render_demo_dashboard.sh '${recording_id}' wrist wrist"
-    printf 'Recording ID: %s\n' "${recording_id}"
+    finish_demo_recording "${recording_id}"
+    ;;
+  jepa-wm-grasp-film)
+    readiness_id="${2:-}"
+    exploration_seed="${3:-}"
+    recording_id="${4:-grasp-demo-$(date -u +%Y%m%dT%H%M%SZ)}"
+    proposal_fingerprint=""
+    is_safe_identifier "${readiness_id}" || die "invalid grasp readiness"
+    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+    is_safe_identifier "${recording_id}" || die "invalid recording name"
+    sync_repo
+    proposal_fingerprint="$(remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.grasp_control_readiness_cli --data-root /home/ubuntu/docker/isaac-sim/data/quantis --readiness-id '${readiness_id}' --fingerprint-only")"
+    [[ "${proposal_fingerprint}" =~ ^[0-9a-f]{64}$ ]] \
+      || die "grasp readiness returned an invalid proposal fingerprint"
+    demo_python \
+      "await demo.record_grasp_demo('${readiness_id}', ${exploration_seed}, '${recording_id}', '${proposal_fingerprint}')" 1800
+    finish_demo_recording "${recording_id}"
     ;;
   jepa-wm-summarize)
     experiment_id="${2:-}"

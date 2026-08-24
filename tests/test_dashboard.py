@@ -11,6 +11,68 @@ from jepa.dashboard import PANEL_SIZE, render_dashboard_panels
 
 
 class DashboardTest(unittest.TestCase):
+    def test_renders_validated_grasp_replay_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recording = Path(temp_dir)
+            (recording / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "fps": 12,
+                        "frames": 1,
+                        "metadata": {
+                            "grasp_demo": {
+                                "schema": "quantis.jepa_wm_grasp_demo.v1",
+                                "visualization_only": True,
+                                "readiness_id": "grasp-readiness-v2",
+                                "baseline_experiment_id": "grasp-baseline-12401-v2",
+                                "rollout_id": "rollout-12401",
+                                "seed": 12401,
+                                "proposal": {
+                                    "path": "/tmp/proposal.pth",
+                                    "fingerprint": "a" * 64,
+                                },
+                                "source_steps": 8,
+                                "task_outcome": {
+                                    "passed": True,
+                                    "acquisition_index": 1,
+                                    "attached_observations": 8,
+                                    "maximum_retained_displacement_meters": 0.0585,
+                                    "failures": [],
+                                },
+                                "replay_tracking_passed": True,
+                                "maximum_replay_joint_error_rad": 0.001,
+                                "maximum_replay_gripper_error_m": 0.0002,
+                                "replay_safety_passed": True,
+                                "maximum_replay_contact_force_newtons": 0.0,
+                                "replay_collision_detected": False,
+                            }
+                        },
+                    }
+                )
+            )
+            (recording / "steps.jsonl").write_text(
+                json.dumps(
+                    {
+                        "index": 0,
+                        "stage": "cable_grasped",
+                        "phase": "pre_insertion_complete",
+                        "arm_positions": [0.0] * 7,
+                        "gripper_width_m": 0.01,
+                        "plug_position": [0.02, -0.25, 1.32],
+                        "plug_attached": True,
+                    }
+                )
+                + "\n"
+            )
+
+            result = render_dashboard_panels(recording)
+
+            self.assertTrue(result["grasp_demo"])
+            self.assertFalse(result["candidate_demo"])
+            self.assertTrue(
+                (recording / "dashboard" / "panel" / "frame_000000.png").is_file()
+            )
+
     def test_renders_candidate_search_metrics_from_recording_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             recording = Path(temp_dir)

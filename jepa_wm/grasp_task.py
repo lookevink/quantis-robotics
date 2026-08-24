@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from math import isfinite
-from typing import Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -66,6 +66,15 @@ class ReachAndGraspDecision:
     maximum_retained_displacement_meters: float
     failures: tuple[ReachAndGraspFailure, ...]
 
+    def __post_init__(self) -> None:
+        if (
+            (self.acquisition_index is not None and self.acquisition_index < 1)
+            or self.attached_observations < 0
+            or not isfinite(self.maximum_retained_displacement_meters)
+            or self.maximum_retained_displacement_meters < 0.0
+        ):
+            raise ValueError("reach-and-grasp decision is invalid")
+
     @property
     def passed(self) -> bool:
         return not self.failures
@@ -80,6 +89,28 @@ class ReachAndGraspDecision:
             ),
             "failures": [failure.value for failure in self.failures],
         }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> ReachAndGraspDecision:
+        try:
+            failures = payload["failures"]
+            if not isinstance(failures, (list, tuple)):
+                raise ValueError("reach-and-grasp failures are invalid")
+            instance = cls(
+                (
+                    int(payload["acquisition_index"])
+                    if payload.get("acquisition_index") is not None
+                    else None
+                ),
+                int(payload["attached_observations"]),
+                float(payload["maximum_retained_displacement_meters"]),
+                tuple(ReachAndGraspFailure(value) for value in failures),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("reach-and-grasp decision is incomplete") from error
+        if payload.get("passed") is not instance.passed:
+            raise ValueError("reach-and-grasp pass claim is invalid")
+        return instance
 
 
 def evaluate_reach_and_grasp(

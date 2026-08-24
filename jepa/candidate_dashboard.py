@@ -56,11 +56,11 @@ def render_candidate_panel(
         690,
         "REPLAY TRACKING",
         (
-            f"PASS / {metadata.maximum_replay_joint_error_rad * 1000.0:.2f} mrad"
-            if metadata.tracking_passed
+            f"PASS / {metadata.replay.maximum_arm_error_rad * 1000.0:.2f} mrad"
+            if metadata.replay.tracking_passed
             else "FAIL"
         ),
-        color=ACCENT if metadata.tracking_passed else WARNING,
+        color=ACCENT if metadata.replay.tracking_passed else WARNING,
     )
 
     card(draw, (36, 744, 604, 1136))
@@ -73,14 +73,14 @@ def render_candidate_panel(
         draw,
         1228,
         "MAX CONTACT FORCE",
-        f"{metadata.maximum_replay_contact_force_newtons:.2f} N",
+        f"{metadata.replay.maximum_contact_force_newtons:.2f} N",
     )
     metric_row(
         draw,
         1278,
         "COLLISION",
-        "CLEAR" if not metadata.replay_collision_detected else "DETECTED",
-        color=ACCENT if not metadata.replay_collision_detected else WARNING,
+        "CLEAR" if not metadata.replay.collision_detected else "DETECTED",
+        color=ACCENT if metadata.replay.safety_passed else WARNING,
     )
     draw.text(
         (54, 1320),

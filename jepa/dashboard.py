@@ -11,6 +11,7 @@ from typing import Any
 from PIL import Image
 
 from jepa.candidate_dashboard import render_candidate_panel
+from jepa.grasp_dashboard import render_grasp_panel
 from jepa.dashboard_primitives import (
     ACCENT,
     FONTS,
@@ -26,6 +27,7 @@ from jepa.dashboard_primitives import (
     metric_row,
 )
 from jepa_wm.candidate_demo import CandidateDemoMetadata
+from jepa_wm.grasp_demo import GraspDemoMetadata
 
 
 PANEL_DIRECTORY = Path("dashboard/panel")
@@ -171,6 +173,9 @@ def render_dashboard_panels(
         recording / "jepa" / jepa_camera / "stage_report.json"
     )
     candidate_metadata = CandidateDemoMetadata.from_manifest(manifest)
+    grasp_metadata = GraspDemoMetadata.from_manifest(manifest)
+    if candidate_metadata is not None and grasp_metadata is not None:
+        raise ValueError("recording cannot be both candidate and grasp replay")
     layout = DashboardLayout()
     output = recording / PANEL_DIRECTORY
     output.mkdir(parents=True, exist_ok=True)
@@ -178,21 +183,27 @@ def render_dashboard_panels(
         stale.unlink()
 
     for step in steps:
-        panel = (
-            render_candidate_panel(
+        if grasp_metadata is not None:
+            panel = render_grasp_panel(
+                step,
+                grasp_metadata,
+                frame_count=frame_count,
+                fps=fps,
+            )
+        elif candidate_metadata is not None:
+            panel = render_candidate_panel(
                 step,
                 candidate_metadata,
                 frame_count=frame_count,
                 fps=fps,
             )
-            if candidate_metadata is not None
-            else _render_panel(
+        else:
+            panel = _render_panel(
                 step,
                 predictions.get(step.stage),
                 frame_count=frame_count,
                 fps=fps,
             )
-        )
         panel.save(output / f"frame_{step.index:06d}.png", compress_level=1)
 
     layout_path = recording / LAYOUT_PATH
@@ -206,6 +217,7 @@ def render_dashboard_panels(
         "jepa_camera": jepa_camera,
         "jepa_stages": sorted(predictions),
         "candidate_demo": candidate_metadata is not None,
+        "grasp_demo": grasp_metadata is not None,
         "layout": layout.to_dict(),
         "layout_path": str(layout_path),
     }

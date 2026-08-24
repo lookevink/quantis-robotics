@@ -167,6 +167,71 @@ class GraspControlReadinessSummaryTest(unittest.TestCase):
                         evidence.report.experiment_id,
                     )
 
+    def test_saved_readiness_is_reconstructed_and_tamper_checked(self) -> None:
+        summary = GraspControlReadinessSummary.from_evidence(
+            (self._evidence(12400), self._evidence(12401))
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            readiness_id = "grasp-readiness-v2"
+            output = root / "control_readiness" / readiness_id / "readiness.json"
+            output.parent.mkdir(parents=True)
+            output.write_text(json.dumps(summary.to_dict()))
+            with patch.object(
+                GraspControlReadinessSummary,
+                "from_persisted",
+                return_value=summary,
+            ) as rebuild:
+                self.assertEqual(
+                    GraspControlReadinessSummary.load_verified(
+                        root,
+                        readiness_id,
+                    ),
+                    summary,
+                )
+                rebuild.assert_called_once_with(
+                    root,
+                    ("grasp-baseline-12400", "grasp-baseline-12401"),
+                )
+
+            with patch.object(
+                GraspControlReadinessSummary,
+                "from_persisted_identity",
+                return_value=summary,
+            ) as reconstruct:
+                self.assertEqual(
+                    GraspControlReadinessSummary.load_container_reconstruction(
+                        root,
+                        readiness_id,
+                        expected_proposal_fingerprint=(
+                            summary.evidence[0].proposal.fingerprint
+                        ),
+                    ),
+                    summary,
+                )
+                self.assertEqual(
+                    reconstruct.call_args.kwargs["persisted_proposal_identity"],
+                    summary.evidence[0].proposal,
+                )
+                with self.assertRaisesRegex(ValueError, "host-verified"):
+                    GraspControlReadinessSummary.load_container_reconstruction(
+                        root,
+                        readiness_id,
+                        expected_proposal_fingerprint="f" * 64,
+                    )
+
+                payload = summary.to_dict()
+                payload["filming_readiness_passed"] = False
+                output.write_text(json.dumps(payload))
+                with self.assertRaisesRegex(ValueError, "raw evidence"):
+                    GraspControlReadinessSummary.load_container_reconstruction(
+                        root,
+                        readiness_id,
+                        expected_proposal_fingerprint=(
+                            summary.evidence[0].proposal.fingerprint
+                        ),
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

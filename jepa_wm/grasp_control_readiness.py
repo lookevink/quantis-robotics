@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -11,6 +12,7 @@ from jepa_wm.grasp_contract import GRASP_TASK_ID
 from jepa_wm.grasp_task import ReachAndGraspDecision
 from jepa_wm.training_artifact import ArtifactIdentity, TrainingArtifactIdentity
 from jepa_wm.whole_seed_readiness import WholeSeedReadiness
+from sim.recording import validate_recording_id
 
 
 GRASP_CONTROL_READINESS_SCHEMA = "quantis.jepa_wm_grasp_control_readiness.v1"
@@ -48,11 +50,32 @@ class GraspControlReadinessEvidence:
             data_root,
             baseline_experiment_id,
         )
-        proposal = TrainingArtifactIdentity.from_artifact(
+        training_identity = TrainingArtifactIdentity.from_artifact(
             report.direct.proposal,
             fingerprint_field="proposal_fingerprint",
         )
-        return cls(report, ArtifactIdentity(proposal.path, proposal.fingerprint))
+        return cls(
+            report,
+            ArtifactIdentity(training_identity.path, training_identity.fingerprint),
+        )
+
+    @classmethod
+    def from_persisted_identity(
+        cls,
+        data_root: Path,
+        baseline_experiment_id: str,
+        *,
+        persisted_proposal_identity: ArtifactIdentity,
+    ) -> GraspControlReadinessEvidence:
+        """Reconstruct raw evidence when checkpoint bytes are host-only."""
+
+        report = RealizedBaselineReport.load_persisted(
+            data_root,
+            baseline_experiment_id,
+        )
+        if report.direct.proposal != persisted_proposal_identity.path:
+            raise ValueError("baseline proposal path differs from readiness identity")
+        return cls(report, persisted_proposal_identity)
 
     @property
     def task_outcomes(
@@ -158,6 +181,38 @@ class GraspControlReadinessSummary:
             )
         )
 
+    @classmethod
+    def from_persisted_identity(
+        cls,
+        data_root: Path,
+        baseline_experiment_ids: Sequence[str],
+        *,
+        persisted_proposal_identity: ArtifactIdentity,
+    ) -> GraspControlReadinessSummary:
+        return cls.from_evidence(
+            tuple(
+                GraspControlReadinessEvidence.from_persisted_identity(
+                    data_root,
+                    experiment_id,
+                    persisted_proposal_identity=persisted_proposal_identity,
+                )
+                for experiment_id in baseline_experiment_ids
+            )
+        )
+
+    @classmethod
+    def load_verified(
+        cls,
+        data_root: Path,
+        readiness_id: str,
+    ) -> GraspControlReadinessSummary:
+        """Verify current checkpoint bytes, sidecar, and every saved raw artifact."""
+
+        payload, experiment_ids, _ = _saved_readiness(data_root, readiness_id)
+        summary = cls.from_persisted(data_root, experiment_ids)
+        _require_saved_summary(summary, payload)
+        return summary
+
     @property
     def whole_seed_count(self) -> int:
         return self.readiness.whole_seed_count
@@ -190,3 +245,77 @@ class GraspControlReadinessSummary:
             "production_authority_granted": self.production_authority_granted,
             "trials": [item.to_dict() for item in self.evidence],
         }
+
+    @classmethod
+    def load_container_reconstruction(
+        cls,
+        data_root: Path,
+        readiness_id: str,
+        *,
+        expected_proposal_fingerprint: str,
+    ) -> GraspControlReadinessSummary:
+        """Reconstruct raw evidence against a host-verified proposal fingerprint."""
+
+        payload, experiment_ids, persisted_proposal_identity = _saved_readiness(
+            data_root,
+            readiness_id,
+        )
+        if persisted_proposal_identity.fingerprint != expected_proposal_fingerprint:
+            raise ValueError(
+                "host-verified proposal fingerprint differs from grasp readiness"
+            )
+        summary = cls.from_persisted_identity(
+            data_root,
+            experiment_ids,
+            persisted_proposal_identity=persisted_proposal_identity,
+        )
+        _require_saved_summary(summary, payload)
+        return summary
+
+
+def _saved_readiness(
+    data_root: Path,
+    readiness_id: str,
+) -> tuple[dict[str, Any], tuple[str, ...], ArtifactIdentity]:
+    """Parse the immutable identities named by one persisted readiness gate."""
+
+    validate_recording_id(readiness_id)
+    path = data_root / "control_readiness" / readiness_id / "readiness.json"
+    payload = json.loads(path.read_text())
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema") != GRASP_CONTROL_READINESS_SCHEMA
+        or not isinstance(payload.get("trials"), list)
+    ):
+        raise ValueError("grasp readiness artifact is invalid")
+    try:
+        experiment_ids = tuple(
+            str(trial["baseline_experiment_id"])
+            for trial in payload["trials"]
+            if isinstance(trial, dict)
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("grasp readiness trial provenance is invalid") from error
+    if len(experiment_ids) != len(payload["trials"]):
+        raise ValueError("grasp readiness trial provenance is invalid")
+    try:
+        proposals = {
+            ArtifactIdentity(
+                Path(trial["proposal"]["path"]),
+                str(trial["proposal"]["fingerprint"]),
+            )
+            for trial in payload["trials"]
+        }
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("grasp readiness proposal identity is invalid") from error
+    if len(proposals) != 1:
+        raise ValueError("grasp readiness requires one proposal identity")
+    return payload, experiment_ids, next(iter(proposals))
+
+
+def _require_saved_summary(
+    summary: GraspControlReadinessSummary,
+    payload: dict[str, Any],
+) -> None:
+    if summary.to_dict() != payload:
+        raise ValueError("grasp readiness artifact does not match raw evidence")

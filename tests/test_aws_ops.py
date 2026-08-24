@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import tempfile
@@ -9,6 +10,7 @@ from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AWS_SCRIPT = REPO_ROOT / "ops" / "aws.sh"
+CW_AGENT_CONFIG = REPO_ROOT / "ops" / "cloudwatch-agent.json"
 REMOTE_BOOTSTRAP = REPO_ROOT / "ops" / "remote_bootstrap.sh"
 ENCODE_RECORDING = REPO_ROOT / "ops" / "encode_demo_recording.sh"
 BACKUP_STATE = REPO_ROOT / "ops" / "backup_state.sh"
@@ -76,6 +78,10 @@ class AwsLifecycleTests(unittest.TestCase):
                     args=" $* "
                     if [[ "${args}" == *" sts get-caller-identity "* ]]; then
                       printf '%s\\n' "${FAKE_AWS_ACCOUNT}"
+                    elif [[ "${args}" == *"IamInstanceProfile.Arn"* ]]; then
+                      printf 'arn:aws:iam::686410906008:instance-profile/quantis-isaac-sim-ssm\\n'
+                    elif [[ "${args}" == *" iam get-instance-profile "* ]]; then
+                      printf 'quantis-isaac-sim-ssm\\n'
                     elif [[ "${args}" == *"State.Name"* ]]; then
                       printf '%s\\n' "${FAKE_AWS_STATE}"
                     elif [[ "${args}" == *"PublicIpAddress"* ]]; then
@@ -178,6 +184,26 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("rsync ", calls)
         self.assertIn("ops/backup_state.sh", calls)
+
+    def test_cloudwatch_enable_attaches_policy_and_configures_remote_agent(self):
+        result, calls = self.run_command("cloudwatch-enable")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("iam attach-role-policy", calls)
+        self.assertIn("CloudWatchAgentServerPolicy", calls)
+        self.assertIn("rsync ", calls)
+        self.assertIn("ops/cloudwatch_agent.sh enable", calls)
+
+    def test_cloudwatch_config_has_only_four_lean_metrics(self):
+        config = json.loads(CW_AGENT_CONFIG.read_text())
+        collected = config["metrics"]["metrics_collected"]
+
+        self.assertEqual(config["agent"]["metrics_collection_interval"], 60)
+        self.assertEqual(collected["mem"]["measurement"], ["mem_used_percent"])
+        self.assertEqual(
+            collected["nvidia_gpu"]["measurement"],
+            ["utilization_gpu", "memory_used", "memory_total"],
+        )
 
     def test_backup_state_copies_persistent_runtime_artifacts(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -432,6 +458,25 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("candidate-proof-11401", calls)
         self.assertIn("ops/encode_demo_recording.sh 'candidate-film-11401'", calls)
         self.assertIn("ops/render_demo_dashboard.sh 'candidate-film-11401'", calls)
+
+    def test_grasp_film_reloads_readiness_then_records_encodes_and_renders(self):
+        fingerprint = "a" * 64
+        result, calls = self.run_command(
+            "jepa-wm-grasp-film",
+            arguments=("grasp-readiness-v2", "12401", "grasp-film-12401"),
+            extra_env={"FAKE_SSH_RESPONSE": fingerprint},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("record_grasp_demo", calls)
+        self.assertIn("grasp_control_readiness_cli", calls)
+        self.assertIn("--readiness-id 'grasp-readiness-v2'", calls)
+        self.assertIn("--fingerprint-only", calls)
+        self.assertIn(fingerprint, calls)
+        self.assertIn("grasp-readiness-v2", calls)
+        self.assertIn("12401", calls)
+        self.assertIn("ops/encode_demo_recording.sh 'grasp-film-12401'", calls)
+        self.assertIn("ops/render_demo_dashboard.sh 'grasp-film-12401'", calls)
 
     def test_jepa_embed_forwards_recording_and_camera(self):
         result, calls = self.run_command(

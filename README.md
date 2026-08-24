@@ -87,6 +87,21 @@ Check and start that instance when necessary:
 ./ops/aws.sh ssh
 ```
 
+Enable the lean CloudWatch agent configuration for one-minute host RAM, GPU
+utilization, and GPU memory metrics:
+
+```bash
+./ops/aws.sh cloudwatch-enable
+./ops/aws.sh cloudwatch-status
+```
+
+This idempotently attaches `CloudWatchAgentServerPolicy` to the instance role
+and starts the existing agent with four custom `CWAgent` metrics:
+`mem_used_percent`, `nvidia_smi_utilization_gpu`,
+`nvidia_smi_memory_used`, and `nvidia_smi_memory_total`. View them in the AWS
+console under **CloudWatch → Metrics → All metrics → CWAgent**. EC2 detailed
+monitoring remains disabled because it does not provide host RAM or GPU data.
+
 ## 2. Bootstrap the remote host
 
 The idempotent bootstrap starts the instance, restricts SSH and WebRTC ingress to your current public IP, syncs this repository, installs Docker and the NVIDIA container runtime, downloads the assets, pulls Isaac Sim, provisions JEPA-WM, and verifies both runtimes:
@@ -602,6 +617,22 @@ rollouts stop `12–15 mm` short of the scripted endpoint (and seed 12400 does
 not beat zero's small rotation drift). That stricter result remains visible in
 the readiness artifact; task filming readiness is not production authority and
 does not establish cable insertion.
+
+Record a high-resolution visualization of one readiness-validated rollout with:
+
+```bash
+./ops/aws.sh jepa-wm-grasp-film \
+  grasp-control-readiness-20260824-v2 12401 \
+  grasp-demo-20260824-seed12401-v1
+```
+
+The recorder reconstructs the saved readiness gate and all six raw baseline
+rollouts, then replays the eight realized direct endpoints with synchronized
+1080p wrist and presentation cameras. The side panel separates original task
+evidence from replay-measured tracking/contact/collision and labels the result
+as a visualization with no production authority. Outputs are under
+`/home/ubuntu/docker/isaac-sim/data/quantis/recordings/<recording>/`, including
+`wrist.mp4`, `presentation.mp4`, and the 2560×1440 `dashboard.mp4`.
 
 The first grasp-domain JEPA-WM action adapter used all 1,980 bounded rollouts
 from the 20 training recordings. In a fixed eight-context CEM diagnostic it

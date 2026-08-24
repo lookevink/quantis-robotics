@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from sim.isaac_candidate_demo import (
+from sim.isaac_replay import (
     ReplaySafetyMonitor,
     ReplayTrackingMonitor,
     command_errors,
