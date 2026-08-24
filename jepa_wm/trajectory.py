@@ -88,6 +88,13 @@ class RolloutWindow:
             "stride": self.stride,
         }
 
+    @property
+    def context_indices(self) -> tuple[int, ...]:
+        return tuple(
+            self.start_index + offset * self.stride
+            for offset in range(self.count)
+        )
+
     def report_name(self, camera: str) -> str:
         return f"{camera}_rollout_eval_" f"{self.start_index:06d}_{self.count:03d}.json"
 

@@ -44,14 +44,18 @@ for ((index = 0; index < held_out_count; index++)); do
 done
 training_recordings="$(IFS=,; printf '%s' "${training_recording_names[*]}")"
 held_out_recordings="$(IFS=,; printf '%s' "${held_out_recording_names[*]}")"
-"${aws_workflow}" jepa-wm-proposal-train \
-  "${training_recordings}" wrist "${training_steps}" "${proposal_name}"
+"${aws_workflow}" jepa-wm-grasp-proposal-train \
+  "${training_recordings}" "${training_steps}" "${proposal_name}"
 for recording_id in "${held_out_recording_names[@]}"; do
-  "${aws_workflow}" jepa-wm-proposal-eval \
-    "${recording_id}" wrist 69 30 1 "${proposal_name}"
+  "${aws_workflow}" jepa-wm-grasp-proposal-eval \
+    "${recording_id}" "${proposal_name}"
 done
-"${aws_workflow}" jepa-wm-proposal-summarize \
-  "${held_out_recordings}" wrist 69 30 1 "${proposal_name}"
+set +e
+"${aws_workflow}" jepa-wm-grasp-proposal-summarize \
+  "${held_out_recordings}" "${proposal_name}"
+readiness_status=$?
+set -e
 "${aws_workflow}" backup-state
 printf 'Grasp experiment: %s\nProposal: %s\n' \
   "${experiment_id}" "${proposal_name}"
+exit "${readiness_status}"

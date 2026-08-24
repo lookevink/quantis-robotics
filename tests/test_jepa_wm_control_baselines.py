@@ -35,6 +35,8 @@ class RealizedBaselineComparisonTest(unittest.TestCase):
         joints: tuple[float, ...] = (0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5),
         collision_detected: bool = False,
         contact_force_newtons: float = 0.0,
+        plug_position: tuple[float, float, float] | None = (0.4, 0.0, 0.5),
+        plug_attached: bool = False,
     ) -> ControlRolloutReport:
         observation = ControlObservation(
             7,
@@ -82,6 +84,8 @@ class RealizedBaselineComparisonTest(unittest.TestCase):
             joints,
             collision_detected,
             contact_force_newtons,
+            plug_position=plug_position,
+            plug_attached=plug_attached,
         )
         return ControlRolloutReport(
             rollout_id,
@@ -269,6 +273,36 @@ class RealizedBaselineComparisonTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "collision or contact"):
             RealizedBaselineReport.from_rollouts(
                 "contact-mismatch", direct, contacted_zero, scripted
+            )
+
+    def test_rejects_trials_with_a_different_connector_reset(self) -> None:
+        initial = DroidPose((0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.2))
+        target = DroidPose((0.03, 0.0, 0.5, 0.0, 0.0, 0.0, 0.2))
+        actions = (DroidAction((0.0,) * 7),) * 3
+        direct = self._rollout(
+            "direct", Path("/tmp/proposal.pth"), initial, initial, target, actions
+        )
+        scripted = self._rollout(
+            "scripted",
+            Path("/tmp/baseline_scripted.pth"),
+            initial,
+            target,
+            target,
+            actions,
+        )
+        moved_zero = self._rollout(
+            "zero",
+            Path("/tmp/baseline_zero.pth"),
+            initial,
+            initial,
+            target,
+            actions,
+            plug_position=(0.41, 0.0, 0.5),
+        )
+
+        with self.assertRaisesRegex(ValueError, "same reset"):
+            RealizedBaselineReport.from_rollouts(
+                "connector-mismatch", direct, moved_zero, scripted
             )
 
 

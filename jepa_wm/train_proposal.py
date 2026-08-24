@@ -23,11 +23,23 @@ from jepa_wm.proposal import (
     save_action_proposal,
 )
 from jepa_wm.proprioception import DroidValueNormalization
-from jepa_wm.trajectory import RecordedRollout, load_rollouts
+from jepa_wm.trajectory import RecordedRollout, RolloutWindow, load_rollouts
 from jepa_wm.training_artifact import TrainingArtifactMetadata, training_report_path
 
 
 TRAINING_BOUNDS = ActionSelectionBounds(minimum_action_norm=0.0)
+
+
+@dataclass(frozen=True)
+class TrainingRecordingSelection:
+    recording: str
+    context_indices: tuple[int, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "recording": self.recording,
+            "context_indices": list(self.context_indices),
+        }
 
 
 @dataclass(frozen=True)
@@ -54,20 +66,34 @@ class ProposalTrainingConfig:
 
 
 def _training_rollouts(
-    recordings: Sequence[Path], camera: str
-) -> tuple[RecordedRollout, ...]:
-    rollouts = tuple(
-        rollout
-        for recording in recordings
-        for rollout in load_rollouts(
+    recordings: Sequence[Path], camera: str, window: RolloutWindow | None
+) -> tuple[tuple[RecordedRollout, ...], tuple[TrainingRecordingSelection, ...]]:
+    def selected(recording: Path) -> tuple[RecordedRollout, ...]:
+        recording_rollouts = load_rollouts(
             recording,
             camera=camera,
             bounds=TRAINING_BOUNDS,
         )
-    )
+        return (
+            window.select(recording_rollouts)
+            if window is not None
+            else recording_rollouts
+        )
+
+    rollouts = []
+    selections = []
+    for recording in recordings:
+        recording_rollouts = selected(recording)
+        rollouts.extend(recording_rollouts)
+        selections.append(
+            TrainingRecordingSelection(
+                recording.name,
+                tuple(rollout.context[0].index for rollout in recording_rollouts),
+            )
+        )
     if not rollouts:
         raise ValueError("proposal training recordings contain no rollouts")
-    return rollouts
+    return tuple(rollouts), tuple(selections)
 
 
 def train_action_proposal(
@@ -78,13 +104,14 @@ def train_action_proposal(
     *,
     camera: str,
     config: ProposalTrainingConfig,
+    window: RolloutWindow | None = None,
 ) -> dict[str, Any]:
     if not torch.cuda.is_available():
         raise RuntimeError("action proposal training requires CUDA")
     device = torch.device("cuda", torch.cuda.current_device())
     torch.manual_seed(config.seed)
     torch.cuda.manual_seed_all(config.seed)
-    rollouts = _training_rollouts(recordings, camera)
+    rollouts, recording_selections = _training_rollouts(recordings, camera, window)
     model = load_headless_model(source, checkpoint, device=device)
     encoding_started = monotonic()
     contexts = encode_clips(
@@ -174,6 +201,11 @@ def train_action_proposal(
         "metadata": metadata.to_dict(),
         "config": asdict(config),
         "rollouts": len(rollouts),
+        "window": window.to_dict() if window is not None else None,
+        "selection_bounds": TRAINING_BOUNDS.to_dict(),
+        "recording_selections": [
+            selection.to_dict() for selection in recording_selections
+        ],
         "trainable_parameters": sum(
             parameter.numel() for parameter in proposal.parameters()
         ),
@@ -197,7 +229,32 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--camera", default="wrist")
     parser.add_argument("--steps", type=int, default=ProposalTrainingConfig.steps)
+    parser.add_argument(
+        "--hidden-dimension",
+        type=int,
+        default=ProposalTrainingConfig.hidden_dimension,
+    )
+    parser.add_argument(
+        "--learning-rate", type=float, default=ProposalTrainingConfig.learning_rate
+    )
+    parser.add_argument(
+        "--weight-decay", type=float, default=ProposalTrainingConfig.weight_decay
+    )
+    parser.add_argument("--seed", type=int, default=ProposalTrainingConfig.seed)
+    parser.add_argument("--start-index", type=int)
+    parser.add_argument("--count", type=int)
+    parser.add_argument("--stride", type=int)
     args = parser.parse_args()
+    window_values = (args.start_index, args.count, args.stride)
+    if any(value is not None for value in window_values) and not all(
+        value is not None for value in window_values
+    ):
+        parser.error("start-index, count, and stride must be provided together")
+    window = (
+        RolloutWindow(*window_values)
+        if all(value is not None for value in window_values)
+        else None
+    )
     print(
         json.dumps(
             train_action_proposal(
@@ -206,7 +263,14 @@ def main() -> None:
                 args.recording,
                 args.output,
                 camera=args.camera,
-                config=ProposalTrainingConfig(steps=args.steps),
+                config=ProposalTrainingConfig(
+                    steps=args.steps,
+                    hidden_dimension=args.hidden_dimension,
+                    learning_rate=args.learning_rate,
+                    weight_decay=args.weight_decay,
+                    seed=args.seed,
+                ),
+                window=window,
             ),
             indent=2,
         )

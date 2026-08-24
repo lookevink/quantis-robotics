@@ -23,6 +23,9 @@ control_pid_file="${control_run_dir}/control.pid"
 control_artifacts_file="${control_run_dir}/control.artifacts"
 control_log="${jepa_wm_home}/logs/control-worker.log"
 control_frame_root="${HOME}/docker/isaac-sim/data/quantis"
+grasp_window_start=69
+grasp_window_count=30
+grasp_window_stride=1
 
 jepa_revision="${JEPA_WM_REVISION:-13cf1d9c7e476f53c17714d2e0f1dc239a883ce0}"
 dinov3_revision="${DINOV3_REVISION:-6876159a11b4df116f30f667f8c9888617df0751}"
@@ -326,15 +329,38 @@ benchmark_planner() {
 
 train_action_proposal() {
   local -A options=()
-  parse_named_options options "recordings camera steps proposal" "$@"
+  parse_named_options options \
+    "recordings camera steps proposal start-index count stride hidden-dimension learning-rate weight-decay seed" "$@"
   local recording_list="${options[recordings]:-}"
   local camera_name="${options[camera]:-wrist}"
   local training_steps="${options[steps]:-2000}"
   local proposal_name="${options[proposal]:-quantis_isaac_${camera_name}_action_proposal}"
+  local start_index="${options[start-index]:-}"
+  local rollout_count="${options[count]:-}"
+  local rollout_stride="${options[stride]:-}"
+  local hidden_dimension="${options[hidden-dimension]:-128}"
+  local learning_rate="${options[learning-rate]:-0.001}"
+  local weight_decay="${options[weight-decay]:-0.0001}"
+  local training_seed="${options[seed]:-234}"
   is_safe_identifier_list "${recording_list}" || die "invalid recording list"
   is_safe_identifier "${camera_name}" || die "invalid camera name"
   is_safe_identifier "${proposal_name}" || die "invalid proposal name"
   require_positive_integer "training steps" "${training_steps}" || exit 1
+  require_positive_integer "hidden dimension" "${hidden_dimension}" || exit 1
+  require_nonnegative_integer "training seed" "${training_seed}" || exit 1
+  require_nonnegative_number "learning rate" "${learning_rate}" || exit 1
+  require_nonnegative_number "weight decay" "${weight_decay}" || exit 1
+  local -a window_arguments=()
+  if [[ -n "${start_index}${rollout_count}${rollout_stride}" ]]; then
+    require_nonnegative_integer "start index" "${start_index}" || exit 1
+    require_positive_integer "rollout count" "${rollout_count}" || exit 1
+    require_positive_integer "rollout stride" "${rollout_stride}" || exit 1
+    window_arguments=(
+      --start-index "${start_index}"
+      --count "${rollout_count}"
+      --stride "${rollout_stride}"
+    )
+  fi
   local -a recording_names
   local -a recording_arguments
   local recording_name
@@ -355,25 +381,51 @@ train_action_proposal() {
     "${recording_arguments[@]}" \
     --output "${checkpoint_dir}/${proposal_name}.pth" \
     --camera "${camera_name}" \
-    --steps "${training_steps}"
+    --steps "${training_steps}" \
+    --hidden-dimension "${hidden_dimension}" \
+    --learning-rate "${learning_rate}" \
+    --weight-decay "${weight_decay}" \
+    --seed "${training_seed}" \
+    "${window_arguments[@]}"
+}
+
+train_grasp_action_proposal() {
+  local -A options=()
+  parse_named_options options \
+    "recordings steps proposal hidden-dimension learning-rate weight-decay seed" "$@"
+  train_action_proposal \
+    --recordings "${options[recordings]:-}" \
+    --camera wrist \
+    --steps "${options[steps]:-3000}" \
+    --proposal "${options[proposal]:-}" \
+    --hidden-dimension "${options[hidden-dimension]:-128}" \
+    --learning-rate "${options[learning-rate]:-0.001}" \
+    --weight-decay "${options[weight-decay]:-0.0001}" \
+    --seed "${options[seed]:-234}" \
+    --start-index "${grasp_window_start}" \
+    --count "${grasp_window_count}" \
+    --stride "${grasp_window_stride}"
 }
 
 evaluate_action_proposal() {
   local -A options=()
   parse_named_options options \
-    "recording camera start-index count stride proposal" "$@"
+    "recording camera start-index count stride proposal include-stationary" "$@"
   local recording_name="${options[recording]:-}"
   local camera_name="${options[camera]:-wrist}"
   local start_index="${options[start-index]:-0}"
   local rollout_count="${options[count]:-8}"
   local rollout_stride="${options[stride]:-1}"
   local proposal_name="${options[proposal]:-quantis_isaac_${camera_name}_action_proposal}"
+  local include_stationary="${options[include-stationary]:-false}"
   is_safe_identifier "${recording_name}" || die "invalid recording name"
   is_safe_identifier "${camera_name}" || die "invalid camera name"
   is_safe_identifier "${proposal_name}" || die "invalid proposal name"
   require_nonnegative_integer "start index" "${start_index}" || exit 1
   require_positive_integer "rollout count" "${rollout_count}" || exit 1
   require_positive_integer "rollout stride" "${rollout_stride}" || exit 1
+  [[ "${include_stationary}" == "true" || "${include_stationary}" == "false" ]] \
+    || die "include-stationary must be true or false"
   local recording="${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}"
   local proposal="${checkpoint_dir}/${proposal_name}.pth"
   [[ -f "${recording}/manifest.json" ]] \
@@ -381,6 +433,10 @@ evaluate_action_proposal() {
   [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
   require_runtime
   sudo chown -R "${USER}:${USER}" "${recording}"
+  local -a stationary_arguments=()
+  if [[ "${include_stationary}" == "true" ]]; then
+    stationary_arguments+=(--include-stationary)
+  fi
   cd "${repo_dir}"
   "${venv_dir}/bin/python" -m jepa_wm.evaluate_proposal \
     --source "${source_dir}" \
@@ -390,7 +446,71 @@ evaluate_action_proposal() {
     --camera "${camera_name}" \
     --start-index "${start_index}" \
     --count "${rollout_count}" \
-    --stride "${rollout_stride}"
+    --stride "${rollout_stride}" \
+    "${stationary_arguments[@]}"
+}
+
+evaluate_grasp_action_proposal() {
+  local -A options=()
+  parse_named_options options "recording proposal" "$@"
+  evaluate_action_proposal \
+    --recording "${options[recording]:-}" \
+    --camera wrist \
+    --start-index "${grasp_window_start}" \
+    --count "${grasp_window_count}" \
+    --stride "${grasp_window_stride}" \
+    --proposal "${options[proposal]:-}" \
+    --include-stationary true
+}
+
+proposal_evaluation_report_name() {
+  local camera_name="$1"
+  local proposal_name="$2"
+  local start_index="$3"
+  local rollout_count="$4"
+  local rollout_stride="$5"
+  printf '%s_%s_proposal_eval_%06d_%03d_%03d.json' \
+    "${camera_name}" "${proposal_name}" "${start_index}" \
+    "${rollout_count}" "${rollout_stride}"
+}
+
+run_action_proposal_summary() {
+  local recording_list="$1"
+  local camera_name="$2"
+  local start_index="$3"
+  local rollout_count="$4"
+  local rollout_stride="$5"
+  local proposal_name="$6"
+  local readiness_module="$7"
+  local output_suffix="$8"
+  is_safe_identifier_list "${recording_list}" || die "invalid recording list"
+  is_safe_identifier "${camera_name}" || die "invalid camera name"
+  is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+  require_nonnegative_integer "start index" "${start_index}" || exit 1
+  require_positive_integer "rollout count" "${rollout_count}" || exit 1
+  require_positive_integer "rollout stride" "${rollout_stride}" || exit 1
+  local proposal="${checkpoint_dir}/${proposal_name}.pth"
+  [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
+  local -a recording_names
+  local -a arguments=()
+  local recording_name
+  local report_name
+  local report
+  IFS=',' read -r -a recording_names <<<"${recording_list}"
+  report_name="$(proposal_evaluation_report_name \
+    "${camera_name}" "${proposal_name}" "${start_index}" \
+    "${rollout_count}" "${rollout_stride}")"
+  for recording_name in "${recording_names[@]}"; do
+    report="${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}/jepa_wm/${report_name}"
+    [[ -f "${report}" ]] || die "proposal report does not exist: ${report}"
+    arguments+=(--evaluation-report "${report}")
+  done
+  local output="${checkpoint_dir}/experiments/${proposal_name}_${output_suffix}.json"
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m "${readiness_module}" \
+    --proposal "${proposal}" \
+    "${arguments[@]}" \
+    --output "${output}"
 }
 
 summarize_action_proposal() {
@@ -403,34 +523,19 @@ summarize_action_proposal() {
   local rollout_count="${options[count]:-62}"
   local rollout_stride="${options[stride]:-1}"
   local proposal_name="${options[proposal]:-quantis_isaac_${camera_name}_action_proposal}"
-  is_safe_identifier_list "${recording_list}" || die "invalid recording list"
-  is_safe_identifier "${camera_name}" || die "invalid camera name"
-  is_safe_identifier "${proposal_name}" || die "invalid proposal name"
-  require_nonnegative_integer "start index" "${start_index}" || exit 1
-  require_positive_integer "rollout count" "${rollout_count}" || exit 1
-  require_positive_integer "rollout stride" "${rollout_stride}" || exit 1
-  local proposal="${checkpoint_dir}/${proposal_name}.pth"
-  [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
-  local -a recording_names
-  local -a arguments
-  local recording_name
-  local report_name
-  local report
-  IFS=',' read -r -a recording_names <<<"${recording_list}"
-  printf -v report_name '%s_%s_proposal_eval_%06d_%03d_%03d.json' \
-    "${camera_name}" "${proposal_name}" "${start_index}" \
-    "${rollout_count}" "${rollout_stride}"
-  for recording_name in "${recording_names[@]}"; do
-    report="${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}/jepa_wm/${report_name}"
-    [[ -f "${report}" ]] || die "proposal report does not exist: ${report}"
-    arguments+=(--evaluation-report "${report}")
-  done
-  local output="${checkpoint_dir}/experiments/${proposal_name}_readiness.json"
-  cd "${repo_dir}"
-  "${venv_dir}/bin/python" -m jepa_wm.proposal_readiness \
-    --proposal "${proposal}" \
-    "${arguments[@]}" \
-    --output "${output}"
+  run_action_proposal_summary \
+    "${recording_list}" "${camera_name}" "${start_index}" \
+    "${rollout_count}" "${rollout_stride}" "${proposal_name}" \
+    jepa_wm.proposal_readiness readiness
+}
+
+summarize_grasp_action_proposal() {
+  local -A options=()
+  parse_named_options options "recordings proposal" "$@"
+  run_action_proposal_summary \
+    "${options[recordings]:-}" wrist \
+    "${grasp_window_start}" "${grasp_window_count}" "${grasp_window_stride}" \
+    "${options[proposal]:-}" jepa_wm.grasp_proposal_readiness grasp_readiness
 }
 
 infer_replayed_control() {
@@ -985,11 +1090,20 @@ case "${1:-}" in
   proposal-train)
     train_action_proposal "${@:2}"
     ;;
+  grasp-proposal-train)
+    train_grasp_action_proposal "${@:2}"
+    ;;
   proposal-eval)
     evaluate_action_proposal "${@:2}"
     ;;
+  grasp-proposal-eval)
+    evaluate_grasp_action_proposal "${@:2}"
+    ;;
   proposal-summarize)
     summarize_action_proposal "${@:2}"
+    ;;
+  grasp-proposal-summarize)
+    summarize_grasp_action_proposal "${@:2}"
     ;;
   control-infer-replay)
     infer_replayed_control "${@:2}"
@@ -1038,6 +1152,6 @@ case "${1:-}" in
       "${2:-}" "${3:-}" "${4:-}" "${5:-wrist}" "${6:-40}"
     ;;
   *)
-    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, proposal-eval, proposal-summarize, control-worker-configure, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, control-candidate-report, control-candidate-summarize, control-objective-calibrate, or summarize"
+    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, grasp-proposal-train, proposal-eval, grasp-proposal-eval, proposal-summarize, grasp-proposal-summarize, control-worker-configure, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, control-candidate-report, control-candidate-summarize, control-objective-calibrate, or summarize"
     ;;
 esac

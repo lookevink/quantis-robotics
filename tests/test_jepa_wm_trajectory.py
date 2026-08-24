@@ -16,6 +16,12 @@ from jepa_wm.trajectory import (
 
 
 class RecordedTrajectoryTest(unittest.TestCase):
+    def test_window_owns_its_strided_context_indices(self) -> None:
+        self.assertEqual(
+            RolloutWindow(start_index=4, count=3, stride=2).context_indices,
+            (4, 6, 8),
+        )
+
     def test_loads_native_context_actions_and_terminal_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             recording = Path(temp_dir)

@@ -311,14 +311,17 @@ Commands:
   jepa-wm-adapt-set RECORDING[,RECORDING...] [camera] [steps] [adapter-name]
   jepa-wm-plan-benchmark RECORDING [camera] [start] [count] [stride] [iterations] [samples] [elites] [adapter] [proposal]
   jepa-wm-proposal-train RECORDING[,RECORDING...] [camera] [steps] [proposal]
+  jepa-wm-grasp-proposal-train RECORDING[,RECORDING...] [steps] PROPOSAL [hidden-dimension learning-rate weight-decay seed]
   jepa-wm-proposal-eval RECORDING [camera] [start] [count] [stride] [proposal]
   jepa-wm-proposal-summarize RECORDING[,RECORDING...] [camera] [start] [count] [stride] [proposal]
+  jepa-wm-grasp-proposal-eval RECORDING PROPOSAL
+  jepa-wm-grasp-proposal-summarize RECORDING[,RECORDING...] PROPOSAL
   jepa-wm-control-infer-replay RECORDING [camera] [context-index] [proposal]
   jepa-wm-control-worker-configure NAME PROPOSAL ADAPTER [CALIBRATION] [translation-margin rotation-margin gripper-margin] [planner-seed iterations samples elites]
   jepa-wm-control-worker-start [artifacts] | jepa-wm-control-worker-status | jepa-wm-control-worker-stop
   jepa-wm-control-step REFERENCE_RECORDING SEED [artifacts] [context-index]
   jepa-wm-control-rollout REFERENCE_RECORDING SEED STEPS [artifacts] [context-index]
-  jepa-wm-control-baseline REFERENCE_RECORDING SEED STEPS zero|scripted
+  jepa-wm-control-baseline REFERENCE_RECORDING SEED STEPS zero|scripted [context-index]
   jepa-wm-control-baselines EXPERIMENT DIRECT ZERO SCRIPTED REFERENCE SEED STEPS [direct-proposal] [direct-sessions]
   jepa-wm-control-calibration-collect CALIBRATION REFERENCE SEED TRIALS [artifacts]
   jepa-wm-control-candidate REFERENCE_RECORDING SEED SOURCE_SESSION BASELINE_EXPERIMENT
@@ -592,6 +595,24 @@ case "${command}" in
     sync_repo
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh proposal-eval --recording '${recording_name}' --camera '${camera_name}' --start-index '${start_index}' --count '${rollout_count}' --stride '${rollout_stride}' --proposal '${proposal_name}'"
     ;;
+  jepa-wm-grasp-proposal-train)
+    recording_names="${2:-}"
+    training_steps="${3:-3000}"
+    proposal_name="${4:-}"
+    hidden_dimension="${5:-128}"
+    learning_rate="${6:-0.001}"
+    weight_decay="${7:-0.0001}"
+    training_seed="${8:-234}"
+    is_safe_identifier_list "${recording_names}" || die "invalid recording list"
+    require_positive_integer "training steps" "${training_steps}" || exit 1
+    require_positive_integer "hidden dimension" "${hidden_dimension}" || exit 1
+    require_nonnegative_number "learning rate" "${learning_rate}" || exit 1
+    require_nonnegative_number "weight decay" "${weight_decay}" || exit 1
+    require_nonnegative_integer "training seed" "${training_seed}" || exit 1
+    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh grasp-proposal-train --recordings '${recording_names}' --steps '${training_steps}' --proposal '${proposal_name}' --hidden-dimension '${hidden_dimension}' --learning-rate '${learning_rate}' --weight-decay '${weight_decay}' --seed '${training_seed}'"
+    ;;
   jepa-wm-proposal-summarize)
     recording_names="${2:-}"
     camera_name="${3:-wrist}"
@@ -608,6 +629,23 @@ case "${command}" in
     require_positive_integer "rollout stride" "${rollout_stride}" || exit 1
     sync_repo
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh proposal-summarize --recordings '${recording_names}' --camera '${camera_name}' --start-index '${start_index}' --count '${rollout_count}' --stride '${rollout_stride}' --proposal '${proposal_name}'"
+    ;;
+  jepa-wm-grasp-proposal-eval)
+    recording_name="${2:-}"
+    proposal_name="${3:-}"
+    is_safe_identifier "${recording_name}" || die "invalid recording name"
+    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh grasp-proposal-eval --recording '${recording_name}' --proposal '${proposal_name}'"
+    ;;
+  jepa-wm-grasp-proposal-summarize)
+    recording_names="${2:-}"
+    proposal_name="${3:-}"
+    is_safe_identifier_list "${recording_names}" \
+      || die "invalid held-out recording list"
+    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh grasp-proposal-summarize --recordings '${recording_names}' --proposal '${proposal_name}'"
     ;;
   jepa-wm-control-infer-replay)
     recording_name="${2:-}"
@@ -707,16 +745,18 @@ case "${command}" in
     exploration_seed="${3:-}"
     step_count="${4:-3}"
     policy="${5:-}"
+    context_index="${6:-4}"
     is_safe_identifier "${reference_name}" || die "invalid reference recording"
     require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
     require_positive_integer "step count" "${step_count}" || exit 1
     (( step_count <= 8 )) || die "control rollout is capped at eight steps"
     [[ "${policy}" == "zero" || "${policy}" == "scripted" ]] \
       || die "baseline policy must be zero or scripted"
+    require_positive_integer "context index" "${context_index}" || exit 1
     proposal_name="$(control_proposal_for_policy "${policy}")"
     rollout_id="${policy}-$(date -u +%Y%m%dT%H%M%SZ)-${exploration_seed}"
     sync_repo
-    remote "bash ~/quantis-robotics/ops/run_control_rollout.sh '${rollout_id}' '${reference_name}' '${exploration_seed}' '${step_count}' '${proposal_name}' '${policy}'"
+    remote "bash ~/quantis-robotics/ops/run_control_rollout.sh '${rollout_id}' '${reference_name}' '${exploration_seed}' '${step_count}' '${proposal_name}' '${policy}' '${context_index}'"
     printf 'Control baseline: %s\n' "${rollout_id}"
     ;;
   jepa-wm-control-baselines)

@@ -686,6 +686,39 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("domain-held-00,domain-held-01", calls)
         self.assertIn("--start-index '4' --count '62' --stride '1'", calls)
 
+    def test_jepa_wm_grasp_proposal_commands_bind_the_complete_task_window(self):
+        trained, training_calls = self.run_command(
+            "jepa-wm-grasp-proposal-train",
+            arguments=(
+                "grasp-train-00,grasp-train-01",
+                "500",
+                "grasp-proposal",
+                "16",
+                "0.001",
+                "0.01",
+                "235",
+            ),
+        )
+        evaluated, evaluation_calls = self.run_command(
+            "jepa-wm-grasp-proposal-eval",
+            arguments=("grasp-held-00", "grasp-proposal"),
+        )
+        summarized, summary_calls = self.run_command(
+            "jepa-wm-grasp-proposal-summarize",
+            arguments=("grasp-held-00,grasp-held-01", "grasp-proposal"),
+        )
+
+        self.assertEqual(trained.returncode, 0, trained.stderr)
+        self.assertIn("ops/jepa_wm.sh grasp-proposal-train", training_calls)
+        self.assertIn("--hidden-dimension '16'", training_calls)
+        self.assertIn("--weight-decay '0.01' --seed '235'", training_calls)
+        self.assertEqual(evaluated.returncode, 0, evaluated.stderr)
+        self.assertIn("ops/jepa_wm.sh grasp-proposal-eval", evaluation_calls)
+        self.assertIn("grasp-held-00", evaluation_calls)
+        self.assertEqual(summarized.returncode, 0, summarized.stderr)
+        self.assertIn("ops/jepa_wm.sh grasp-proposal-summarize", summary_calls)
+        self.assertIn("grasp-held-00,grasp-held-01", summary_calls)
+
     def test_jepa_wm_control_replay_forwards_one_fresh_observation(self):
         result, calls = self.run_command(
             "jepa-wm-control-infer-replay",
@@ -844,6 +877,15 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("'baseline_scripted' 'scripted'", calls)
         self.assertNotIn("control-worker-start", calls)
 
+    def test_jepa_wm_control_baseline_forwards_the_task_context(self):
+        result, calls = self.run_command(
+            "jepa-wm-control-baseline",
+            arguments=("grasp-held-00", "12400", "8", "zero", "86"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("'baseline_zero' 'zero' '86'", calls)
+
     def test_jepa_wm_control_baselines_forwards_strict_trial_provenance(self):
         result, calls = self.run_command(
             "jepa-wm-control-baselines",
@@ -981,11 +1023,21 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls.count("start_grasp_recording"), 14)
         self.assertEqual(calls.count("jepa_wm.grasp_recording_cli"), 14)
-        self.assertIn("ops/jepa_wm.sh proposal-train", calls)
-        self.assertEqual(calls.count("ops/jepa_wm.sh proposal-eval"), 2)
-        self.assertIn("ops/jepa_wm.sh proposal-summarize", calls)
+        self.assertIn("ops/jepa_wm.sh grasp-proposal-train", calls)
+        self.assertEqual(calls.count("ops/jepa_wm.sh grasp-proposal-eval"), 2)
+        self.assertIn("ops/jepa_wm.sh grasp-proposal-summarize", calls)
         self.assertIn("ops/backup_state.sh", calls)
         self.assertIn("Grasp experiment:", result.stdout)
+        milestone = (REPO_ROOT / "ops/jepa_wm_grasp_milestone.sh").read_text()
+        self.assertIn("readiness_status=$?", milestone)
+        self.assertLess(
+            milestone.index('"${aws_workflow}" jepa-wm-grasp-proposal-summarize'),
+            milestone.index('"${aws_workflow}" backup-state'),
+        )
+        self.assertLess(
+            milestone.index('"${aws_workflow}" backup-state'),
+            milestone.index('exit "${readiness_status}"'),
+        )
 
     def test_remote_bootstrap_installs_python_server_client(self):
         bootstrap = REMOTE_BOOTSTRAP.read_text()

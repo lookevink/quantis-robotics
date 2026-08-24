@@ -519,12 +519,16 @@ class RealizedBaselineReport:
                     direct_state.current_joint_positions,
                     direct_state.collision_detected,
                     direct_state.contact_force_newtons,
+                    direct_state.plug_position,
+                    direct_state.plug_attached,
                 ),
                 TrialResetState(
                     cls._initial_pose(report),
                     state.current_joint_positions,
                     state.collision_detected,
                     state.contact_force_newtons,
+                    state.plug_position,
+                    state.plug_attached,
                 ),
                 tolerances=reset_tolerances,
             )

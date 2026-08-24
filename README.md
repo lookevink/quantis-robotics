@@ -466,6 +466,32 @@ fixating on the first grasp image. The rollout report admits that moving target
 only for a validated `reach_and_grasp` recording and binds the initial connector
 pose/attachment state into reset-equivalence checks.
 
+The first complete proposal experiment is preserved as
+`grasp-20260824T041009Z-2400`: 12 training seeds and two disjoint held-out
+seeds, each with 102 true-4-FPS frames, frame-89 acquisition, 13 attached
+observations, and approximately 100 mm of retained connector motion. The
+generic 1,188-rollout proposal failed the task gate with aggregate mean cosine
+`0.6238` and `75.9%` active-direction passes. Restricting the fit to all 30
+task-window rollouts per seed improved those figures to `0.6861` and `79.6%`,
+but still failed the `0.9`/`98%` thresholds. A 16-unit regularized head reached
+`0.7112`/`85.2%` and also failed. These are retained negative results, not live
+task or demo evidence; no failed checkpoint is allowed to command the arm.
+
+Task-specific training and evaluation include the final stationary attached
+hold windows rather than silently dropping zero-action labels:
+
+```bash
+./ops/aws.sh jepa-wm-grasp-proposal-train \
+  TRAIN_RECORDING[,TRAIN_RECORDING...] 3000 PROPOSAL
+./ops/aws.sh jepa-wm-grasp-proposal-eval HELD_OUT_RECORDING PROPOSAL
+./ops/aws.sh jepa-wm-grasp-proposal-summarize \
+  HELD_OUT_RECORDING[,HELD_OUT_RECORDING...] PROPOSAL
+```
+
+The next iteration keeps held-out seeds 12400/12401 fixed, expands training
+variation from 12 to 20 seeds, and reruns the same fail-closed gate before any
+live rollout.
+
 ### Inverse-action proposal milestone
 
 The repository now has a deterministic bounded CEM implementation, empirical

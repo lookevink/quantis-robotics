@@ -115,6 +115,7 @@ def evaluate_action_proposal(
         "camera": camera,
         "rollouts": len(rollouts),
         "window": window.to_dict(),
+        "selection_bounds": selection_bounds.to_dict(),
         "mean_sequence_mse": float(
             np.mean([result["sequence_mse"] for result in results])
         ),
@@ -146,7 +147,17 @@ def main() -> None:
     parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--count", type=int, default=8)
     parser.add_argument("--stride", type=int, default=1)
+    parser.add_argument(
+        "--include-stationary",
+        action="store_true",
+        help="include zero-action rollouts in the requested evaluation window",
+    )
     args = parser.parse_args()
+    selection_bounds = (
+        ActionSelectionBounds(minimum_action_norm=0.0)
+        if args.include_stationary
+        else DEFAULT_ACTION_SELECTION_BOUNDS
+    )
     print(
         json.dumps(
             evaluate_action_proposal(
@@ -156,6 +167,7 @@ def main() -> None:
                 args.recording,
                 camera=args.camera,
                 window=RolloutWindow(args.start_index, args.count, args.stride),
+                selection_bounds=selection_bounds,
             ),
             indent=2,
         )
