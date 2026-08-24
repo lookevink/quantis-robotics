@@ -16,6 +16,8 @@ from jepa_wm.control_baselines import (
 )
 from jepa_wm.calibration_sessions import calibration_trial_from_session
 from jepa_wm.control_rollout import ControlStepSummary
+from jepa_wm.objective_calibration import TaskProgressMargins
+from jepa_wm.shadow_planning import ShadowSearchConfig
 from sim.control_session import ControlSession
 from sim.recording import validate_recording_id
 
@@ -24,9 +26,40 @@ CANDIDATE_TRIAL_REPORT_SCHEMA = "quantis.jepa_wm_candidate_trial.v1"
 
 
 @dataclass(frozen=True)
-class CandidateSeedProvenance:
+class CandidateWorkerIdentity:
+    proposal: Path
+    adapter: Path
+    calibration_fingerprint: str
+    progress_margins: TaskProgressMargins
+    search: ShadowSearchConfig
+
+    def __post_init__(self) -> None:
+        if (
+            not self.proposal.is_absolute()
+            or not self.adapter.is_absolute()
+            or len(self.calibration_fingerprint) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.calibration_fingerprint
+            )
+        ):
+            raise ValueError("candidate worker identity is invalid")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "proposal": str(self.proposal),
+            "adapter": str(self.adapter),
+            "calibration_fingerprint": self.calibration_fingerprint,
+            "progress_margins": self.progress_margins.to_dict(),
+            "search": self.search.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class CandidateReadinessProvenance:
     seed: int
     calibration_seeds: tuple[int, ...]
+    worker: CandidateWorkerIdentity
 
     def __post_init__(self) -> None:
         if not self.calibration_seeds:
@@ -38,6 +71,7 @@ class CandidateSeedProvenance:
         return {
             "seed": self.seed,
             "calibration_seeds": list(self.calibration_seeds),
+            "worker": self.worker.to_dict(),
         }
 
 
@@ -178,10 +212,10 @@ class CandidateTrialReport:
             raise ValueError("candidate trial report does not match raw sessions")
         return report
 
-    def calibration_seed_provenance(
+    def readiness_provenance(
         self,
         data_root: Path,
-    ) -> CandidateSeedProvenance:
+    ) -> CandidateReadinessProvenance:
         baseline = RealizedBaselineReport.load_persisted(
             data_root, self.baseline_experiment_id
         )
@@ -200,9 +234,16 @@ class CandidateTrialReport:
                 raise ValueError(
                     "candidate trial calibration does not match raw training sessions"
                 )
-        return CandidateSeedProvenance(
+        return CandidateReadinessProvenance(
             state.seed,
             tuple(sorted(set(calibration.seeds))),
+            CandidateWorkerIdentity(
+                shadow.proposal,
+                shadow.adapter,
+                calibration.fingerprint,
+                shadow.task_progress.minimum_progress,
+                shadow.config,
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:

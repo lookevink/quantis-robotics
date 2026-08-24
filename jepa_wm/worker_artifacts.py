@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from jepa_wm.objective_calibration import TaskProgressMargins
+from jepa_wm.planner import CEMConfig
 from jepa_wm.persistence import write_json_atomic
+from jepa_wm.shadow_planning import (
+    CALIBRATED_SHADOW_SEARCH_CONFIG,
+    ShadowSearchConfig,
+)
 
 
 WORKER_ARTIFACTS_SCHEMA = "quantis.jepa_wm_control_worker_artifacts.v1"
@@ -21,6 +26,7 @@ class ControlWorkerArtifacts:
     adapter: Path
     calibration: Path | None = None
     progress_margins: TaskProgressMargins | None = None
+    planner: CEMConfig | None = None
 
     def __post_init__(self) -> None:
         paths = (self.proposal, self.adapter)
@@ -32,6 +38,15 @@ class ControlWorkerArtifacts:
             raise ValueError("uncalibrated workers cannot define progress margins")
         if self.calibration is not None and self.progress_margins is None:
             object.__setattr__(self, "progress_margins", TaskProgressMargins())
+        if self.planner is None:
+            default = (
+                CALIBRATED_SHADOW_SEARCH_CONFIG.planner
+                if self.calibration is not None
+                else ShadowSearchConfig().planner
+            )
+            object.__setattr__(self, "planner", default)
+        if self.planner is None or self.planner.horizon != 3:
+            raise ValueError("control worker planner must use the native horizon")
 
     @property
     def calibrated(self) -> bool:
@@ -55,6 +70,7 @@ class ControlWorkerArtifacts:
                 if self.progress_margins is not None
                 else None
             ),
+            "planner": self.planner.to_dict(),
             "calibrated": self.calibrated,
         }
 
@@ -86,6 +102,11 @@ class ControlWorkerArtifacts:
                 if payload.get("progress_margins") is not None
                 else None
             ),
+            planner=(
+                CEMConfig(**payload["planner"])
+                if payload.get("planner") is not None
+                else None
+            ),
         )
         if payload.get("calibrated") is not artifacts.calibrated:
             raise ValueError("control worker artifact claims are inconsistent")
@@ -115,6 +136,10 @@ def main() -> None:
     write_parser.add_argument("--translation-margin", type=float)
     write_parser.add_argument("--rotation-margin", type=float)
     write_parser.add_argument("--gripper-margin", type=float)
+    write_parser.add_argument("--planner-seed", type=int)
+    write_parser.add_argument("--planner-iterations", type=int)
+    write_parser.add_argument("--planner-samples", type=int)
+    write_parser.add_argument("--planner-elites", type=int)
     proposal_parser = subparsers.add_parser("proposal-name")
     proposal_parser.add_argument("--manifest", type=Path, required=True)
     args = parser.parse_args()
@@ -135,11 +160,32 @@ def main() -> None:
         if all(value is not None for value in margin_values)
         else None
     )
+    planner_values = (
+        args.planner_seed,
+        args.planner_iterations,
+        args.planner_samples,
+        args.planner_elites,
+    )
+    if any(value is not None for value in planner_values) and not all(
+        value is not None for value in planner_values
+    ):
+        parser.error("all four planner settings must be provided together")
+    planner = (
+        CEMConfig(
+            seed=args.planner_seed,
+            iterations=args.planner_iterations,
+            samples=args.planner_samples,
+            elites=args.planner_elites,
+        )
+        if all(value is not None for value in planner_values)
+        else None
+    )
     ControlWorkerArtifacts(
         args.proposal.resolve(),
         args.adapter.resolve(),
         args.calibration.resolve() if args.calibration is not None else None,
         progress_margins,
+        planner,
     ).write(args.output)
     print(args.output)
 

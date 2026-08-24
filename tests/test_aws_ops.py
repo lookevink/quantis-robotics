@@ -716,6 +716,30 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("--rotation-margin '0.001'", calls)
         self.assertIn("--gripper-margin '0.005'", calls)
 
+    def test_jepa_wm_control_worker_binds_reproducible_search_budget(self):
+        result, calls = self.run_command(
+            "jepa-wm-control-worker-configure",
+            arguments=(
+                "quantis_search_control",
+                "proposal",
+                "adapter",
+                "calibration",
+                "0.0005",
+                "0.001",
+                "0.005",
+                "235",
+                "8",
+                "256",
+                "16",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--planner-seed '235'", calls)
+        self.assertIn("--planner-iterations '8'", calls)
+        self.assertIn("--planner-samples '256'", calls)
+        self.assertIn("--planner-elites '16'", calls)
+
     def test_jepa_wm_control_worker_rejects_partial_progress_margins(self):
         result, calls = self.run_command(
             "jepa-wm-control-worker-configure",

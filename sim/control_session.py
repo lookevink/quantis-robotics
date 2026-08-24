@@ -483,35 +483,19 @@ class ControlSession:
         self,
         binding: ExperimentalCandidateBinding,
         response: ProposedControl | None,
+        source_evidence: CandidateSourceEvidence | None = None,
     ) -> None:
         observation, state = self.load_capture()
         source = ControlSession.at(self.path.parent, binding.source_session_id)
-        source_observation, source_state = source.load_capture()
-        shadow = source.load_shadow()
-        safety = source.load_shadow_safety()
+        if source_evidence is None:
+            source_evidence = source.load_candidate_source_evidence()
         if (
             binding.execution_session_id != self.session_id
             or binding.source_session_id != source.session_id
         ):
             raise ValueError("experimental candidate is not bound to its source trial")
         binding.validate_execution(
-            CandidateSourceEvidence(
-                CandidateTrialContext(
-                    source_observation,
-                    TrialResetState(
-                        source_observation.pose,
-                        source_state.current_joint_positions,
-                        source_state.collision_detected,
-                        source_state.contact_force_newtons,
-                    ),
-                    source_state.execution_policy,
-                    source_state.reference_recording,
-                    source_state.seed,
-                    source_state.previous_session_id,
-                ),
-                shadow,
-                safety,
-            ),
+            source_evidence,
             CandidateExecutionEvidence(
                 CandidateTrialContext(
                     observation,
@@ -530,12 +514,36 @@ class ControlSession:
             ),
         )
 
-    def write_candidate_binding(self, binding: ExperimentalCandidateBinding) -> None:
+    def load_candidate_source_evidence(self) -> CandidateSourceEvidence:
+        observation, state = self.load_capture()
+        return CandidateSourceEvidence(
+            CandidateTrialContext(
+                observation,
+                TrialResetState(
+                    observation.pose,
+                    state.current_joint_positions,
+                    state.collision_detected,
+                    state.contact_force_newtons,
+                ),
+                state.execution_policy,
+                state.reference_recording,
+                state.seed,
+                state.previous_session_id,
+            ),
+            self.load_shadow(),
+            self.load_shadow_safety(),
+        )
+
+    def write_candidate_binding(
+        self,
+        binding: ExperimentalCandidateBinding,
+        source_evidence: CandidateSourceEvidence | None = None,
+    ) -> None:
         if self.candidate_binding_path.exists():
             raise ValueError(
                 f"control session already has candidate evidence: {self.session_id}"
             )
-        self._validate_candidate_binding(binding, None)
+        self._validate_candidate_binding(binding, None, source_evidence)
         write_json_atomic(self.candidate_binding_path, binding.to_dict())
 
     def load_candidate_binding(
@@ -589,6 +597,7 @@ class ControlSession:
             or evidence.proposal != response.proposal
             or evidence.direct.actions != response.actions
             or evidence.adapter != shadow_request.expected_adapter
+            or evidence.config.planner != shadow_request.expected_planner
             or calibrated_binding_invalid
         ):
             raise ValueError("shadow evidence is not bound to its control session")

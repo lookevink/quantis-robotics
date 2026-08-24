@@ -248,6 +248,7 @@ class ControlRolloutTest(unittest.TestCase):
                         observation,
                         response,
                         Path("/tmp/adapter.pth"),
+                        shadow.config.planner,
                     ).to_dict()
                 )
             )
@@ -299,11 +300,18 @@ class ControlRolloutTest(unittest.TestCase):
             safety_path.write_text(json.dumps(safety_payload))
             with self.assertRaisesRegex(ValueError, "not bound"):
                 self._report(root, ("session-0",), requested_steps=1)
+
             safety_path.write_text(json.dumps(safety.to_dict()))
 
             shadow_request_path = session / "shadow_request.json"
             shadow_request = json.loads(shadow_request_path.read_text())
             shadow_request["expected_adapter"] = "/tmp/other-adapter.pth"
+            shadow_request_path.write_text(json.dumps(shadow_request))
+            with self.assertRaisesRegex(ValueError, "not bound"):
+                self._report(root, ("session-0",), requested_steps=1)
+
+            shadow_request["expected_adapter"] = "/tmp/adapter.pth"
+            shadow_request["expected_planner"]["seed"] += 1
             shadow_request_path.write_text(json.dumps(shadow_request))
             with self.assertRaisesRegex(ValueError, "not bound"):
                 self._report(root, ("session-0",), requested_steps=1)
@@ -402,6 +410,7 @@ class ControlRolloutTest(unittest.TestCase):
                 observation,
                 response,
                 Path("/tmp/adapter.pth"),
+                ShadowSearchConfig().planner,
                 CalibrationIdentity.from_calibration(
                     calibration_path, calibration
                 ),

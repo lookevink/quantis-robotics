@@ -80,7 +80,10 @@ class ControlWorkerTest(unittest.TestCase):
             io.StringIO(
                 json.dumps(
                     ShadowPlanningRequest(
-                        observation, direct, Path("/tmp/adapter.pth")
+                        observation,
+                        direct,
+                        Path("/tmp/adapter.pth"),
+                        ShadowSearchConfig().planner,
                     ).to_dict()
                 )
                 + "\n"

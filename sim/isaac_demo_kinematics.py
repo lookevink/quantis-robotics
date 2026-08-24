@@ -46,6 +46,44 @@ def _rotation_error(left: np.ndarray, right: np.ndarray) -> float:
     return float(delta.magnitude())
 
 
+def _closest_inverse_kinematics(
+    solver: Any,
+    frame_name: str,
+    target_position: np.ndarray,
+    target_orientation: np.ndarray,
+    warm_start: np.ndarray,
+) -> tuple[np.ndarray, bool]:
+    """Select the successful Lula branch closest to the captured articulation."""
+
+    joints = np.asarray(warm_start, dtype=np.float64)
+    alternating = np.asarray((1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0))
+    offsets = (
+        np.zeros(7),
+        alternating * 1e-4,
+        alternating * -1e-4,
+        alternating * 5e-4,
+        alternating * -5e-4,
+    )
+    solutions = []
+    for offset in offsets:
+        solution, success = solver.compute_inverse_kinematics(
+            frame_name,
+            target_position,
+            target_orientation,
+            warm_start=joints + offset,
+            position_tolerance=0.0001,
+            orientation_tolerance=0.001,
+        )
+        if success:
+            solutions.append(np.asarray(solution, dtype=np.float64))
+    if not solutions:
+        return joints, False
+    return min(
+        solutions,
+        key=lambda solution: float(np.max(np.abs(solution - joints))),
+    ), True
+
+
 def _task_geometry(stage: Any) -> DemoGeometry:
     plug_position, _ = world_pose(stage.GetPrimAtPath(PLUG_PATH))
     socket_position, _ = world_pose(stage.GetPrimAtPath(SOCKET_PATH))
@@ -144,13 +182,12 @@ def solve_droid_pose(
     target_position, target_orientation = target_pose.to_world_pose(
         base_position, base_orientation
     )
-    arm_positions, success = solver.compute_inverse_kinematics(
+    arm_positions, success = _closest_inverse_kinematics(
+        solver,
         "panda_hand",
         target_position,
         target_orientation,
-        warm_start=joints,
-        position_tolerance=0.0001,
-        orientation_tolerance=0.001,
+        joints,
     )
     if not success:
         raise RuntimeError("IK failed for proposed DROID pose")

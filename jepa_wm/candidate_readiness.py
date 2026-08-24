@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from jepa_wm.candidate_trial import (
-    CandidateSeedProvenance,
+    CandidateReadinessProvenance,
     CandidateTrialReport,
     RealizedCandidateComparison,
 )
@@ -21,7 +21,7 @@ MINIMUM_WHOLE_SEEDS = 2
 @dataclass(frozen=True)
 class CandidateReadinessEvidence:
     report: CandidateTrialReport
-    seed_provenance: CandidateSeedProvenance
+    provenance: CandidateReadinessProvenance
 
     def __post_init__(self) -> None:
         validate_recording_id(self.report.experiment_id)
@@ -33,7 +33,7 @@ class CandidateReadinessEvidence:
         experiment_id: str,
     ) -> CandidateReadinessEvidence:
         report = CandidateTrialReport.load_persisted(data_root, experiment_id)
-        return cls(report, report.calibration_seed_provenance(data_root))
+        return cls(report, report.readiness_provenance(data_root))
 
     @property
     def experiment_id(self) -> str:
@@ -41,7 +41,7 @@ class CandidateReadinessEvidence:
 
     @property
     def seed(self) -> int:
-        return self.seed_provenance.seed
+        return self.provenance.seed
 
     @property
     def comparison(self) -> RealizedCandidateComparison:
@@ -56,7 +56,7 @@ class CandidateReadinessEvidence:
             "experiment_id": self.report.experiment_id,
             "candidate_session_id": self.report.candidate_session_id,
             "source_session_id": self.report.source_session_id,
-            **self.seed_provenance.to_dict(),
+            **self.provenance.to_dict(),
             "strict_gate_passed": self.strict_gate_passed,
             **self.comparison.to_dict(),
         }
@@ -75,12 +75,16 @@ class CandidateReadinessSummary:
         calibration_seeds = {
             seed
             for item in self.evidence
-            for seed in item.seed_provenance.calibration_seeds
+            for seed in item.provenance.calibration_seeds
         }
         if evaluation_seeds & calibration_seeds:
             raise ValueError(
                 "candidate readiness requires globally disjoint calibration "
                 "and evaluation seeds"
+            )
+        if len({item.provenance.worker for item in self.evidence}) != 1:
+            raise ValueError(
+                "candidate readiness requires one identical worker policy"
             )
 
     @classmethod

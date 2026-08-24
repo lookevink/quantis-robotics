@@ -684,6 +684,20 @@ uncalibrated workers reject them:
   0.0005 0.001 0.005
 ```
 
+The manifest also owns the bounded CEM planner identity. Append the seed,
+iterations, samples, and elite count together to make search experiments exact
+and replayable. The native three-action horizon remains fixed:
+
+```bash
+./ops/aws.sh jepa-wm-control-worker-configure \
+  quantis_train1400_margin500_seed235_control \
+  quantis_isaac_wrist_action_proposal_motion_state_12seed \
+  quantis_isaac_wrist_action_adapter \
+  quantis_action_response_train1400_v1 \
+  0.0005 0.001 0.005 \
+  235 5 128 12
+```
+
 Live shadow session `step-20260823T224924Z-11401` cleared all three margins. It
 predicted reductions of `0.218 mm` translation, `0.00233 rad` rotation, and
 `0.0419` gripper error, improved latent energy by `0.000182`, and passed the
@@ -774,6 +788,39 @@ both vector axes. With the same `0.5 mm` worker gate, held-out session
 translation: rotation missed the threshold by `0.000011 rad` and latent energy
 worsened slightly. The next experiment varies only the persisted CEM search
 configuration; no candidate is applied for the failed seed.
+
+Seed 235 at the same 5-iteration, 128-sample, 12-elite budget cleared the 11400
+search, but the accompanying 11401 result came from a different planner seed.
+The strict readiness aggregator now reconstructs and compares the complete
+worker/search identity and rejects that mixed configuration.
+
+One fixed seed-237 worker then passed both held-out seeds. Source sessions
+`step-20260824T014148Z-11400` and `step-20260824T014915Z-11401` bind the same
+proposal, adapter, training-only calibration fingerprint, progress margins,
+and `5 × 128 / 12 elites` planner. Their reset-only candidates are
+`candidate-20260824T014710Z-11400` and
+`candidate-20260824T015225Z-11401`. They respectively realized
+`2.843 mm`/`0.001144 rad`/`0.03301` and
+`2.659 mm`/`0.002756 rad`/`0.03845` translation/rotation/gripper progress.
+Both beat zero and direct on every axis, reached scripted tolerance on every
+axis, passed action tracking at 0 N with no collision, and remain
+non-production. Resident baseline/candidate response construction keeps the
+live command fresh, while repeated warm-start IK probes select the successful
+solution closest to the captured seven-joint state before the unchanged safety
+gate evaluates it.
+
+The first globally disjoint two-seed readiness artifact is:
+
+```text
+/home/ubuntu/docker/isaac-sim/data/quantis/control_candidates/train1400-seed237-candidate-readiness-20260824-v1/readiness.json
+```
+
+It reconstructs training-only calibration seed `1400`, held-out evaluation
+seeds `11400` and `11401`, the identical seed-237 worker policy, and reports
+`strict_pass_count: 2` with
+`candidate_readiness_passed: true`. `production_authority_granted` remains
+hard-coded `false`; this milestone proves bounded isolated candidate search,
+not autonomous repeated control.
 
 Stop the worker independently with
 `./ops/aws.sh jepa-wm-control-worker-stop`.

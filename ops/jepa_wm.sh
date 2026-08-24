@@ -701,7 +701,7 @@ calibrate_control_objective() {
 configure_control_worker() {
   local -A options=()
   parse_named_options options \
-    "name proposal adapter calibration translation-margin rotation-margin gripper-margin" \
+    "name proposal adapter calibration translation-margin rotation-margin gripper-margin planner-seed planner-iterations planner-samples planner-elites" \
     "$@"
   local name="${options[name]:-}"
   local proposal_name="${options[proposal]:-}"
@@ -710,6 +710,10 @@ configure_control_worker() {
   local translation_margin="${options[translation-margin]:-}"
   local rotation_margin="${options[rotation-margin]:-}"
   local gripper_margin="${options[gripper-margin]:-}"
+  local planner_seed="${options[planner-seed]:-}"
+  local planner_iterations="${options[planner-iterations]:-}"
+  local planner_samples="${options[planner-samples]:-}"
+  local planner_elites="${options[planner-elites]:-}"
   for identifier in "${name}" "${proposal_name}" "${adapter_name}" "${calibration_name}"; do
     is_safe_identifier "${identifier}" || die "invalid worker artifact identifier"
   done
@@ -719,11 +723,24 @@ configure_control_worker() {
   [[ -s "${adapter}" ]] || die "action adapter does not exist: ${adapter_name}"
   local -a calibration_arguments=()
   local -a margin_arguments=()
+  local -a planner_arguments=()
   if [[ "${calibration_name}" != "none" ]]; then
     local calibration="${checkpoint_dir}/${calibration_name}.json"
     [[ -s "${calibration}" ]] \
       || die "action-response calibration does not exist: ${calibration_name}"
     calibration_arguments=(--calibration "${calibration}")
+  fi
+  if cem_settings_requested \
+    "${planner_seed}" "${planner_iterations}" "${planner_samples}" "${planner_elites}"; then
+    validate_cem_settings \
+      "${planner_seed}" "${planner_iterations}" "${planner_samples}" "${planner_elites}" \
+      || exit 1
+    planner_arguments=(
+      --planner-seed "${planner_seed}"
+      --planner-iterations "${planner_iterations}"
+      --planner-samples "${planner_samples}"
+      --planner-elites "${planner_elites}"
+    )
   fi
   if [[ -n "${translation_margin}${rotation_margin}${gripper_margin}" ]]; then
     [[ "${calibration_name}" != "none" ]] \
@@ -745,7 +762,8 @@ configure_control_worker() {
     --proposal "${proposal}" \
     --adapter "${adapter}" \
     "${calibration_arguments[@]}" \
-    "${margin_arguments[@]}"
+    "${margin_arguments[@]}" \
+    "${planner_arguments[@]}"
 }
 
 rollout_session_list() {

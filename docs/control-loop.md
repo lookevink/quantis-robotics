@@ -286,7 +286,7 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     before approaching cable contact. Three-step reset-identical trials now
     establish the comparison, and its failed direct baseline gate prevents
     premature promotion.
-14. [ ] Establish repeatable realized shadow-candidate improvement on whole
+14. [x] Establish repeatable realized shadow-candidate improvement on whole
     held-out seeds. A `0.5 mm` manifest-bound translation gate now transfers in
     both whole-seed directions and beats zero/direct on every axis.
     Calibration checkpoints retain reconstructible proposed/realized trials,
@@ -312,3 +312,11 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     The fitter and readiness reconstruction revalidate every calibration trial's
     policy, training manifest, seed, realized action, tracking, collision, and
     contact evidence before it can count.
+    Worker manifests now also own the CEM seed, iterations, samples, and elites,
+    and readiness rejects results whose full worker/search identities differ.
+    One fixed seed-237, `5 × 128 / 12 elites` worker passed held-out 11400 and
+    11401. Its isolated candidates realized `2.843 mm` and `2.659 mm`
+    translation progress, beat zero/direct and reached scripted tolerance on
+    every axis, and passed tracking at 0 N without collision. The strict
+    readiness summary passes `2/2` globally disjoint held-out seeds against
+    calibration seed 1400; production authority remains false.

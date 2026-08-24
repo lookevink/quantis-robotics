@@ -49,6 +49,7 @@ class ShadowPlanningRequest:
     observation: ControlObservation
     direct_control: ProposedControl
     expected_adapter: Path
+    expected_planner: CEMConfig
     expected_calibration: CalibrationIdentity | None = None
 
     def __post_init__(self) -> None:
@@ -75,6 +76,7 @@ class ShadowPlanningRequest:
                 if self.expected_calibration is not None
                 else None
             ),
+            "expected_planner": self.expected_planner.to_dict(),
         }
 
     @classmethod
@@ -86,6 +88,15 @@ class ShadowPlanningRequest:
                 ControlObservation.from_dict(payload["observation"]),
                 ProposedControl.from_dict(payload["direct_control"]),
                 Path(payload["expected_adapter"]),
+                (
+                    CEMConfig(**payload["expected_planner"])
+                    if payload.get("expected_planner") is not None
+                    else (
+                        CALIBRATED_SHADOW_SEARCH_CONFIG.planner
+                        if payload.get("expected_calibration") is not None
+                        else ShadowSearchConfig().planner
+                    )
+                ),
                 (
                     CalibrationIdentity.from_dict(payload["expected_calibration"])
                     if payload.get("expected_calibration") is not None

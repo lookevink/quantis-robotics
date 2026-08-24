@@ -309,7 +309,7 @@ Commands:
   jepa-wm-proposal-eval RECORDING [camera] [start] [count] [stride] [proposal]
   jepa-wm-proposal-summarize RECORDING[,RECORDING...] [camera] [start] [count] [stride] [proposal]
   jepa-wm-control-infer-replay RECORDING [camera] [context-index] [proposal]
-  jepa-wm-control-worker-configure NAME PROPOSAL ADAPTER [CALIBRATION] [translation-margin rotation-margin gripper-margin]
+  jepa-wm-control-worker-configure NAME PROPOSAL ADAPTER [CALIBRATION] [translation-margin rotation-margin gripper-margin] [planner-seed iterations samples elites]
   jepa-wm-control-worker-start [artifacts] | jepa-wm-control-worker-status | jepa-wm-control-worker-stop
   jepa-wm-control-step REFERENCE_RECORDING SEED [artifacts]
   jepa-wm-control-rollout REFERENCE_RECORDING SEED STEPS [artifacts]
@@ -603,11 +603,16 @@ case "${command}" in
     translation_margin="${6:-}"
     rotation_margin="${7:-}"
     gripper_margin="${8:-}"
+    planner_seed="${9:-}"
+    planner_iterations="${10:-}"
+    planner_samples="${11:-}"
+    planner_elites="${12:-}"
     for identifier in \
       "${artifacts_name}" "${proposal_name}" "${adapter_name}" "${calibration_name}"; do
       is_safe_identifier "${identifier}" || die "invalid worker artifact identifier"
     done
     margin_arguments=""
+    planner_arguments=""
     if [[ -n "${translation_margin}${rotation_margin}${gripper_margin}" ]]; then
       [[ -n "${translation_margin}" && -n "${rotation_margin}" && -n "${gripper_margin}" ]] \
         || die "all three progress margins must be provided together"
@@ -616,8 +621,15 @@ case "${command}" in
       require_nonnegative_number "gripper margin" "${gripper_margin}" || exit 1
       margin_arguments=" --translation-margin '${translation_margin}' --rotation-margin '${rotation_margin}' --gripper-margin '${gripper_margin}'"
     fi
+    if cem_settings_requested \
+      "${planner_seed}" "${planner_iterations}" "${planner_samples}" "${planner_elites}"; then
+      validate_cem_settings \
+        "${planner_seed}" "${planner_iterations}" "${planner_samples}" "${planner_elites}" \
+        || exit 1
+      planner_arguments=" --planner-seed '${planner_seed}' --planner-iterations '${planner_iterations}' --planner-samples '${planner_samples}' --planner-elites '${planner_elites}'"
+    fi
     sync_repo
-    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-configure --name '${artifacts_name}' --proposal '${proposal_name}' --adapter '${adapter_name}' --calibration '${calibration_name}'${margin_arguments}"
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-configure --name '${artifacts_name}' --proposal '${proposal_name}' --adapter '${adapter_name}' --calibration '${calibration_name}'${margin_arguments}${planner_arguments}"
     ;;
   jepa-wm-control-worker-start)
     artifacts_name="${2:-quantis_wrist_control}"

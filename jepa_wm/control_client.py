@@ -95,6 +95,7 @@ def main() -> None:
             observation,
             direct,
             artifacts.adapter,
+            artifacts.planner,
             (
                 CalibrationIdentity.from_calibration(
                     artifacts.calibration, calibration

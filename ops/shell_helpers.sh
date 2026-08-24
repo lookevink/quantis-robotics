@@ -43,6 +43,30 @@ require_nonnegative_number() {
   }
 }
 
+cem_settings_requested() {
+  [[ -n "$1$2$3$4" ]]
+}
+
+validate_cem_settings() {
+  local seed="$1"
+  local iterations="$2"
+  local samples="$3"
+  local elites="$4"
+  [[ -n "${seed}" && -n "${iterations}" && -n "${samples}" && -n "${elites}" ]] \
+    || {
+      printf 'error: all four planner settings must be provided together\n' >&2
+      return 1
+    }
+  require_nonnegative_integer "planner seed" "${seed}" || return 1
+  require_positive_integer "planner iterations" "${iterations}" || return 1
+  require_positive_integer "planner samples" "${samples}" || return 1
+  require_positive_integer "planner elites" "${elites}" || return 1
+  (( elites > 1 && elites <= samples )) || {
+    printf 'error: planner elites must be between two and the sample count\n' >&2
+    return 1
+  }
+}
+
 load_control_policy_descriptor() {
   local policy="$1"
   local direct_proposal="${2:-direct-proposal}"
@@ -109,8 +133,8 @@ respond_to_control_session() {
         control-infer-session --session "${session_id}"
       ;;
     baseline)
-      bash "${repository}/ops/jepa_wm.sh" control-baseline-session \
-        --session "${session_id}" --policy "${policy}"
+      isaac_server_call \
+        "demo.persist_baseline_response('${session_id}','${policy}')" 120
       ;;
     candidate)
       is_safe_identifier "${source_session_id}" || {

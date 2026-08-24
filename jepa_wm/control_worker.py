@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 import sys
@@ -80,6 +80,7 @@ class FrozenProposalPredictor:
         )
         self._calibration_path = artifacts.calibration
         self._progress_margins = artifacts.progress_margins
+        self._planner = artifacts.planner
         if (
             self._calibration is not None
             and not self._calibration.ready_for_reranking
@@ -184,6 +185,8 @@ class FrozenProposalPredictor:
         )
         if request_fingerprint != expected_fingerprint:
             raise ValueError("shadow request calibration fingerprint does not match")
+        if request.expected_planner != self._planner:
+            raise ValueError("shadow request expects a different planner configuration")
         if (
             self._latest is not None
             and request.observation.observation_id == self._latest.observation_id
@@ -217,10 +220,11 @@ class FrozenProposalPredictor:
             score=scorer,
             proposal=self._proposal_path,
             adapter=self._adapter_path,
-            config=(
+            config=replace(
                 CALIBRATED_SHADOW_SEARCH_CONFIG
                 if task_progress is not None
-                else ShadowSearchConfig()
+                else ShadowSearchConfig(),
+                planner=self._planner,
             ),
             task_progress=task_progress,
         )

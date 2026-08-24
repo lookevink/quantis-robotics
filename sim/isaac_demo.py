@@ -23,6 +23,9 @@ from sim.isaac_control_bridge import (
     capture_control_observation,
     capture_followup_observation,
     evaluate_shadow_candidate,
+    persist_experimental_candidate_response,
+    prepare_experimental_candidate_source,
+    persist_baseline_response,
 )
 from sim.isaac_demo_runtime import (
     Actuators,

@@ -63,7 +63,10 @@ class ControlServerTest(unittest.TestCase):
                 shadow = request_shadow_plan(
                     server.socket_path,
                     ShadowPlanningRequest(
-                        observation, response, Path("/tmp/adapter.pth")
+                        observation,
+                        response,
+                        Path("/tmp/adapter.pth"),
+                        ShadowSearchConfig().planner,
                     ),
                 )
                 self.assertEqual(shadow.observation_id, 9)

@@ -49,6 +49,8 @@ def reload_demo_runtime() -> ModuleType:
         "sim.isaac_control_execution",
         "sim.isaac_control_followup",
         "sim.isaac_shadow_safety",
+        "sim.isaac_candidate_binding",
+        "sim.isaac_baseline_response",
         "sim.isaac_control_bridge",
     ):
         _reload(module_name)

@@ -44,6 +44,9 @@ class ShadowCandidatePlanningTest(unittest.TestCase):
                 proposal=Path("/tmp/proposal.pth"),
             ),
             expected_adapter=Path("/tmp/adapter.pth"),
+            expected_planner=CEMConfig(
+                iterations=5, samples=128, elites=12, seed=235
+            ),
         )
 
         self.assertEqual(ShadowPlanningRequest.from_dict(request.to_dict()), request)
@@ -67,7 +70,12 @@ class ShadowCandidatePlanningTest(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "observation identity"):
-            ShadowPlanningRequest(observation, direct, Path("/tmp/adapter.pth"))
+            ShadowPlanningRequest(
+                observation,
+                direct,
+                Path("/tmp/adapter.pth"),
+                ShadowSearchConfig().planner,
+            )
 
     def test_clips_every_candidate_to_global_and_proposal_centered_bounds(self) -> None:
         center = np.asarray(

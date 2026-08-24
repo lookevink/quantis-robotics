@@ -5,6 +5,8 @@ from pathlib import Path
 import unittest
 
 from jepa_wm.objective_calibration import TaskProgressMargins
+from jepa_wm.planner import CEMConfig
+from jepa_wm.shadow_planning import CALIBRATED_SHADOW_SEARCH_CONFIG
 from jepa_wm.worker_artifacts import ControlWorkerArtifacts
 
 
@@ -18,12 +20,17 @@ class ControlWorkerArtifactsTest(unittest.TestCase):
                 root / "adapter.pth",
                 root / "calibration.json",
                 TaskProgressMargins(5e-4, 1e-3, 0.005),
+                CEMConfig(iterations=8, samples=256, elites=16, seed=235),
             )
 
             artifacts.write(manifest)
 
             self.assertEqual(ControlWorkerArtifacts.load(manifest), artifacts)
             self.assertNotIn(str(root), manifest.read_text())
+            self.assertEqual(
+                ControlWorkerArtifacts.load(manifest).planner.seed,
+                235,
+            )
 
     def test_legacy_calibrated_manifest_receives_default_progress_margins(self) -> None:
         root = Path("/tmp/quantis-worker-artifacts")
@@ -38,6 +45,10 @@ class ControlWorkerArtifactsTest(unittest.TestCase):
         artifacts = ControlWorkerArtifacts.from_dict(payload, relative_to=root)
 
         self.assertEqual(artifacts.progress_margins, TaskProgressMargins())
+        self.assertEqual(
+            artifacts.planner,
+            CALIBRATED_SHADOW_SEARCH_CONFIG.planner,
+        )
 
     def test_rejects_progress_margins_without_calibration(self) -> None:
         with self.assertRaisesRegex(

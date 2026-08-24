@@ -3,6 +3,11 @@
 from sim.isaac_control_capture import capture_control_observation
 from sim.isaac_control_execution import apply_control_response
 from sim.isaac_control_followup import capture_followup_observation
+from sim.isaac_candidate_binding import (
+    persist_experimental_candidate_response,
+    prepare_experimental_candidate_source,
+)
+from sim.isaac_baseline_response import persist_baseline_response
 from sim.isaac_shadow_safety import evaluate_shadow_candidate
 
 
@@ -11,4 +16,7 @@ __all__ = (
     "capture_control_observation",
     "capture_followup_observation",
     "evaluate_shadow_candidate",
+    "persist_experimental_candidate_response",
+    "prepare_experimental_candidate_source",
+    "persist_baseline_response",
 )

@@ -54,12 +54,18 @@ finalize_candidate_trial() {
 
 trap finalize_candidate_trial EXIT
 cd "${repo_dir}"
+current_phase="candidate_source_preflight"
+isaac_server_call \
+  "demo.prepare_experimental_candidate_source('${source_session_id}')" \
+  180 true
+current_phase="candidate_capture"
 isaac_server_call \
   "await demo.capture_control_observation('${session_id}','${reference_name}',${exploration_seed},'${proposal_name}','${policy}')" \
-  180 true
+  180
 current_phase="candidate_binding"
-respond_to_control_session \
-  "${repo_dir}" "${session_id}" "${policy}" "${source_session_id}"
+isaac_server_call \
+  "demo.persist_experimental_candidate_response('${session_id}','${source_session_id}')" \
+  180
 current_phase="candidate_apply"
 isaac_server_call "await demo.apply_control_response('${session_id}')" 180
 current_phase="complete"
