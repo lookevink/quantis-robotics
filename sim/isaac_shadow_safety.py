@@ -8,7 +8,6 @@ from typing import Any
 import numpy as np
 
 from jepa_wm.action import MAX_GRIPPER_WIDTH_M
-from jepa_wm.control_protocol import ProposedControl
 from jepa_wm.control_safety import SimulatorSafetyLimits
 from jepa_wm.shadow_safety import ShadowSafetyEvidence
 from sim.control_session import CONTROL_ROOT, ControlSession
@@ -42,12 +41,7 @@ async def evaluate_shadow_candidate(session_id: str) -> dict[str, Any]:
         collision_detected=persisted_state.collision_detected,
         limits=SimulatorSafetyLimits(),
     )
-    planned = ProposedControl(
-        observation_id=observation.observation_id,
-        created_at_unix_seconds=direct.created_at_unix_seconds,
-        actions=shadow.planned.actions,
-        proposal=direct.proposal,
-    )
+    planned = direct.with_actions(shadow.planned.actions)
     attempts, selected = select_safe_projection(
         safety,
         planned,

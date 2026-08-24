@@ -134,12 +134,7 @@ def project_control_candidate(
     now_unix_seconds: float | None = None,
 ) -> tuple[SafetyProjectionAttempt, SafeProjection | None]:
     candidate_action = scale.apply(proposal.first_action)
-    candidate = ProposedControl(
-        observation_id=proposal.observation_id,
-        created_at_unix_seconds=proposal.created_at_unix_seconds,
-        actions=(candidate_action, *proposal.actions[1:]),
-        proposal=proposal.proposal,
-    )
+    candidate = proposal.with_actions((candidate_action, *proposal.actions[1:]))
     current_joints = tuple(context.current.arm_positions)
     try:
         candidate_pose = context.observation.pose.applied(candidate_action)

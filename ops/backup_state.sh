@@ -75,7 +75,8 @@ ensure_writable_backup_root
 sync_tree "${isaac_data_root}/quantis/scenes" "${backup_root}/isaac/scenes"
 sync_tree "${isaac_data_root}/quantis/recordings" "${backup_root}/isaac/recordings"
 for state_tree in \
-  control_sessions control_rollouts control_baselines control_candidates; do
+  control_sessions control_rollouts control_baselines control_readiness \
+  control_candidates; do
   if [[ -d "${isaac_data_root}/quantis/${state_tree}" ]]; then
     sync_tree \
       "${isaac_data_root}/quantis/${state_tree}" \

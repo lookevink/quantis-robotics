@@ -57,6 +57,7 @@ class FrozenProposalPredictor:
 
         from jepa_wm.model import load_headless_model
         from jepa_wm.proposal import load_action_proposal
+        from jepa_wm.training_artifact import TrainingArtifactIdentity
 
         if not torch.cuda.is_available():
             raise RuntimeError("control inference requires CUDA")
@@ -68,10 +69,17 @@ class FrozenProposalPredictor:
             device=self._device,
             adapter=artifacts.adapter,
         )
-        self._proposal, _ = load_action_proposal(
+        proposal_identity = TrainingArtifactIdentity.from_artifact(
+            artifacts.proposal,
+            fingerprint_field="proposal_fingerprint",
+        )
+        self._proposal, proposal_metadata = load_action_proposal(
             artifacts.proposal, device=self._device
         )
+        if proposal_metadata != proposal_identity.metadata:
+            raise ValueError("proposal checkpoint and sidecar metadata differ")
         self._proposal_path = artifacts.proposal
+        self._proposal_fingerprint = proposal_identity.fingerprint
         self._adapter_path = artifacts.adapter
         self._calibration = (
             ActionResponseCalibration.load(artifacts.calibration)
@@ -143,6 +151,7 @@ class FrozenProposalPredictor:
                 for action in actions
             ),
             proposal=self._proposal_path,
+            proposal_fingerprint=self._proposal_fingerprint,
         )
         self._latest = EncodedObservationCache(
             observation.observation_id,

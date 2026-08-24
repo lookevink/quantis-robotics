@@ -323,6 +323,7 @@ Commands:
   jepa-wm-control-rollout REFERENCE_RECORDING SEED STEPS [artifacts] [context-index]
   jepa-wm-control-baseline REFERENCE_RECORDING SEED STEPS zero|scripted [context-index]
   jepa-wm-control-baselines EXPERIMENT DIRECT ZERO SCRIPTED REFERENCE SEED STEPS [direct-proposal] [direct-sessions]
+  jepa-wm-grasp-control-summarize EXPERIMENT BASELINE_EXPERIMENT[,BASELINE_EXPERIMENT...]
   jepa-wm-control-calibration-collect CALIBRATION REFERENCE SEED TRIALS [artifacts]
   jepa-wm-control-candidate REFERENCE_RECORDING SEED SOURCE_SESSION BASELINE_EXPERIMENT
   jepa-wm-control-candidate-summarize EXPERIMENT[,EXPERIMENT...] OUTPUT
@@ -787,6 +788,16 @@ case "${command}" in
       direct_sessions_argument=" --direct-sessions '${direct_sessions}'"
     fi
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-baseline-report --experiment '${experiment_id}' --reference '${reference_name}' --seed '${exploration_seed}' --requested-steps '${step_count}' --direct-rollout '${direct_rollout}' --zero-rollout '${zero_rollout}' --scripted-rollout '${scripted_rollout}' --direct-proposal '${proposal_name}'${direct_sessions_argument}"
+    ;;
+  jepa-wm-grasp-control-summarize)
+    experiment_id="${2:-}"
+    baseline_experiments="${3:-}"
+    is_safe_identifier "${experiment_id}" \
+      || die "invalid grasp control readiness identifier"
+    is_safe_identifier_list "${baseline_experiments}" \
+      || die "invalid grasp baseline experiment list"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh grasp-control-summarize --experiment '${experiment_id}' --baseline-experiments '${baseline_experiments}'"
     ;;
   jepa-wm-control-calibration-collect)
     calibration_name="${2:-}"

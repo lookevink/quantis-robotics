@@ -550,6 +550,40 @@ reach-and-grasp task and does not authorize filming. The next run must extend
 the same held-out receding-horizon sequence through at least 20 mm of retained
 motion, then reproduce it on held-out seed 12401.
 
+The eight-step follow-ups complete that gate on both fixed held-out seeds.
+Fingerprint-bound rollouts `rollout-20260824T124729Z-12400` and
+`rollout-20260824T132311Z-12401` each applied `8/8` JEPA actions, acquired the
+connector on action one, retained it for all eight observations, and moved it
+`55.258 mm` and `58.508 mm` respectively at 0 N without collision. Independent
+reset-identical zero trials never attached, while scripted trials attached and
+retained `70.549 mm`/`70.557 mm`. The task-specific readiness gate reloads all
+six raw rollouts, validates scripted responses and reset provenance, and binds
+both direct trials to proposal fingerprint
+`6aa4b94b610bfd8fff07e9356e932574a11342533d55c69b06c1c2ab20e9fd2d`.
+It passes `2/2` whole seeds and authorizes a truthful reach-and-grasp film:
+
+```bash
+./ops/aws.sh jepa-wm-grasp-control-summarize \
+  grasp-control-readiness-20260824-v2 \
+  grasp-baseline-20260824-seed12400-v2,grasp-baseline-20260824-seed12401-v2
+```
+
+```text
+/home/ubuntu/docker/isaac-sim/data/quantis/control_readiness/grasp-control-readiness-20260824-v2/readiness.json
+```
+
+The preserved v1 readiness report is superseded because those earlier live
+responses predated execution-time proposal fingerprint binding. A later
+seed-12401 attempt, `rollout-20260824T130455Z-12401`, is also preserved as
+negative evidence: seven actions applied before the final action failed closed
+at 2.89 seconds of observation age. No freshness threshold was relaxed.
+
+The generic endpoint-pose baseline gate remains false because the direct
+rollouts stop `12–15 mm` short of the scripted endpoint (and seed 12400 does
+not beat zero's small rotation drift). That stricter result remains visible in
+the readiness artifact; task filming readiness is not production authority and
+does not establish cable insertion.
+
 The first grasp-domain JEPA-WM action adapter used all 1,980 bounded rollouts
 from the 20 training recordings. In a fixed eight-context CEM diagnostic it
 lowered latent energy below both zero and recorded actions on every context,

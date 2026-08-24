@@ -160,7 +160,7 @@ class SimulatorControlGateTest(unittest.TestCase):
     def test_round_trips_versioned_observation_and_proposal(self) -> None:
         target_pose = DroidPose((0.41, 0.0, 0.5, 0.0, 0.0, 0.0, 0.6))
         observation = _observation(target_pose=target_pose)
-        proposal = _proposal()
+        proposal = _proposal(proposal_fingerprint="a" * 64)
 
         self.assertEqual(ControlObservation.from_dict(observation.to_dict()), observation)
         self.assertEqual(observation.target_pose, target_pose)
@@ -170,6 +170,20 @@ class SimulatorControlGateTest(unittest.TestCase):
         ):
             self.assertAlmostEqual(actual, expected)
         self.assertEqual(ProposedControl.from_dict(proposal.to_dict()), proposal)
+        replacement_actions = (
+            DroidAction((0.001,) * 7),
+            *proposal.actions[1:],
+        )
+        derived = proposal.with_actions(replacement_actions)
+        self.assertEqual(derived.actions, replacement_actions)
+        self.assertEqual(derived.proposal, proposal.proposal)
+        self.assertEqual(
+            derived.proposal_fingerprint,
+            proposal.proposal_fingerprint,
+        )
+
+        with self.assertRaisesRegex(ValueError, "artifact identity"):
+            _proposal(proposal_fingerprint="not-a-sha256")
 
     def test_rejects_cartesian_motion_in_the_wrong_direction(self) -> None:
         tracking = evaluate_action_tracking(

@@ -678,11 +678,8 @@ class ControlSession:
         current_joints = state.current_joint_positions
         for attempt in evidence.attempts:
             scaled_action = attempt.scale.apply(shadow.planned.actions[0])
-            candidate = ProposedControl(
-                observation.observation_id,
-                response.created_at_unix_seconds,
-                (scaled_action, *shadow.planned.actions[1:]),
-                response.proposal,
+            candidate = response.with_actions(
+                (scaled_action, *shadow.planned.actions[1:])
             )
             safety_state = SimulatorSafetyState(
                 observed_joint_positions=current_joints,

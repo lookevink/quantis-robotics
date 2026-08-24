@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import isfinite
 from pathlib import Path
 from typing import Any
 
 from jepa_wm.action import DroidAction, DroidPose, action_between
+from jepa_wm.training_artifact import ArtifactIdentity
 
 
 CONTROL_SCHEMA = "quantis.jepa_wm_control.v1"
@@ -158,6 +159,7 @@ class ProposedControl:
     created_at_unix_seconds: float
     actions: tuple[DroidAction, ...]
     proposal: Path
+    proposal_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -170,10 +172,16 @@ class ProposedControl:
             raise ValueError("proposed control must contain the DROID action horizon")
         if not self.proposal.is_absolute():
             raise ValueError("control proposal path must be absolute")
+        if self.proposal_fingerprint is not None:
+            ArtifactIdentity(self.proposal, self.proposal_fingerprint)
 
     @property
     def first_action(self) -> DroidAction:
         return self.actions[0]
+
+    def with_actions(self, actions: tuple[DroidAction, ...]) -> ProposedControl:
+        """Derive another action horizon without losing proposal identity."""
+        return replace(self, actions=actions)
 
     @classmethod
     def from_dict(cls, payload: Any) -> ProposedControl:
@@ -185,15 +193,23 @@ class ProposedControl:
                 created_at_unix_seconds=float(payload["created_at_unix_seconds"]),
                 actions=tuple(DroidAction(tuple(action)) for action in payload["actions"]),
                 proposal=Path(payload["proposal"]),
+                proposal_fingerprint=(
+                    str(payload["proposal_fingerprint"])
+                    if payload.get("proposal_fingerprint") is not None
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("proposed control is incomplete") from error
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema": CONTROL_SCHEMA,
             "observation_id": self.observation_id,
             "created_at_unix_seconds": self.created_at_unix_seconds,
             "actions": [list(action.values) for action in self.actions],
             "proposal": str(self.proposal),
         }
+        if self.proposal_fingerprint is not None:
+            payload["proposal_fingerprint"] = self.proposal_fingerprint
+        return payload

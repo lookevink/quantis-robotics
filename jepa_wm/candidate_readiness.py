@@ -12,10 +12,10 @@ from jepa_wm.candidate_trial import (
     RealizedCandidateComparison,
 )
 from sim.recording import validate_recording_id
+from jepa_wm.whole_seed_readiness import WholeSeedReadiness
 
 
 CANDIDATE_READINESS_SCHEMA = "quantis.jepa_wm_candidate_readiness.v1"
-MINIMUM_WHOLE_SEEDS = 2
 
 
 @dataclass(frozen=True)
@@ -96,27 +96,30 @@ class CandidateReadinessSummary:
 
     @property
     def whole_seed_count(self) -> int:
-        return len(self.evidence)
+        return self.readiness.whole_seed_count
 
     @property
     def strict_pass_count(self) -> int:
-        return sum(item.strict_gate_passed for item in self.evidence)
+        return self.readiness.pass_count
 
     @property
-    def candidate_readiness_passed(self) -> bool:
-        return (
-            self.whole_seed_count >= MINIMUM_WHOLE_SEEDS
-            and self.strict_pass_count == self.whole_seed_count
+    def readiness(self) -> WholeSeedReadiness:
+        return WholeSeedReadiness.from_passes(
+            item.strict_gate_passed for item in self.evidence
         )
 
     @property
+    def candidate_readiness_passed(self) -> bool:
+        return self.readiness.passed
+
+    @property
     def production_authority_granted(self) -> bool:
-        return False
+        return self.readiness.production_authority_granted
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema": CANDIDATE_READINESS_SCHEMA,
-            "minimum_whole_seeds": MINIMUM_WHOLE_SEEDS,
+            "minimum_whole_seeds": self.readiness.minimum_whole_seeds,
             "whole_seed_count": self.whole_seed_count,
             "strict_pass_count": self.strict_pass_count,
             "candidate_readiness_passed": self.candidate_readiness_passed,

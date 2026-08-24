@@ -206,7 +206,7 @@ contact.
     a deterministic motion-rich context boundary. Rollout
     `rollout-20260824T032653Z-11401` moved `15.440 mm` and made `11.127 mm`
     target progress at 0 N, without grasping the plug.
-11. [ ] Complete a JEPA-controlled reach-and-grasp before filming again. The
+11. [x] Complete a JEPA-controlled reach-and-grasp before filming again. The
     hand must enter a defined pre-grasp region, close on the rigid connector,
     persist a bound `plug_attached` transition, and retain the object through a
     lift/hold while tracking, collision, and force gates pass. Validate the raw
@@ -216,8 +216,15 @@ contact.
     `rollout-20260824T105547Z-12400` is the first validated partial success: JEPA
     acquired the connector on action one, retained attachment across four safe
     observations, and moved it `5.615 mm` at 0 N. It remains below the 20 mm
-    retained-motion threshold with `insufficient_lift`, so this item and filming
-    authority remain open.
+    retained-motion threshold with `insufficient_lift`. Eight-step follow-ups
+    fingerprint-bound rollouts `rollout-20260824T124729Z-12400` and
+    `rollout-20260824T132311Z-12401` then passed the task gate on both held-out
+    seeds: `8/8` actions applied per seed, attachment retained for all eight
+    observations, `55.258 mm`/`58.508 mm` retained displacement, 0 N contact,
+    and no collision. Reset-identical zero trials did not attach and scripted
+    trials passed the same task. The exact-proposal two-seed readiness artifact
+    passes and permits filming this bounded task; production command authority
+    remains false and insertion is still the next milestone.
 
 ## Recommended process boundary
 
@@ -346,7 +353,7 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     every axis, and passed tracking at 0 N without collision. The strict
     readiness summary passes `2/2` globally disjoint held-out seeds against
     calibration seed 1400; production authority remains false.
-15. [ ] Demonstrate a meaningful JEPA-controlled reach-and-grasp before
+15. [x] Demonstrate a meaningful JEPA-controlled reach-and-grasp before
     producing another video. Require a defined pre-grasp approach, verified
     rigid-connector attachment, retained lift/hold, safe force/collision and
     tracking evidence, and two whole held-out seeds compared with zero and
@@ -383,4 +390,10 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     observations, moving it `5.615 mm` without force or collision. The task
     still fails only `insufficient_lift`; no live result yet clears the 20 mm
     retained-motion threshold or the required second held-out seed, so filming
-    authority remains false.
+    authority remained false at that checkpoint. The subsequent eight-step
+    fingerprint-bound direct rollouts on held-out seeds 12400/12401 both passed
+    reach-and-grasp at `55.258 mm`/`58.508 mm`, while reset-identical zero
+    controls failed to attach and scripted controls passed. The persisted
+    two-seed task readiness
+    gate now passes; filming this grasp is authorized, but production command
+    authority and cable-insertion capability remain false.
