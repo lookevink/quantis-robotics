@@ -1,4 +1,4 @@
-"""Normalization contract for seven-value DROID pose and action inputs."""
+"""Normalization contracts for proposal proprioception and task inputs."""
 
 from __future__ import annotations
 
@@ -7,6 +7,39 @@ from dataclasses import dataclass
 import numpy as np
 
 from jepa_wm.action import ACTION_DIMENSIONS
+
+
+@dataclass(frozen=True)
+class ScalarNormalization:
+    mean: float
+    standard_deviation: float
+
+    def __post_init__(self) -> None:
+        if (
+            not np.isfinite(self.mean)
+            or not np.isfinite(self.standard_deviation)
+            or self.standard_deviation <= 0.0
+        ):
+            raise ValueError("scalar normalization must be finite and positive")
+
+    @classmethod
+    def from_samples(
+        cls,
+        samples: np.ndarray,
+        *,
+        minimum_standard_deviation: float = 1e-3,
+    ) -> ScalarNormalization:
+        values = np.asarray(samples, dtype=np.float32).reshape(-1)
+        if (
+            not len(values)
+            or not np.all(np.isfinite(values))
+            or minimum_standard_deviation <= 0.0
+        ):
+            raise ValueError("scalar samples and deviation floor must be valid")
+        return cls(
+            float(values.mean()),
+            max(float(values.std()), minimum_standard_deviation),
+        )
 
 
 @dataclass(frozen=True)

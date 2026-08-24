@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from jepa_wm.proprioception import DroidValueNormalization
+from jepa_wm.proprioception import DroidValueNormalization, ScalarNormalization
 
 
 class DroidValueNormalizationTest(unittest.TestCase):
@@ -34,6 +34,14 @@ class DroidValueNormalizationTest(unittest.TestCase):
     def test_rejects_an_invalid_pose_shape(self) -> None:
         with self.assertRaisesRegex(ValueError, "shape"):
             DroidValueNormalization.from_samples(np.zeros((2, 6), dtype=np.float32))
+
+    def test_normalizes_task_progress_with_a_deviation_floor(self) -> None:
+        normalization = ScalarNormalization.from_samples(
+            np.asarray((72.0, 72.0), dtype=np.float32)
+        )
+
+        self.assertEqual(normalization.mean, 72.0)
+        self.assertEqual(normalization.standard_deviation, 1e-3)
 
 
 if __name__ == "__main__":

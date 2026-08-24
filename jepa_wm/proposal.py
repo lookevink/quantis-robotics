@@ -13,7 +13,7 @@ import torch
 
 from jepa_wm.action import ACTION_DIMENSIONS
 from jepa_wm.action_prior import ActionPriorConfig
-from jepa_wm.proprioception import DroidValueNormalization
+from jepa_wm.proprioception import DroidValueNormalization, ScalarNormalization
 from jepa_wm.training_artifact import (
     ProposalConditioningCapabilities,
     TrainingArtifactMetadata,
@@ -24,7 +24,8 @@ if TYPE_CHECKING:
     from jepa_wm.trajectory import RecordedRollout
 
 
-PROPOSAL_SCHEMA = "quantis.jepa_wm_action_proposal.v1"
+LEGACY_PROPOSAL_SCHEMA = "quantis.jepa_wm_action_proposal.v1"
+PROPOSAL_SCHEMA = "quantis.jepa_wm_action_proposal.v2"
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class ProposalConditioning:
     pose: DroidValueNormalization | None = None
     previous_action: DroidValueNormalization | None = None
     goal_delta: DroidValueNormalization | None = None
+    task_progress: ScalarNormalization | None = None
 
     def __post_init__(self) -> None:
         if self.previous_action is not None and self.pose is None:
@@ -39,10 +41,11 @@ class ProposalConditioning:
 
     @property
     def input_dimension(self) -> int:
-        return ACTION_DIMENSIONS * sum(
+        droid_dimension = ACTION_DIMENSIONS * sum(
             value is not None
             for value in (self.pose, self.previous_action, self.goal_delta)
         )
+        return droid_dimension + int(self.task_progress is not None)
 
     @property
     def uses_proprioception(self) -> bool:
@@ -56,6 +59,10 @@ class ProposalConditioning:
     def uses_goal_delta(self) -> bool:
         return self.goal_delta is not None
 
+    @property
+    def uses_task_progress(self) -> bool:
+        return self.task_progress is not None
+
     def to_dict(self) -> dict[str, bool]:
         return self.capabilities.to_dict()
 
@@ -65,6 +72,7 @@ class ProposalConditioning:
             self.uses_proprioception,
             self.uses_action_history,
             self.uses_goal_delta,
+            self.uses_task_progress,
         )
 
 
@@ -73,6 +81,7 @@ class ProposalInputs:
     pose: torch.Tensor | None = None
     previous_action: torch.Tensor | None = None
     goal_delta: torch.Tensor | None = None
+    task_progress: torch.Tensor | None = None
 
     @classmethod
     def from_rollouts(
@@ -86,6 +95,9 @@ class ProposalInputs:
         include_pose = conditioning is None or conditioning.uses_proprioception
         include_history = conditioning is None or conditioning.uses_action_history
         include_goal_delta = conditioning is None or conditioning.uses_goal_delta
+        include_task_progress = (
+            conditioning is None or conditioning.uses_task_progress
+        )
         return cls(
             pose=torch.tensor(
                 [rollout.context_pose.values for rollout in rollouts],
@@ -102,6 +114,11 @@ class ProposalInputs:
                 device=device,
                 dtype=dtype,
             ) if include_goal_delta else None,
+            task_progress=torch.tensor(
+                [[float(rollout.task_context_index.value)] for rollout in rollouts],
+                device=device,
+                dtype=dtype,
+            ) if include_task_progress else None,
         )
 
     @classmethod
@@ -123,6 +140,11 @@ class ProposalInputs:
             goal_delta=torch.tensor(
                 (observation.goal_action.values,), device=device, dtype=dtype
             ) if conditioning.uses_goal_delta else None,
+            task_progress=torch.tensor(
+                ((float(observation.task_context_index.value),),),
+                device=device,
+                dtype=dtype,
+            ) if conditioning.uses_task_progress else None,
         )
 
     def indexed(self, indices: torch.Tensor) -> ProposalInputs:
@@ -147,7 +169,7 @@ class ProposalInputs:
 
     @property
     def values(self) -> tuple[torch.Tensor | None, ...]:
-        return self.pose, self.previous_action, self.goal_delta
+        return self.pose, self.previous_action, self.goal_delta, self.task_progress
 
 
 class ProposalFeatureMode(str, Enum):
@@ -281,6 +303,14 @@ class ActionProposalNetwork(torch.nn.Module):
         else:
             goal_delta_mean = torch.zeros(ACTION_DIMENSIONS)
             goal_delta_standard_deviation = torch.ones(ACTION_DIMENSIONS)
+        if conditioning.task_progress is not None:
+            task_progress_mean = torch.tensor((conditioning.task_progress.mean,))
+            task_progress_standard_deviation = torch.tensor(
+                (conditioning.task_progress.standard_deviation,)
+            )
+        else:
+            task_progress_mean = torch.zeros(1)
+            task_progress_standard_deviation = torch.ones(1)
         self.network = torch.nn.Sequential(
             torch.nn.Linear(input_dimension, hidden_dimension),
             torch.nn.GELU(),
@@ -308,6 +338,13 @@ class ActionProposalNetwork(torch.nn.Module):
             "goal_delta_standard_deviation",
             goal_delta_standard_deviation.clone().float(),
         )
+        self.register_buffer(
+            "task_progress_mean", task_progress_mean.clone().float()
+        )
+        self.register_buffer(
+            "task_progress_standard_deviation",
+            task_progress_standard_deviation.clone().float(),
+        )
 
     @property
     def uses_proprioception(self) -> bool:
@@ -320,6 +357,10 @@ class ActionProposalNetwork(torch.nn.Module):
     @property
     def uses_goal_delta(self) -> bool:
         return self.conditioning.uses_goal_delta
+
+    @property
+    def uses_task_progress(self) -> bool:
+        return self.conditioning.uses_task_progress
 
     def standardized_actions(
         self,
@@ -378,6 +419,23 @@ class ActionProposalNetwork(torch.nn.Module):
             features = torch.cat((features, standardized_goal_delta), dim=-1)
         elif inputs.goal_delta is not None:
             raise ValueError("proposal checkpoint does not accept goal conditioning")
+        if self.uses_task_progress:
+            task_progress = inputs.task_progress
+            if (
+                task_progress is None
+                or task_progress.ndim != 2
+                or task_progress.shape[-1] != 1
+            ):
+                raise ValueError(
+                    "task-conditioned proposal requires one task position per sample"
+                )
+            standardized_task_progress = (
+                task_progress.to(device=features.device, dtype=features.dtype)
+                - self.task_progress_mean
+            ) / self.task_progress_standard_deviation
+            features = torch.cat((features, standardized_task_progress), dim=-1)
+        elif inputs.task_progress is not None:
+            raise ValueError("proposal checkpoint does not accept task progress")
         return self.network(features).reshape(-1, self.horizon, ACTION_DIMENSIONS)
 
     def forward(
@@ -434,7 +492,8 @@ def load_action_proposal(
     device: torch.device,
 ) -> tuple[ActionProposalNetwork, TrainingArtifactMetadata]:
     payload = torch.load(path, map_location=device, weights_only=True)
-    if payload.get("schema") != PROPOSAL_SCHEMA:
+    schema = payload.get("schema")
+    if schema not in (LEGACY_PROPOSAL_SCHEMA, PROPOSAL_SCHEMA):
         raise ValueError("action proposal schema is unsupported")
     metadata_payload = payload.get("metadata")
     if not isinstance(metadata_payload, dict):
@@ -460,6 +519,7 @@ def load_action_proposal(
             bool(payload.get("uses_proprioception", False)),
             bool(payload.get("uses_action_history", False)),
             bool(payload.get("uses_goal_conditioning", False)),
+            False,
         )
     else:
         capabilities = ProposalConditioningCapabilities.from_dict(
@@ -477,6 +537,21 @@ def load_action_proposal(
             raise ValueError("action proposal goal-delta state is incomplete")
         state["goal_delta_mean"] = torch.zeros(ACTION_DIMENSIONS)
         state["goal_delta_standard_deviation"] = torch.ones(ACTION_DIMENSIONS)
+    task_progress_state_keys = {
+        "task_progress_mean",
+        "task_progress_standard_deviation",
+    }
+    present_task_progress_state = task_progress_state_keys.intersection(state)
+    if (
+        present_task_progress_state
+        and present_task_progress_state != task_progress_state_keys
+    ):
+        raise ValueError("action proposal task-progress state is incomplete")
+    if not present_task_progress_state:
+        if schema != LEGACY_PROPOSAL_SCHEMA or capabilities.task_progress:
+            raise ValueError("action proposal task-progress state is incomplete")
+        state["task_progress_mean"] = torch.zeros(1)
+        state["task_progress_standard_deviation"] = torch.ones(1)
     pose_normalization = (
         DroidValueNormalization(
             state["pose_mean"].cpu().numpy(),
@@ -501,10 +576,19 @@ def load_action_proposal(
         if capabilities.goal_delta
         else None
     )
+    task_progress_normalization = (
+        ScalarNormalization(
+            float(state["task_progress_mean"].item()),
+            float(state["task_progress_standard_deviation"].item()),
+        )
+        if capabilities.task_progress
+        else None
+    )
     conditioning = ProposalConditioning(
         pose=pose_normalization,
         previous_action=previous_action_normalization,
         goal_delta=goal_delta_normalization,
+        task_progress=task_progress_normalization,
     )
     proposal = ActionProposalNetwork(
         int(payload["feature_dimension"]),

@@ -34,6 +34,7 @@ class GraspProposalReadinessTest(unittest.TestCase):
                             "proprioception": True,
                             "action_history": True,
                             "goal_delta": True,
+                            "task_progress": True,
                         },
                     }
                 )
@@ -154,6 +155,7 @@ class GraspProposalReadinessTest(unittest.TestCase):
                             "proprioception": True,
                             "action_history": True,
                             "goal_delta": True,
+                            "task_progress": True,
                         },
                         "rollouts": 29,
                         "recording_selections": [
@@ -196,12 +198,40 @@ class GraspProposalReadinessTest(unittest.TestCase):
                             "proprioception": True,
                             "action_history": True,
                             "goal_delta": False,
+                            "task_progress": True,
                         },
                     }
                 )
             )
 
             with self.assertRaisesRegex(ValueError, "goal-delta"):
+                validate_grasp_training_selection(proposal, metadata)
+
+    def test_requires_task_progress_conditioning(self) -> None:
+        metadata = TrainingArtifactMetadata(
+            "jepa_wm_droid", "revision", "wrist", ("train-00",), 500
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            proposal = Path(temp_dir) / "proposal.pth"
+            proposal.with_suffix(".pth.json").write_text(
+                json.dumps(
+                    {
+                        "window": {
+                            "start_index": 69,
+                            "count": 30,
+                            "stride": 1,
+                        },
+                        "conditioning": {
+                            "proprioception": True,
+                            "action_history": True,
+                            "goal_delta": True,
+                            "task_progress": False,
+                        },
+                    }
+                )
+            )
+
+            with self.assertRaisesRegex(ValueError, "task-progress"):
                 validate_grasp_training_selection(proposal, metadata)
 
 

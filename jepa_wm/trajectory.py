@@ -15,7 +15,11 @@ from jepa_wm.action import (
     DroidPose,
     action_between,
 )
-from jepa_wm.control_protocol import ControlObservation, ControlTarget
+from jepa_wm.control_protocol import (
+    ControlObservation,
+    ControlTarget,
+    TaskContextIndex,
+)
 
 
 @dataclass(frozen=True)
@@ -71,6 +75,12 @@ class RecordedRollout:
         """Base-frame delta from the observed pose to the rollout goal pose."""
 
         return action_between(self.context_pose, self.target_pose)
+
+    @property
+    def task_context_index(self) -> TaskContextIndex:
+        """Recorded task position shared by identically scripted domain trials."""
+
+        return TaskContextIndex(self.context[0].index)
 
 
 @dataclass(frozen=True)

@@ -28,7 +28,7 @@ class ProposalReadinessThresholds:
     minimum_rollouts_per_seed: int = 50
     minimum_gate_pass_rate: float = 0.95
     minimum_active_direction_pass_rate: float = 0.98
-    minimum_mean_cosine: float = 0.9
+    minimum_mean_active_cosine: float = 0.9
     maximum_mean_sequence_mse: float = 0.001
     minimum_warmup_frames: int = 4
 
@@ -36,7 +36,7 @@ class ProposalReadinessThresholds:
         rates = (
             self.minimum_gate_pass_rate,
             self.minimum_active_direction_pass_rate,
-            self.minimum_mean_cosine,
+            self.minimum_mean_active_cosine,
         )
         if (
             self.minimum_training_seeds <= 0
@@ -94,6 +94,13 @@ class ProposalMetrics:
         return self.first_actions.mean_cosine
 
     @property
+    def mean_active_first_action_cosine(self) -> float:
+        mean = self.first_actions.mean_active_cosine
+        if mean is None:
+            raise ValueError("proposal readiness requires active actions")
+        return mean
+
+    @property
     def gate_pass_rate(self) -> float:
         return self.first_actions.pass_rate
 
@@ -111,7 +118,8 @@ class ProposalMetrics:
             and self.gate_pass_rate >= thresholds.minimum_gate_pass_rate
             and self.active_direction_pass_rate
             >= thresholds.minimum_active_direction_pass_rate
-            and self.mean_first_action_cosine >= thresholds.minimum_mean_cosine
+            and self.mean_active_first_action_cosine
+            >= thresholds.minimum_mean_active_cosine
             and self.mean_sequence_mse <= thresholds.maximum_mean_sequence_mse
         )
 
@@ -121,6 +129,9 @@ class ProposalMetrics:
             "warmup_frames": self.warmup_frames,
             "mean_sequence_mse": self.mean_sequence_mse,
             "mean_first_action_cosine": self.mean_first_action_cosine,
+            "mean_active_first_action_cosine": (
+                self.mean_active_first_action_cosine
+            ),
             "first_action_gate_pass_rate": self.gate_pass_rate,
             "active_first_action_direction_pass_rate": (
                 self.active_direction_pass_rate
@@ -261,7 +272,7 @@ class ProposalEvaluationEvidence:
             first_actions=first_actions,
             warmup_frames=rollout_window.start_index,
         )
-        reported_values = (
+        reported_values = [
             (payload.get("mean_sequence_mse"), metrics.mean_sequence_mse),
             (
                 payload.get("mean_first_action_cosine"),
@@ -272,7 +283,12 @@ class ProposalEvaluationEvidence:
                 payload.get("active_first_action_direction_pass_rate"),
                 metrics.active_direction_pass_rate,
             ),
-        )
+        ]
+        reported_active_cosine = payload.get("mean_active_first_action_cosine")
+        if reported_active_cosine is not None:
+            reported_values.append(
+                (reported_active_cosine, metrics.mean_active_first_action_cosine)
+            )
         if any(
             not isinstance(reported, (int, float))
             or not isclose(float(reported), computed, rel_tol=1e-9, abs_tol=1e-12)

@@ -16,6 +16,7 @@ class ProposalConditioningCapabilities:
     proprioception: bool
     action_history: bool
     goal_delta: bool
+    task_progress: bool = False
 
     def __post_init__(self) -> None:
         if self.action_history and not self.proprioception:
@@ -23,20 +24,24 @@ class ProposalConditioningCapabilities:
 
     @classmethod
     def from_dict(cls, payload: Any) -> ProposalConditioningCapabilities:
-        fields = {"proprioception", "action_history", "goal_delta"}
+        legacy_fields = {"proprioception", "action_history", "goal_delta"}
+        fields = legacy_fields | {"task_progress"}
         if (
             not isinstance(payload, dict)
-            or set(payload) != fields
-            or any(type(payload[field]) is not bool for field in fields)
+            or set(payload) not in (legacy_fields, fields)
+            or any(type(payload[field]) is not bool for field in payload)
         ):
             raise ValueError("proposal conditioning capabilities are invalid")
-        return cls(**payload)
+        values = dict(payload)
+        values.setdefault("task_progress", False)
+        return cls(**values)
 
     def to_dict(self) -> dict[str, bool]:
         return {
             "proprioception": self.proprioception,
             "action_history": self.action_history,
             "goal_delta": self.goal_delta,
+            "task_progress": self.task_progress,
         }
 
 

@@ -28,7 +28,7 @@ from jepa_wm.training_artifact import (
 GRASP_READINESS_SCHEMA = "quantis.jepa_wm_grasp_proposal_readiness.v1"
 GRASP_WINDOW = RolloutWindow(69, 30, 1)
 GRASP_EVALUATION_BOUNDS = ActionSelectionBounds(minimum_action_norm=0.0)
-GRASP_CONDITIONING = ProposalConditioningCapabilities(True, True, True)
+GRASP_CONDITIONING = ProposalConditioningCapabilities(True, True, True, True)
 
 
 def _grasp_training_report(proposal: Path) -> dict[str, object]:
@@ -53,8 +53,8 @@ def _validate_grasp_conditioning(payload: dict[str, object]) -> None:
         raise ValueError("grasp proposal conditioning evidence is invalid") from error
     if conditioning != GRASP_CONDITIONING:
         raise ValueError(
-            "grasp proposal training must use pose, action-history, and goal-delta "
-            "conditioning"
+            "grasp proposal training must use pose, action-history, goal-delta, "
+            "and task-progress conditioning"
         )
 
 

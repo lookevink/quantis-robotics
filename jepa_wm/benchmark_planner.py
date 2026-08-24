@@ -240,7 +240,11 @@ def benchmark_recording(
         )
     torch.cuda.synchronize(device)
     planning_seconds = monotonic() - planning_started
-    initialization_name = proposal.stem if proposal is not None else adapter.stem
+    initialization_name = (
+        f"{adapter.stem}_{proposal.stem}"
+        if proposal is not None
+        else adapter.stem
+    )
     output_path = recording.resolve() / "jepa_wm" / (
         f"{camera}_{initialization_name}_cem_benchmark_"
         f"{window.start_index:06d}_{window.count:03d}.json"

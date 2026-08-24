@@ -94,6 +94,7 @@ class ProposalReadinessTest(unittest.TestCase):
                     "window": {"start_index": 4, "count": rollouts, "stride": 1},
                     "mean_sequence_mse": mean_mse,
                     "mean_first_action_cosine": mean_cosine,
+                    "mean_active_first_action_cosine": mean_cosine,
                     "first_action_gate_pass_rate": passed / rollouts,
                     "active_first_action_direction_pass_rate": passed / rollouts,
                     "stationary_first_action_hold_rate": None,
@@ -126,6 +127,35 @@ class ProposalReadinessTest(unittest.TestCase):
             self.assertTrue(summary["passed"])
             self.assertEqual(summary["aggregate"]["rollouts"], 124)
             self.assertEqual(json.loads(output.read_text()), summary)
+
+    def test_reconstructs_active_cosine_for_legacy_v1_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            training = tuple(
+                self._recording(root, f"train-{seed}", "train", seed)
+                for seed in range(100, 112)
+            )
+            proposal = self._proposal(root, training)
+            reports = []
+            for seed in (200, 201):
+                report = self._report(
+                    self._recording(root, f"held-{seed}", "held_out", seed),
+                    proposal,
+                    pass_rate=1.0,
+                )
+                payload = json.loads(report.read_text())
+                payload.pop("mean_active_first_action_cosine")
+                report.write_text(json.dumps(payload))
+                reports.append(report)
+
+            summary = summarize_proposal_readiness(
+                proposal, tuple(reports), root / "readiness.json"
+            )
+
+            self.assertTrue(summary["passed"])
+            self.assertEqual(
+                summary["aggregate"]["mean_active_first_action_cosine"], 1.0
+            )
 
     def test_fails_if_one_seed_misses_the_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

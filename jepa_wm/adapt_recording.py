@@ -23,7 +23,7 @@ from jepa_wm.frames import encode_clips
 from jepa_wm.model import load_headless_model
 from jepa_wm.rollout_scoring import (
     rollout_action_tensor,
-    score_recorded_against_zero,
+    score_recorded_against_mismatched,
 )
 from jepa_wm.trajectory import RecordedRollout, load_rollouts
 from jepa_wm.training_artifact import TrainingArtifactMetadata, training_report_path
@@ -37,17 +37,23 @@ class AdaptationConfig:
     steps: int = 100
     batch_size: int = 2
     learning_rate: float = 1e-3
-    contrastive_weight: float = 1.0
-    contrastive_margin: float = 1e-3
+    zero_negative_weight: float = 1.0
+    zero_negative_margin: float = 1e-3
+    mismatched_negative_weight: float = 1.0
+    mismatched_negative_margin: float = 1e-3
     encoding_batch_size: int = 4
     seed: int = 234
 
     def __post_init__(self) -> None:
         if self.steps <= 0 or self.batch_size <= 0 or self.encoding_batch_size <= 0:
             raise ValueError("training steps and batch sizes must be positive")
-        if self.learning_rate <= 0 or self.contrastive_margin < 0:
+        if (
+            self.learning_rate <= 0
+            or self.zero_negative_margin < 0
+            or self.mismatched_negative_margin < 0
+        ):
             raise ValueError("learning rate must be positive and margin non-negative")
-        if self.contrastive_weight < 0:
+        if self.zero_negative_weight < 0 or self.mismatched_negative_weight < 0:
             raise ValueError("contrastive weight must be non-negative")
 
     def to_dict(self) -> dict[str, int | float]:
@@ -55,8 +61,10 @@ class AdaptationConfig:
             "steps": self.steps,
             "batch_size": self.batch_size,
             "learning_rate": self.learning_rate,
-            "contrastive_weight": self.contrastive_weight,
-            "contrastive_margin": self.contrastive_margin,
+            "zero_negative_weight": self.zero_negative_weight,
+            "zero_negative_margin": self.zero_negative_margin,
+            "mismatched_negative_weight": self.mismatched_negative_weight,
+            "mismatched_negative_margin": self.mismatched_negative_margin,
             "encoding_batch_size": self.encoding_batch_size,
             "seed": self.seed,
         }
@@ -75,9 +83,46 @@ def _load_training_rollouts(
             bounds=TRAINING_BOUNDS,
         )
     )
-    if not rollouts:
-        raise ValueError("training recordings contain no bounded rollouts")
+    if len(rollouts) < 2:
+        raise ValueError("adaptation requires at least two bounded rollouts")
     return rollouts
+
+
+def mismatched_negative_candidates(
+    rollouts: Sequence[RecordedRollout],
+) -> tuple[tuple[int, ...], ...]:
+    """Eligible negative indices with different task positions and actions."""
+
+    action_sequences = tuple(
+        tuple(action.values for action in rollout.actions) for rollout in rollouts
+    )
+    candidates = tuple(
+        tuple(
+            candidate_index
+            for candidate_index, candidate in enumerate(rollouts)
+            if candidate.task_context_index != rollout.task_context_index
+            and action_sequences[candidate_index] != action_sequences[rollout_index]
+        )
+        for rollout_index, rollout in enumerate(rollouts)
+    )
+    if not candidates or any(not eligible for eligible in candidates):
+        raise ValueError(
+            "each adaptation rollout requires a different-context action negative"
+        )
+    return candidates
+
+
+def _sample_mismatched_indices(
+    candidates: tuple[tuple[int, ...], ...],
+    positive_indices: torch.Tensor,
+    generator: torch.Generator,
+) -> torch.Tensor:
+    selected = []
+    for positive_index in positive_indices.tolist():
+        eligible = candidates[positive_index]
+        ordinal = int(torch.randint(len(eligible), (1,), generator=generator).item())
+        selected.append(eligible[ordinal])
+    return torch.tensor(selected, dtype=torch.long)
 
 
 def adapt_recordings(
@@ -124,6 +169,7 @@ def adapt_recordings(
     )
     encoding_seconds = monotonic() - encoding_started
     actions = rollout_action_tensor(rollouts)
+    negative_candidates = mismatched_negative_candidates(rollouts)
 
     optimizer = torch.optim.AdamW(adapter_parameters, lr=config.learning_rate)
     generator = torch.Generator(device="cpu").manual_seed(config.seed)
@@ -139,16 +185,33 @@ def adapt_recordings(
         context = context_latents[indices].to(device)
         target = target_latents[indices].to(device)
         action_batch = actions[:, indices].to(device)
-        energies = score_recorded_against_zero(
+        negative_indices = _sample_mismatched_indices(
+            negative_candidates,
+            indices,
+            generator,
+        )
+        mismatched_negative_batch = actions[:, negative_indices].to(device)
+        energies = score_recorded_against_mismatched(
             model,
             context,
             target,
             action_batch,
+            mismatched_negative_batch,
         )
-        contrastive = torch.relu(
-            config.contrastive_margin + energies.recorded - energies.zero
+        zero_contrastive = torch.relu(
+            config.zero_negative_margin + energies.recorded - energies.zero
         )
-        loss = energies.recorded.mean() + config.contrastive_weight * contrastive.mean()
+        mismatched_negative_contrastive = torch.relu(
+            config.mismatched_negative_margin
+            + energies.recorded
+            - energies.mismatched_negative
+        )
+        loss = (
+            energies.recorded.mean()
+            + config.zero_negative_weight * zero_contrastive.mean()
+            + config.mismatched_negative_weight
+            * mismatched_negative_contrastive.mean()
+        )
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()

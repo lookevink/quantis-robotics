@@ -57,6 +57,8 @@ class FirstActionGateTest(unittest.TestCase):
         )
 
         self.assertEqual(summary.pass_rate, 0.5)
+        self.assertEqual(summary.mean_cosine, 0.5)
+        self.assertEqual(summary.mean_active_cosine, 1.0)
         self.assertEqual(summary.active_direction_pass_rate, 1.0)
         self.assertEqual(summary.stationary_hold_rate, 0.0)
 

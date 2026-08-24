@@ -502,6 +502,26 @@ live rollout or video is authorized. The next model iteration adds explicit
 task-progress conditioning while preserving the same held-out seeds and
 fail-closed thresholds.
 
+That task-progress experiment is also retained as a negative. A 661,013-
+parameter h128 head trained on the same 600 rollouts reached held-out active
+cosines `0.844`/`0.871`, gate rates `90%`/`90%`, and active-direction rates
+`88.9%`/`92.6%`; it did not clear either whole-seed gate. The directional
+metric now averages cosine only across active labels because cosine is
+undefined for a zero vector, while stationary labels still face the unchanged
+translation/rotation/gripper hold gate.
+
+The first grasp-domain JEPA-WM action adapter used all 1,980 bounded rollouts
+from the 20 training recordings. In a fixed eight-context CEM diagnostic it
+lowered latent energy below both zero and recorded actions on every context,
+but produced only `0.434` mean active cosine and `37.5%` first-action passes:
+evidence that the planner was exploiting the learned energy rather than
+recovering the demonstrated action. Adding a uniformly sampled mismatched
+rollout action improved those figures to `0.489`/`50%`, still far below
+the live gate. Both adapters and benchmark reports are preserved as offline
+negative evidence. The next adapter iteration needs stronger candidate-aware
+ranking and proposal-centered regularization; no current grasp artifact may
+command or film the arm.
+
 ### Inverse-action proposal milestone
 
 The repository now has a deterministic bounded CEM implementation, empirical

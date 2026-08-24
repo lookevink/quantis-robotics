@@ -24,7 +24,7 @@ from jepa_wm.proposal import (
     action_normalization,
     save_action_proposal,
 )
-from jepa_wm.proprioception import DroidValueNormalization
+from jepa_wm.proprioception import DroidValueNormalization, ScalarNormalization
 from jepa_wm.trajectory import RecordedRollout, RolloutWindow, load_rollouts
 from jepa_wm.training_artifact import (
     TrainingArtifactMetadata,
@@ -148,6 +148,9 @@ def train_action_proposal(
     goal_delta_normalization = DroidValueNormalization.from_samples(
         proposal_inputs.goal_delta.numpy()
     )
+    task_progress_normalization = ScalarNormalization.from_samples(
+        proposal_inputs.task_progress.numpy()
+    )
     actions = torch.from_numpy(action_sequences)
     standardized_actions = (actions - action_mean) / action_std
     feature_dimension = contexts.shape[-1]
@@ -161,6 +164,7 @@ def train_action_proposal(
             pose=pose_normalization,
             previous_action=previous_action_normalization,
             goal_delta=goal_delta_normalization,
+            task_progress=task_progress_normalization,
         ),
     ).to(device)
     optimizer = torch.optim.AdamW(

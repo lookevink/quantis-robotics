@@ -14,6 +14,17 @@ CONTROL_SCHEMA = "quantis.jepa_wm_control.v1"
 DROID_ACTION_HORIZON = 3
 
 
+@dataclass(frozen=True)
+class TaskContextIndex:
+    """Zero-based scripted-task position shared by recordings and live control."""
+
+    value: int
+
+    def __post_init__(self) -> None:
+        if isinstance(self.value, bool) or not isinstance(self.value, int) or self.value < 0:
+            raise ValueError("task context index must be a non-negative integer")
+
+
 def _strict_positive_int(payload: dict[str, Any], field: str) -> int:
     value = payload[field]
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
@@ -80,6 +91,12 @@ class ControlObservation:
         if self.target_pose is None:
             raise ValueError("control observation has no target pose")
         return action_between(self.pose, self.target_pose)
+
+    @property
+    def task_context_index(self) -> TaskContextIndex:
+        """Task position historically persisted as the warm-up frame count."""
+
+        return TaskContextIndex(self.warmup_frames)
 
     def __post_init__(self) -> None:
         if isinstance(self.observation_id, bool) or self.observation_id <= 0:

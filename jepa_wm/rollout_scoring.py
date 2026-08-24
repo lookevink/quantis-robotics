@@ -17,6 +17,13 @@ class RolloutEnergies:
     zero: torch.Tensor
 
 
+@dataclass(frozen=True)
+class ContrastiveRolloutEnergies:
+    recorded: torch.Tensor
+    zero: torch.Tensor
+    mismatched_negative: torch.Tensor
+
+
 def score_actions(
     model: Any,
     context: torch.Tensor,
@@ -47,4 +54,26 @@ def score_recorded_against_zero(
     return RolloutEnergies(
         recorded=score_actions(model, context, target, actions),
         zero=score_actions(model, context, target, torch.zeros_like(actions)),
+    )
+
+
+def score_recorded_against_mismatched(
+    model: Any,
+    context: torch.Tensor,
+    target: torch.Tensor,
+    actions: torch.Tensor,
+    mismatched_actions: torch.Tensor,
+) -> ContrastiveRolloutEnergies:
+    if mismatched_actions.shape != actions.shape:
+        raise ValueError("mismatched actions must match recorded actions")
+    baseline = score_recorded_against_zero(model, context, target, actions)
+    return ContrastiveRolloutEnergies(
+        recorded=baseline.recorded,
+        zero=baseline.zero,
+        mismatched_negative=score_actions(
+            model,
+            context,
+            target,
+            mismatched_actions,
+        ),
     )

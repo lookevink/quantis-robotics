@@ -358,4 +358,12 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     current-to-goal DROID delta improved the best task head to `90%` gate and
     `92.6%` active-direction passes, but contexts 76/83 and the attached hold
     still fail the strict offline gate. This checkpoint remains negative and has
-    no live or filming authority.
+    no live or filming authority. Explicit task progress reached held-out active
+    cosines `0.844`/`0.871` but remained at `90%` gate on both seeds. Active
+    cosine now excludes zero-vector stationary labels while their separate hold
+    gate remains mandatory. A 20-recording grasp action adapter then exposed
+    latent-objective exploitation: fixed bounded CEM reached only `0.434` cosine
+    and `37.5%` gate despite lowering energy below recorded actions on all eight
+    diagnostic contexts. Uniformly sampled mismatched rollout negatives improved the
+    controlled comparison to `0.489`/`50%`, still a strict negative. Candidate-
+    aware ranking and stronger proposal-centered regularization are next.

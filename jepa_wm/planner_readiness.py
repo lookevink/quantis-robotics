@@ -141,6 +141,15 @@ class FirstActionSummary:
         return fsum(decision.cosine for decision in self.decisions) / self.count
 
     @property
+    def mean_active_cosine(self) -> float | None:
+        active = tuple(
+            decision.cosine
+            for decision in self.decisions
+            if decision.recorded_action_is_active
+        )
+        return fsum(active) / len(active) if active else None
+
+    @property
     def gate_passes(self) -> int:
         return sum(decision.passed for decision in self.decisions)
 
@@ -181,6 +190,7 @@ class FirstActionSummary:
 
     def to_dict(self) -> dict[str, float | None]:
         return {
+            "mean_active_first_action_cosine": self.mean_active_cosine,
             "first_action_gate_pass_rate": self.pass_rate,
             "active_first_action_direction_pass_rate": (
                 self.active_direction_pass_rate
