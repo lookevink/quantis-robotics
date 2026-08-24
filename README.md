@@ -488,9 +488,19 @@ hold windows rather than silently dropping zero-action labels:
   HELD_OUT_RECORDING[,HELD_OUT_RECORDING...] PROPOSAL
 ```
 
-The next iteration keeps held-out seeds 12400/12401 fixed, expands training
-variation from 12 to 20 seeds, and reruns the same fail-closed gate before any
-live rollout.
+The next iteration kept held-out seeds 12400/12401 fixed and expanded training
+variation from 12 to 20 validated seeds (600 exact task-window rollouts). Pure
+capacity changes still failed: h16/h32/h128 heads reached aggregate cosine
+`0.6786`/`0.6726`/`0.7421` and active-direction pass rates
+`81.5%`/`75.9%`/`88.9%`. The proposal contract now additionally conditions on
+the provenance-bound delta from the current DROID pose to the three-frame goal
+pose. This reduced aggregate MSE to `0.0000226`; the h128 head reached cosine
+`0.7717`, a `90%` first-action gate rate, and `92.6%` active-direction passes on
+both held-out seeds. It remains a retained negative result: phase reversals at
+contexts 76 and 83 and final hold precision still miss the strict gate, so no
+live rollout or video is authorized. The next model iteration adds explicit
+task-progress conditioning while preserving the same held-out seeds and
+fail-closed thresholds.
 
 ### Inverse-action proposal milestone
 

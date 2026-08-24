@@ -32,7 +32,7 @@ from jepa_wm.planner_report import (
     PlannerRunSummary,
     PlannerTimings,
 )
-from jepa_wm.proposal import load_action_proposal
+from jepa_wm.proposal import ProposalInputs, load_action_proposal
 from jepa_wm.trajectory import RolloutWindow, load_rollouts
 from jepa_wm.training_artifact import load_training_report_metadata
 
@@ -113,24 +113,15 @@ def benchmark_recording(
             raise ValueError("proposal camera does not match planner camera")
         if recording.name in proposal_metadata.training_recordings:
             raise ValueError("planner proposal was trained on the evaluation recording")
-        poses = torch.tensor(
-            [rollout.context_pose.values for rollout in rollouts],
-            device=device,
-            dtype=contexts.dtype,
-        )
-        previous_actions = torch.tensor(
-            [rollout.previous_action.values for rollout in rollouts],
+        inputs = ProposalInputs.from_rollouts(
+            rollouts,
+            conditioning=proposal_model.conditioning,
             device=device,
             dtype=contexts.dtype,
         )
         with torch.inference_mode():
             proposal_actions = planner_bounds.clip(
-                proposal_model(
-                    contexts,
-                    targets,
-                    poses if proposal_model.uses_proprioception else None,
-                    previous_actions if proposal_model.uses_action_history else None,
-                )
+                proposal_model(contexts, targets, inputs)
                 .cpu()
                 .numpy()
             )

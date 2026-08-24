@@ -20,8 +20,10 @@ from jepa_wm.frames import encode_clips
 from jepa_wm.model import load_headless_model
 from jepa_wm.planner import PlannerActionBounds
 from jepa_wm.planner_readiness import evaluate_first_actions
-from jepa_wm.proposal import load_action_proposal
+from jepa_wm.proposal import ProposalInputs, load_action_proposal
+from jepa_wm.proposal_evidence import ProposalGoalEvidence
 from jepa_wm.trajectory import RolloutWindow, load_rollouts
+from jepa_wm.training_artifact import artifact_fingerprint
 
 
 REPORT_SCHEMA = "quantis.jepa_wm_action_proposal_evaluation.v1"
@@ -64,23 +66,14 @@ def evaluate_action_proposal(
     )
     encoding_seconds = monotonic() - encoding_started
     with torch.inference_mode():
-        poses = torch.tensor(
-            [rollout.context_pose.values for rollout in rollouts],
-            device=device,
-            dtype=contexts.dtype,
-        )
-        previous_actions = torch.tensor(
-            [rollout.previous_action.values for rollout in rollouts],
+        inputs = ProposalInputs.from_rollouts(
+            rollouts,
+            conditioning=proposal.conditioning,
             device=device,
             dtype=contexts.dtype,
         )
         predicted = (
-            proposal(
-                contexts.to(device),
-                targets.to(device),
-                poses if proposal.uses_proprioception else None,
-                previous_actions if proposal.uses_action_history else None,
-            )
+            proposal(contexts.to(device), targets.to(device), inputs)
             .cpu()
             .numpy()
         )
@@ -95,8 +88,7 @@ def evaluate_action_proposal(
     )
     results = [
         {
-            "context_index": rollout.context[0].index,
-            "target_index": rollout.target.index,
+            **ProposalGoalEvidence.from_rollout(rollout).to_dict(),
             "recorded_actions": recorded_action.tolist(),
             "proposed_actions": predicted_action.tolist(),
             "sequence_mse": float(np.square(recorded_action - predicted_action).mean()),
@@ -111,11 +103,13 @@ def evaluate_action_proposal(
         "schema": REPORT_SCHEMA,
         "status": "evaluated",
         "proposal": str(proposal_path.resolve()),
+        "proposal_fingerprint": artifact_fingerprint(proposal_path),
         "recording": str(recording.resolve()),
         "camera": camera,
         "rollouts": len(rollouts),
         "window": window.to_dict(),
         "selection_bounds": selection_bounds.to_dict(),
+        "conditioning": proposal.conditioning.to_dict(),
         "mean_sequence_mse": float(
             np.mean([result["sequence_mse"] for result in results])
         ),

@@ -19,12 +19,18 @@ from jepa_wm.frames import encode_clips
 from jepa_wm.model import load_headless_model
 from jepa_wm.proposal import (
     ActionProposalNetwork,
+    ProposalConditioning,
+    ProposalInputs,
     action_normalization,
     save_action_proposal,
 )
 from jepa_wm.proprioception import DroidValueNormalization
 from jepa_wm.trajectory import RecordedRollout, RolloutWindow, load_rollouts
-from jepa_wm.training_artifact import TrainingArtifactMetadata, training_report_path
+from jepa_wm.training_artifact import (
+    TrainingArtifactMetadata,
+    artifact_fingerprint,
+    training_report_path,
+)
 
 
 TRAINING_BOUNDS = ActionSelectionBounds(minimum_action_norm=0.0)
@@ -130,20 +136,18 @@ def train_action_proposal(
         dtype=np.float32,
     )
     action_mean, action_std = action_normalization(action_sequences)
-    poses = np.asarray(
-        [rollout.context_pose.values for rollout in rollouts],
-        dtype=np.float32,
-    )
-    pose_normalization = DroidValueNormalization.from_samples(poses)
-    pose_tensor = torch.from_numpy(poses)
-    previous_actions = np.asarray(
-        [rollout.previous_action.values for rollout in rollouts],
-        dtype=np.float32,
+    proposal_inputs = ProposalInputs.from_rollouts(rollouts)
+    if any(value is None for value in proposal_inputs.values):
+        raise ValueError("training rollouts did not produce complete proposal inputs")
+    pose_normalization = DroidValueNormalization.from_samples(
+        proposal_inputs.pose.numpy()
     )
     previous_action_normalization = DroidValueNormalization.from_samples(
-        previous_actions
+        proposal_inputs.previous_action.numpy()
     )
-    previous_action_tensor = torch.from_numpy(previous_actions)
+    goal_delta_normalization = DroidValueNormalization.from_samples(
+        proposal_inputs.goal_delta.numpy()
+    )
     actions = torch.from_numpy(action_sequences)
     standardized_actions = (actions - action_mean) / action_std
     feature_dimension = contexts.shape[-1]
@@ -153,8 +157,11 @@ def train_action_proposal(
         config.hidden_dimension,
         action_mean,
         action_std,
-        pose_normalization=pose_normalization,
-        previous_action_normalization=previous_action_normalization,
+        conditioning=ProposalConditioning(
+            pose=pose_normalization,
+            previous_action=previous_action_normalization,
+            goal_delta=goal_delta_normalization,
+        ),
     ).to(device)
     optimizer = torch.optim.AdamW(
         proposal.parameters(),
@@ -171,11 +178,9 @@ def train_action_proposal(
             (config.batch_size,),
             generator=generator,
         )
+        inputs = proposal_inputs.indexed(indices).to(device)
         predicted = proposal.standardized_actions(
-            contexts[indices].to(device),
-            targets[indices].to(device),
-            pose_tensor[indices].to(device),
-            previous_action_tensor[indices].to(device),
+            contexts[indices].to(device), targets[indices].to(device), inputs
         )
         loss = torch.nn.functional.mse_loss(
             predicted,
@@ -198,6 +203,7 @@ def train_action_proposal(
     report = {
         "status": "trained",
         "proposal": str(output.resolve()),
+        "proposal_fingerprint": artifact_fingerprint(output),
         "metadata": metadata.to_dict(),
         "config": asdict(config),
         "rollouts": len(rollouts),
@@ -206,6 +212,7 @@ def train_action_proposal(
         "recording_selections": [
             selection.to_dict() for selection in recording_selections
         ],
+        "conditioning": proposal.conditioning.to_dict(),
         "trainable_parameters": sum(
             parameter.numel() for parameter in proposal.parameters()
         ),

@@ -353,4 +353,9 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     evidence only; JEPA has not yet passed the live task gate. Live context 86
     now reconstructs the exact held-out prefix three actions before acquisition,
     advances the task target one reference frame per receding-horizon step, and
-    binds connector reset state into baseline equivalence.
+    binds connector reset state into baseline equivalence. Training variation is
+    now 20 seeds while held-out seeds 12400/12401 remain fixed. A typed
+    current-to-goal DROID delta improved the best task head to `90%` gate and
+    `92.6%` active-direction passes, but contexts 76/83 and the attached hold
+    still fail the strict offline gate. This checkpoint remains negative and has
+    no live or filming authority.

@@ -3,11 +3,63 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 import json
 from pathlib import Path
 from typing import Any
 
 from jepa_wm.contract import MODEL_ID
+
+
+@dataclass(frozen=True)
+class ProposalConditioningCapabilities:
+    proprioception: bool
+    action_history: bool
+    goal_delta: bool
+
+    def __post_init__(self) -> None:
+        if self.action_history and not self.proprioception:
+            raise ValueError("action-history conditioning requires proprioception")
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ProposalConditioningCapabilities:
+        fields = {"proprioception", "action_history", "goal_delta"}
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != fields
+            or any(type(payload[field]) is not bool for field in fields)
+        ):
+            raise ValueError("proposal conditioning capabilities are invalid")
+        return cls(**payload)
+
+    def to_dict(self) -> dict[str, bool]:
+        return {
+            "proprioception": self.proprioception,
+            "action_history": self.action_history,
+            "goal_delta": self.goal_delta,
+        }
+
+
+@dataclass(frozen=True)
+class ProposalArtifactIdentity:
+    path: Path
+    fingerprint: str
+
+    def __post_init__(self) -> None:
+        if (
+            not self.path.is_absolute()
+            or len(self.fingerprint) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.fingerprint
+            )
+        ):
+            raise ValueError("proposal artifact identity is invalid")
+
+    @classmethod
+    def from_artifact(cls, artifact: Path) -> ProposalArtifactIdentity:
+        resolved = artifact.resolve()
+        return cls(resolved, artifact_fingerprint(resolved))
 
 
 @dataclass(frozen=True)
@@ -62,6 +114,14 @@ class TrainingArtifactMetadata:
 
 def training_report_path(artifact: Path) -> Path:
     return artifact.with_suffix(artifact.suffix + ".json")
+
+
+def artifact_fingerprint(artifact: Path) -> str:
+    digest = sha256()
+    with artifact.resolve().open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def load_training_report_metadata(artifact: Path) -> TrainingArtifactMetadata:

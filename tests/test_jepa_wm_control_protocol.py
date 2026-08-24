@@ -164,6 +164,11 @@ class SimulatorControlGateTest(unittest.TestCase):
 
         self.assertEqual(ControlObservation.from_dict(observation.to_dict()), observation)
         self.assertEqual(observation.target_pose, target_pose)
+        for actual, expected in zip(
+            observation.goal_action.values,
+            (0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.1),
+        ):
+            self.assertAlmostEqual(actual, expected)
         self.assertEqual(ProposedControl.from_dict(proposal.to_dict()), proposal)
 
     def test_rejects_cartesian_motion_in_the_wrong_direction(self) -> None:

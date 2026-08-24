@@ -120,26 +120,18 @@ class FrozenProposalPredictor:
 
     def predict(self, observation: ControlObservation) -> ProposedControl:
         from jepa_wm.planner import PlannerActionBounds
+        from jepa_wm.proposal import ProposalInputs
 
         context, target = self._encode_observation(observation)
-        pose = self._torch.tensor(
-            (observation.pose.values,),
-            device=self._device,
-            dtype=context.dtype,
-        )
-        previous_action = self._torch.tensor(
-            (observation.previous_action.values,),
+        inputs = ProposalInputs.from_observation(
+            observation,
+            conditioning=self._proposal.conditioning,
             device=self._device,
             dtype=context.dtype,
         )
         with self._torch.inference_mode():
             actions = PlannerActionBounds().clip(
-                self._proposal(
-                    context,
-                    target,
-                    pose if self._proposal.uses_proprioception else None,
-                    previous_action if self._proposal.uses_action_history else None,
-                )
+                self._proposal(context, target, inputs)
                 .cpu()
                 .numpy()
             )[0]

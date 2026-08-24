@@ -66,6 +66,12 @@ class RecordedRollout:
     def target_clip(self) -> tuple[Path, ...]:
         return (self.target.path,)
 
+    @property
+    def goal_action(self) -> DroidAction:
+        """Base-frame delta from the observed pose to the rollout goal pose."""
+
+        return action_between(self.context_pose, self.target_pose)
+
 
 @dataclass(frozen=True)
 class RolloutWindow:

@@ -7,7 +7,7 @@ from math import isfinite
 from pathlib import Path
 from typing import Any
 
-from jepa_wm.action import DroidAction, DroidPose
+from jepa_wm.action import DroidAction, DroidPose, action_between
 
 
 CONTROL_SCHEMA = "quantis.jepa_wm_control.v1"
@@ -74,6 +74,12 @@ class ControlObservation:
     @property
     def target_pose(self) -> DroidPose | None:
         return self.target.pose
+
+    @property
+    def goal_action(self) -> DroidAction:
+        if self.target_pose is None:
+            raise ValueError("control observation has no target pose")
+        return action_between(self.pose, self.target_pose)
 
     def __post_init__(self) -> None:
         if isinstance(self.observation_id, bool) or self.observation_id <= 0:

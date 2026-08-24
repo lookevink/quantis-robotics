@@ -97,6 +97,10 @@ class RecordedTrajectoryTest(unittest.TestCase):
                 rollout.target_pose.values,
                 (0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5),
             )
+            self.assertEqual(
+                rollout.goal_action.values,
+                (0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            )
             observation = ControlObservation(
                 1,
                 1.0,
