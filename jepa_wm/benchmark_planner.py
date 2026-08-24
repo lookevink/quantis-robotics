@@ -32,6 +32,7 @@ from jepa_wm.planner import (
     PlannerActionBounds,
     ProposalCenteredBounds,
 )
+from jepa_wm.planner_objective import evaluate_planner_objective
 from jepa_wm.planning_scoring import LatentGoalScorer
 from jepa_wm.planner_report import (
     CandidateEvaluation,
@@ -367,8 +368,33 @@ def benchmark_recording(
                 config=prior_config,
             )
 
+        goal_alignment = task_policy.goal_action_alignment
+        task_penalty = (
+            (
+                lambda candidates: goal_alignment.penalty(
+                    candidates,
+                    rollout.goal_action,
+                )
+            )
+            if goal_alignment is not None
+            else None
+        )
+
+        def evaluate_objective(
+            candidates: np.ndarray,
+            *,
+            latent_energy: np.ndarray | None = None,
+        ):
+            return evaluate_planner_objective(
+                candidates,
+                scorer,
+                prior,
+                task_penalty,
+                latent_energy=latent_energy,
+            )
+
         def planning_objective(candidates: np.ndarray) -> np.ndarray:
-            return scorer(candidates) + prior.penalty(candidates)
+            return evaluate_objective(candidates).total
 
         config = CEMConfig(
             horizon=planner_config.horizon,
@@ -398,17 +424,16 @@ def benchmark_recording(
             [action.values for action in rollout.actions], dtype=np.float64
         )
         if library_energies is not None:
-            library_objectives = library_energies + prior.penalty(
-                action_library.sequences
+            library_components = evaluate_objective(
+                action_library.sequences,
+                latent_energy=library_energies,
             )
-            library_index = int(np.argmin(library_objectives))
+            library_index = int(np.argmin(library_components.total))
             library_action = action_library.sequences[library_index]
-            library_energy = float(library_energies[library_index])
-            library_objective = float(library_objectives[library_index])
+            library_scores = library_components.candidate(library_index)
         else:
             library_action = None
-            library_energy = None
-            library_objective = None
+            library_scores = None
         comparison_actions = [
             recorded_actions,
             np.zeros_like(recorded_actions),
@@ -416,51 +441,42 @@ def benchmark_recording(
         ]
         if proposed_actions is not None:
             comparison_actions.append(proposed_actions)
-        comparison_energies = scorer(np.stack(comparison_actions))
-        proposal_energy = (
-            float(comparison_energies[3]) if proposed_actions is not None else None
-        )
-        proposal_objective = (
-            proposal_energy + float(prior.penalty(proposed_actions[None, :, :])[0])
-            if proposed_actions is not None and proposal_energy is not None
+        comparison_components = evaluate_objective(np.stack(comparison_actions))
+        proposal_scores = (
+            comparison_components.candidate(3)
+            if proposed_actions is not None
             else None
         )
         if proposed_actions is not None:
-            if proposal_energy is None or proposal_objective is None:
+            if proposal_scores is None:
                 raise ValueError("proposal initialization metrics are incomplete")
             rollout_initialization = PlannerInitialization.PROPOSAL
             initial_candidate = CandidateEvaluation(
                 proposed_actions,
-                proposal_energy,
-                proposal_objective,
+                proposal_scores,
             )
         else:
-            if (
-                library_action is None
-                or library_energy is None
-                or library_objective is None
-            ):
+            if library_action is None or library_scores is None:
                 raise ValueError("library initialization metrics are incomplete")
             rollout_initialization = PlannerInitialization.LIBRARY
             initial_candidate = CandidateEvaluation(
                 library_action,
-                library_energy,
-                library_objective,
+                library_scores,
             )
         evaluations.append(
             PlannerRolloutEvaluation(
                 context_index=rollout.context[0].index,
                 target_index=rollout.target.index,
                 recorded_actions=recorded_actions,
-                recorded_energy=float(comparison_energies[0]),
-                zero_energy=float(comparison_energies[1]),
+                recorded_energy=float(comparison_components.latent_energy[0]),
+                zero_energy=float(comparison_components.latent_energy[1]),
                 initialization=rollout_initialization,
                 initial_candidate=initial_candidate,
                 planned_candidate=CandidateEvaluation(
                     result.actions,
-                    float(comparison_energies[2]),
-                    result.energy,
+                    comparison_components.candidate(2),
                 ),
+                goal_action=rollout.goal_action,
             )
         )
     torch.cuda.synchronize(device)

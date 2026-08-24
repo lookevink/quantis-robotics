@@ -804,6 +804,18 @@ passed insertion proposal supplies the initial three-action sequence; JEPA-WM
 may refine it only inside the planner bounds and must retain task direction,
 stationary holds, and positive energy improvement before any simulator trial.
 
+The first exact bounded search exposed a systematic latent shortcut. With
+proposal prior `1e-5`, a `1 mm / 0.004 rad / 0.02` trust region, and fixed
+`4 × 64 / 8 elites` CEM, JEPA lowered energy below both zero and recorded
+actions on all eight sampled insertion contexts for both held-out seeds.
+Nevertheless, seed `12600` reached only `0.119557` mean first-action cosine and
+seed `12601` only `0.0687623`; both failed the task-direction gate `0/8`.
+These fingerprinted reports are preserved and recovery-backed up. Lower energy
+alone is therefore not insertion control. The next offline profile adds a
+fail-closed goal-action alignment objective computed from the observable
+current-to-target DROID delta; it must preserve that direction as well as beat
+the proposal/zero/recorded energies before any live trial.
+
 The first grasp-domain JEPA-WM action adapter used all 1,980 bounded rollouts
 from the 20 training recordings. In a fixed eight-context CEM diagnostic it
 lowered latent energy below both zero and recorded actions on every context,

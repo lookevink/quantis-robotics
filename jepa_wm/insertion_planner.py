@@ -11,7 +11,7 @@ from jepa_wm.insertion_contract import (
 )
 from jepa_wm.planner import CandidateTrustRegion, CEMConfig
 from jepa_wm.planner_readiness import FirstActionThresholds
-from jepa_wm.planner_policy import PlannerTaskPolicy
+from jepa_wm.planner_policy import GoalActionAlignment, PlannerTaskPolicy
 from jepa_wm.trajectory import RolloutWindow
 
 
@@ -40,6 +40,10 @@ class InsertionPlannerProfile:
             maximum_stationary_rotation=5e-4,
             maximum_stationary_gripper=0.005,
             minimum_active_cosine=0.9,
+        ),
+        goal_action_alignment=GoalActionAlignment(
+            minimum_cosine=0.95,
+            failure_penalty=0.01,
         ),
     )
 

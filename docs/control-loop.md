@@ -453,5 +453,9 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     passed both whole held-out seeds: `+6.13514e-5`/`82.9545%` and
     `+5.94737e-5`/`85.2273%`. Aggregate evidence over 176 rollouts is
     `+6.04125e-5`/`84.0909%`. This closes the offline insertion-energy
-    checkpoint only. Next is proposal-centered bounded candidate search on the
-    same held-out seeds; JEPA has not yet selected or executed an insertion.
+    checkpoint only. The first proposal-centered search then lowered energy
+    below zero and recorded actions in all `16/16` sampled contexts, but failed
+    insertion direction in all `16/16` (`0.119557`/`0.0687623` mean cosine).
+    That exact negative is recovery-backed up. The next profile constrains
+    search with the observable current-to-target DROID goal action; JEPA has
+    not yet selected or executed an insertion.

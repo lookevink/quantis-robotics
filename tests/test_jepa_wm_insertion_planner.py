@@ -11,8 +11,14 @@ except ModuleNotFoundError:
     torch = None
 
 from jepa_wm.action import DroidAction
+from jepa_wm.action_prior import ActionPriorConfig, EmpiricalActionPrior
 from jepa_wm.insertion_planner import INSERTION_PLANNER_PROFILE
 from jepa_wm.planner_readiness import FirstActionGate, FirstActionReason
+from jepa_wm.planner_policy import GoalActionAlignment
+from jepa_wm.planner_objective import (
+    CandidateObjective,
+    evaluate_planner_objective,
+)
 from jepa_wm.planner_report import (
     CandidateEvaluation,
     PlannerInitialization,
@@ -28,6 +34,10 @@ if torch is not None:
 
 
 class InsertionPlannerProfileTest(unittest.TestCase):
+    @staticmethod
+    def _scores(energy: float) -> CandidateObjective:
+        return CandidateObjective(energy, 0.0, 0.0)
+
     @staticmethod
     def _metadata(
         *,
@@ -71,6 +81,40 @@ class InsertionPlannerProfileTest(unittest.TestCase):
         self.assertFalse(opposite.passed)
         self.assertEqual(opposite.reasons, (FirstActionReason.DIRECTION_MISMATCH,))
 
+    def test_goal_alignment_penalizes_latent_shortcuts(self) -> None:
+        policy = GoalActionAlignment(
+            minimum_cosine=0.95,
+            failure_penalty=0.01,
+        )
+        goal = DroidAction((0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+        candidates = np.zeros((2, 3, 7), dtype=np.float64)
+        candidates[0, 0, 0] = 0.0005
+        candidates[1, 0, 1] = 0.0005
+
+        penalties = policy.penalty(candidates, goal)
+
+        self.assertEqual(penalties[0], 0.0)
+        self.assertGreaterEqual(penalties[1], 0.01)
+        self.assertTrue(policy.evaluate(DroidAction(tuple(candidates[0, 0])), goal).passed)
+        self.assertFalse(policy.evaluate(DroidAction(tuple(candidates[1, 0])), goal).passed)
+
+    def test_objective_components_have_one_total_owner(self) -> None:
+        candidates = np.zeros((2, 3, 7), dtype=np.float64)
+        prior = EmpiricalActionPrior.fit(
+            candidates[:1],
+            ActionPriorConfig(),
+        )
+
+        components = evaluate_planner_objective(
+            candidates,
+            lambda _: np.asarray((0.1, 0.2)),
+            prior,
+            lambda _: np.asarray((0.01, 0.0)),
+        )
+
+        self.assertAlmostEqual(components.candidate(0).total, 0.11)
+        self.assertEqual(components.candidate(1), CandidateObjective(0.2, 0.0, 0.0))
+
     def test_persisted_rollout_decision_uses_the_insertion_gate(self) -> None:
         recorded = np.zeros((3, 7), dtype=np.float64)
         planned = np.zeros((3, 7), dtype=np.float64)
@@ -83,8 +127,8 @@ class InsertionPlannerProfileTest(unittest.TestCase):
             recorded_energy=0.01,
             zero_energy=0.011,
             initialization=PlannerInitialization.PROPOSAL,
-            initial_candidate=CandidateEvaluation(recorded, 0.01, 0.01),
-            planned_candidate=CandidateEvaluation(planned, 0.009, 0.009),
+            initial_candidate=CandidateEvaluation(recorded, self._scores(0.01)),
+            planned_candidate=CandidateEvaluation(planned, self._scores(0.009)),
         )
 
         payload = evaluation.to_dict(
@@ -96,6 +140,32 @@ class InsertionPlannerProfileTest(unittest.TestCase):
         self.assertFalse(payload["first_action_gate"]["passed"])
         self.assertEqual(
             payload["first_action_gate"]["reasons"], ["direction_mismatch"]
+        )
+
+    def test_persists_reconstructible_goal_alignment(self) -> None:
+        recorded = np.zeros((3, 7), dtype=np.float64)
+        planned = np.zeros((3, 7), dtype=np.float64)
+        planned[0, 0] = 0.0005
+        goal = DroidAction((0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+        evaluation = PlannerRolloutEvaluation(
+            context_index=44,
+            target_index=47,
+            recorded_actions=recorded,
+            recorded_energy=0.01,
+            zero_energy=0.011,
+            initialization=PlannerInitialization.PROPOSAL,
+            initial_candidate=CandidateEvaluation(recorded, self._scores(0.01)),
+            planned_candidate=CandidateEvaluation(planned, self._scores(0.009)),
+            goal_action=goal,
+        )
+
+        payload = evaluation.to_dict(
+            goal_alignment=INSERTION_PLANNER_PROFILE.task_policy.goal_action_alignment
+        )
+
+        self.assertEqual(payload["goal_action"], list(goal.values))
+        self.assertEqual(
+            payload["goal_action_alignment"], {"cosine": 1.0, "passed": True}
         )
 
     @unittest.skipIf(torch is None, "PyTorch is not installed locally")

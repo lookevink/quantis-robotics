@@ -27,6 +27,7 @@ from jepa_wm.planner_readiness import (
     FirstActionGate,
     FirstActionThresholds,
 )
+from jepa_wm.planner_objective import evaluate_planner_objective
 from jepa_wm.objective_calibration import (
     CalibrationIdentity,
     TaskProgressAssessment,
@@ -415,36 +416,6 @@ class ShadowSearchEvidence:
         return evidence
 
 
-@dataclass(frozen=True)
-class ShadowObjectiveComponents:
-    latent_energy: np.ndarray
-    prior_penalty: np.ndarray
-    task_penalty: np.ndarray
-    total: np.ndarray
-
-
-def _evaluate_objective(
-    candidates: np.ndarray,
-    score: CandidateScorer,
-    prior: EmpiricalActionPrior,
-    task_progress: TaskProgressObjective | None,
-) -> ShadowObjectiveComponents:
-    values = np.asarray(candidates, dtype=np.float64)
-    latent = np.asarray(score(values), dtype=np.float64)
-    prior_values = prior.penalty(values)
-    task_values = (
-        task_progress.penalty(values)
-        if task_progress is not None
-        else np.zeros(len(values), dtype=np.float64)
-    )
-    return ShadowObjectiveComponents(
-        latent,
-        prior_values,
-        task_values,
-        latent + prior_values + task_values,
-    )
-
-
 def _candidate(
     actions: np.ndarray,
     score: CandidateScorer,
@@ -452,7 +423,12 @@ def _candidate(
     task_progress: TaskProgressObjective | None,
 ) -> ShadowCandidate:
     batch = np.asarray(actions, dtype=np.float64)[None, :, :]
-    components = _evaluate_objective(batch, score, prior, task_progress)
+    components = evaluate_planner_objective(
+        batch,
+        score,
+        prior,
+        task_progress.penalty if task_progress is not None else None,
+    )
     return ShadowCandidate(
         actions=tuple(DroidAction(tuple(row)) for row in batch[0]),
         latent_energy=float(components.latent_energy[0]),
@@ -489,8 +465,11 @@ def plan_shadow_candidates(
     )
 
     def objective(candidates: np.ndarray) -> np.ndarray:
-        return _evaluate_objective(
-            candidates, score, prior, task_progress
+        return evaluate_planner_objective(
+            candidates,
+            score,
+            prior,
+            task_progress.penalty if task_progress is not None else None,
         ).total
 
     planning_started = monotonic()

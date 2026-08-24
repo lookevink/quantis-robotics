@@ -14,7 +14,12 @@ import numpy as np
 from jepa_wm.action import ActionSelectionBounds, DroidAction
 from jepa_wm.domain_recording import DomainRecording
 from jepa_wm.planner import CEMConfig, PlannerActionBounds
-from jepa_wm.planner_policy import PlannerTaskPolicy
+from jepa_wm.planner_policy import (
+    GoalAlignmentDecision,
+    GoalActionAlignment,
+    PlannerTaskPolicy,
+)
+from jepa_wm.planner_objective import CandidateObjective
 from jepa_wm.planner_readiness import (
     FirstActionDecision,
     FirstActionGate,
@@ -36,16 +41,13 @@ class PlannerInitialization(str, Enum):
 @dataclass(frozen=True)
 class CandidateEvaluation:
     actions: np.ndarray
-    energy: float
-    objective: float
+    scores: CandidateObjective
 
     def __post_init__(self) -> None:
         if (
             self.actions.ndim != 2
             or self.actions.shape[1] != 7
             or not np.all(np.isfinite(self.actions))
-            or not isfinite(self.energy)
-            or not isfinite(self.objective)
         ):
             raise ValueError("candidate evaluation must contain finite actions and scores")
 
@@ -60,6 +62,7 @@ class PlannerRolloutEvaluation:
     initialization: PlannerInitialization
     initial_candidate: CandidateEvaluation
     planned_candidate: CandidateEvaluation
+    goal_action: DroidAction | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -72,19 +75,22 @@ class PlannerRolloutEvaluation:
 
     @property
     def planned_prior_penalty(self) -> float:
-        return self.planned_candidate.objective - self.planned_candidate.energy
+        return self.planned_candidate.scores.prior_penalty
 
     @property
     def refinement_improvement(self) -> float:
-        return self.initial_candidate.objective - self.planned_candidate.objective
+        return (
+            self.initial_candidate.scores.total
+            - self.planned_candidate.scores.total
+        )
 
     @property
     def improvement_over_zero(self) -> float:
-        return self.zero_energy - self.planned_candidate.energy
+        return self.zero_energy - self.planned_candidate.scores.latent_energy
 
     @property
     def improvement_over_recorded(self) -> float:
-        return self.recorded_energy - self.planned_candidate.energy
+        return self.recorded_energy - self.planned_candidate.scores.latent_energy
 
     def first_action_decision(
         self,
@@ -100,8 +106,26 @@ class PlannerRolloutEvaluation:
     def first_action_cosine(self) -> float:
         return self.first_action_decision().cosine
 
-    def to_dict(self, gate: FirstActionGate | None = None) -> dict[str, Any]:
+    def goal_alignment_decision(
+        self,
+        policy: GoalActionAlignment | None,
+    ) -> GoalAlignmentDecision | None:
+        if policy is None:
+            return None
+        if self.goal_action is None:
+            raise ValueError("planner rollout is missing its goal action")
+        return policy.evaluate(
+            DroidAction(tuple(self.planned_candidate.actions[0])),
+            self.goal_action,
+        )
+
+    def to_dict(
+        self,
+        gate: FirstActionGate | None = None,
+        goal_alignment: GoalActionAlignment | None = None,
+    ) -> dict[str, Any]:
         first_action = self.first_action_decision(gate)
+        goal_decision = self.goal_alignment_decision(goal_alignment)
         library = (
             self.initial_candidate
             if self.initialization is PlannerInitialization.LIBRARY
@@ -115,24 +139,39 @@ class PlannerRolloutEvaluation:
         return {
             "context_index": self.context_index,
             "target_index": self.target_index,
+            "goal_action": (
+                list(self.goal_action.values) if self.goal_action is not None else None
+            ),
             "recorded_actions": self.recorded_actions.tolist(),
             "library_action": library.actions.tolist() if library else None,
-            "library_energy": library.energy if library else None,
-            "library_objective": library.objective if library else None,
+            "library_energy": library.scores.latent_energy if library else None,
+            "library_objective": library.scores.total if library else None,
+            "library_prior_penalty": (
+                library.scores.prior_penalty if library else None
+            ),
+            "library_task_penalty": library.scores.task_penalty if library else None,
             "proposal_action": proposal.actions.tolist() if proposal else None,
-            "proposal_energy": proposal.energy if proposal else None,
-            "proposal_objective": proposal.objective if proposal else None,
+            "proposal_energy": proposal.scores.latent_energy if proposal else None,
+            "proposal_objective": proposal.scores.total if proposal else None,
+            "proposal_prior_penalty": (
+                proposal.scores.prior_penalty if proposal else None
+            ),
+            "proposal_task_penalty": proposal.scores.task_penalty if proposal else None,
             "planned_actions": self.planned_candidate.actions.tolist(),
             "recorded_energy": self.recorded_energy,
             "zero_energy": self.zero_energy,
-            "planned_energy": self.planned_candidate.energy,
-            "planned_objective": self.planned_candidate.objective,
+            "planned_energy": self.planned_candidate.scores.latent_energy,
+            "planned_objective": self.planned_candidate.scores.total,
             "planned_prior_penalty": self.planned_prior_penalty,
+            "planned_task_penalty": self.planned_candidate.scores.task_penalty,
             "refinement_improvement": self.refinement_improvement,
             "improvement_over_zero": self.improvement_over_zero,
             "improvement_over_recorded": self.improvement_over_recorded,
             "first_action_cosine": first_action.cosine,
             "first_action_gate": first_action.to_dict(),
+            "goal_action_alignment": (
+                goal_decision.to_dict() if goal_decision is not None else None
+            ),
         }
 
 
@@ -270,6 +309,16 @@ class PlannerBenchmarkReport:
             ],
             first_action_gate,
         )
+        goal_alignment_decisions = tuple(
+            decision
+            for evaluation in self.evaluations
+            if (
+                decision := evaluation.goal_alignment_decision(
+                    self.planner.task_policy.goal_action_alignment
+                )
+            )
+            is not None
+        )
         return {
             "schema": REPORT_SCHEMA,
             "status": "benchmarked",
@@ -297,9 +346,18 @@ class PlannerBenchmarkReport:
             ),
             "mean_first_action_cosine": summary.mean_cosine,
             **summary.to_dict(),
+            "goal_action_alignment_pass_rate": (
+                sum(decision.passed for decision in goal_alignment_decisions)
+                / len(goal_alignment_decisions)
+                if goal_alignment_decisions
+                else None
+            ),
             **self.timings.to_dict(),
             "results": [
-                evaluation.to_dict(first_action_gate)
+                evaluation.to_dict(
+                    first_action_gate,
+                    self.planner.task_policy.goal_action_alignment,
+                )
                 for evaluation in self.evaluations
             ],
         }
