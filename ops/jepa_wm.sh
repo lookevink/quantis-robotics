@@ -246,7 +246,10 @@ evaluate_recording() {
     [[ -s "${adapter}" ]] || die "action adapter is not installed for ${camera_name}"
     arguments+=(--adapter "${adapter}")
   elif [[ "${adapter_mode}" != "base" ]]; then
-    die "evaluation mode must be base or adapted"
+    is_safe_identifier "${adapter_mode}" || die "invalid adapter name"
+    local adapter="${checkpoint_dir}/${adapter_mode}.pth"
+    [[ -s "${adapter}" ]] || die "action adapter does not exist: ${adapter_mode}"
+    arguments+=(--adapter "${adapter}")
   fi
   "${venv_dir}/bin/python" "${arguments[@]}"
 }
@@ -256,10 +259,24 @@ adapt_recording_set() {
   local camera_name="$2"
   local training_steps="$3"
   local adapter_name="${4:-quantis_isaac_${camera_name}_action_adapter}"
+  local start_index="${5:-}"
+  local rollout_count="${6:-}"
+  local rollout_stride="${7:-}"
   is_safe_identifier_list "${recording_list}" || die "invalid recording list"
   is_safe_identifier "${camera_name}" || die "invalid camera name"
   is_safe_identifier "${adapter_name}" || die "invalid adapter name"
   require_positive_integer "training steps" "${training_steps}" || exit 1
+  local -a window_arguments=()
+  if [[ -n "${start_index}${rollout_count}${rollout_stride}" ]]; then
+    require_nonnegative_integer "start index" "${start_index}" || exit 1
+    require_positive_integer "rollout count" "${rollout_count}" || exit 1
+    require_positive_integer "rollout stride" "${rollout_stride}" || exit 1
+    window_arguments=(
+      --start-index "${start_index}"
+      --count "${rollout_count}"
+      --stride "${rollout_stride}"
+    )
+  fi
   local -a recording_names
   local -a recording_arguments
   local recording_name
@@ -284,7 +301,75 @@ adapt_recording_set() {
     "${recording_arguments[@]}" \
     --output "${adapter}" \
     --camera "${camera_name}" \
-    --steps "${training_steps}"
+    --steps "${training_steps}" \
+    "${window_arguments[@]}"
+}
+
+adapt_insertion_world_model() {
+  local -A options=()
+  parse_named_options options "recordings steps adapter" "$@"
+  local window_start window_count window_stride
+  read -r window_start window_count window_stride \
+    <<<"$(task_proposal_window insertion)"
+  adapt_recording_set \
+    "${options[recordings]:-}" wrist "${options[steps]:-500}" \
+    "${options[adapter]:-}" \
+    "${window_start}" "${window_count}" "${window_stride}"
+}
+
+evaluate_insertion_world_model() {
+  local -A options=()
+  parse_named_options options "recording adapter" "$@"
+  local window_start window_count window_stride
+  read -r window_start window_count window_stride \
+    <<<"$(task_proposal_window insertion)"
+  evaluate_recording \
+    "${options[recording]:-}" wrist \
+    "${window_start}" "${window_count}" "${window_stride}" \
+    "${options[adapter]:-}"
+}
+
+summarize_insertion_world_model() {
+  local -A options=()
+  parse_named_options options \
+    "recordings adapter experiment base-seed" "$@"
+  local held_out_list="${options[recordings]:-}"
+  local adapter_name="${options[adapter]:-}"
+  local experiment_id="${options[experiment]:-}"
+  local base_seed="${options[base-seed]:-}"
+  is_safe_identifier_list "${held_out_list}" || die "invalid held-out list"
+  is_safe_identifier "${adapter_name}" || die "invalid adapter name"
+  is_safe_identifier "${experiment_id}" || die "invalid experiment ID"
+  require_nonnegative_integer "base seed" "${base_seed}" || exit 1
+  require_runtime
+  local adapter="${checkpoint_dir}/${adapter_name}.pth"
+  [[ -s "${adapter}" ]] || die "action adapter does not exist: ${adapter_name}"
+  local roster="${checkpoint_dir}/experiments/${experiment_id}_insertion_corpus.json"
+  mkdir -p "$(dirname "${roster}")"
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.insertion_corpus create \
+    --experiment-id "${experiment_id}" --base-seed "${base_seed}" \
+    --output "${roster}"
+  local -a held_out_names reports=()
+  local recording_name report
+  local window_start window_count window_stride
+  read -r window_start window_count window_stride \
+    <<<"$(task_proposal_window insertion)"
+  IFS=',' read -r -a held_out_names <<<"${held_out_list}"
+  for recording_name in "${held_out_names[@]}"; do
+    printf -v report '%s/jepa_wm/wrist_%s_rollout_eval_%06d_%03d.json' \
+      "${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}" \
+      "${adapter_name}" "${window_start}" "${window_count}"
+    [[ -f "${report}" ]] || die "insertion adapter report does not exist: ${report}"
+    reports+=(--evaluation-report "${report}")
+  done
+  local output="${checkpoint_dir}/experiments/${adapter_name}_insertion_wm_readiness.json"
+  "${venv_dir}/bin/python" -m jepa_wm.insertion_wm_readiness \
+    --experiment-id "${experiment_id}" \
+    --adapter "${adapter}" \
+    "${reports[@]}" \
+    --roster "${roster}" \
+    --output "${output}"
 }
 
 benchmark_planner() {
@@ -1202,7 +1287,15 @@ case "${1:-}" in
     adapt_recording_set "${2:-}" "${3:-wrist}" "${4:-100}"
     ;;
   adapt-set)
-    adapt_recording_set "${2:-}" "${3:-wrist}" "${4:-500}" "${5:-}"
+    adapt_recording_set \
+      "${2:-}" "${3:-wrist}" "${4:-500}" "${5:-}" \
+      "${6:-}" "${7:-}" "${8:-}"
+    ;;
+  insertion-wm-adapt)
+    adapt_insertion_world_model "${@:2}"
+    ;;
+  insertion-wm-eval)
+    evaluate_insertion_world_model "${@:2}"
     ;;
   plan-benchmark)
     benchmark_planner "${@:2}"
@@ -1233,6 +1326,9 @@ case "${1:-}" in
     ;;
   insertion-proposal-summarize)
     summarize_insertion_action_proposal "${@:2}"
+    ;;
+  insertion-wm-summarize)
+    summarize_insertion_world_model "${@:2}"
     ;;
   control-infer-replay)
     infer_replayed_control "${@:2}"
@@ -1284,6 +1380,6 @@ case "${1:-}" in
       "${2:-}" "${3:-}" "${4:-}" "${5:-wrist}" "${6:-40}"
     ;;
   *)
-    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, grasp-proposal-train, insertion-proposal-train, proposal-eval, grasp-proposal-eval, insertion-proposal-eval, proposal-summarize, grasp-proposal-summarize, insertion-proposal-summarize, control-worker-configure, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, grasp-control-summarize, control-candidate-report, control-candidate-summarize, control-objective-calibrate, or summarize"
+    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, grasp-proposal-train, insertion-proposal-train, proposal-eval, grasp-proposal-eval, insertion-proposal-eval, proposal-summarize, grasp-proposal-summarize, insertion-proposal-summarize, insertion-wm-summarize, control-worker-configure, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, grasp-control-summarize, control-candidate-report, control-candidate-summarize, control-objective-calibrate, or summarize"
     ;;
 esac

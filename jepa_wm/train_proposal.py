@@ -26,28 +26,16 @@ from jepa_wm.proposal import (
     save_action_proposal,
 )
 from jepa_wm.proprioception import DroidValueNormalization, ScalarNormalization
-from jepa_wm.trajectory import RecordedRollout, RolloutWindow, load_rollouts
+from jepa_wm.rollout_training import RolloutTrainingSelection
+from jepa_wm.trajectory import RecordedRollout, RolloutWindow
 from jepa_wm.training_artifact import (
     TrainingArtifactMetadata,
     artifact_fingerprint,
-    proposal_training_selection_fingerprint,
     training_report_path,
 )
 
 
 TRAINING_BOUNDS = ActionSelectionBounds(minimum_action_norm=0.0)
-
-
-@dataclass(frozen=True)
-class TrainingRecordingSelection:
-    recording: str
-    context_indices: tuple[int, ...]
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "recording": self.recording,
-            "context_indices": list(self.context_indices),
-        }
 
 
 @dataclass(frozen=True)
@@ -240,37 +228,6 @@ def proposal_loss(
     )
 
 
-def _training_rollouts(
-    recordings: Sequence[Path], camera: str, window: RolloutWindow | None
-) -> tuple[tuple[RecordedRollout, ...], tuple[TrainingRecordingSelection, ...]]:
-    def selected(recording: Path) -> tuple[RecordedRollout, ...]:
-        recording_rollouts = load_rollouts(
-            recording,
-            camera=camera,
-            bounds=TRAINING_BOUNDS,
-        )
-        return (
-            window.select(recording_rollouts)
-            if window is not None
-            else recording_rollouts
-        )
-
-    rollouts = []
-    selections = []
-    for recording in recordings:
-        recording_rollouts = selected(recording)
-        rollouts.extend(recording_rollouts)
-        selections.append(
-            TrainingRecordingSelection(
-                recording.name,
-                tuple(rollout.context[0].index for rollout in recording_rollouts),
-            )
-        )
-    if not rollouts:
-        raise ValueError("proposal training recordings contain no rollouts")
-    return tuple(rollouts), tuple(selections)
-
-
 def train_action_proposal(
     source: Path,
     checkpoint: Path,
@@ -286,7 +243,13 @@ def train_action_proposal(
     device = torch.device("cuda", torch.cuda.current_device())
     torch.manual_seed(config.seed)
     torch.cuda.manual_seed_all(config.seed)
-    rollouts, recording_selections = _training_rollouts(recordings, camera, window)
+    training_selection = RolloutTrainingSelection.load(
+        recordings,
+        camera=camera,
+        bounds=TRAINING_BOUNDS,
+        window=window,
+    )
+    rollouts = training_selection.rollouts
     model = load_headless_model(source, checkpoint, device=device)
     encoding_started = monotonic()
     contexts = encode_clips(
@@ -381,17 +344,8 @@ def train_action_proposal(
         training_recordings=tuple(recording.name for recording in recordings),
         training_steps=config.steps,
     )
-    training_selection = {
-        "window": window.to_dict() if window is not None else None,
-        "selection_bounds": TRAINING_BOUNDS.to_dict(),
-        "recording_selections": [
-            selection.to_dict() for selection in recording_selections
-        ],
-        "rollouts": len(rollouts),
-    }
-    selection_fingerprint = proposal_training_selection_fingerprint(
-        training_selection
-    )
+    selection_payload = training_selection.to_dict()
+    selection_fingerprint = training_selection.fingerprint
     save_action_proposal(
         proposal,
         output,
@@ -404,7 +358,7 @@ def train_action_proposal(
         "proposal_fingerprint": artifact_fingerprint(output),
         "metadata": metadata.to_dict(),
         "config": asdict(config),
-        **training_selection,
+        **selection_payload,
         "training_selection_fingerprint": selection_fingerprint,
         "conditioning": proposal.conditioning.to_dict(),
         "trainable_parameters": sum(

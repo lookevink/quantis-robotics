@@ -32,7 +32,8 @@ from jepa_wm.rollout_scoring import (
     score_actions,
     score_recorded_against_mismatched,
 )
-from jepa_wm.trajectory import RecordedRollout, load_rollouts
+from jepa_wm.rollout_training import RolloutTrainingSelection
+from jepa_wm.trajectory import RecordedRollout, RolloutWindow
 from jepa_wm.training_artifact import (
     TrainingArtifactMetadata,
     artifact_fingerprint,
@@ -90,24 +91,6 @@ class AdaptationConfig:
             "encoding_batch_size": self.encoding_batch_size,
             "seed": self.seed,
         }
-
-
-def _load_training_rollouts(
-    recordings: Sequence[DomainRecording],
-    camera: str,
-) -> tuple[RecordedRollout, ...]:
-    rollouts = tuple(
-        rollout
-        for recording in recordings
-        for rollout in load_rollouts(
-            recording.path,
-            camera=camera,
-            bounds=TRAINING_BOUNDS,
-        )
-    )
-    if len(rollouts) < 2:
-        raise ValueError("adaptation requires at least two bounded rollouts")
-    return rollouts
 
 
 def validated_training_recordings(
@@ -171,6 +154,7 @@ def adapt_recordings(
     *,
     camera: str,
     config: AdaptationConfig,
+    window: RolloutWindow | None = None,
 ) -> dict[str, Any]:
     if not torch.cuda.is_available():
         raise RuntimeError("JEPA-WM adaptation requires CUDA")
@@ -183,7 +167,15 @@ def adapt_recordings(
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats(device_index)
 
-    rollouts = _load_training_rollouts(training_recordings, camera)
+    training_selection = RolloutTrainingSelection.load(
+        tuple(recording.path for recording in training_recordings),
+        camera=camera,
+        bounds=TRAINING_BOUNDS,
+        window=window,
+    )
+    rollouts = training_selection.rollouts
+    if len(rollouts) < 2:
+        raise ValueError("adaptation requires at least two bounded rollouts")
     load_started = monotonic()
     model = load_headless_model(source, checkpoint, device=device)
     load_seconds = monotonic() - load_started
@@ -277,14 +269,22 @@ def adapt_recordings(
         training_recordings=tuple(recording.name for recording in training_recordings),
         training_steps=config.steps,
     )
-    save_action_adapter(model, output, metadata)
+    selection_payload = training_selection.to_dict()
+    selection_fingerprint = training_selection.fingerprint
+    save_action_adapter(
+        model,
+        output,
+        metadata,
+        training_selection_fingerprint=selection_fingerprint,
+    )
     report = {
         "status": "adapted",
         "adapter": str(output.resolve()),
         "adapter_fingerprint": artifact_fingerprint(output),
         "metadata": metadata.to_dict(),
         "config": config.to_dict(),
-        "rollouts": len(rollouts),
+        **selection_payload,
+        "training_selection_fingerprint": selection_fingerprint,
         "trainable_parameters": sum(
             parameter.numel() for parameter in adapter_parameters
         ),
@@ -312,6 +312,9 @@ def main() -> None:
     parser.add_argument("--recording", type=Path, action="append", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--camera", default="wrist")
+    parser.add_argument("--start-index", type=int)
+    parser.add_argument("--count", type=int)
+    parser.add_argument("--stride", type=int)
     parser.add_argument("--steps", type=int, default=AdaptationConfig.steps)
     parser.add_argument("--batch-size", type=int, default=AdaptationConfig.batch_size)
     parser.add_argument(
@@ -320,6 +323,11 @@ def main() -> None:
         default=AdaptationConfig.learning_rate,
     )
     args = parser.parse_args()
+    window_values = (args.start_index, args.count, args.stride)
+    if any(value is not None for value in window_values) and not all(
+        value is not None for value in window_values
+    ):
+        parser.error("start-index, count, and stride must be supplied together")
     print(
         json.dumps(
             adapt_recordings(
@@ -332,6 +340,11 @@ def main() -> None:
                     steps=args.steps,
                     batch_size=args.batch_size,
                     learning_rate=args.learning_rate,
+                ),
+                window=(
+                    RolloutWindow(args.start_index, args.count, args.stride)
+                    if all(value is not None for value in window_values)
+                    else None
                 ),
             ),
             indent=2,

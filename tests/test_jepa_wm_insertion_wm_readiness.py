@@ -1,0 +1,222 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+try:
+    import torch
+except ModuleNotFoundError:
+    torch = None
+
+from jepa_wm.action import ACTION_RECORDING_CONTRACT, DroidAction
+from jepa_wm.contract import MODEL_ID
+from jepa_wm.training_artifact import (
+    TrainingArtifactMetadata,
+    artifact_fingerprint,
+    rollout_training_selection_fingerprint,
+)
+from jepa_wm.trajectory import DROID_ROLLOUT_PROTOCOL
+
+if torch is not None:
+    from jepa_wm.adapter import save_action_adapter
+    from jepa_wm.insertion_wm_readiness import (
+        INSERTION_BOUNDS,
+        INSERTION_WINDOW,
+        validate_insertion_adapter,
+        validate_insertion_adapter_evaluation,
+    )
+
+
+@unittest.skipIf(torch is None, "PyTorch is required for adapter binding")
+class InsertionWorldModelReadinessTest(unittest.TestCase):
+    @staticmethod
+    def _adapter(root: Path):
+        adapter = root / "insertion-adapter.pth"
+        recordings = tuple(f"insertion-train-{index:02d}" for index in range(12))
+        metadata = TrainingArtifactMetadata(
+            "jepa_wm_droid",
+            "revision",
+            "wrist",
+            recordings,
+            500,
+        )
+        model = SimpleNamespace(
+            model=SimpleNamespace(
+                predictor=SimpleNamespace(
+                    action_encoder=torch.nn.Linear(7, 4, bias=False)
+                )
+            )
+        )
+        selection = {
+            "window": INSERTION_WINDOW.to_dict(),
+            "selection_bounds": INSERTION_BOUNDS.to_dict(),
+            "recording_selections": [
+                {
+                    "recording": recording,
+                    "context_indices": list(INSERTION_WINDOW.context_indices),
+                }
+                for recording in recordings
+            ],
+            "rollouts": 12 * INSERTION_WINDOW.count,
+        }
+        selection_fingerprint = rollout_training_selection_fingerprint(selection)
+        save_action_adapter(
+            model,
+            adapter,
+            metadata,
+            training_selection_fingerprint=selection_fingerprint,
+        )
+        Path(f"{adapter}.json").write_text(
+            json.dumps(
+                {
+                    "adapter_fingerprint": artifact_fingerprint(adapter),
+                    "metadata": metadata.to_dict(),
+                    **selection,
+                    "training_selection_fingerprint": selection_fingerprint,
+                }
+            )
+        )
+        return adapter
+
+    def test_binds_exact_window_selection_to_adapter_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            adapter = self._adapter(Path(temporary_directory))
+
+            evidence = validate_insertion_adapter(adapter)
+
+            self.assertEqual(evidence.identity.fingerprint, artifact_fingerprint(adapter))
+            payload = json.loads(Path(f"{adapter}.json").read_text())
+            payload["recording_selections"][0]["context_indices"][0] = 22
+            Path(f"{adapter}.json").write_text(json.dumps(payload))
+            with self.assertRaisesRegex(ValueError, "disagree"):
+                validate_insertion_adapter(adapter)
+
+    def test_reconstructs_actions_and_energy_aggregates_from_held_out_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            adapter = validate_insertion_adapter(self._adapter(root))
+            recording = root / "insertion-held-00"
+            action = DroidAction((0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            results = [
+                {
+                    "context_indices": [context_index],
+                    "target_index": context_index + 3,
+                    "actions": [list(action.values)] * 3,
+                    "recorded_action_energy": 1.0,
+                    "zero_action_energy": 2.0,
+                    "improvement_over_zero": 1.0,
+                    "recorded_action_wins": True,
+                }
+                for context_index in INSERTION_WINDOW.context_indices
+            ]
+            report = root / "report.json"
+            report.write_text(
+                json.dumps(
+                    {
+                        "model": MODEL_ID,
+                        "source_revision": adapter.metadata.source_revision,
+                        "recording": str(recording),
+                        "camera": "wrist",
+                        "adapter": str(adapter.identity.path),
+                        "adapter_fingerprint": adapter.identity.fingerprint,
+                        "rollouts": INSERTION_WINDOW.count,
+                        "rollout_window": INSERTION_WINDOW.to_dict(),
+                        "action_selection": INSERTION_BOUNDS.to_dict(),
+                        "rollout_protocol": DROID_ROLLOUT_PROTOCOL.to_dict(),
+                        "action_format": ACTION_RECORDING_CONTRACT.format,
+                        "objective": "terminal_latent_l2",
+                        "mean_improvement_over_zero": 1.0,
+                        "recorded_action_win_rate": 1.0,
+                        "control_gate": {
+                            "passed": True,
+                            "minimum_win_rate": 0.75,
+                            "requires_positive_mean_improvement": True,
+                            "reasons": [],
+                        },
+                        "results": results,
+                    }
+                )
+            )
+            with (
+                patch(
+                    "jepa_wm.insertion_wm_readiness.ContactInsertionEvidence.from_recording"
+                ),
+                patch(
+                    "jepa_wm.insertion_wm_readiness.load_rollout_at",
+                    side_effect=lambda *args, context_index, **kwargs: SimpleNamespace(
+                        context=(SimpleNamespace(index=context_index),),
+                        target=SimpleNamespace(index=context_index + 3),
+                        actions=(action,) * 3,
+                    ),
+                ),
+                patch(
+                    "jepa_wm.insertion_wm_readiness.HeldOutEvaluation.from_payload",
+                    return_value=SimpleNamespace(recording=SimpleNamespace(path=recording)),
+                ),
+            ):
+                evidence = validate_insertion_adapter_evaluation(
+                    report,
+                    adapter,
+                    expected_recording="insertion-held-00",
+                    expected_seed=12600,
+                )
+                self.assertEqual(evidence.recording.path, recording)
+                results[0]["actions"][0][0] = -0.001
+                report_payload = json.loads(report.read_text())
+                report_payload["results"] = results
+                report.write_text(json.dumps(report_payload))
+                with self.assertRaisesRegex(ValueError, "inconsistent"):
+                    validate_insertion_adapter_evaluation(
+                        report,
+                        adapter,
+                        expected_recording="insertion-held-00",
+                        expected_seed=12600,
+                    )
+
+                report_payload = json.loads(report.read_text())
+                report_payload["results"] = [
+                    {
+                        **result,
+                        "recorded_action_energy": "1.0",
+                    }
+                    if index == 0
+                    else result
+                    for index, result in enumerate(results)
+                ]
+                report.write_text(json.dumps(report_payload))
+                with self.assertRaisesRegex(ValueError, "native numbers"):
+                    validate_insertion_adapter_evaluation(
+                        report,
+                        adapter,
+                        expected_recording="insertion-held-00",
+                        expected_seed=12600,
+                    )
+
+                report_payload["results"][0]["recorded_action_energy"] = -1.0
+                report.write_text(json.dumps(report_payload))
+                with self.assertRaisesRegex(ValueError, "inconsistent"):
+                    validate_insertion_adapter_evaluation(
+                        report,
+                        adapter,
+                        expected_recording="insertion-held-00",
+                        expected_seed=12600,
+                    )
+
+                report_payload["results"][0]["recorded_action_energy"] = 1.0
+                report_payload["source_revision"] = "different-revision"
+                report.write_text(json.dumps(report_payload))
+                with self.assertRaisesRegex(ValueError, "identity"):
+                    validate_insertion_adapter_evaluation(
+                        report,
+                        adapter,
+                        expected_recording="insertion-held-00",
+                        expected_seed=12600,
+                    )
+
+
+if __name__ == "__main__":
+    unittest.main()

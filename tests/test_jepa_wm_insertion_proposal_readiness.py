@@ -28,7 +28,7 @@ from jepa_wm.insertion_corpus import InsertionCorpusRoster
 from jepa_wm.training_artifact import (
     TrainingArtifactMetadata,
     artifact_fingerprint,
-    proposal_training_selection_fingerprint,
+    rollout_training_selection_fingerprint,
 )
 
 if torch is not None:
@@ -146,7 +146,7 @@ class InsertionProposalReadinessTest(unittest.TestCase):
                 ],
                 "rollouts": INSERTION_WINDOW.count,
             }
-            selection_fingerprint = proposal_training_selection_fingerprint(selection)
+            selection_fingerprint = rollout_training_selection_fingerprint(selection)
             save_action_proposal(
                 checkpoint,
                 proposal,

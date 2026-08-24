@@ -873,6 +873,38 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("insert-held-00,insert-held-01", summary_calls)
         self.assertIn("--experiment 'insert-v9-2600' --base-seed '2600'", summary_calls)
 
+    def test_jepa_wm_insertion_world_model_commands_bind_one_named_adapter(self):
+        trained, training_calls = self.run_command(
+            "jepa-wm-insertion-adapt",
+            arguments=(
+                "insert-train-00,insert-train-01",
+                "500",
+                "insertion-adapter",
+            ),
+        )
+        evaluated, evaluation_calls = self.run_command(
+            "jepa-wm-insertion-wm-eval",
+            arguments=("insert-held-00", "insertion-adapter"),
+        )
+        summarized, summary_calls = self.run_command(
+            "jepa-wm-insertion-wm-summarize",
+            arguments=(
+                "insert-held-00,insert-held-01",
+                "insertion-adapter",
+                "insert-v9-2600",
+                "2600",
+            ),
+        )
+
+        self.assertEqual(trained.returncode, 0, trained.stderr)
+        self.assertIn("ops/jepa_wm.sh insertion-wm-adapt", training_calls)
+        self.assertIn("--steps '500' --adapter 'insertion-adapter'", training_calls)
+        self.assertEqual(evaluated.returncode, 0, evaluated.stderr)
+        self.assertIn("ops/jepa_wm.sh insertion-wm-eval", evaluation_calls)
+        self.assertEqual(summarized.returncode, 0, summarized.stderr)
+        self.assertIn("ops/jepa_wm.sh insertion-wm-summarize", summary_calls)
+        self.assertIn("--experiment 'insert-v9-2600' --base-seed '2600'", summary_calls)
+
     def test_jepa_wm_control_replay_forwards_one_fresh_observation(self):
         result, calls = self.run_command(
             "jepa-wm-control-infer-replay",

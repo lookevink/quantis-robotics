@@ -64,6 +64,26 @@ class ProposalConditioningCapabilities:
 
 
 @dataclass(frozen=True)
+class TrainingRecordingSelection:
+    recording: str
+    context_indices: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            not self.recording
+            or not self.context_indices
+            or any(index < 0 for index in self.context_indices)
+        ):
+            raise ValueError("training recording selection is invalid")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "recording": self.recording,
+            "context_indices": list(self.context_indices),
+        }
+
+
+@dataclass(frozen=True)
 class ArtifactIdentity:
     path: Path
     fingerprint: str
@@ -169,8 +189,8 @@ def artifact_fingerprint(artifact: Path) -> str:
     return digest.hexdigest()
 
 
-def proposal_training_selection_fingerprint(payload: Any) -> str:
-    """Fingerprint the exact rollout-selection contract used for proposal training."""
+def rollout_training_selection_fingerprint(payload: Any) -> str:
+    """Fingerprint the exact rollout-selection contract used for training."""
 
     if not isinstance(payload, dict) or set(payload) != {
         "window",
@@ -178,7 +198,7 @@ def proposal_training_selection_fingerprint(payload: Any) -> str:
         "recording_selections",
         "rollouts",
     }:
-        raise ValueError("proposal training selection contract is invalid")
+        raise ValueError("rollout training selection contract is invalid")
     canonical = json.dumps(
         payload,
         sort_keys=True,

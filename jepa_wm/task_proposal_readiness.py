@@ -22,7 +22,7 @@ from jepa_wm.training_artifact import (
     ProposalConditioningCapabilities,
     TrainingArtifactMetadata,
     load_training_report_metadata,
-    proposal_training_selection_fingerprint,
+    rollout_training_selection_fingerprint,
     training_report_path,
 )
 from sim.exploration import DatasetSplit
@@ -99,7 +99,7 @@ class TaskProposalReadinessPolicy:
             checkpoint.uses_goal_delta,
             checkpoint.uses_task_progress,
         )
-        selection_fingerprint = proposal_training_selection_fingerprint(
+        selection_fingerprint = rollout_training_selection_fingerprint(
             {
                 field: payload.get(field)
                 for field in (

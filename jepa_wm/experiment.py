@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from jepa_wm.domain_recording import DomainRecording
+from jepa_wm.persistence import write_json_atomic
 from jepa_wm.readiness import ActionControlDecision, ActionControlGate
 from jepa_wm.training_artifact import load_training_report_metadata
 from sim.exploration import DatasetSplit
@@ -106,6 +107,10 @@ class HeldOutEvaluation:
     @classmethod
     def from_path(cls, path: Path) -> HeldOutEvaluation:
         payload = json.loads(path.read_text())
+        return cls.from_payload(path, payload)
+
+    @classmethod
+    def from_payload(cls, path: Path, payload: Any) -> HeldOutEvaluation:
         if not isinstance(payload, dict):
             raise ValueError(f"held-out report must be an object: {path}")
         recording_path = payload.get("recording")
@@ -171,21 +176,17 @@ def _validate_adapter_training_set(
         raise ValueError("adapter training recordings do not match the experiment")
 
 
-def summarize_experiment(
+def build_experiment_from_evidence(
     experiment_id: str,
-    training_recordings: Sequence[Path],
-    held_out_reports: Sequence[Path],
-    output: Path,
+    training: Sequence[DomainRecording],
+    evaluations: Sequence[HeldOutEvaluation],
 ) -> dict[str, Any]:
-    if not experiment_id or not training_recordings or not held_out_reports:
+    if not experiment_id or not training or not evaluations:
         raise ValueError(
             "experiment, training recordings, and held-out reports are required"
         )
-    training = tuple(
-        DomainRecording.from_path(path, expected_split=DatasetSplit.TRAIN)
-        for path in training_recordings
-    )
-    evaluations = tuple(HeldOutEvaluation.from_path(path) for path in held_out_reports)
+    training = tuple(training)
+    evaluations = tuple(evaluations)
     _require_unique_disjoint_recordings(training, evaluations)
     cameras = {evaluation.camera for evaluation in evaluations}
     adapters = {evaluation.adapter for evaluation in evaluations}
@@ -202,19 +203,49 @@ def summarize_experiment(
     passed = aggregate.control_gate.passed and all(
         evaluation.metrics.control_gate.passed for evaluation in evaluations
     )
-    summary = {
+    return {
         "schema": EXPERIMENT_SCHEMA,
         "experiment_id": experiment_id,
         "camera": evaluations[0].camera,
         "adapter": str(evaluations[0].adapter),
         "training_recordings": [recording.name for recording in training],
-        "held_out_evaluations": [evaluation.to_dict() for evaluation in evaluations],
+        "held_out_evaluations": [
+            evaluation.to_dict() for evaluation in evaluations
+        ],
         "aggregate": aggregate.to_dict(),
         "passed": passed,
     }
-    output = output.resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(summary, indent=2) + "\n")
+
+
+def build_experiment(
+    experiment_id: str,
+    training_recordings: Sequence[Path],
+    held_out_reports: Sequence[Path],
+) -> dict[str, Any]:
+    if not experiment_id or not training_recordings or not held_out_reports:
+        raise ValueError(
+            "experiment, training recordings, and held-out reports are required"
+        )
+    training = tuple(
+        DomainRecording.from_path(path, expected_split=DatasetSplit.TRAIN)
+        for path in training_recordings
+    )
+    evaluations = tuple(HeldOutEvaluation.from_path(path) for path in held_out_reports)
+    return build_experiment_from_evidence(experiment_id, training, evaluations)
+
+
+def summarize_experiment(
+    experiment_id: str,
+    training_recordings: Sequence[Path],
+    held_out_reports: Sequence[Path],
+    output: Path,
+) -> dict[str, Any]:
+    summary = build_experiment(
+        experiment_id,
+        training_recordings,
+        held_out_reports,
+    )
+    write_json_atomic(output.resolve(), summary)
     return summary
 
 

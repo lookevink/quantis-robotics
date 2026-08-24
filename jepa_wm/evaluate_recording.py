@@ -33,6 +33,7 @@ from jepa_wm.trajectory import (
     RolloutWindow,
     load_rollouts,
 )
+from jepa_wm.training_artifact import artifact_fingerprint
 
 
 @dataclass(frozen=True)
@@ -145,6 +146,9 @@ def evaluate_recording(
         "model": MODEL_ID,
         "source_revision": os.environ.get("JEPA_WM_REVISION", "unknown"),
         "adapter": str(adapter.resolve()) if adapter is not None else None,
+        "adapter_fingerprint": (
+            artifact_fingerprint(adapter) if adapter is not None else None
+        ),
         "recording": str(recording.resolve()),
         "camera": camera,
         "rollouts": len(rollouts),
@@ -168,7 +172,15 @@ def evaluate_recording(
     }
     output_dir = recording.resolve() / "jepa_wm"
     output_dir.mkdir(parents=True, exist_ok=True)
-    report_camera = f"{camera}_adapted" if adapter is not None else camera
+    report_camera = (
+        (
+            f"{camera}_adapted"
+            if adapter.stem == f"quantis_isaac_{camera}_action_adapter"
+            else f"{camera}_{adapter.stem}"
+        )
+        if adapter is not None
+        else camera
+    )
     output_path = output_dir / window.report_name(report_camera)
     report["output_path"] = str(output_path)
     output_path.write_text(json.dumps(report, indent=2) + "\n")

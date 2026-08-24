@@ -435,14 +435,15 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     bound that contract but did not retain sub-limit transient force maxima;
     v8 does, while v9 additionally rejects non-finite/negative sensor values
     before aggregation.
-19. [ ] Collect the contact-aware insertion corpus. Record at least 12 unique
-    TRAIN seeds and two disjoint HELD_OUT seeds under the exact v9 contract,
-    then train/evaluate insertion-conditioned proposal and world-model
-    artifacts. The resumable `ops/jepa_wm_insertion_corpus.sh` workflow owns
+19. [ ] Complete insertion-domain JEPA-WM readiness. The exact contact-aware
+    corpus now contains 12 unique TRAIN seeds and two disjoint HELD_OUT seeds
+    under the v9 contract. Proposal fingerprint `ea7ce27c...ea255` passed all
+    176 held-out post-attachment rollouts with `0.998534` mean active cosine
+    and `4.41223e-8` sequence MSE. The resumable
+    `ops/jepa_wm_insertion_corpus.sh` workflow owns
     the split/seed roster, strict per-recording validation, and exit backup. No
-    current insertion artifact grants JEPA control or filming. The offline
-    proposal boundary is now prepared: `ops/jepa_wm_insertion_milestone.sh`
-    reuses that corpus, trains contexts 21–108 after fixed-joint acquisition,
-    evaluates both whole held-out seeds, preserves a negative readiness result,
-    and recovery-backs up on every exit. Corpus collection is still in progress;
-    the readiness gate has not run yet.
+    current insertion artifact grants JEPA control or filming. The remaining
+    gate is `ops/jepa_wm_insertion_wm_milestone.sh`: adapt JEPA-WM on the same
+    exact contexts 21–108, then require recorded insertion actions to beat zero
+    action on both whole held-out seeds and in aggregate. Preserve any negative
+    result and recovery-back up before considering live insertion.
