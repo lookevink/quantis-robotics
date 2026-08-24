@@ -218,6 +218,7 @@ evaluate_recording() {
   local transition_count="$4"
   local transition_stride="$5"
   local adapter_mode="${6:-base}"
+  local minimum_action_norm="${7:-}"
   is_safe_identifier "${recording_name}" \
     || die "invalid recording name"
   is_safe_identifier "${camera_name}" \
@@ -225,6 +226,10 @@ evaluate_recording() {
   require_nonnegative_integer "start index" "${start_index}" || exit 1
   require_positive_integer "transition count" "${transition_count}" || exit 1
   require_positive_integer "transition stride" "${transition_stride}" || exit 1
+  if [[ -n "${minimum_action_norm}" ]]; then
+    require_nonnegative_number "minimum action norm" "${minimum_action_norm}" \
+      || exit 1
+  fi
   local recording="${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}"
   [[ -f "${recording}/manifest.json" ]] \
     || die "recording does not exist: ${recording_name}"
@@ -241,6 +246,9 @@ evaluate_recording() {
     --count "${transition_count}"
     --stride "${transition_stride}"
   )
+  if [[ -n "${minimum_action_norm}" ]]; then
+    arguments+=(--minimum-action-norm "${minimum_action_norm}")
+  fi
   if [[ "${adapter_mode}" == "adapted" ]]; then
     local adapter="${checkpoint_dir}/quantis_isaac_${camera_name}_action_adapter.pth"
     [[ -s "${adapter}" ]] || die "action adapter is not installed for ${camera_name}"
@@ -329,7 +337,7 @@ evaluate_insertion_world_model() {
   evaluate_recording \
     "${options[recording]:-}" wrist \
     "${window_start}" "${window_count}" "${window_stride}" \
-    "${options[adapter]:-}"
+    "${options[adapter]:-}" 0
 }
 
 summarize_insertion_world_model() {
