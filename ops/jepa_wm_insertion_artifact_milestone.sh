@@ -28,7 +28,7 @@ configure_artifact() {
       include_seed=true
       ;;
     world_model)
-      default_steps=500
+      default_steps="$(insertion_epoch_steps)"
       artifact_label="Adapter"
       artifact_stem="insertion_adapter_s"
       training_command=jepa-wm-insertion-adapt

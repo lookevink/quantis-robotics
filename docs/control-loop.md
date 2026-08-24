@@ -442,8 +442,12 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     and `4.41223e-8` sequence MSE. The resumable
     `ops/jepa_wm_insertion_corpus.sh` workflow owns
     the split/seed roster, strict per-recording validation, and exit backup. No
-    current insertion artifact grants JEPA control or filming. The remaining
-    gate is `ops/jepa_wm_insertion_wm_milestone.sh`: adapt JEPA-WM on the same
-    exact contexts 21–108, then require recorded insertion actions to beat zero
-    action on both whole held-out seeds and in aggregate. Preserve any negative
-    result and recovery-back up before considering live insertion.
+    current insertion artifact grants JEPA control or filming. The first exact
+    adapter, fingerprint `4341ea85...be48`, completed 500 batch-one updates but
+    failed both held-out seeds: `-2.31725e-5`/`12.5%` and
+    `-4.12553e-5`/`47.7273%` mean improvement/win rate. Aggregate evidence was
+    `-3.22139e-5`/`30.1136%`; a TRAIN diagnostic also failed, while adaptation
+    still improved seed 12600 substantially over the base model. The result is
+    preserved and recovery-backed up. The next checkpoint must train with an
+    explicit seeded epoch schedule covering all 1,056 exact rollouts before
+    repeating the same two-seed gate.

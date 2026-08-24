@@ -43,6 +43,11 @@ require_nonnegative_number() {
   }
 }
 
+# The fixed insertion corpus has 12 TRAIN recordings with 88 rollouts each.
+insertion_epoch_steps() {
+  printf '1056\n'
+}
+
 cem_settings_requested() {
   [[ -n "$1$2$3$4" ]]
 }

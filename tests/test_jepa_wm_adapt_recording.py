@@ -16,6 +16,7 @@ if torch is not None:
     from jepa_wm.action import DroidAction
     from jepa_wm.adapt_recording import (
         ContrastiveTermConfig,
+        ShuffledEpochSampler,
         TRAINING_BOUNDS,
         mismatched_negative_candidates,
         validated_training_recordings,
@@ -27,6 +28,27 @@ if torch is not None:
 
 @unittest.skipIf(torch is None, "PyTorch is not installed in the local test runtime")
 class MismatchedNegativeCandidatesTest(unittest.TestCase):
+    def test_shuffled_epoch_sampler_covers_every_rollout_before_reuse(self) -> None:
+        first = ShuffledEpochSampler(5, 1, 17)
+        second = ShuffledEpochSampler(5, 1, 17)
+
+        first_epoch = [int(first.next_indices().item()) for _ in range(5)]
+        replay = [int(second.next_indices().item()) for _ in range(5)]
+
+        self.assertEqual(set(first_epoch), set(range(5)))
+        self.assertEqual(replay, first_epoch)
+        self.assertEqual(
+            first.to_dict(),
+            {
+                "strategy": "seeded_shuffled_epochs",
+                "rollouts_per_epoch": 5,
+                "batch_size": 1,
+                "seed": 17,
+                "samples_drawn": 5,
+                "complete_epochs": 1,
+            },
+        )
+
     @staticmethod
     def _rollout(context_index: int, translation: float):
         action = DroidAction((translation, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))

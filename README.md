@@ -750,7 +750,7 @@ sequence MSE was `4.41223e-8`. The exact roster and training-selection
 fingerprint are persisted in the readiness artifact. This remains imitation
 evidence; it does not show that JEPA-WM ranks the insertion actions correctly.
 
-The next checkpoint adapts JEPA-WM on the same contexts `21–108`, evaluates
+The first checkpoint adapted JEPA-WM on the same contexts `21–108`, evaluated
 recorded insertion actions against zero action on both whole held-out seeds,
 and requires every seed plus the aggregate energy gate to pass:
 
@@ -759,10 +759,31 @@ and requires every seed plus the aggregate energy gate to pass:
   500 2600 contact-insertion-v9-2600
 ```
 
-The adapter checkpoint, sidecar, held-out reports, and final readiness artifact
-bind the exact roster, context selection, and adapter SHA-256. A failed energy
-gate is preserved as negative evidence. Neither the proposal pass nor a future
-energy pass alone authorizes live insertion or filming.
+Adapter fingerprint
+`4341ea852c5db41b87522b1cb965f17571d8c06f0b81e2ca2cb9e029d457be48`
+completed 500 batch-one updates, but failed the strict gate on August 24, 2026.
+Seed `12600` produced `-2.31725e-5` mean improvement and `12.5%` recorded-action
+wins; seed `12601` produced `-4.12553e-5` and `47.7273%`. Across all 176
+rollouts the result was `-3.22139e-5` and `30.1136%`, versus the required
+positive mean and `75%` wins. A TRAIN-seed diagnostic also failed
+(`-7.37809e-5`/`4.54545%`), identifying underfitting rather than only a
+held-out generalization failure. The base model on seed `12600` was much worse
+at `-6.45639e-4`/`2.27273%`, so the adapter learned useful domain structure but
+did not learn a valid insertion energy. The 500 with-replacement updates also
+covered fewer samples than the 1,056-rollout corpus contains. The next adapter
+uses a seeded shuffled epoch schedule so complete corpus coverage is explicit.
+
+The adapter checkpoint, sidecar, held-out reports, and failed readiness
+artifact bind the exact roster, context selection, and adapter SHA-256 and are
+recovery-backed up. Neither the proposal pass nor a future energy pass alone
+authorizes live insertion or filming.
+
+The next exact run uses one seeded shuffled pass over all 1,056 rollouts:
+
+```bash
+./ops/jepa_wm_insertion_wm_milestone.sh \
+  1056 2600 contact-insertion-v9-2600
+```
 
 The first grasp-domain JEPA-WM action adapter used all 1,980 bounded rollouts
 from the 20 training recordings. In a fixed eight-context CEM diagnostic it

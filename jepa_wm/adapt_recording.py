@@ -93,6 +93,49 @@ class AdaptationConfig:
         }
 
 
+class ShuffledEpochSampler:
+    """Deterministic without-replacement rollout coverage across epochs."""
+
+    def __init__(self, rollout_count: int, batch_size: int, seed: int) -> None:
+        if rollout_count <= 0 or batch_size <= 0:
+            raise ValueError("rollout count and sampling batch size must be positive")
+        self.rollout_count = rollout_count
+        self.batch_size = batch_size
+        self.seed = seed
+        self.samples_drawn = 0
+        self._generator = torch.Generator(device="cpu").manual_seed(seed)
+        self._order = torch.randperm(rollout_count, generator=self._generator)
+        self._cursor = 0
+
+    def next_indices(self) -> torch.Tensor:
+        chunks = []
+        remaining = self.batch_size
+        while remaining:
+            available = self.rollout_count - self._cursor
+            take = min(remaining, available)
+            chunks.append(self._order[self._cursor : self._cursor + take])
+            self._cursor += take
+            remaining -= take
+            if self._cursor == self.rollout_count:
+                self._order = torch.randperm(
+                    self.rollout_count,
+                    generator=self._generator,
+                )
+                self._cursor = 0
+        self.samples_drawn += self.batch_size
+        return torch.cat(chunks)
+
+    def to_dict(self) -> dict[str, int | str]:
+        return {
+            "strategy": "seeded_shuffled_epochs",
+            "rollouts_per_epoch": self.rollout_count,
+            "batch_size": self.batch_size,
+            "seed": self.seed,
+            "samples_drawn": self.samples_drawn,
+            "complete_epochs": self.samples_drawn // self.rollout_count,
+        }
+
+
 def validated_training_recordings(
     recordings: Sequence[Path],
 ) -> tuple[DomainRecording, ...]:
@@ -201,24 +244,25 @@ def adapt_recordings(
     negative_candidates = mismatched_negative_candidates(rollouts)
 
     optimizer = torch.optim.AdamW(adapter_parameters, lr=config.learning_rate)
-    generator = torch.Generator(device="cpu").manual_seed(config.seed)
+    sampler = ShuffledEpochSampler(
+        len(rollouts),
+        config.batch_size,
+        config.seed,
+    )
+    mismatch_generator = torch.Generator(device="cpu").manual_seed(config.seed + 1)
     candidate_generator = torch.Generator(device=device).manual_seed(config.seed)
     losses = []
     training_started = monotonic()
     model.eval()
     for _ in range(config.steps):
-        indices = torch.randint(
-            len(rollouts),
-            (config.batch_size,),
-            generator=generator,
-        )
+        indices = sampler.next_indices()
         context = context_latents[indices].to(device)
         target = target_latents[indices].to(device)
         action_batch = actions[:, indices].to(device)
         negative_indices = _sample_mismatched_indices(
             negative_candidates,
             indices,
-            generator,
+            mismatch_generator,
         )
         mismatched_negative_batch = actions[:, negative_indices].to(device)
         local_candidates = sample_local_candidates(
@@ -284,6 +328,7 @@ def adapt_recordings(
         "adapter_fingerprint": artifact_fingerprint(output),
         "metadata": metadata.to_dict(),
         "config": config.to_dict(),
+        "sampling": sampler.to_dict(),
         **selection_payload,
         "training_selection_fingerprint": selection_fingerprint,
         "trainable_parameters": sum(

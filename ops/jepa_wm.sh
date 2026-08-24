@@ -323,7 +323,8 @@ adapt_insertion_world_model() {
   read -r window_start window_count window_stride \
     <<<"$(task_proposal_window insertion)"
   adapt_recording_set \
-    "${options[recordings]:-}" wrist "${options[steps]:-500}" \
+    "${options[recordings]:-}" wrist \
+    "${options[steps]:-$(insertion_epoch_steps)}" \
     "${options[adapter]:-}" \
     "${window_start}" "${window_count}" "${window_stride}" 1
 }

@@ -676,7 +676,7 @@ case "${command}" in
     ;;
   jepa-wm-insertion-adapt)
     recording_names="${2:-}"
-    training_steps="${3:-500}"
+    training_steps="${3:-$(insertion_epoch_steps)}"
     adapter_name="${4:-}"
     is_safe_identifier_list "${recording_names}" \
       || die "invalid training recording list"
