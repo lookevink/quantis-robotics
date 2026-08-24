@@ -16,18 +16,22 @@ from jepa_wm.rollout_scoring import score_actions
 @dataclass(frozen=True)
 class CandidateMiningConfig:
     candidates_per_rollout: int = 4
+    scoring_batch_size: int = 2
     noise_scale: float = 0.25
     bounds: PlannerActionBounds = PlannerActionBounds()
 
     def __post_init__(self) -> None:
         if self.candidates_per_rollout < 2:
             raise ValueError("candidate mining requires at least two candidates")
+        if self.scoring_batch_size <= 0:
+            raise ValueError("candidate scoring batch size must be positive")
         if not isfinite(self.noise_scale) or self.noise_scale <= 0.0:
             raise ValueError("candidate mining noise scale must be positive")
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "candidates_per_rollout": self.candidates_per_rollout,
+            "scoring_batch_size": self.scoring_batch_size,
             "noise_scale": self.noise_scale,
             "bounds": self.bounds.to_dict(),
         }
@@ -36,6 +40,7 @@ class CandidateMiningConfig:
     def from_dict(cls, payload: Mapping[str, Any]) -> CandidateMiningConfig:
         return cls(
             candidates_per_rollout=int(payload["candidates_per_rollout"]),
+            scoring_batch_size=int(payload.get("scoring_batch_size", 2)),
             noise_scale=float(payload["noise_scale"]),
             bounds=PlannerActionBounds.from_dict(payload["bounds"]),
         )
@@ -71,6 +76,8 @@ def mine_lowest_energy_candidates(
     context: torch.Tensor,
     target: torch.Tensor,
     candidates: torch.Tensor,
+    *,
+    scoring_batch_size: int,
 ) -> torch.Tensor:
     """Select the current model's most deceptive candidate for each rollout."""
 
@@ -81,14 +88,22 @@ def mine_lowest_energy_candidates(
     horizon, batch, candidate_count, _ = candidates.shape
     if context.shape[0] != batch or target.shape[0] != batch:
         raise ValueError("candidate batch does not match context and target batches")
+    if scoring_batch_size <= 0:
+        raise ValueError("candidate scoring batch size must be positive")
     flattened = candidates.reshape(horizon, batch * candidate_count, ACTION_DIMENSIONS)
+    repeated_context = context.repeat_interleave(candidate_count, dim=0)
+    repeated_target = target.repeat_interleave(candidate_count, dim=0)
     with torch.no_grad():
-        energies = score_actions(
-            model,
-            context.repeat_interleave(candidate_count, dim=0),
-            target.repeat_interleave(candidate_count, dim=0),
-            flattened,
-        ).reshape(batch, candidate_count)
+        energy_chunks = tuple(
+            score_actions(
+                model,
+                repeated_context[start : start + scoring_batch_size],
+                repeated_target[start : start + scoring_batch_size],
+                flattened[:, start : start + scoring_batch_size],
+            )
+            for start in range(0, batch * candidate_count, scoring_batch_size)
+        )
+        energies = torch.cat(energy_chunks).reshape(batch, candidate_count)
         selected_indices = energies.argmin(dim=1)
     by_rollout = candidates.permute(1, 2, 0, 3)
     selected = by_rollout[

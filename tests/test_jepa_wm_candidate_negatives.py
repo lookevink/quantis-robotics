@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 try:
     import torch
@@ -54,7 +55,11 @@ class CandidateNegativesTest(unittest.TestCase):
         target = torch.zeros((2, 1, 7))
 
         selected = mine_lowest_energy_candidates(
-            _CandidateEnergyModel(), context, target, candidates
+            _CandidateEnergyModel(),
+            context,
+            target,
+            candidates,
+            scoring_batch_size=2,
         )
 
         self.assertEqual(selected.shape, (1, 2, 7))
@@ -63,6 +68,8 @@ class CandidateNegativesTest(unittest.TestCase):
     def test_rejects_invalid_candidate_configuration(self) -> None:
         with self.assertRaises(ValueError):
             CandidateMiningConfig(candidates_per_rollout=1)
+        with self.assertRaises(ValueError):
+            CandidateMiningConfig(scoring_batch_size=0)
         with self.assertRaises(ValueError):
             CandidateMiningConfig(noise_scale=0.0)
 
@@ -108,6 +115,30 @@ class CandidateNegativesTest(unittest.TestCase):
 
         self.assertEqual(restored, config)
         torch.testing.assert_close(replay, original)
+
+    def test_candidate_scoring_is_micro_batched_without_changing_selection(self) -> None:
+        candidates = torch.zeros((1, 2, 4, 7))
+        candidates[0, 0, :, 0] = torch.tensor((0.4, 0.1, 0.3, 0.2))
+        candidates[0, 1, :, 0] = torch.tensor((-0.4, -0.2, -0.1, -0.3))
+        context = torch.zeros((2, 1, 7))
+        target = torch.zeros((2, 1, 7))
+        batch_sizes = []
+
+        def energy(_model, _context, _target, actions):
+            batch_sizes.append(actions.shape[1])
+            return actions.square().sum(dim=(0, 2))
+
+        with patch("jepa_wm.candidate_negatives.score_actions", side_effect=energy):
+            selected = mine_lowest_energy_candidates(
+                object(),
+                context,
+                target,
+                candidates,
+                scoring_batch_size=2,
+            )
+
+        self.assertEqual(batch_sizes, [2, 2, 2, 2])
+        torch.testing.assert_close(selected[0, :, 0], torch.tensor((0.1, -0.1)))
 
 
 if __name__ == "__main__":

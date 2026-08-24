@@ -231,6 +231,7 @@ def adapt_recordings(
             context,
             target,
             local_candidates,
+            scoring_batch_size=config.candidate_mining.scoring_batch_size,
         )
         energies = score_recorded_against_mismatched(
             model,

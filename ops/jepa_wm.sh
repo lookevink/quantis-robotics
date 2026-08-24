@@ -262,10 +262,12 @@ adapt_recording_set() {
   local start_index="${5:-}"
   local rollout_count="${6:-}"
   local rollout_stride="${7:-}"
+  local training_batch_size="${8:-2}"
   is_safe_identifier_list "${recording_list}" || die "invalid recording list"
   is_safe_identifier "${camera_name}" || die "invalid camera name"
   is_safe_identifier "${adapter_name}" || die "invalid adapter name"
   require_positive_integer "training steps" "${training_steps}" || exit 1
+  require_positive_integer "training batch size" "${training_batch_size}" || exit 1
   local -a window_arguments=()
   if [[ -n "${start_index}${rollout_count}${rollout_stride}" ]]; then
     require_nonnegative_integer "start index" "${start_index}" || exit 1
@@ -302,6 +304,7 @@ adapt_recording_set() {
     --output "${adapter}" \
     --camera "${camera_name}" \
     --steps "${training_steps}" \
+    --batch-size "${training_batch_size}" \
     "${window_arguments[@]}"
 }
 
@@ -314,7 +317,7 @@ adapt_insertion_world_model() {
   adapt_recording_set \
     "${options[recordings]:-}" wrist "${options[steps]:-500}" \
     "${options[adapter]:-}" \
-    "${window_start}" "${window_count}" "${window_stride}"
+    "${window_start}" "${window_count}" "${window_stride}" 1
 }
 
 evaluate_insertion_world_model() {
