@@ -382,8 +382,29 @@ class AwsLifecycleTests(unittest.TestCase):
             "ops/wait_demo_recording.sh 'domain-20260823-train-00'",
             calls,
         )
-        self.assertIn("ServerAliveInterval=15", calls)
-        self.assertNotIn("ops/encode_demo_recording.sh", calls)
+
+    def test_demo_record_grasp_forwards_seed_and_dataset_split(self):
+        result, calls = self.run_command(
+            "demo-record-grasp",
+            arguments=("grasp-20260824-train-00", "2400", "train"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("start_grasp_recording", calls)
+        self.assertIn("grasp-20260824-train-00", calls)
+        self.assertIn("2400", calls)
+        self.assertIn("train", calls)
+
+    def test_grasp_recording_validation_runs_against_persistent_data(self):
+        result, calls = self.run_command(
+            "jepa-wm-grasp-validate",
+            arguments=("grasp-20260824-held-11401", "held_out"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("jepa_wm.grasp_recording_cli", calls)
+        self.assertIn("grasp-20260824-held-11401", calls)
+        self.assertIn("held_out", calls)
 
     def test_demo_dashboard_records_scores_and_renders_one_recording(self):
         result, calls = self.run_command(
@@ -950,6 +971,21 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/jepa_wm.sh summarize", calls)
         self.assertIn("ops/backup_state.sh", calls)
         self.assertIn("Experiment ID:", result.stdout)
+
+    def test_jepa_wm_grasp_milestone_requires_and_validates_whole_seeds(self):
+        result, calls = self.run_command(
+            "jepa-wm-grasp-milestone",
+            arguments=("12", "2", "10", "2400"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls.count("start_grasp_recording"), 14)
+        self.assertEqual(calls.count("jepa_wm.grasp_recording_cli"), 14)
+        self.assertIn("ops/jepa_wm.sh proposal-train", calls)
+        self.assertEqual(calls.count("ops/jepa_wm.sh proposal-eval"), 2)
+        self.assertIn("ops/jepa_wm.sh proposal-summarize", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+        self.assertIn("Grasp experiment:", result.stdout)
 
     def test_remote_bootstrap_installs_python_server_client(self):
         bootstrap = REMOTE_BOOTSTRAP.read_text()

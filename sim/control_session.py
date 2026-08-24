@@ -130,12 +130,21 @@ class PostActionEvidence:
     contact_force_newtons: float
     collision_detected: bool
     frame: dict[str, Any]
+    plug_position: tuple[float, ...] | None = None
+    plug_attached: bool = False
 
     def __post_init__(self) -> None:
         if len(self.joint_positions) != 7 or not all(
             isfinite(value) for value in self.joint_positions
         ):
             raise ValueError("post-action joint evidence must be seven-dimensional")
+        if self.plug_position is not None and (
+            len(self.plug_position) != 3
+            or not all(isfinite(value) for value in self.plug_position)
+        ):
+            raise ValueError("post-action plug position must be three-dimensional")
+        if not isinstance(self.plug_attached, bool):
+            raise ValueError("post-action plug attachment evidence must be boolean")
         scalars = (
             self.maximum_joint_tracking_error_rad,
             self.contact_force_newtons,
@@ -155,6 +164,10 @@ class PostActionEvidence:
             "post_action_contact_force_newtons": self.contact_force_newtons,
             "post_action_collision_detected": self.collision_detected,
             "post_action_frame": self.frame,
+            "post_action_plug_position": (
+                list(self.plug_position) if self.plug_position is not None else None
+            ),
+            "post_action_plug_attached": self.plug_attached,
         }
 
     @classmethod
@@ -182,6 +195,12 @@ class PostActionEvidence:
                 ),
                 collision_detected=payload["post_action_collision_detected"],
                 frame=frame,
+                plug_position=(
+                    tuple(float(value) for value in payload["post_action_plug_position"])
+                    if payload.get("post_action_plug_position") is not None
+                    else None
+                ),
+                plug_attached=payload.get("post_action_plug_attached", False),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("post-action evidence is incomplete") from error

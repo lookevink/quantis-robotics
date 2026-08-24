@@ -18,6 +18,11 @@ from jepa_wm.control_tracking import (
     tracking_limits_for_policy,
 )
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
+from jepa_wm.grasp_task import (
+    GraspTaskStep,
+    ReachAndGraspDecision,
+    evaluate_reach_and_grasp,
+)
 from jepa_wm.control_safety import SimulatorSafetyLimits
 from jepa_wm.shadow_planning import ShadowSearchEvidence
 from sim.control_session import (
@@ -300,6 +305,17 @@ class ControlStepSummary:
                 if self.result.post_action is not None
                 else None
             ),
+            "plug_position": (
+                list(self.result.post_action.plug_position)
+                if self.result.post_action is not None
+                and self.result.post_action.plug_position is not None
+                else None
+            ),
+            "plug_attached": (
+                self.result.post_action.plug_attached
+                if self.result.post_action is not None
+                else None
+            ),
             "shadow_search": self.shadow.to_dict() if self.shadow is not None else None,
             "shadow_safety": (
                 self.shadow_safety.to_dict()
@@ -489,6 +505,24 @@ class ControlRolloutReport:
             raise AssertionError("validated applied step has no post-action pose")
         return PoseError.between(final_pose, self.target_pose)
 
+    @property
+    def reach_and_grasp(self) -> ReachAndGraspDecision | None:
+        evidence = []
+        for step in self.complete_steps:
+            post_action = step.result.post_action
+            if post_action is None or post_action.plug_position is None:
+                return None
+            evidence.append(
+                GraspTaskStep(
+                    tuple(post_action.plug_position),
+                    post_action.plug_attached,
+                    post_action.tracking.passed,
+                    post_action.collision_detected,
+                    post_action.contact_force_newtons,
+                )
+            )
+        return evaluate_reach_and_grasp(tuple(evidence)) if evidence else None
+
     def to_dict(self) -> dict[str, Any]:
         initial = self.initial_goal_error
         final = self.final_goal_error
@@ -500,6 +534,7 @@ class ControlRolloutReport:
             if step.shadow_safety is not None
         ]
         applied_count = len(self.applied_steps)
+        grasp = self.reach_and_grasp
         return {
             "schema": ROLLOUT_SCHEMA,
             "rollout_id": self.rollout_id,
@@ -568,6 +603,7 @@ class ControlRolloutReport:
                 if initial and final
                 else None
             ),
+            "reach_and_grasp": grasp.to_dict() if grasp is not None else None,
             "steps": [step.to_dict() for step in self.steps],
         }
 

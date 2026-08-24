@@ -36,7 +36,8 @@ from sim.isaac_control_runtime import (
     read_contact,
 )
 from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, capture_camera_frame
-from sim.isaac_demo_kinematics import SolvedPose, solve_droid_pose
+from sim.grasp_task import evaluate_grasp_acquisition
+from sim.isaac_demo_kinematics import SolvedPose, solve_droid_pose, solve_waypoints
 from sim.isaac_demo_runtime import (
     JointCommand,
     create_actuators,
@@ -44,7 +45,7 @@ from sim.isaac_demo_runtime import (
     prepare_plug,
     recording_snapshot,
 )
-from sim.isaac_demo_scene import ROBOT_PATH
+from sim.isaac_demo_scene import ROBOT_PATH, world_pose
 from sim.recording import RecordingLabel, RecordingMoment
 
 
@@ -300,6 +301,25 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                 joint_tracking_error = float(
                     np.max(np.abs(actual.arm_positions - solved.arm_positions))
                 )
+                acquisition = evaluate_grasp_acquisition(
+                    world_pose(attachment.hand_prim)[0],
+                    solve_waypoints()[2].hand_position,
+                    actual.gripper_width_m,
+                )
+                if (
+                    acquisition.passed
+                    and joint_tracking_error <= 0.01
+                    and tracking.passed
+                    and not post_collision
+                    and post_force <= limits.maximum_contact_force_newtons
+                ):
+                    attachment.attach(world_pose(attachment.hand_prim)[0])
+                    post_snapshot = recording_snapshot(
+                        RecordingLabel(RecordingMoment.ATTACHED, Phase.GRASP),
+                        ObservationStage.CABLE_GRASPED,
+                        actual,
+                        attachment,
+                    )
                 post_action = PostActionEvidence(
                     proposal.first_action,
                     candidate.first_action,
@@ -311,6 +331,8 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     post_force,
                     post_collision,
                     capture,
+                    tuple(float(value) for value in post_snapshot.plug_position),
+                    post_snapshot.plug_attached,
                 )
                 status = ControlResultStatus.APPLIED
             except Exception as error:

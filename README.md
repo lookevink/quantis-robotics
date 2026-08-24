@@ -425,6 +425,39 @@ The aggregate experiment report and held-out evidence are available at:
 /home/ubuntu/docker/isaac-sim/data/quantis/recordings/domain-20260823T113209Z-1400-held-01/jepa_wm/wrist_adapted_rollout_eval_000000_040.json
 ```
 
+### Reach-and-grasp data checkpoint
+
+The next dataset adds a scripted, labeled task tail after the same seeded
+exploration prefix: approach, close at the connector, an explicit rigid-body
+attachment transition, a 10 cm retained retreat, and a hold. Record and
+validate one trajectory with:
+
+```bash
+./ops/aws.sh demo-record-grasp grasp-example 11401 held_out
+./ops/aws.sh jepa-wm-grasp-validate grasp-example held_out
+```
+
+The validator rejects wrong split/task provenance, incomplete or off-cadence
+telemetry, missing/lost attachment, and less than 2 cm of retained connector
+motion. The first AWS artifact, `grasp-20260824-held-11401-v1`, contains 102
+true-4-FPS frames, acquired the connector at frame 89, retained it for 13
+observations, and moved it `99.9997 mm` while attached.
+
+This artifact is a scripted training/evaluation demonstration, not evidence
+that JEPA completed the task. Build the required 12-training-seed/two-held-out
+proposal dataset and offline gate with:
+
+```bash
+./ops/aws.sh jepa-wm-grasp-milestone 12 2 3000 2400
+```
+
+Live control now persists connector position and attachment state after every
+action. It can only acquire the rigid connector when the hand is within 25 mm
+of the IK-defined grasp pose and the gripper width is at most 30 mm. Rollout
+task success additionally requires an unattached-to-attached transition,
+continuous retention over at least two observations, at least 20 mm of retained
+motion, passed tracking, no collision, and no force above 2 N.
+
 ### Inverse-action proposal milestone
 
 The repository now has a deterministic bounded CEM implementation, empirical

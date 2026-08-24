@@ -273,11 +273,13 @@ wait_recording_job() {
   die "recording job timed out: ${recording_id}"
 }
 
-record_exploration_job() {
+record_seeded_job() {
+  local starter="$1"
+  shift
   local recording_id="$1"
   local exploration_seed="$2"
   local dataset_split="$3"
-  demo_python "demo.start_exploration_recording('${recording_id}',${exploration_seed},'${dataset_split}')"
+  demo_python "demo.${starter}('${recording_id}',${exploration_seed},'${dataset_split}')"
   wait_recording_job "${recording_id}"
 }
 
@@ -296,11 +298,14 @@ Commands:
   demo-reset | demo-preflight | demo-run | demo-capture | demo-record
   demo-record-actions             Capture a short 4 FPS JEPA-WM trajectory
   demo-record-exploration RECORDING SEED train|held_out
+  demo-record-grasp RECORDING SEED train|held_out
+  jepa-wm-grasp-validate RECORDING train|held_out
   demo-dashboard REFERENCE [primary-camera] [jepa-camera]
   capture-smoke | jepa-embed [source-name] [camera]
   jepa-stage-embed [recording-name] [camera]
   jepa-stage-report REFERENCE QUERY [camera]
   jepa-wm-install | jepa-wm-smoke | jepa-wm-status
+  jepa-wm-grasp-milestone [training-count=12] [held-out-count=2] [steps=3000] [base-seed=2400]
   jepa-wm-eval RECORDING [camera] [start-index] [count] [stride]
   jepa-wm-adapt RECORDING [camera] [steps]
   jepa-wm-adapt-set RECORDING[,RECORDING...] [camera] [steps] [adapter-name]
@@ -415,8 +420,28 @@ case "${command}" in
     require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
     [[ "${dataset_split}" == "train" || "${dataset_split}" == "held_out" ]] \
       || die "dataset split must be train or held_out"
-    record_exploration_job \
+    record_seeded_job start_exploration_recording \
       "${recording_id}" "${exploration_seed}" "${dataset_split}"
+    ;;
+  demo-record-grasp)
+    recording_id="${2:-}"
+    exploration_seed="${3:-}"
+    dataset_split="${4:-}"
+    is_safe_identifier "${recording_id}" || die "invalid recording name"
+    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+    [[ "${dataset_split}" == "train" || "${dataset_split}" == "held_out" ]] \
+      || die "dataset split must be train or held_out"
+    record_seeded_job start_grasp_recording \
+      "${recording_id}" "${exploration_seed}" "${dataset_split}"
+    ;;
+  jepa-wm-grasp-validate)
+    recording_id="${2:-}"
+    dataset_split="${3:-}"
+    is_safe_identifier "${recording_id}" || die "invalid recording name"
+    [[ "${dataset_split}" == "train" || "${dataset_split}" == "held_out" ]] \
+      || die "dataset split must be train or held_out"
+    sync_repo
+    remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.grasp_recording_cli ~/docker/isaac-sim/data/quantis/recordings/'${recording_id}' '${dataset_split}'"
     ;;
   demo-dashboard)
     reference_name="${2:-}"
@@ -830,6 +855,10 @@ case "${command}" in
   jepa-wm-milestone)
     exec bash "${repo_root}/ops/jepa_wm_milestone.sh" \
       "${2:-4}" "${3:-2}" "${4:-500}" "${5:-1200}"
+    ;;
+  jepa-wm-grasp-milestone)
+    exec bash "${repo_root}/ops/jepa_wm_grasp_milestone.sh" \
+      "${2:-12}" "${3:-2}" "${4:-3000}" "${5:-2400}"
     ;;
   *)
     die "unknown command: ${command} (run $0 help)"

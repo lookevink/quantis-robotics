@@ -8,6 +8,7 @@ import numpy as np
 
 from jepa.contract import ObservationStage
 from jepa_wm.action import DROID_FPS
+from jepa_wm.grasp_contract import GRASP_TASK_ID
 from sim.demo_sequence import Phase
 from sim.exploration import (
     DatasetSplit,
@@ -23,13 +24,15 @@ from sim.isaac_demo_camera import (
 )
 from sim.isaac_demo_kinematics import solve_waypoints
 from sim.isaac_demo_runtime import (
+    Actuators,
     JointCommand,
+    PlugAttachment,
     create_actuators,
     move_joint_command,
     prepare_plug,
     recording_snapshot,
 )
-from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH, SOCKET_PATH
+from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH, SOCKET_PATH, world_pose
 from sim.recording import RecordingLabel, RecordingMoment
 
 
@@ -84,10 +87,105 @@ def _recording_label(outcome: SegmentOutcome) -> RecordingLabel:
     return RecordingLabel(moment, Phase.READY)
 
 
+async def _record_successful_grasp(
+    actuators: Actuators,
+    current: JointCommand,
+    attachment: PlugAttachment,
+    recorder: DemoRecorder,
+    sample_period_seconds: float,
+) -> tuple[JointCommand, tuple[float, ...]]:
+    """Record approach, acquisition, retained retreat, and hold."""
+
+    solved = solve_waypoints()
+    pre_grasp = JointCommand(
+        solved[1].arm_positions,
+        solved[1].waypoint.gripper_width_m,
+    )
+    grasp_open = JointCommand(
+        solved[2].arm_positions,
+        solved[1].waypoint.gripper_width_m,
+    )
+    grasp_closed = JointCommand(
+        solved[2].arm_positions,
+        solved[2].waypoint.gripper_width_m,
+    )
+    retained = JointCommand(
+        solved[1].arm_positions,
+        solved[2].waypoint.gripper_width_m,
+    )
+    sample_times = []
+    for command, frames, label in (
+        (
+            pre_grasp,
+            8,
+            RecordingLabel(RecordingMoment.MOTION, Phase.PRE_GRASP),
+        ),
+        (
+            grasp_open,
+            8,
+            RecordingLabel(RecordingMoment.MOTION, Phase.GRASP),
+        ),
+        (
+            grasp_closed,
+            4,
+            RecordingLabel(RecordingMoment.CLOSE, Phase.GRASP),
+        ),
+    ):
+        sample_times.extend(
+            await move_joint_command(
+                actuators,
+                current,
+                command,
+                attachment,
+                frame_count=frames,
+                phase=label,
+                stage=ObservationStage.APPROACHING_CABLE,
+                recorder=recorder,
+                sample_period_seconds=sample_period_seconds,
+            )
+        )
+        current = command
+    attachment.attach(world_pose(attachment.hand_prim)[0])
+    for command, frames, label in (
+        (
+            current,
+            1,
+            RecordingLabel(RecordingMoment.ATTACHED, Phase.GRASP),
+        ),
+        (
+            retained,
+            8,
+            RecordingLabel(RecordingMoment.MOTION, Phase.PRE_INSERTION),
+        ),
+        (
+            retained,
+            4,
+            RecordingLabel(RecordingMoment.SETTLE, Phase.PRE_INSERTION),
+        ),
+    ):
+        sample_times.extend(
+            await move_joint_command(
+                actuators,
+                current,
+                command,
+                attachment,
+                frame_count=frames,
+                phase=label,
+                stage=ObservationStage.CABLE_GRASPED,
+                recorder=recorder,
+                sample_period_seconds=sample_period_seconds,
+            )
+        )
+        current = command
+    return current, tuple(sample_times)
+
+
 async def record_exploration_trajectory(
     recording_id: str,
     seed: int,
     split: DatasetSplit,
+    *,
+    include_successful_grasp: bool = False,
 ) -> dict[str, Any]:
     """Capture a seeded, true-4-FPS wrist rollout for domain adaptation."""
 
@@ -104,12 +202,18 @@ async def record_exploration_trajectory(
     stage = omni.usd.get_context().get_stage()
     stage.SetEditTarget(stage.GetSessionLayer())
     apply_variant(stage, plan)
+    metadata = {
+        **plan.metadata(),
+        "task": (
+            GRASP_TASK_ID if include_successful_grasp else "domain_exploration"
+        ),
+    }
     recorder = DemoRecorder(
         recording_id,
         fps=DROID_FPS,
         minimum_stage_frames=0,
         camera_specs=JEPA_WM_CAMERA_SPECS,
-        metadata=plan.metadata(),
+        metadata=metadata,
     )
     timeline = omni.timeline.get_timeline_interface()
     original_rendering_dt = RenderingManager.get_dt()
@@ -169,6 +273,15 @@ async def record_exploration_trajectory(
                 )
             )
             current = command
+        if include_successful_grasp:
+            current, grasp_times = await _record_successful_grasp(
+                actuators,
+                current,
+                attachment,
+                recorder,
+                plan.sample_period_seconds,
+            )
+            sample_times.extend(grasp_times)
         validate_sample_times(tuple(sample_times), plan.sample_period_seconds)
         completed = True
     except Exception:
@@ -187,5 +300,20 @@ async def record_exploration_trajectory(
         "recording_id": recording_id,
         "output_directory": str(output_dir),
         "frames": recorder.frame_count,
-        "metadata": plan.metadata(),
+        "metadata": metadata,
     }
+
+
+async def record_grasp_trajectory(
+    recording_id: str,
+    seed: int,
+    split: DatasetSplit,
+) -> dict[str, Any]:
+    """Capture exploration plus a successful rigid-connector grasp and retention."""
+
+    return await record_exploration_trajectory(
+        recording_id,
+        seed,
+        split,
+        include_successful_grasp=True,
+    )
