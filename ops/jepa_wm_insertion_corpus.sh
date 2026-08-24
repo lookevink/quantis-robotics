@@ -78,9 +78,9 @@ capture_recording() {
     "${recording_id}" "${split}" "${seed}"
 }
 
-while IFS=$'\t' read -r recording_id seed split; do
+while IFS=$'\t' read -r -u 3 recording_id seed split; do
   capture_recording "${recording_id}" "${seed}" "${split}"
-done < <(
+done 3< <(
   python3 -m jepa_wm.insertion_corpus show \
     --roster "${roster_path}" --format tsv
 )

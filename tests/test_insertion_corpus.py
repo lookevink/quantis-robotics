@@ -57,6 +57,7 @@ class InsertionCorpusWorkflowTest(unittest.TestCase):
                 "#!/usr/bin/env bash\n"
                 "printf '%s\\n' \"$*\" >> \"${CORPUS_CALLS}\"\n"
                 "if [[ \"$1\" == jepa-wm-contact-insertion-status ]]; then printf 'valid\\n'; fi\n"
+                "cat >/dev/null\n"
             )
             fake.chmod(0o755)
             result = subprocess.run(
