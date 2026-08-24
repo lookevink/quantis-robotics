@@ -734,6 +734,27 @@ The reverse experiment fit calibration only on seed 11401 and evaluated seed
 scripted translation tolerance by about `0.057 mm`, so strict aggregate
 readiness and production authority remain false.
 
+The reciprocal seed-11400/11401 experiments are two-fold cross-validation, not
+a globally held-out readiness set: each evaluation seed appears in the other
+trial's calibration. The readiness command reloads every trial from raw
+sessions and rejects that global overlap:
+
+```bash
+./ops/aws.sh jepa-wm-control-candidate-summarize \
+  candidate-proof-20260823T232732Z-11401,candidate-proof-20260823T234655Z-11400 \
+  cross-seed-candidate-readiness-20260823-v1
+```
+
+The historical report below records the pre-gate cross-validation summary (two
+seeds and one strict pass), but is not held-out readiness evidence. A valid
+readiness artifact requires a calibration set disjoint from both 11400 and
+11401, two strict held-out passes, and still cannot itself grant production
+authority:
+
+```text
+/home/ubuntu/docker/isaac-sim/data/quantis/control_candidates/cross-seed-candidate-readiness-20260823-v1/readiness.json
+```
+
 Stop the worker independently with
 `./ops/aws.sh jepa-wm-control-worker-stop`.
 

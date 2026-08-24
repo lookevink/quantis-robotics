@@ -300,4 +300,8 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     gate with `1.531 mm` translation progress. Calibration on 11401 and
     evaluation on 11400 realized `2.188 mm` but missed scripted translation
     tolerance by `0.057 mm`. This is repeatable improvement, but not yet two
-    strict passes; production authority remains false.
+    strict passes; production authority remains false. These reciprocal trials
+    are two-fold cross-validation, not a globally held-out readiness set. The
+    readiness gate rejects any calibration seed appearing anywhere in the
+    evaluation-seed union; the next experiment must calibrate on training-only
+    seeds and then pass both 11400 and 11401.

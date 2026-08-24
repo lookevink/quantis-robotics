@@ -645,6 +645,33 @@ report_candidate_trial() {
     --output "${report_dir}/report.json"
 }
 
+summarize_candidate_trials() {
+  local -A options=()
+  parse_named_options options "experiments output" "$@"
+  local experiments="${options[experiments]:-}"
+  local output_name="${options[output]:-}"
+  is_safe_identifier_list "${experiments}" \
+    || die "invalid candidate readiness experiment list"
+  is_safe_identifier "${output_name}" \
+    || die "invalid candidate readiness output name"
+  local -a experiment_ids
+  local -a experiment_arguments=()
+  local experiment_id
+  IFS=',' read -r -a experiment_ids <<<"${experiments}"
+  for experiment_id in "${experiment_ids[@]}"; do
+    [[ -f "${control_frame_root}/control_candidates/${experiment_id}/report.json" ]] \
+      || die "candidate trial report does not exist: ${experiment_id}"
+    experiment_arguments+=(--experiment "${experiment_id}")
+  done
+  local report_dir="${control_frame_root}/control_candidates/${output_name}"
+  sudo install -d -o "${USER}" -g "${USER}" "${report_dir}"
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.candidate_readiness_cli \
+    --data-root "${control_frame_root}" \
+    "${experiment_arguments[@]}" \
+    --output "${report_dir}/readiness.json"
+}
+
 calibrate_control_objective() {
   local -A options=()
   parse_named_options options "sessions output" "$@"
@@ -970,6 +997,9 @@ case "${1:-}" in
   control-candidate-report)
     report_candidate_trial "${@:2}"
     ;;
+  control-candidate-summarize)
+    summarize_candidate_trials "${@:2}"
+    ;;
   control-objective-calibrate)
     calibrate_control_objective "${@:2}"
     ;;
@@ -990,6 +1020,6 @@ case "${1:-}" in
       "${2:-}" "${3:-}" "${4:-}" "${5:-wrist}" "${6:-40}"
     ;;
   *)
-    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, proposal-eval, proposal-summarize, control-worker-configure, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, control-candidate-report, control-objective-calibrate, or summarize"
+    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, proposal-train, proposal-eval, proposal-summarize, control-worker-configure, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, control-candidate-report, control-candidate-summarize, control-objective-calibrate, or summarize"
     ;;
 esac

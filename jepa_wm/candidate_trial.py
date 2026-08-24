@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,24 @@ from sim.recording import validate_recording_id
 
 
 CANDIDATE_TRIAL_REPORT_SCHEMA = "quantis.jepa_wm_candidate_trial.v1"
+
+
+@dataclass(frozen=True)
+class CandidateSeedProvenance:
+    seed: int
+    calibration_seeds: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if not self.calibration_seeds:
+            raise ValueError("candidate readiness requires calibration provenance")
+        if self.seed in self.calibration_seeds:
+            raise ValueError("candidate readiness detected calibration seed leakage")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "seed": self.seed,
+            "calibration_seeds": list(self.calibration_seeds),
+        }
 
 
 @dataclass(frozen=True)
@@ -127,6 +146,56 @@ class CandidateTrialReport:
             candidate_session_id,
             source_session_id,
             comparison,
+        )
+
+    @classmethod
+    def load_persisted(
+        cls,
+        data_root: Path,
+        experiment_id: str,
+    ) -> CandidateTrialReport:
+        validate_recording_id(experiment_id)
+        path = data_root / "control_candidates" / experiment_id / "report.json"
+        payload = json.loads(path.read_text())
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema") != CANDIDATE_TRIAL_REPORT_SCHEMA
+            or payload.get("experiment_id") != experiment_id
+        ):
+            raise ValueError("candidate trial report identity is invalid")
+        try:
+            report = cls.from_sessions(
+                data_root,
+                experiment_id,
+                str(payload["baseline_experiment_id"]),
+                str(payload["candidate_session_id"]),
+                str(payload["source_session_id"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("candidate trial report provenance is invalid") from error
+        if payload != report.to_dict():
+            raise ValueError("candidate trial report does not match raw sessions")
+        return report
+
+    def calibration_seed_provenance(
+        self,
+        data_root: Path,
+    ) -> CandidateSeedProvenance:
+        baseline = RealizedBaselineReport.load_persisted(
+            data_root, self.baseline_experiment_id
+        )
+        source = ControlSession.at(
+            data_root / "control_sessions", self.source_session_id
+        )
+        _, state = source.load_capture()
+        shadow = source.load_shadow()
+        if state.seed != baseline.seed:
+            raise ValueError("candidate trial seed provenance is inconsistent")
+        if shadow.task_progress is None:
+            raise ValueError("candidate trial requires calibrated shadow evidence")
+        return CandidateSeedProvenance(
+            state.seed,
+            tuple(sorted(set(shadow.task_progress.calibration.seeds))),
         )
 
     def to_dict(self) -> dict[str, Any]:

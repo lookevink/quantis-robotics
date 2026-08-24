@@ -317,6 +317,7 @@ Commands:
   jepa-wm-control-baselines EXPERIMENT DIRECT ZERO SCRIPTED REFERENCE SEED STEPS [direct-proposal] [direct-sessions]
   jepa-wm-control-calibration-collect CALIBRATION REFERENCE SEED TRIALS [artifacts]
   jepa-wm-control-candidate REFERENCE_RECORDING SEED SOURCE_SESSION BASELINE_EXPERIMENT
+  jepa-wm-control-candidate-summarize EXPERIMENT[,EXPERIMENT...] OUTPUT
   jepa-wm-objective-calibrate CALIBRATION SESSION[,SESSION...]
   jepa-wm-control-rollout-report ROLLOUT SESSION[,SESSION...] REQUESTED_STEPS REFERENCE SEED [proposal] [policy]
   jepa-wm-control-apply SESSION
@@ -739,6 +740,16 @@ case "${command}" in
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-candidate-report --experiment '${experiment_id}' --baseline-experiment '${baseline_experiment_id}' --candidate-session '${candidate_session_id}' --source-session '${source_session_id}'"
     printf 'Candidate session: %s\nCandidate experiment: %s\n' \
       "${candidate_session_id}" "${experiment_id}"
+    ;;
+  jepa-wm-control-candidate-summarize)
+    experiments="${2:-}"
+    output_name="${3:-}"
+    is_safe_identifier_list "${experiments}" \
+      || die "invalid candidate readiness experiment list"
+    is_safe_identifier "${output_name}" \
+      || die "invalid candidate readiness output name"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-candidate-summarize --experiments '${experiments}' --output '${output_name}'"
     ;;
   jepa-wm-control-rollout-report)
     rollout_id="${2:-}"

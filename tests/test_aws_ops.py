@@ -732,6 +732,17 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("all three progress margins", result.stderr)
         self.assertNotIn("control-worker-configure", calls)
 
+    def test_jepa_wm_candidate_readiness_forwards_trial_experiments(self):
+        result, calls = self.run_command(
+            "jepa-wm-control-candidate-summarize",
+            arguments=("candidate-a,candidate-b", "candidate-readiness-v1"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("control-candidate-summarize", calls)
+        self.assertIn("--experiments 'candidate-a,candidate-b'", calls)
+        self.assertIn("--output 'candidate-readiness-v1'", calls)
+
     def test_jepa_wm_control_step_keeps_inference_outside_isaac(self):
         result, calls = self.run_command(
             "jepa-wm-control-step",
