@@ -33,7 +33,11 @@ from jepa_wm.rollout_scoring import (
     score_recorded_against_mismatched,
 )
 from jepa_wm.trajectory import RecordedRollout, load_rollouts
-from jepa_wm.training_artifact import TrainingArtifactMetadata, training_report_path
+from jepa_wm.training_artifact import (
+    TrainingArtifactMetadata,
+    artifact_fingerprint,
+    training_report_path,
+)
 from sim.exploration import DatasetSplit
 
 
@@ -277,6 +281,7 @@ def adapt_recordings(
     report = {
         "status": "adapted",
         "adapter": str(output.resolve()),
+        "adapter_fingerprint": artifact_fingerprint(output),
         "metadata": metadata.to_dict(),
         "config": config.to_dict(),
         "rollouts": len(rollouts),

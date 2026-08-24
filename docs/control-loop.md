@@ -369,5 +369,8 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     aware online mining over four bounded local candidates moved the same
     diagnostic to `0.497` active cosine and `62.5%` gate. The unrefined proposal
     itself scores `0.703`/`75%` there, so the remaining planner failure is weak
-    proposal-centered regularization. This remains offline-only and has no live
-    or filming authority.
+    proposal-centered regularization. A split-validated TRAIN calibration chose
+    a `1e-2` proposal prior after it restored `0.986` cosine and `100%` passes;
+    one frozen held-out run then preserved the proposal at `0.703`/`75%`. This
+    removes CEM degradation but does not improve the proposal, so the checkpoint
+    remains offline-only with no live or filming authority.

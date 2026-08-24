@@ -11,6 +11,15 @@ from typing import Any
 from jepa_wm.contract import MODEL_ID
 
 
+def _validate_artifact_identity(path: Path, fingerprint: str) -> None:
+    if (
+        not path.is_absolute()
+        or len(fingerprint) != 64
+        or any(character not in "0123456789abcdef" for character in fingerprint)
+    ):
+        raise ValueError("training artifact identity is invalid")
+
+
 @dataclass(frozen=True)
 class ProposalConditioningCapabilities:
     proprioception: bool
@@ -46,26 +55,48 @@ class ProposalConditioningCapabilities:
 
 
 @dataclass(frozen=True)
-class ProposalArtifactIdentity:
+class ArtifactIdentity:
     path: Path
     fingerprint: str
 
     def __post_init__(self) -> None:
-        if (
-            not self.path.is_absolute()
-            or len(self.fingerprint) != 64
-            or any(
-                character not in "0123456789abcdef"
-                for character in self.fingerprint
-            )
-        ):
-            raise ValueError("proposal artifact identity is invalid")
+        _validate_artifact_identity(self.path, self.fingerprint)
 
     @classmethod
-    def from_artifact(cls, artifact: Path) -> ProposalArtifactIdentity:
+    def from_artifact(cls, artifact: Path) -> ArtifactIdentity:
         resolved = artifact.resolve()
         return cls(resolved, artifact_fingerprint(resolved))
 
+    def to_dict(self) -> dict[str, str]:
+        return {"path": str(self.path), "fingerprint": self.fingerprint}
+
+
+ProposalArtifactIdentity = ArtifactIdentity
+
+
+@dataclass(frozen=True)
+class TrainingArtifactIdentity(ArtifactIdentity):
+    metadata: TrainingArtifactMetadata
+
+    @classmethod
+    def from_artifact(
+        cls,
+        artifact: Path,
+        *,
+        fingerprint_field: str,
+    ) -> TrainingArtifactIdentity:
+        resolved = artifact.resolve()
+        payload = load_training_report(resolved)
+        actual_fingerprint = artifact_fingerprint(resolved)
+        if payload.get(fingerprint_field) != actual_fingerprint:
+            raise ValueError(
+                f"{fingerprint_field} does not match the training artifact"
+            )
+        return cls(
+            resolved,
+            actual_fingerprint,
+            TrainingArtifactMetadata.from_dict(payload.get("metadata")),
+        )
 
 @dataclass(frozen=True)
 class TrainingArtifactMetadata:
@@ -129,11 +160,16 @@ def artifact_fingerprint(artifact: Path) -> str:
     return digest.hexdigest()
 
 
-def load_training_report_metadata(artifact: Path) -> TrainingArtifactMetadata:
+def load_training_report(artifact: Path) -> dict[str, Any]:
     report = training_report_path(artifact)
     if not report.is_file():
         raise ValueError(f"training report does not exist: {report}")
     payload = json.loads(report.read_text())
     if not isinstance(payload, dict):
         raise ValueError(f"training report must be an object: {report}")
+    return payload
+
+
+def load_training_report_metadata(artifact: Path) -> TrainingArtifactMetadata:
+    payload = load_training_report(artifact)
     return TrainingArtifactMetadata.from_dict(payload.get("metadata"))

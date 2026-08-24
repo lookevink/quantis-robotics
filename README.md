@@ -533,6 +533,16 @@ those contexts, showing that weak proposal-centered regularization still lets
 CEM trade away action agreement for small latent-energy gains. No live or
 filming authority is granted.
 
+Proposal-prior calibration is split-safe and explicit. Planner calibration
+accepts only a TRAIN recording that belongs to both the adapter and proposal;
+normal evaluation accepts only HELD_OUT recordings absent from both training
+sets. On TRAIN seed 2400, a `1e-3` prior reached `0.842`/`87.5%`, while `1e-2`
+restored the proposal's `0.986`/`100%`, so `1e-2` was frozen before one held-out
+run. On held-out seed 12400 it preserved the proposal exactly at
+`0.703`/`75%`, improving over candidate-aware CEM's `0.497`/`62.5%` but not over
+the proposal itself. This fixes planner degradation; it does not make the
+current proposal demo-worthy or grant live/filming authority.
+
 ### Inverse-action proposal milestone
 
 The repository now has a deterministic bounded CEM implementation, empirical

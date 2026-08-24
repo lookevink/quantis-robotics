@@ -11,10 +11,12 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from jepa_wm.action import DroidAction
+from jepa_wm.action import ActionSelectionBounds, DroidAction
+from jepa_wm.domain_recording import DomainRecording
 from jepa_wm.planner import CEMConfig, PlannerActionBounds
 from jepa_wm.planner_readiness import FirstActionDecision, evaluate_first_actions
 from jepa_wm.trajectory import RolloutWindow
+from jepa_wm.training_artifact import ArtifactIdentity, TrainingArtifactIdentity
 
 
 REPORT_SCHEMA = "quantis.jepa_wm_planner_benchmark.v1"
@@ -138,25 +140,43 @@ def _win_rate(evaluations: Sequence[PlannerRolloutEvaluation], name: str) -> flo
 class PlannerBenchmarkProvenance:
     model: str
     source_revision: str
-    adapter: Path
-    proposal: Path | None
-    recording: Path
+    adapter: TrainingArtifactIdentity
+    proposal: TrainingArtifactIdentity | None
+    base_checkpoint: ArtifactIdentity
+    recording: DomainRecording
     camera: str
     window: RolloutWindow
+    selection_bounds: ActionSelectionBounds
+    scoring_batch_size: int
 
     def __post_init__(self) -> None:
-        if not self.model or not self.source_revision or not self.camera:
+        if (
+            not self.model
+            or not self.source_revision
+            or not self.camera
+            or self.scoring_batch_size <= 0
+        ):
             raise ValueError("planner benchmark provenance is incomplete")
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "model": self.model,
             "source_revision": self.source_revision,
-            "adapter": str(self.adapter.resolve()),
-            "proposal": str(self.proposal.resolve()) if self.proposal else None,
-            "recording": str(self.recording.resolve()),
+            "adapter": str(self.adapter.path),
+            "adapter_fingerprint": self.adapter.fingerprint,
+            "proposal": str(self.proposal.path) if self.proposal else None,
+            "proposal_fingerprint": (
+                self.proposal.fingerprint if self.proposal else None
+            ),
+            "base_checkpoint": str(self.base_checkpoint.path),
+            "base_checkpoint_fingerprint": self.base_checkpoint.fingerprint,
+            "recording": str(self.recording.path),
+            "recording_split": self.recording.split.value,
+            "recording_seed": self.recording.seed,
             "camera": self.camera,
             "window": self.window.to_dict(),
+            "selection_bounds": self.selection_bounds.to_dict(),
+            "scoring_batch_size": self.scoring_batch_size,
         }
 
 
