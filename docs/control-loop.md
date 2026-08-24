@@ -464,6 +464,26 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     zero by `+2.52775e-5` and beat recorded `7/8`, but passed goal direction
     only `6/8`. The planner therefore accepts a refinement only when it both
     meets the goal gate and improves proposal latent energy by at least `1e-6`;
-    otherwise it records a proposal fallback. Goal-aligned train-only negative
-    mining and fresh whole held-out seeds remain required before any live
-    insertion or filming checkpoint.
+    otherwise it retains only a goal-aligned proposal and explicitly blocks
+    the context if both candidates fail. The first exact v3 seed-12600 report
+    accepted only `1/8` refinements and blocked the misaligned context-44
+    proposal. Goal-aligned train-only negative mining and fresh whole held-out
+    seeds remain required before any live insertion or filming checkpoint.
+20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
+    the training artifacts and a versioned reset-sampling contract first,
+    including its workspace/geometry bounds and distribution, then draw one
+    held-out reset from a reserved seed. The reset must not replay a recorded
+    approach or post-attachment prefix, use manually staged task phases, or
+    provide seed-specific waypoints. Ordinary synchronized camera observations
+    and robot proprioception remain valid controller inputs.
+    From that reset, JEPA-controlled, safety-gated actions must approach and
+    acquire the connector, retain it through transport, align it with the
+    socket, complete contact-aware insertion, and hold the validated seated
+    state. Persist the reset-contract fingerprint and seed, initial reset,
+    every observation/action, task-phase handoff, contact/force/collision and
+    tracking evidence, and the terminal task decision so the run can be
+    reconstructed independently. One valid held-out success satisfies the
+    requested lab stopping point for this stage.
+    Multi-seed repeatability, autonomous failure recovery, real-hardware
+    transfer, and production authority are explicitly deferred and must not be
+    added as prerequisites without new direction.

@@ -828,12 +828,27 @@ make the learned energy and insertion constraint agree on both whole seeds.
 The planner now treats CEM output as a searched candidate, not automatically
 as the selected action. A refinement is accepted only when it passes the goal
 alignment gate and lowers JEPA latent energy relative to the proposal by at
-least `1e-6`; otherwise the offline report explicitly falls back to the
-proposal and records the rejection reason. This Pareto gate is an evidence
-boundary, not live authority. The following train-only adapter checkpoint must
-mine goal-aligned local candidates, rather than generic perturbations, so the
-energy model learns to distinguish plausible insertion refinements before the
-same fixed search is evaluated on fresh whole held-out seeds.
+least `1e-6`; otherwise the offline report falls back to the proposal only when
+that proposal independently passes the observable goal-alignment gate. If both
+fail, the context is explicitly blocked and has no selected action. This
+Pareto gate is an evidence boundary, not live authority. Its first exact v3
+report accepted only `1/8` refinements on seed `12600` and blocked the
+misaligned context-44 proposal instead of silently retaining it. The following
+train-only adapter checkpoint must mine goal-aligned local candidates, rather
+than generic perturbations, so the energy model learns to distinguish
+plausible insertion refinements before the same fixed search is evaluated on
+fresh whole held-out seeds.
+
+After insertion control clears its offline and live safety gates, the requested
+lab stopping point is one reconstructible end-to-end Isaac run from a
+predeclared, bounded held-out unknown start. That run must not replay a recorded
+motion prefix or use manually staged task phases: it must approach, grasp,
+retain, align, insert, and hold through JEPA-controlled, safety-gated actions
+from ordinary synchronized camera observations and robot proprioception. One
+valid run is sufficient at this stage; multi-seed repeatability, autonomous
+recovery, real-hardware transfer, and production readiness are intentionally
+deferred. See milestone 20 in [`docs/control-loop.md`](docs/control-loop.md) for
+the exact acceptance contract.
 
 The first grasp-domain JEPA-WM action adapter used all 1,980 bounded rollouts
 from the 20 training recordings. In a fixed eight-context CEM diagnostic it

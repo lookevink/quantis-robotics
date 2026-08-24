@@ -172,6 +172,7 @@ class InsertionPlannerProfileTest(unittest.TestCase):
         policy = INSERTION_PLANNER_PROFILE.task_policy
         acceptance = policy.refinement_acceptance
         self.assertIsNotNone(acceptance)
+        self.assertEqual(acceptance.to_dict()["unaligned_initial"], "blocked")
 
         aligned = policy.goal_action_alignment.evaluate(
             DroidAction((0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
@@ -218,6 +219,31 @@ class InsertionPlannerProfileTest(unittest.TestCase):
         )
         self.assertEqual(payload["selected_source"], "initial")
         self.assertEqual(payload["selected_actions"], initial.tolist())
+
+    def test_blocks_when_search_and_initial_candidate_are_goal_misaligned(self) -> None:
+        initial = np.zeros((3, 7), dtype=np.float64)
+        searched = np.zeros((3, 7), dtype=np.float64)
+        initial[0, 1] = 0.0005
+        searched[0, 1] = 0.0004
+        evaluation = PlannerRolloutEvaluation(
+            context_index=44,
+            target_index=47,
+            recorded_actions=np.array(initial, copy=True),
+            recorded_energy=0.01,
+            zero_energy=0.011,
+            initialization=PlannerInitialization.PROPOSAL,
+            initial_candidate=CandidateEvaluation(initial, self._scores(0.01)),
+            searched_candidate=CandidateEvaluation(searched, self._scores(0.009)),
+            goal_action=DroidAction((0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+        )
+
+        payload = evaluation.to_dict(INSERTION_PLANNER_PROFILE.task_policy)
+
+        self.assertEqual(payload["selection_status"], "blocked")
+        self.assertIsNone(payload["selected_source"])
+        self.assertIsNone(payload["selected_actions"])
+        self.assertIsNone(payload["selected_energy"])
+        self.assertFalse(payload["initial_goal_action_alignment"]["passed"])
 
     @unittest.skipIf(torch is None, "PyTorch is not installed locally")
     def test_rejects_adapter_and_proposal_from_different_corpora(self) -> None:

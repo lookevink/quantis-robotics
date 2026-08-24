@@ -7,7 +7,7 @@ from enum import Enum
 import json
 from math import isfinite
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Sequence, Union
 
 import numpy as np
 
@@ -31,7 +31,7 @@ from jepa_wm.trajectory import RolloutWindow
 from jepa_wm.training_artifact import ArtifactIdentity, TrainingArtifactIdentity
 
 
-REPORT_SCHEMA = "quantis.jepa_wm_planner_benchmark.v2"
+REPORT_SCHEMA = "quantis.jepa_wm_planner_benchmark.v3"
 
 
 class PlannerInitialization(str, Enum):
@@ -39,7 +39,7 @@ class PlannerInitialization(str, Enum):
     PROPOSAL = "proposal"
 
 
-class PlannerSelectionSource(str, Enum):
+class PlannerSelectedSource(str, Enum):
     INITIAL = "initial"
     SEARCHED = "searched"
 
@@ -59,10 +59,11 @@ class CandidateEvaluation:
 
 
 @dataclass(frozen=True)
-class PlannerRefinementSelection:
-    source: PlannerSelectionSource
+class SelectedRefinement:
+    source: PlannerSelectedSource
     candidate: CandidateEvaluation
     searched_goal_alignment: GoalAlignmentDecision | None
+    initial_goal_alignment: GoalAlignmentDecision | None
     acceptance: RefinementAcceptanceDecision | None
     selected_goal_alignment: GoalAlignmentDecision | None
     first_action: FirstActionDecision
@@ -70,20 +71,33 @@ class PlannerRefinementSelection:
     improvement_over_recorded: float
 
     def __post_init__(self) -> None:
-        if not isfinite(self.improvement_over_zero) or not isfinite(
-            self.improvement_over_recorded
+        if not all(
+            isfinite(value)
+            for value in (self.improvement_over_zero, self.improvement_over_recorded)
         ):
             raise ValueError("selected candidate improvements must be finite")
-        if self.acceptance is not None and (
-            self.acceptance.accepted
-            is (self.source is PlannerSelectionSource.INITIAL)
+        if self.source is PlannerSelectedSource.SEARCHED and (
+            self.acceptance is not None and not self.acceptance.accepted
         ):
             raise ValueError("refinement acceptance and selected source disagree")
+        if self.source is PlannerSelectedSource.INITIAL and (
+            self.acceptance is None
+            or self.acceptance.accepted
+            or self.initial_goal_alignment is None
+            or not self.initial_goal_alignment.passed
+        ):
+            raise ValueError("initial fallback requires rejected search and alignment")
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "selection_status": "selected",
             "refinement_acceptance": (
                 self.acceptance.to_dict() if self.acceptance is not None else None
+            ),
+            "initial_goal_action_alignment": (
+                self.initial_goal_alignment.to_dict()
+                if self.initial_goal_alignment is not None
+                else None
             ),
             "selected_source": self.source.value,
             "selected_actions": self.candidate.actions.tolist(),
@@ -101,6 +115,42 @@ class PlannerRefinementSelection:
             "selected_improvement_over_zero": self.improvement_over_zero,
             "selected_improvement_over_recorded": self.improvement_over_recorded,
         }
+
+
+@dataclass(frozen=True)
+class BlockedRefinement:
+    searched_goal_alignment: GoalAlignmentDecision
+    initial_goal_alignment: GoalAlignmentDecision
+    acceptance: RefinementAcceptanceDecision
+
+    def __post_init__(self) -> None:
+        if (
+            self.acceptance.accepted
+            or self.initial_goal_alignment.passed
+            or self.acceptance.reasons == ()
+        ):
+            raise ValueError("blocked refinement evidence is inconsistent")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "selection_status": "blocked",
+            "refinement_acceptance": self.acceptance.to_dict(),
+            "initial_goal_action_alignment": self.initial_goal_alignment.to_dict(),
+            "selected_source": None,
+            "selected_actions": None,
+            "selected_energy": None,
+            "selected_objective": None,
+            "selected_prior_penalty": None,
+            "selected_task_penalty": None,
+            "selected_first_action_cosine": None,
+            "selected_first_action_gate": None,
+            "selected_goal_action_alignment": None,
+            "selected_improvement_over_zero": None,
+            "selected_improvement_over_recorded": None,
+        }
+
+
+PlannerRefinementSelection = Union[SelectedRefinement, BlockedRefinement]
 
 
 @dataclass(frozen=True)
@@ -190,11 +240,33 @@ class PlannerRolloutEvaluation:
                 self.searched_candidate.scores.latent_energy,
                 goal_decision,
             )
-        source, candidate = (
-            (PlannerSelectionSource.INITIAL, self.initial_candidate)
-            if acceptance is not None and not acceptance.accepted
-            else (PlannerSelectionSource.SEARCHED, self.searched_candidate)
+        initial_goal_alignment = (
+            task_policy.goal_action_alignment.evaluate(
+                DroidAction(tuple(self.initial_candidate.actions[0])),
+                self.goal_action,
+            )
+            if (
+                task_policy.goal_action_alignment is not None
+                and self.goal_action is not None
+            )
+            else None
         )
+        if acceptance is None or acceptance.accepted:
+            source = PlannerSelectedSource.SEARCHED
+            candidate = self.searched_candidate
+        elif initial_goal_alignment is None or (
+            task_policy.refinement_acceptance.allows_initial(
+                initial_goal_alignment
+            )
+        ):
+            source = PlannerSelectedSource.INITIAL
+            candidate = self.initial_candidate
+        else:
+            return BlockedRefinement(
+                searched_goal_alignment=goal_decision,
+                initial_goal_alignment=initial_goal_alignment,
+                acceptance=acceptance,
+            )
         selected_goal_alignment = (
             task_policy.goal_action_alignment.evaluate(
                 DroidAction(tuple(candidate.actions[0])),
@@ -206,10 +278,11 @@ class PlannerRolloutEvaluation:
             )
             else None
         )
-        return PlannerRefinementSelection(
+        return SelectedRefinement(
             source=source,
             candidate=candidate,
             searched_goal_alignment=goal_decision,
+            initial_goal_alignment=initial_goal_alignment,
             acceptance=acceptance,
             selected_goal_alignment=selected_goal_alignment,
             first_action=self.first_action_decision(
@@ -423,8 +496,21 @@ class PlannerBenchmarkReport:
             evaluation.refinement_selection(task_policy)
             for evaluation in self.evaluations
         )
-        selected_summary = FirstActionSummary(
-            tuple(selection.first_action for selection in selections)
+        selected_selections = tuple(
+            selection
+            for selection in selections
+            if isinstance(selection, SelectedRefinement)
+        )
+        selected_summary = (
+            FirstActionSummary(
+                tuple(
+                    selection.first_action
+                    for selection in selected_selections
+                    if selection.first_action is not None
+                )
+            )
+            if selected_selections
+            else None
         )
         goal_alignment_decisions = tuple(
             selection.searched_goal_alignment
@@ -433,7 +519,7 @@ class PlannerBenchmarkReport:
         )
         selected_goal_alignment_decisions = tuple(
             selection.selected_goal_alignment
-            for selection in selections
+            for selection in selected_selections
             if selection.selected_goal_alignment is not None
         )
         acceptance_decisions = tuple(
@@ -442,10 +528,12 @@ class PlannerBenchmarkReport:
             if selection.acceptance is not None
         )
         selected_improvement_over_zero = tuple(
-            selection.improvement_over_zero for selection in selections
+            selection.improvement_over_zero
+            for selection in selected_selections
         )
         selected_improvement_over_recorded = tuple(
-            selection.improvement_over_recorded for selection in selections
+            selection.improvement_over_recorded
+            for selection in selected_selections
         )
         return {
             "schema": REPORT_SCHEMA,
@@ -486,22 +574,39 @@ class PlannerBenchmarkReport:
                 if acceptance_decisions
                 else None
             ),
-            "mean_selected_improvement_over_zero": float(
-                np.mean(selected_improvement_over_zero)
-            ),
-            "selected_action_win_rate_over_zero": sum(
-                value > 0.0 for value in selected_improvement_over_zero
+            "selection_rate": len(selected_selections) / len(selections),
+            "blocked_rate": (
+                len(selections) - len(selected_selections)
             )
-            / len(selected_improvement_over_zero),
-            "mean_selected_improvement_over_recorded": float(
-                np.mean(selected_improvement_over_recorded)
+            / len(selections),
+            "mean_selected_improvement_over_zero": (
+                float(np.mean(selected_improvement_over_zero))
+                if selected_improvement_over_zero
+                else None
             ),
-            "selected_action_win_rate_over_recorded": sum(
-                value > 0.0 for value in selected_improvement_over_recorded
-            )
-            / len(selected_improvement_over_recorded),
-            "mean_selected_first_action_cosine": selected_summary.mean_cosine,
-            "selected_first_action": selected_summary.to_dict(),
+            "selected_action_win_rate_over_zero": (
+                sum(value > 0.0 for value in selected_improvement_over_zero)
+                / len(selected_improvement_over_zero)
+                if selected_improvement_over_zero
+                else None
+            ),
+            "mean_selected_improvement_over_recorded": (
+                float(np.mean(selected_improvement_over_recorded))
+                if selected_improvement_over_recorded
+                else None
+            ),
+            "selected_action_win_rate_over_recorded": (
+                sum(value > 0.0 for value in selected_improvement_over_recorded)
+                / len(selected_improvement_over_recorded)
+                if selected_improvement_over_recorded
+                else None
+            ),
+            "mean_selected_first_action_cosine": (
+                selected_summary.mean_cosine if selected_summary is not None else None
+            ),
+            "selected_first_action": (
+                selected_summary.to_dict() if selected_summary is not None else None
+            ),
             "selected_goal_action_alignment_pass_rate": (
                 sum(
                     decision.passed

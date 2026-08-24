@@ -150,8 +150,15 @@ class RefinementAcceptancePolicy:
             tuple(reasons),
         )
 
-    def to_dict(self) -> dict[str, float]:
-        return {"minimum_latent_improvement": self.minimum_latent_improvement}
+    def to_dict(self) -> dict[str, float | str]:
+        return {
+            "minimum_latent_improvement": self.minimum_latent_improvement,
+            "unaligned_initial": "blocked",
+        }
+
+    @staticmethod
+    def allows_initial(goal_alignment: GoalAlignmentDecision) -> bool:
+        return goal_alignment.passed
 
 
 @dataclass(frozen=True)
