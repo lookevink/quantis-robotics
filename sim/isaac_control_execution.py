@@ -158,6 +158,22 @@ def select_safe_projection(
     return tuple(attempts), None
 
 
+async def synchronized_actual_command(
+    actuators: Actuators,
+    timeline: Any,
+    advance: Any,
+) -> JointCommand:
+    """Refresh a stale paused physics tensor before reading articulation state."""
+
+    if not actuators.articulation.is_physics_tensor_entity_valid():
+        timeline.play()
+        try:
+            await advance()
+        finally:
+            timeline.pause()
+    return actuators.actual_command()
+
+
 async def apply_control_response(session_id: str) -> dict[str, Any]:
     """Gate and apply only the first response action, then observe and pause."""
 
@@ -174,12 +190,16 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
     if SimulationManager.get_physics_sim_view() is None:
         SimulationManager.initialize_physics()
     actuators = create_actuators(stage, Articulation(ROBOT_PATH))
-    current = actuators.actual_command()
+    timeline = omni.timeline.get_timeline_interface()
+    current = await synchronized_actual_command(
+        actuators,
+        timeline,
+        omni.kit.app.get_app().next_update_async,
+    )
     expected_current = np.asarray(
         persisted_state.current_joint_positions, dtype=np.float64
     )
     sensor = contact_sensor(stage, create=False)
-    timeline = omni.timeline.get_timeline_interface()
     try:
         # Follow-up capture leaves the stage synchronized and paused. Read the
         # live articulation/contact state without spending a render tick from

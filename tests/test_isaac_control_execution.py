@@ -1,15 +1,16 @@
-from pathlib import Path
+from __future__ import annotations
+
+import asyncio
 import unittest
+from pathlib import Path
 
 import numpy as np
 
 from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
 from jepa_wm.control_safety import ControlGateReason, SimulatorSafetyLimits
-from sim.isaac_control_execution import (
-    ExecutionSafetyContext,
-    select_safe_projection,
-)
+from sim.isaac_control_execution import synchronized_actual_command
+from sim.isaac_control_execution import ExecutionSafetyContext, select_safe_projection
 from sim.isaac_demo_kinematics import SolvedPose
 from sim.isaac_demo_runtime import JointCommand
 
@@ -70,6 +71,69 @@ class ControlProjectionTest(unittest.TestCase):
             attempts[1].scale,
             DroidActionScale(0.5, 0.125, 0.125),
         )
+
+
+class FakeTimeline:
+    def __init__(self) -> None:
+        self.events: list[str] = []
+
+    def play(self) -> None:
+        self.events.append("play")
+
+    def pause(self) -> None:
+        self.events.append("pause")
+
+
+class FakeArticulation:
+    def __init__(self, valid: bool) -> None:
+        self.valid = valid
+
+    def is_physics_tensor_entity_valid(self) -> bool:
+        return self.valid
+
+
+class FakeActuators:
+    def __init__(self, valid: bool) -> None:
+        self.articulation = FakeArticulation(valid)
+        self.command = object()
+
+    def actual_command(self) -> object:
+        if not self.articulation.valid:
+            raise AssertionError("physics tensor is invalid")
+        return self.command
+
+
+class IsaacControlExecutionTest(unittest.TestCase):
+    def test_refreshes_a_stale_paused_physics_tensor_before_reading(self) -> None:
+        actuators = FakeActuators(valid=False)
+        timeline = FakeTimeline()
+
+        async def advance() -> None:
+            actuators.articulation.valid = True
+
+        command = asyncio.run(
+            synchronized_actual_command(actuators, timeline, advance)
+        )
+
+        self.assertIs(command, actuators.command)
+        self.assertEqual(timeline.events, ["play", "pause"])
+
+    def test_does_not_advance_an_already_valid_tensor(self) -> None:
+        actuators = FakeActuators(valid=True)
+        timeline = FakeTimeline()
+        advanced = False
+
+        async def advance() -> None:
+            nonlocal advanced
+            advanced = True
+
+        command = asyncio.run(
+            synchronized_actual_command(actuators, timeline, advance)
+        )
+
+        self.assertIs(command, actuators.command)
+        self.assertFalse(advanced)
+        self.assertEqual(timeline.events, [])
 
 
 if __name__ == "__main__":
