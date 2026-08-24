@@ -816,6 +816,25 @@ fail-closed goal-action alignment objective computed from the observable
 current-to-target DROID delta; it must preserve that direction as well as beat
 the proposal/zero/recorded energies before any live trial.
 
+That aligned profile exposed the next boundary rather than clearing it. On
+held-out seed `12600`, all eight searched actions met the goal-direction gate,
+but their mean latent improvement over zero was `-5.76454e-6` and only `1/8`
+beat the recorded insertion action. On seed `12601`, the search improved over
+zero by `+2.52775e-5` and beat the recorded action in `7/8`, but only `6/8`
+actions met the pinned `0.95` goal cosine. The reports are preserved as a
+second exact negative: adding a task penalty fixes most directions but does not
+make the learned energy and insertion constraint agree on both whole seeds.
+
+The planner now treats CEM output as a searched candidate, not automatically
+as the selected action. A refinement is accepted only when it passes the goal
+alignment gate and lowers JEPA latent energy relative to the proposal by at
+least `1e-6`; otherwise the offline report explicitly falls back to the
+proposal and records the rejection reason. This Pareto gate is an evidence
+boundary, not live authority. The following train-only adapter checkpoint must
+mine goal-aligned local candidates, rather than generic perturbations, so the
+energy model learns to distinguish plausible insertion refinements before the
+same fixed search is evaluated on fresh whole held-out seeds.
+
 The first grasp-domain JEPA-WM action adapter used all 1,980 bounded rollouts
 from the 20 training recordings. In a fixed eight-context CEM diagnostic it
 lowered latent energy below both zero and recorded actions on every context,

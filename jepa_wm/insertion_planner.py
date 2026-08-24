@@ -11,7 +11,11 @@ from jepa_wm.insertion_contract import (
 )
 from jepa_wm.planner import CandidateTrustRegion, CEMConfig
 from jepa_wm.planner_readiness import FirstActionThresholds
-from jepa_wm.planner_policy import GoalActionAlignment, PlannerTaskPolicy
+from jepa_wm.planner_policy import (
+    GoalActionAlignment,
+    PlannerTaskPolicy,
+    RefinementAcceptancePolicy,
+)
 from jepa_wm.trajectory import RolloutWindow
 
 
@@ -44,6 +48,9 @@ class InsertionPlannerProfile:
         goal_action_alignment=GoalActionAlignment(
             minimum_cosine=0.95,
             failure_penalty=0.01,
+        ),
+        refinement_acceptance=RefinementAcceptancePolicy(
+            minimum_latent_improvement=1e-6,
         ),
     )
 

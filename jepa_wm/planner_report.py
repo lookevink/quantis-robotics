@@ -18,24 +18,30 @@ from jepa_wm.planner_policy import (
     GoalAlignmentDecision,
     GoalActionAlignment,
     PlannerTaskPolicy,
+    RefinementAcceptanceDecision,
 )
 from jepa_wm.planner_objective import CandidateObjective
 from jepa_wm.planner_readiness import (
     FirstActionDecision,
     FirstActionGate,
-    FirstActionThresholds,
+    FirstActionSummary,
     evaluate_first_actions,
 )
 from jepa_wm.trajectory import RolloutWindow
 from jepa_wm.training_artifact import ArtifactIdentity, TrainingArtifactIdentity
 
 
-REPORT_SCHEMA = "quantis.jepa_wm_planner_benchmark.v1"
+REPORT_SCHEMA = "quantis.jepa_wm_planner_benchmark.v2"
 
 
 class PlannerInitialization(str, Enum):
     LIBRARY = "library"
     PROPOSAL = "proposal"
+
+
+class PlannerSelectionSource(str, Enum):
+    INITIAL = "initial"
+    SEARCHED = "searched"
 
 
 @dataclass(frozen=True)
@@ -53,6 +59,51 @@ class CandidateEvaluation:
 
 
 @dataclass(frozen=True)
+class PlannerRefinementSelection:
+    source: PlannerSelectionSource
+    candidate: CandidateEvaluation
+    searched_goal_alignment: GoalAlignmentDecision | None
+    acceptance: RefinementAcceptanceDecision | None
+    selected_goal_alignment: GoalAlignmentDecision | None
+    first_action: FirstActionDecision
+    improvement_over_zero: float
+    improvement_over_recorded: float
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.improvement_over_zero) or not isfinite(
+            self.improvement_over_recorded
+        ):
+            raise ValueError("selected candidate improvements must be finite")
+        if self.acceptance is not None and (
+            self.acceptance.accepted
+            is (self.source is PlannerSelectionSource.INITIAL)
+        ):
+            raise ValueError("refinement acceptance and selected source disagree")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "refinement_acceptance": (
+                self.acceptance.to_dict() if self.acceptance is not None else None
+            ),
+            "selected_source": self.source.value,
+            "selected_actions": self.candidate.actions.tolist(),
+            "selected_energy": self.candidate.scores.latent_energy,
+            "selected_objective": self.candidate.scores.total,
+            "selected_prior_penalty": self.candidate.scores.prior_penalty,
+            "selected_task_penalty": self.candidate.scores.task_penalty,
+            "selected_first_action_cosine": self.first_action.cosine,
+            "selected_first_action_gate": self.first_action.to_dict(),
+            "selected_goal_action_alignment": (
+                self.selected_goal_alignment.to_dict()
+                if self.selected_goal_alignment is not None
+                else None
+            ),
+            "selected_improvement_over_zero": self.improvement_over_zero,
+            "selected_improvement_over_recorded": self.improvement_over_recorded,
+        }
+
+
+@dataclass(frozen=True)
 class PlannerRolloutEvaluation:
     context_index: int
     target_index: int
@@ -61,12 +112,12 @@ class PlannerRolloutEvaluation:
     zero_energy: float
     initialization: PlannerInitialization
     initial_candidate: CandidateEvaluation
-    planned_candidate: CandidateEvaluation
+    searched_candidate: CandidateEvaluation
     goal_action: DroidAction | None = None
 
     def __post_init__(self) -> None:
         if (
-            self.recorded_actions.shape != self.planned_candidate.actions.shape
+            self.recorded_actions.shape != self.searched_candidate.actions.shape
             or not np.all(np.isfinite(self.recorded_actions))
             or not isfinite(self.recorded_energy)
             or not isfinite(self.zero_energy)
@@ -74,31 +125,33 @@ class PlannerRolloutEvaluation:
             raise ValueError("recorded and planned action horizons must match")
 
     @property
-    def planned_prior_penalty(self) -> float:
-        return self.planned_candidate.scores.prior_penalty
+    def searched_prior_penalty(self) -> float:
+        return self.searched_candidate.scores.prior_penalty
 
     @property
-    def refinement_improvement(self) -> float:
+    def search_total_improvement(self) -> float:
         return (
             self.initial_candidate.scores.total
-            - self.planned_candidate.scores.total
+            - self.searched_candidate.scores.total
         )
 
     @property
-    def improvement_over_zero(self) -> float:
-        return self.zero_energy - self.planned_candidate.scores.latent_energy
+    def searched_improvement_over_zero(self) -> float:
+        return self.zero_energy - self.searched_candidate.scores.latent_energy
 
     @property
-    def improvement_over_recorded(self) -> float:
-        return self.recorded_energy - self.planned_candidate.scores.latent_energy
+    def searched_improvement_over_recorded(self) -> float:
+        return self.recorded_energy - self.searched_candidate.scores.latent_energy
 
     def first_action_decision(
         self,
         gate: FirstActionGate | None = None,
+        candidate: CandidateEvaluation | None = None,
     ) -> FirstActionDecision:
+        evaluated = candidate or self.searched_candidate
         return evaluate_first_actions(
             [DroidAction(tuple(self.recorded_actions[0]))],
-            [DroidAction(tuple(self.planned_candidate.actions[0]))],
+            [DroidAction(tuple(evaluated.actions[0]))],
             gate,
         ).decisions[0]
 
@@ -115,17 +168,70 @@ class PlannerRolloutEvaluation:
         if self.goal_action is None:
             raise ValueError("planner rollout is missing its goal action")
         return policy.evaluate(
-            DroidAction(tuple(self.planned_candidate.actions[0])),
+            DroidAction(tuple(self.searched_candidate.actions[0])),
             self.goal_action,
+        )
+
+    def refinement_selection(
+        self,
+        task_policy: PlannerTaskPolicy,
+    ) -> PlannerRefinementSelection:
+        goal_decision = self.goal_alignment_decision(
+            task_policy.goal_action_alignment
+        )
+        acceptance = None
+        if task_policy.refinement_acceptance is not None:
+            if goal_decision is None:
+                raise ValueError(
+                    "refinement acceptance requires goal alignment evidence"
+                )
+            acceptance = task_policy.refinement_acceptance.evaluate(
+                self.initial_candidate.scores.latent_energy,
+                self.searched_candidate.scores.latent_energy,
+                goal_decision,
+            )
+        source, candidate = (
+            (PlannerSelectionSource.INITIAL, self.initial_candidate)
+            if acceptance is not None and not acceptance.accepted
+            else (PlannerSelectionSource.SEARCHED, self.searched_candidate)
+        )
+        selected_goal_alignment = (
+            task_policy.goal_action_alignment.evaluate(
+                DroidAction(tuple(candidate.actions[0])),
+                self.goal_action,
+            )
+            if (
+                task_policy.goal_action_alignment is not None
+                and self.goal_action is not None
+            )
+            else None
+        )
+        return PlannerRefinementSelection(
+            source=source,
+            candidate=candidate,
+            searched_goal_alignment=goal_decision,
+            acceptance=acceptance,
+            selected_goal_alignment=selected_goal_alignment,
+            first_action=self.first_action_decision(
+                FirstActionGate(task_policy.first_action_thresholds),
+                candidate,
+            ),
+            improvement_over_zero=(
+                self.zero_energy - candidate.scores.latent_energy
+            ),
+            improvement_over_recorded=(
+                self.recorded_energy - candidate.scores.latent_energy
+            ),
         )
 
     def to_dict(
         self,
-        gate: FirstActionGate | None = None,
-        goal_alignment: GoalActionAlignment | None = None,
+        task_policy: PlannerTaskPolicy = PlannerTaskPolicy(),
+        selection: PlannerRefinementSelection | None = None,
     ) -> dict[str, Any]:
+        gate = FirstActionGate(task_policy.first_action_thresholds)
         first_action = self.first_action_decision(gate)
-        goal_decision = self.goal_alignment_decision(goal_alignment)
+        selected = selection or self.refinement_selection(task_policy)
         library = (
             self.initial_candidate
             if self.initialization is PlannerInitialization.LIBRARY
@@ -157,21 +263,26 @@ class PlannerRolloutEvaluation:
                 proposal.scores.prior_penalty if proposal else None
             ),
             "proposal_task_penalty": proposal.scores.task_penalty if proposal else None,
-            "planned_actions": self.planned_candidate.actions.tolist(),
+            "searched_actions": self.searched_candidate.actions.tolist(),
             "recorded_energy": self.recorded_energy,
             "zero_energy": self.zero_energy,
-            "planned_energy": self.planned_candidate.scores.latent_energy,
-            "planned_objective": self.planned_candidate.scores.total,
-            "planned_prior_penalty": self.planned_prior_penalty,
-            "planned_task_penalty": self.planned_candidate.scores.task_penalty,
-            "refinement_improvement": self.refinement_improvement,
-            "improvement_over_zero": self.improvement_over_zero,
-            "improvement_over_recorded": self.improvement_over_recorded,
-            "first_action_cosine": first_action.cosine,
-            "first_action_gate": first_action.to_dict(),
-            "goal_action_alignment": (
-                goal_decision.to_dict() if goal_decision is not None else None
+            "searched_energy": self.searched_candidate.scores.latent_energy,
+            "searched_objective": self.searched_candidate.scores.total,
+            "searched_prior_penalty": self.searched_prior_penalty,
+            "searched_task_penalty": self.searched_candidate.scores.task_penalty,
+            "search_total_improvement": self.search_total_improvement,
+            "searched_improvement_over_zero": self.searched_improvement_over_zero,
+            "searched_improvement_over_recorded": (
+                self.searched_improvement_over_recorded
             ),
+            "searched_first_action_cosine": first_action.cosine,
+            "searched_first_action_gate": first_action.to_dict(),
+            "searched_goal_action_alignment": (
+                selected.searched_goal_alignment.to_dict()
+                if selected.searched_goal_alignment is not None
+                else None
+            ),
+            **selected.to_dict(),
         }
 
 
@@ -295,29 +406,46 @@ class PlannerBenchmarkReport:
             raise ValueError("planner benchmark requires at least one evaluation")
 
     def to_dict(self) -> dict[str, Any]:
-        first_action_gate = FirstActionGate(
-            self.planner.task_policy.first_action_thresholds
-        )
-        summary = evaluate_first_actions(
+        task_policy = self.planner.task_policy
+        first_action_gate = FirstActionGate(task_policy.first_action_thresholds)
+        searched_summary = evaluate_first_actions(
             [
                 DroidAction(tuple(evaluation.recorded_actions[0]))
                 for evaluation in self.evaluations
             ],
             [
-                DroidAction(tuple(evaluation.planned_candidate.actions[0]))
+                DroidAction(tuple(evaluation.searched_candidate.actions[0]))
                 for evaluation in self.evaluations
             ],
             first_action_gate,
         )
-        goal_alignment_decisions = tuple(
-            decision
+        selections = tuple(
+            evaluation.refinement_selection(task_policy)
             for evaluation in self.evaluations
-            if (
-                decision := evaluation.goal_alignment_decision(
-                    self.planner.task_policy.goal_action_alignment
-                )
-            )
-            is not None
+        )
+        selected_summary = FirstActionSummary(
+            tuple(selection.first_action for selection in selections)
+        )
+        goal_alignment_decisions = tuple(
+            selection.searched_goal_alignment
+            for selection in selections
+            if selection.searched_goal_alignment is not None
+        )
+        selected_goal_alignment_decisions = tuple(
+            selection.selected_goal_alignment
+            for selection in selections
+            if selection.selected_goal_alignment is not None
+        )
+        acceptance_decisions = tuple(
+            selection.acceptance
+            for selection in selections
+            if selection.acceptance is not None
+        )
+        selected_improvement_over_zero = tuple(
+            selection.improvement_over_zero for selection in selections
+        )
+        selected_improvement_over_recorded = tuple(
+            selection.improvement_over_recorded for selection in selections
         )
         return {
             "schema": REPORT_SCHEMA,
@@ -326,39 +454,67 @@ class PlannerBenchmarkReport:
             "rollouts": len(self.evaluations),
             "planner": self.planner.to_dict(),
             "bounds": self.bounds.to_dict(),
-            "mean_refinement_improvement": _mean(
-                self.evaluations, "refinement_improvement"
+            "mean_search_total_improvement": _mean(
+                self.evaluations, "search_total_improvement"
             ),
-            "refinement_win_rate": _win_rate(
-                self.evaluations, "refinement_improvement"
+            "search_total_improvement_win_rate": _win_rate(
+                self.evaluations, "search_total_improvement"
             ),
-            "mean_improvement_over_zero": _mean(
-                self.evaluations, "improvement_over_zero"
+            "mean_searched_improvement_over_zero": _mean(
+                self.evaluations, "searched_improvement_over_zero"
             ),
-            "planned_action_win_rate_over_zero": _win_rate(
-                self.evaluations, "improvement_over_zero"
+            "searched_action_win_rate_over_zero": _win_rate(
+                self.evaluations, "searched_improvement_over_zero"
             ),
-            "mean_improvement_over_recorded": _mean(
-                self.evaluations, "improvement_over_recorded"
+            "mean_searched_improvement_over_recorded": _mean(
+                self.evaluations, "searched_improvement_over_recorded"
             ),
-            "planned_action_win_rate_over_recorded": _win_rate(
-                self.evaluations, "improvement_over_recorded"
+            "searched_action_win_rate_over_recorded": _win_rate(
+                self.evaluations, "searched_improvement_over_recorded"
             ),
-            "mean_first_action_cosine": summary.mean_cosine,
-            **summary.to_dict(),
-            "goal_action_alignment_pass_rate": (
+            "mean_searched_first_action_cosine": searched_summary.mean_cosine,
+            "searched_first_action": searched_summary.to_dict(),
+            "searched_goal_action_alignment_pass_rate": (
                 sum(decision.passed for decision in goal_alignment_decisions)
                 / len(goal_alignment_decisions)
                 if goal_alignment_decisions
                 else None
             ),
+            "refinement_acceptance_rate": (
+                sum(decision.accepted for decision in acceptance_decisions)
+                / len(acceptance_decisions)
+                if acceptance_decisions
+                else None
+            ),
+            "mean_selected_improvement_over_zero": float(
+                np.mean(selected_improvement_over_zero)
+            ),
+            "selected_action_win_rate_over_zero": sum(
+                value > 0.0 for value in selected_improvement_over_zero
+            )
+            / len(selected_improvement_over_zero),
+            "mean_selected_improvement_over_recorded": float(
+                np.mean(selected_improvement_over_recorded)
+            ),
+            "selected_action_win_rate_over_recorded": sum(
+                value > 0.0 for value in selected_improvement_over_recorded
+            )
+            / len(selected_improvement_over_recorded),
+            "mean_selected_first_action_cosine": selected_summary.mean_cosine,
+            "selected_first_action": selected_summary.to_dict(),
+            "selected_goal_action_alignment_pass_rate": (
+                sum(
+                    decision.passed
+                    for decision in selected_goal_alignment_decisions
+                )
+                / len(selected_goal_alignment_decisions)
+                if selected_goal_alignment_decisions
+                else None
+            ),
             **self.timings.to_dict(),
             "results": [
-                evaluation.to_dict(
-                    first_action_gate,
-                    self.planner.task_policy.goal_action_alignment,
-                )
-                for evaluation in self.evaluations
+                evaluation.to_dict(task_policy, selection)
+                for evaluation, selection in zip(self.evaluations, selections)
             ],
         }
 

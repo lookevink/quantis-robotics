@@ -14,7 +14,10 @@ from jepa_wm.action import DroidAction
 from jepa_wm.action_prior import ActionPriorConfig, EmpiricalActionPrior
 from jepa_wm.insertion_planner import INSERTION_PLANNER_PROFILE
 from jepa_wm.planner_readiness import FirstActionGate, FirstActionReason
-from jepa_wm.planner_policy import GoalActionAlignment
+from jepa_wm.planner_policy import (
+    GoalActionAlignment,
+    RefinementRejectionReason,
+)
 from jepa_wm.planner_objective import (
     CandidateObjective,
     evaluate_planner_objective,
@@ -128,18 +131,16 @@ class InsertionPlannerProfileTest(unittest.TestCase):
             zero_energy=0.011,
             initialization=PlannerInitialization.PROPOSAL,
             initial_candidate=CandidateEvaluation(recorded, self._scores(0.01)),
-            planned_candidate=CandidateEvaluation(planned, self._scores(0.009)),
+            searched_candidate=CandidateEvaluation(planned, self._scores(0.009)),
+            goal_action=DroidAction(tuple(recorded[0])),
         )
 
-        payload = evaluation.to_dict(
-            FirstActionGate(
-                INSERTION_PLANNER_PROFILE.task_policy.first_action_thresholds
-            )
-        )
+        payload = evaluation.to_dict(INSERTION_PLANNER_PROFILE.task_policy)
 
-        self.assertFalse(payload["first_action_gate"]["passed"])
+        self.assertFalse(payload["searched_first_action_gate"]["passed"])
         self.assertEqual(
-            payload["first_action_gate"]["reasons"], ["direction_mismatch"]
+            payload["searched_first_action_gate"]["reasons"],
+            ["direction_mismatch"],
         )
 
     def test_persists_reconstructible_goal_alignment(self) -> None:
@@ -155,18 +156,68 @@ class InsertionPlannerProfileTest(unittest.TestCase):
             zero_energy=0.011,
             initialization=PlannerInitialization.PROPOSAL,
             initial_candidate=CandidateEvaluation(recorded, self._scores(0.01)),
-            planned_candidate=CandidateEvaluation(planned, self._scores(0.009)),
+            searched_candidate=CandidateEvaluation(planned, self._scores(0.009)),
             goal_action=goal,
         )
 
-        payload = evaluation.to_dict(
-            goal_alignment=INSERTION_PLANNER_PROFILE.task_policy.goal_action_alignment
-        )
+        payload = evaluation.to_dict(INSERTION_PLANNER_PROFILE.task_policy)
 
         self.assertEqual(payload["goal_action"], list(goal.values))
         self.assertEqual(
-            payload["goal_action_alignment"], {"cosine": 1.0, "passed": True}
+            payload["searched_goal_action_alignment"],
+            {"cosine": 1.0, "passed": True},
         )
+
+    def test_refinement_requires_goal_alignment_and_latent_improvement(self) -> None:
+        policy = INSERTION_PLANNER_PROFILE.task_policy
+        acceptance = policy.refinement_acceptance
+        self.assertIsNotNone(acceptance)
+
+        aligned = policy.goal_action_alignment.evaluate(
+            DroidAction((0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+            DroidAction((0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+        )
+        misaligned = policy.goal_action_alignment.evaluate(
+            DroidAction((0.0, 0.001, 0.0, 0.0, 0.0, 0.0, 0.0)),
+            DroidAction((0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+        )
+
+        self.assertTrue(acceptance.evaluate(0.01, 0.009, aligned).accepted)
+        self.assertEqual(
+            acceptance.evaluate(0.01, 0.011, aligned).reasons,
+            (RefinementRejectionReason.INSUFFICIENT_LATENT_IMPROVEMENT,),
+        )
+        self.assertEqual(
+            acceptance.evaluate(0.01, 0.009, misaligned).reasons,
+            (RefinementRejectionReason.GOAL_MISALIGNED,),
+        )
+
+    def test_rejected_refinement_falls_back_to_initial_candidate(self) -> None:
+        initial = np.zeros((3, 7), dtype=np.float64)
+        searched = np.zeros((3, 7), dtype=np.float64)
+        initial[0, 0] = 0.0005
+        searched[0, 1] = 0.0005
+        goal = DroidAction((0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+        evaluation = PlannerRolloutEvaluation(
+            context_index=44,
+            target_index=47,
+            recorded_actions=initial,
+            recorded_energy=0.01,
+            zero_energy=0.011,
+            initialization=PlannerInitialization.PROPOSAL,
+            initial_candidate=CandidateEvaluation(initial, self._scores(0.01)),
+            searched_candidate=CandidateEvaluation(searched, self._scores(0.009)),
+            goal_action=goal,
+        )
+
+        payload = evaluation.to_dict(INSERTION_PLANNER_PROFILE.task_policy)
+
+        self.assertFalse(payload["refinement_acceptance"]["accepted"])
+        self.assertEqual(
+            payload["refinement_acceptance"]["reasons"], ["goal_misaligned"]
+        )
+        self.assertEqual(payload["selected_source"], "initial")
+        self.assertEqual(payload["selected_actions"], initial.tolist())
 
     @unittest.skipIf(torch is None, "PyTorch is not installed locally")
     def test_rejects_adapter_and_proposal_from_different_corpora(self) -> None:

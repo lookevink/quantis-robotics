@@ -472,7 +472,7 @@ def benchmark_recording(
                 zero_energy=float(comparison_components.latent_energy[1]),
                 initialization=rollout_initialization,
                 initial_candidate=initial_candidate,
-                planned_candidate=CandidateEvaluation(
+                searched_candidate=CandidateEvaluation(
                     result.actions,
                     comparison_components.candidate(2),
                 ),

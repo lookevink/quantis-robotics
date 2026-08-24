@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from math import isfinite
 from typing import Any
 
@@ -89,11 +90,83 @@ class GoalActionAlignment:
         }
 
 
+class RefinementRejectionReason(str, Enum):
+    GOAL_MISALIGNED = "goal_misaligned"
+    INSUFFICIENT_LATENT_IMPROVEMENT = "insufficient_latent_improvement"
+
+
+@dataclass(frozen=True)
+class RefinementAcceptanceDecision:
+    latent_improvement: float
+    accepted: bool
+    reasons: tuple[RefinementRejectionReason, ...]
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.latent_improvement):
+            raise ValueError("refinement latent improvement must be finite")
+        if self.accepted == bool(self.reasons):
+            raise ValueError("refinement acceptance reasons are inconsistent")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "accepted": self.accepted,
+            "latent_improvement": self.latent_improvement,
+            "reasons": [reason.value for reason in self.reasons],
+        }
+
+
+@dataclass(frozen=True)
+class RefinementAcceptancePolicy:
+    """Accept search only when it preserves task direction and improves JEPA."""
+
+    minimum_latent_improvement: float = 1e-6
+
+    def __post_init__(self) -> None:
+        if (
+            not isfinite(self.minimum_latent_improvement)
+            or self.minimum_latent_improvement <= 0.0
+        ):
+            raise ValueError("minimum latent improvement must be finite and positive")
+
+    def evaluate(
+        self,
+        initial_latent_energy: float,
+        searched_latent_energy: float,
+        goal_alignment: GoalAlignmentDecision,
+    ) -> RefinementAcceptanceDecision:
+        if not isfinite(initial_latent_energy) or not isfinite(searched_latent_energy):
+            raise ValueError("refinement energies must be finite")
+        latent_improvement = initial_latent_energy - searched_latent_energy
+        reasons = []
+        if not goal_alignment.passed:
+            reasons.append(RefinementRejectionReason.GOAL_MISALIGNED)
+        if latent_improvement < self.minimum_latent_improvement:
+            reasons.append(
+                RefinementRejectionReason.INSUFFICIENT_LATENT_IMPROVEMENT
+            )
+        return RefinementAcceptanceDecision(
+            latent_improvement,
+            not reasons,
+            tuple(reasons),
+        )
+
+    def to_dict(self) -> dict[str, float]:
+        return {"minimum_latent_improvement": self.minimum_latent_improvement}
+
+
 @dataclass(frozen=True)
 class PlannerTaskPolicy:
     proposal_trust_region: CandidateTrustRegion | None = None
     first_action_thresholds: FirstActionThresholds = FirstActionThresholds()
     goal_action_alignment: GoalActionAlignment | None = None
+    refinement_acceptance: RefinementAcceptancePolicy | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            self.refinement_acceptance is not None
+            and self.goal_action_alignment is None
+        ):
+            raise ValueError("refinement acceptance requires goal alignment")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -106,6 +179,11 @@ class PlannerTaskPolicy:
             "goal_action_alignment": (
                 self.goal_action_alignment.to_dict()
                 if self.goal_action_alignment is not None
+                else None
+            ),
+            "refinement_acceptance": (
+                self.refinement_acceptance.to_dict()
+                if self.refinement_acceptance is not None
                 else None
             ),
         }

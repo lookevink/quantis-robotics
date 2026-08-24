@@ -458,4 +458,12 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     insertion direction in all `16/16` (`0.119557`/`0.0687623` mean cosine).
     That exact negative is recovery-backed up. The next profile constrains
     search with the observable current-to-target DROID goal action; JEPA has
-    not yet selected or executed an insertion.
+    not yet selected or executed an insertion. That aligned search passed goal
+    direction `8/8` on seed `12600` but produced `-5.76454e-6` mean improvement
+    over zero and beat recorded action only `1/8`; seed `12601` improved over
+    zero by `+2.52775e-5` and beat recorded `7/8`, but passed goal direction
+    only `6/8`. The planner therefore accepts a refinement only when it both
+    meets the goal gate and improves proposal latent energy by at least `1e-6`;
+    otherwise it records a proposal fallback. Goal-aligned train-only negative
+    mining and fresh whole held-out seeds remain required before any live
+    insertion or filming checkpoint.
