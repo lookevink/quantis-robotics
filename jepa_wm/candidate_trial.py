@@ -14,6 +14,7 @@ from jepa_wm.control_baselines import (
     RealizedPolicyOutcome,
     ScriptedOutcomeTolerances,
 )
+from jepa_wm.calibration_sessions import calibration_trial_from_session
 from jepa_wm.control_rollout import ControlStepSummary
 from sim.control_session import ControlSession
 from sim.recording import validate_recording_id
@@ -193,9 +194,15 @@ class CandidateTrialReport:
             raise ValueError("candidate trial seed provenance is inconsistent")
         if shadow.task_progress is None:
             raise ValueError("candidate trial requires calibrated shadow evidence")
+        calibration = shadow.task_progress.calibration
+        for trial in calibration.trials:
+            if calibration_trial_from_session(data_root, trial.trial_id) != trial:
+                raise ValueError(
+                    "candidate trial calibration does not match raw training sessions"
+                )
         return CandidateSeedProvenance(
             state.seed,
-            tuple(sorted(set(shadow.task_progress.calibration.seeds))),
+            tuple(sorted(set(calibration.seeds))),
         )
 
     def to_dict(self) -> dict[str, Any]:

@@ -47,7 +47,7 @@ load_control_policy_descriptor() {
   local policy="$1"
   local direct_proposal="${2:-direct-proposal}"
   case "${policy}" in
-    direct)
+    direct|calibration_collection)
       CONTROL_POLICY_PROPOSAL="${direct_proposal}"
       CONTROL_POLICY_REQUIRES_CHECKPOINT=true
       CONTROL_POLICY_RESPONDER=direct
@@ -83,8 +83,10 @@ control_proposal_from_identity() {
   local identity="$2"
   local checkpoint_root="$3"
   local python_bin="$4"
-  local proposal_name="${identity}"
-  if [[ "${policy}" == "direct" ]]; then
+  local proposal_name
+  load_control_policy_descriptor "${policy}" "${identity}" || return 1
+  proposal_name="${CONTROL_POLICY_PROPOSAL}"
+  if [[ "${CONTROL_POLICY_REQUIRES_CHECKPOINT}" == "true" ]]; then
     proposal_name="$("${python_bin}" -m jepa_wm.worker_artifacts proposal-name \
       --manifest "${checkpoint_root}/${identity}.worker.json")" || return 1
   fi

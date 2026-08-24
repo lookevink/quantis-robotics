@@ -304,4 +304,11 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     are two-fold cross-validation, not a globally held-out readiness set. The
     readiness gate rejects any calibration seed appearing anywhere in the
     evaluation-seed union; the next experiment must calibrate on training-only
-    seeds and then pass both 11400 and 11401.
+    seeds and then pass both 11400 and 11401. A dedicated
+    `calibration_collection` policy now permits only training references while
+    retaining live safety/tracking. Seed-1400 calibration passed shadow search
+    on held-out 11401, while 11400 missed rotation by `0.000011 rad` and had
+    slightly worse latent energy. Search robustness is now the active blocker.
+    The fitter and readiness reconstruction revalidate every calibration trial's
+    policy, training manifest, seed, realized action, tracking, collision, and
+    contact evidence before it can count.

@@ -48,11 +48,20 @@ from sim.isaac_exploration import apply_variant
 from sim.recording import RecordingLabel, RecordingMoment, validate_recording_id
 
 
-def _validated_reference(name: str, seed: int) -> DomainRecording:
+def validated_control_reference(
+    name: str,
+    seed: int,
+    policy: ControlExecutionPolicy,
+) -> DomainRecording:
     validate_recording_id(name)
+    expected_split = (
+        DatasetSplit.TRAIN
+        if policy is ControlExecutionPolicy.CALIBRATION_COLLECTION
+        else DatasetSplit.HELD_OUT
+    )
     reference = DomainRecording.from_path(
         RECORDING_ROOT / name,
-        expected_split=DatasetSplit.HELD_OUT,
+        expected_split=expected_split,
     )
     if reference.seed != seed:
         raise ValueError(
@@ -90,8 +99,8 @@ async def capture_control_observation(
     session = ControlSession.at(CONTROL_ROOT, session_id)
     if session.path.exists():
         raise ValueError(f"control session already exists: {session_id}")
-    reference = _validated_reference(reference_recording, seed)
-    plan = build_exploration_plan(seed, DatasetSplit.HELD_OUT)
+    reference = validated_control_reference(reference_recording, seed, policy)
+    plan = build_exploration_plan(seed, reference.split)
     await reset_stage()
     stage = omni.usd.get_context().get_stage()
     stage.SetEditTarget(stage.GetSessionLayer())

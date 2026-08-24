@@ -697,10 +697,19 @@ proposed/realized actions:
 
 ```bash
 ./ops/aws.sh jepa-wm-control-calibration-collect \
-  quantis_action_response_seed11400_v1 \
-  domain-20260823T113209Z-1400-held-00 \
-  11400 6 quantis_wrist_control
+  quantis_action_response_train1400_v1 \
+  domain-20260823T113209Z-1400-train-00 \
+  1400 6 quantis_uncalibrated_control
 ```
+
+The collection runner persists the dedicated `calibration_collection` policy.
+That policy accepts only `train` recordings, while ordinary direct, baseline,
+candidate, and evaluation sessions continue to require `held_out`. It uses the
+same model response, simulator safety, action-tracking, and raw-evidence fitter,
+but cannot act as candidate evaluation evidence.
+The fitter repeats the policy/split check for every raw session. Candidate
+readiness repeats it again from the calibration trial IDs, so held-out direct,
+scripted, or reset-candidate sessions cannot be relabeled as training evidence.
 
 The seed-11400-only artifact generalized to seed 11401 in shadow session
 `step-20260823T230446Z-11401`. Its candidate predicted `0.171 mm`, `0.00152
@@ -754,6 +763,17 @@ authority:
 ```text
 /home/ubuntu/docker/isaac-sim/data/quantis/control_candidates/cross-seed-candidate-readiness-20260823-v1/readiness.json
 ```
+
+Training-only calibration `quantis_action_response_train1400_v1` was fit from
+six live-gated trials on `domain-20260823T113209Z-1400-train-00` (seed 1400).
+It has translation/rotation alignments `0.9991`/`0.8686` and six directions on
+both vector axes. With the same `0.5 mm` worker gate, held-out session
+`step-20260824T001739Z-11401` passed shadow search and safety, predicting
+`0.538 mm`, `0.00166 rad`, and `0.0207` gripper progress. Held-out session
+`step-20260824T001352Z-11400` failed closed despite `0.740 mm` predicted
+translation: rotation missed the threshold by `0.000011 rad` and latent energy
+worsened slightly. The next experiment varies only the persisted CEM search
+configuration; no candidate is applied for the failed seed.
 
 Stop the worker independently with
 `./ops/aws.sh jepa-wm-control-worker-stop`.

@@ -5,8 +5,9 @@ import unittest
 from unittest.mock import patch
 
 from jepa_wm.action import ACTION_RECORDING_CONTRACT, DROID_FPS
+from jepa_wm.control_policy import ControlExecutionPolicy
 from sim.control_identity import observation_id_for_session
-from sim.isaac_control_capture import _validated_reference
+from sim.isaac_control_capture import validated_control_reference
 
 
 class ControlCaptureContractTest(unittest.TestCase):
@@ -42,7 +43,11 @@ class ControlCaptureContractTest(unittest.TestCase):
             root = Path(temp_dir)
             recording = self._recording(root, seed=11400)
             with patch("sim.isaac_control_capture.RECORDING_ROOT", root):
-                reference = _validated_reference(recording.name, 11400)
+                reference = validated_control_reference(
+                    recording.name,
+                    11400,
+                    ControlExecutionPolicy.DIRECT,
+                )
 
                 self.assertEqual(reference.seed, 11400)
 
@@ -52,7 +57,29 @@ class ControlCaptureContractTest(unittest.TestCase):
             recording = self._recording(root, seed=11400)
             with patch("sim.isaac_control_capture.RECORDING_ROOT", root):
                 with self.assertRaisesRegex(ValueError, "does not match"):
-                    _validated_reference(recording.name, 11401)
+                    validated_control_reference(
+                        recording.name,
+                        11401,
+                        ControlExecutionPolicy.DIRECT,
+                    )
+
+    def test_training_references_require_the_calibration_collection_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            recording = self._recording(root, seed=1400, split="train")
+            with patch("sim.isaac_control_capture.RECORDING_ROOT", root):
+                reference = validated_control_reference(
+                    recording.name,
+                    1400,
+                    ControlExecutionPolicy.CALIBRATION_COLLECTION,
+                )
+                self.assertEqual(reference.split.value, "train")
+                with self.assertRaisesRegex(ValueError, "expected 'held_out'"):
+                    validated_control_reference(
+                        recording.name,
+                        1400,
+                        ControlExecutionPolicy.DIRECT,
+                    )
 
 
 if __name__ == "__main__":

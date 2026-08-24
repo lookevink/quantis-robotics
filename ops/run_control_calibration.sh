@@ -32,7 +32,7 @@ for (( index = 0; index < trial_count; index++ )); do
   sessions+="${sessions:+,}${session_id}"
   bash "${repo_dir}/ops/run_control_step.sh" \
     "${session_id}" "${reference_name}" "${exploration_seed}" \
-    "${artifacts_name}" deferred direct
+    "${artifacts_name}" deferred calibration_collection
 done
 
 bash "${repo_dir}/ops/jepa_wm.sh" control-objective-calibrate \
