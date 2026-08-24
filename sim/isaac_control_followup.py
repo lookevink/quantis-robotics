@@ -10,7 +10,11 @@ from scipy.spatial.transform import Rotation
 
 from jepa.contract import ObservationStage
 from jepa_wm.action import DroidPose, action_between
-from jepa_wm.control_protocol import ControlObservation
+from jepa_wm.action import ActionSelectionBounds
+from jepa_wm.control_protocol import ControlObservation, ControlTarget
+from jepa_wm.grasp_contract import GRASP_TASK_ID
+from jepa_wm.trajectory import load_rollout_at
+from sim.control_context import recording_task
 from jepa_wm.control_safety import SimulatorSafetyLimits
 from jepa_wm.control_tracking import ActionTrackingLimits
 from sim.control_session import (
@@ -97,6 +101,20 @@ async def capture_followup_observation(
     expected_proposal = control_proposal_path(proposal_name)
     if previous_observation.expected_proposal != expected_proposal:
         raise ValueError("follow-up proposal differs from the rollout checkpoint")
+    next_context_index = previous_observation.warmup_frames + 1
+    target = previous_observation.target
+    reference_path = QUANTIS_DATA_ROOT / "recordings" / previous_state.reference_recording
+    if recording_task(reference_path) == GRASP_TASK_ID:
+        reference_rollout = load_rollout_at(
+            reference_path,
+            camera="wrist",
+            context_index=next_context_index,
+            bounds=ActionSelectionBounds(minimum_action_norm=0.0),
+        )
+        target = ControlTarget(
+            reference_rollout.target.path.relative_to(QUANTIS_DATA_ROOT),
+            reference_rollout.target_pose,
+        )
 
     session = ControlSession.at(CONTROL_ROOT, session_id)
     session.create()
@@ -141,13 +159,13 @@ async def capture_followup_observation(
         observation_id=observation_id_for_session(session_id),
         captured_at_unix_seconds=captured_at,
         context_frame=context_path.relative_to(QUANTIS_DATA_ROOT),
-        target=previous_observation.target,
+        target=target,
         expected_proposal=expected_proposal,
         pose=snapshot.end_effector_pose,
         previous_action=action_between(
             previous_observation.pose, snapshot.end_effector_pose
         ),
-        warmup_frames=previous_observation.warmup_frames + 1,
+        warmup_frames=next_context_index,
     )
     state = ControlSessionState(
         session_id=session_id,
@@ -159,6 +177,8 @@ async def capture_followup_observation(
         contact_force_newtons=contact_force,
         previous_session_id=previous_session_id,
         execution_policy=previous_state.execution_policy,
+        plug_position=tuple(float(value) for value in snapshot.plug_position),
+        plug_attached=snapshot.plug_attached,
     )
     session.write_capture(observation, state)
     bind_live_runtime(session_id, stage, actuators, attachment, sensor)

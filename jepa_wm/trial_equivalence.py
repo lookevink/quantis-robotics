@@ -17,6 +17,7 @@ class ResetEquivalenceTolerances:
     maximum_gripper_difference: float = 0.01
     maximum_joint_difference_radians: float = 1e-3
     maximum_reset_contact_force_newtons: float = 0.01
+    maximum_plug_position_difference_meters: float = 5e-4
 
     def __post_init__(self) -> None:
         values = (
@@ -25,6 +26,7 @@ class ResetEquivalenceTolerances:
             self.maximum_gripper_difference,
             self.maximum_joint_difference_radians,
             self.maximum_reset_contact_force_newtons,
+            self.maximum_plug_position_difference_meters,
         )
         if not all(isfinite(value) and value >= 0.0 for value in values):
             raise ValueError("reset equivalence tolerances must be finite and nonnegative")
@@ -36,6 +38,8 @@ class TrialResetState:
     joint_positions: tuple[float, ...]
     collision_detected: bool
     contact_force_newtons: float
+    plug_position: tuple[float, ...] | None = None
+    plug_attached: bool = False
 
     def __post_init__(self) -> None:
         if (
@@ -44,6 +48,14 @@ class TrialResetState:
             or not isinstance(self.collision_detected, bool)
             or not isfinite(self.contact_force_newtons)
             or self.contact_force_newtons < 0.0
+            or (
+                self.plug_position is not None
+                and (
+                    len(self.plug_position) != 3
+                    or not all(isfinite(value) for value in self.plug_position)
+                )
+            )
+            or not isinstance(self.plug_attached, bool)
         ):
             raise ValueError("trial reset state is invalid")
 
@@ -66,6 +78,18 @@ def validate_reset_equivalence(
             candidate.joint_positions,
             rtol=0.0,
             atol=tolerances.maximum_joint_difference_radians,
+        )
+        or reference.plug_attached != candidate.plug_attached
+        or (reference.plug_position is None) != (candidate.plug_position is None)
+        or (
+            reference.plug_position is not None
+            and candidate.plug_position is not None
+            and not np.allclose(
+                reference.plug_position,
+                candidate.plug_position,
+                rtol=0.0,
+                atol=tolerances.maximum_plug_position_difference_meters,
+            )
         )
     ):
         raise ValueError("trials did not start from the same reset state")

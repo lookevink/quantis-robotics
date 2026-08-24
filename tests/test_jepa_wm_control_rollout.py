@@ -153,6 +153,7 @@ class ControlRolloutTest(unittest.TestCase):
     def _write_reference(self, root: Path) -> None:
         reference = root / "recordings" / "reference"
         reference.mkdir(parents=True)
+        (reference / "manifest.json").write_text("{}")
         (reference / "steps.jsonl").write_text(
             json.dumps(
                 {
@@ -170,6 +171,7 @@ class ControlRolloutTest(unittest.TestCase):
             root = Path(temp_dir)
             reference = root / "recordings" / "reference"
             reference.mkdir(parents=True)
+            (reference / "manifest.json").write_text("{}")
             (reference / "steps.jsonl").write_text(
                 json.dumps(
                     {
@@ -321,6 +323,7 @@ class ControlRolloutTest(unittest.TestCase):
             root = Path(temp_dir)
             reference = root / "recordings" / "reference"
             reference.mkdir(parents=True)
+            (reference / "manifest.json").write_text("{}")
             (reference / "steps.jsonl").write_text(
                 json.dumps(
                     {
@@ -495,6 +498,56 @@ class ControlRolloutTest(unittest.TestCase):
                     root, ("session-0", "session-1"), requested_steps=2
                 )
 
+    def test_advances_one_reference_target_per_grasp_step(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reference = root / "recordings" / "reference"
+            reference.mkdir(parents=True)
+            (reference / "manifest.json").write_text(
+                json.dumps({"metadata": {"task": "reach_and_grasp"}})
+            )
+            (reference / "steps.jsonl").write_text(
+                "\n".join(
+                    json.dumps(
+                        {
+                            "index": index,
+                            "end_effector_pose": [
+                                position, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5
+                            ],
+                        }
+                    )
+                    for index, position in ((89, 0.43), (90, 0.44))
+                )
+                + "\n"
+            )
+            self._write_step(
+                root,
+                "session-0",
+                previous_session_id=None,
+                pose_x=0.40,
+                post_x=0.41,
+                target_frame="recordings/reference/wrist/frame_000089.png",
+                warmup_frames=86,
+            )
+            self._write_step(
+                root,
+                "session-1",
+                previous_session_id="session-0",
+                pose_x=0.41,
+                post_x=0.42,
+                target_frame="recordings/reference/wrist/frame_000090.png",
+                warmup_frames=87,
+                captured_at=101.0,
+                previous_action_x=0.01,
+            )
+
+            report = self._report(
+                root, ("session-0", "session-1"), requested_steps=2
+            )
+
+        self.assertEqual(report["reference_task"], "reach_and_grasp")
+        self.assertAlmostEqual(report["final_goal_error"]["translation_meters"], 0.02)
+
     def test_rejects_a_non_monotonic_warmup_chain(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -561,6 +614,7 @@ class ControlRolloutTest(unittest.TestCase):
             root = Path(temp_dir)
             reference = root / "recordings" / "reference"
             reference.mkdir(parents=True)
+            (reference / "manifest.json").write_text("{}")
             (reference / "steps.jsonl").write_text(
                 json.dumps(
                     {

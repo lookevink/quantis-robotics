@@ -1,0 +1,85 @@
+"""Validated recorded state used to initialize one live control context."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
+from math import isfinite
+from pathlib import Path
+
+from jepa_wm.grasp_contract import GRASP_TASK_ID
+from sim.exploration import ExplorationPlan, exploration_prefix
+
+
+GRASP_TASK_CONTEXT_START = 69
+GRASP_TASK_CONTEXT_END = 98
+EXPLORATION_CONTEXT_BOUNDARIES = tuple(range(4, 69, 4))
+
+
+def recording_task(recording: Path) -> str | None:
+    manifest = json.loads((recording / "manifest.json").read_text())
+    metadata = manifest.get("metadata") if isinstance(manifest, dict) else None
+    task = metadata.get("task") if isinstance(metadata, dict) else None
+    return task if isinstance(task, str) else None
+
+
+@dataclass(frozen=True)
+class RecordedControlStep:
+    index: int
+    arm_positions: tuple[float, ...]
+    gripper_width_m: float
+    plug_attached: bool
+
+    @classmethod
+    def from_dict(cls, payload: object) -> RecordedControlStep:
+        if not isinstance(payload, dict):
+            raise ValueError("recorded control step must be an object")
+        try:
+            step = cls(
+                int(payload["index"]),
+                tuple(float(value) for value in payload["arm_positions"]),
+                float(payload["gripper_width_m"]),
+                payload["plug_attached"],
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("recorded control step is incomplete") from error
+        if (
+            step.index < 0
+            or len(step.arm_positions) != 7
+            or not all(isfinite(value) for value in step.arm_positions)
+            or not isfinite(step.gripper_width_m)
+            or not 0.0 <= step.gripper_width_m <= 0.08
+            or not isinstance(step.plug_attached, bool)
+        ):
+            raise ValueError("recorded control step is invalid")
+        return step
+
+
+def load_control_context(
+    recording: Path,
+    context_index: int,
+    plan: ExplorationPlan,
+) -> tuple[RecordedControlStep, ...]:
+    """Load an exact prefix and admit task interiors only for grasp recordings."""
+
+    task = recording_task(recording)
+    if task == GRASP_TASK_ID:
+        if not (
+            context_index in EXPLORATION_CONTEXT_BOUNDARIES
+            or GRASP_TASK_CONTEXT_START <= context_index <= GRASP_TASK_CONTEXT_END
+        ):
+            raise ValueError("grasp control context is outside a complete task boundary")
+    else:
+        exploration_prefix(plan, context_index)
+    steps = tuple(
+        RecordedControlStep.from_dict(json.loads(line))
+        for line in (recording / "steps.jsonl").read_text().splitlines()
+        if line
+    )
+    if context_index >= len(steps) - 3 or tuple(
+        step.index for step in steps
+    ) != tuple(range(len(steps))):
+        raise ValueError("recorded control context cannot provide a three-action target")
+    if steps[0].plug_attached:
+        raise ValueError("recorded control context starts with an attached plug")
+    return steps[: context_index + 1]

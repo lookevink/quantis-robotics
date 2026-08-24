@@ -40,6 +40,7 @@ def reload_demo_runtime() -> ModuleType:
         "sim.exploration",
         "jepa_wm.domain_recording",
         "jepa_wm.grasp_recording",
+        "sim.control_context",
         "jepa_wm.trajectory",
         "jepa_wm.control_replay",
         "sim.isaac_demo_scene",

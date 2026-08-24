@@ -350,4 +350,7 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     now active: scripted held-out artifact `grasp-20260824-held-11401-v1`
     validates 102 true-4-FPS frames, acquisition at frame 89, 13 retained
     observations, and `99.9997 mm` attached displacement. This is training
-    evidence only; JEPA has not yet passed the live task gate.
+    evidence only; JEPA has not yet passed the live task gate. Live context 86
+    now reconstructs the exact held-out prefix three actions before acquisition,
+    advances the task target one reference frame per receding-horizon step, and
+    binds connector reset state into baseline equivalence.

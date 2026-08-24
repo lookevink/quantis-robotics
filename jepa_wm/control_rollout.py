@@ -23,6 +23,7 @@ from jepa_wm.grasp_task import (
     ReachAndGraspDecision,
     evaluate_reach_and_grasp,
 )
+from jepa_wm.grasp_contract import GRASP_TASK_ID
 from jepa_wm.control_safety import SimulatorSafetyLimits
 from jepa_wm.shadow_planning import ShadowSearchEvidence
 from sim.control_session import (
@@ -390,6 +391,7 @@ class ControlRolloutReport:
     steps: tuple[RolloutStep, ...]
     target_pose: DroidPose | None
     orchestration_failure: OrchestrationFailure | None = None
+    reference_task: str | None = None
 
     def __post_init__(self) -> None:
         validate_recording_id(self.rollout_id)
@@ -436,7 +438,16 @@ class ControlRolloutReport:
             observations
         ):
             raise ValueError("control rollout observation IDs must be unique")
-        if len({observation.target_frame for observation in observations}) != 1:
+        target_frames = tuple(observation.target_frame for observation in observations)
+        if self.reference_task == GRASP_TASK_ID:
+            target_indices = tuple(
+                int(frame.stem.removeprefix("frame_")) for frame in target_frames
+            )
+            if target_indices != tuple(
+                range(target_indices[0], target_indices[0] + len(target_indices))
+            ):
+                raise ValueError("grasp control rollout target schedule is invalid")
+        elif len(set(target_frames)) != 1:
             raise ValueError("control rollout changed its target frame")
         initial_warmup = observations[0].warmup_frames
         if initial_warmup < 4 or any(
@@ -507,7 +518,20 @@ class ControlRolloutReport:
 
     @property
     def reach_and_grasp(self) -> ReachAndGraspDecision | None:
-        evidence = []
+        if not self.complete_steps:
+            return None
+        initial_state = self.complete_steps[0].state
+        if initial_state.plug_position is None:
+            return None
+        evidence = [
+            GraspTaskStep(
+                tuple(initial_state.plug_position),
+                initial_state.plug_attached,
+                True,
+                initial_state.collision_detected,
+                initial_state.contact_force_newtons,
+            )
+        ]
         for step in self.complete_steps:
             post_action = step.result.post_action
             if post_action is None or post_action.plug_position is None:
@@ -539,6 +563,7 @@ class ControlRolloutReport:
             "schema": ROLLOUT_SCHEMA,
             "rollout_id": self.rollout_id,
             "reference_recording": self.reference_recording,
+            "reference_task": self.reference_task,
             "seed": self.seed,
             "proposal": str(self.proposal),
             "requested_steps": self.requested_steps,
@@ -636,9 +661,28 @@ class ControlRolloutReport:
         complete = tuple(
             step for step in summaries if isinstance(step, ControlStepSummary)
         )
+        reference_task = None
+        if complete:
+            manifest = json.loads(
+                (
+                    data_root
+                    / "recordings"
+                    / reference_recording
+                    / "manifest.json"
+                ).read_text()
+            )
+            metadata = manifest.get("metadata") if isinstance(manifest, dict) else None
+            reference_task = metadata.get("task") if isinstance(metadata, dict) else None
+        target_observation = (
+            None
+            if not complete
+            else complete[-1]
+            if reference_task == GRASP_TASK_ID
+            else complete[0]
+        )
         target = (
-            _target_pose(data_root, reference_recording, complete[0].observation)
-            if complete
+            _target_pose(data_root, reference_recording, target_observation.observation)
+            if target_observation is not None
             else None
         )
         return cls(
@@ -650,4 +694,5 @@ class ControlRolloutReport:
             steps=tuple(summaries),
             target_pose=target,
             orchestration_failure=orchestration_failure,
+            reference_task=(reference_task if isinstance(reference_task, str) else None),
         )

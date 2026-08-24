@@ -61,6 +61,8 @@ class ControlSessionState:
     contact_force_newtons: float
     previous_session_id: str | None = None
     execution_policy: ControlExecutionPolicy = ControlExecutionPolicy.DIRECT
+    plug_position: tuple[float, ...] | None = None
+    plug_attached: bool = False
 
     @classmethod
     def from_dict(cls, payload: Any) -> ControlSessionState:
@@ -85,6 +87,12 @@ class ControlSessionState:
                 execution_policy=ControlExecutionPolicy(
                     payload.get("execution_policy", ControlExecutionPolicy.DIRECT.value)
                 ),
+                plug_position=(
+                    tuple(float(value) for value in payload["plug_position"])
+                    if payload.get("plug_position") is not None
+                    else None
+                ),
+                plug_attached=payload.get("plug_attached", False),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("control session state is incomplete") from error
@@ -100,6 +108,14 @@ class ControlSessionState:
             or not isinstance(state.collision_detected, bool)
             or not isfinite(state.contact_force_newtons)
             or state.contact_force_newtons < 0.0
+            or (
+                state.plug_position is not None
+                and (
+                    len(state.plug_position) != 3
+                    or not all(isfinite(value) for value in state.plug_position)
+                )
+            )
+            or not isinstance(state.plug_attached, bool)
         ):
             raise ValueError("control session state is invalid")
         return state
@@ -115,6 +131,10 @@ class ControlSessionState:
             "contact_force_newtons": self.contact_force_newtons,
             "previous_session_id": self.previous_session_id,
             "execution_policy": self.execution_policy.value,
+            "plug_position": (
+                list(self.plug_position) if self.plug_position is not None else None
+            ),
+            "plug_attached": self.plug_attached,
         }
 
 
@@ -523,6 +543,8 @@ class ControlSession:
                         state.current_joint_positions,
                         state.collision_detected,
                         state.contact_force_newtons,
+                        state.plug_position,
+                        state.plug_attached,
                     ),
                     state.execution_policy,
                     state.reference_recording,
@@ -543,6 +565,8 @@ class ControlSession:
                     state.current_joint_positions,
                     state.collision_detected,
                     state.contact_force_newtons,
+                    state.plug_position,
+                    state.plug_attached,
                 ),
                 state.execution_policy,
                 state.reference_recording,

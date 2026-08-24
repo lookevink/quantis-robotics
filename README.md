@@ -458,6 +458,14 @@ task success additionally requires an unattached-to-attached transition,
 continuous retention over at least two observations, at least 20 mm of retained
 motion, passed tracking, no collision, and no force above 2 N.
 
+For task execution, context index `86` reconstructs the exact held-out
+joint/gripper prefix three actions before the scripted attachment frame. Each
+follow-up advances the reference target by one frame, allowing the receding
+horizon to continue from acquisition into the retained retreat instead of
+fixating on the first grasp image. The rollout report admits that moving target
+only for a validated `reach_and_grasp` recording and binds the initial connector
+pose/attachment state into reset-equivalence checks.
+
 ### Inverse-action proposal milestone
 
 The repository now has a deterministic bounded CEM implementation, empirical

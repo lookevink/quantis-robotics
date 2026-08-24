@@ -29,17 +29,15 @@ from sim.control_session import (
     ControlSession,
     ControlSessionState,
 )
+from sim.control_context import load_control_context
 from sim.control_identity import control_proposal_path, observation_id_for_session
 from sim.demo_sequence import Phase
 from sim.exploration import (
     DatasetSplit,
-    SegmentOutcome,
     build_exploration_plan,
-    exploration_prefix,
 )
 from sim.isaac_control_runtime import bind_live_runtime, contact_sensor, read_contact
 from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, DemoRecorder
-from sim.isaac_demo_kinematics import solve_waypoints
 from sim.isaac_demo_runtime import (
     JointCommand,
     create_actuators,
@@ -48,7 +46,7 @@ from sim.isaac_demo_runtime import (
     recording_snapshot,
     reset_stage,
 )
-from sim.isaac_demo_scene import ROBOT_PATH
+from sim.isaac_demo_scene import ROBOT_PATH, world_pose
 from sim.isaac_exploration import apply_variant
 from sim.recording import RecordingLabel, RecordingMoment, validate_recording_id
 
@@ -107,7 +105,7 @@ async def capture_control_observation(
         raise ValueError(f"control session already exists: {session_id}")
     reference = validated_control_reference(reference_recording, seed, policy)
     plan = build_exploration_plan(seed, reference.split)
-    warmup_targets = exploration_prefix(plan, context_index)
+    context_steps = load_control_context(reference.path, context_index, plan)
     reference_rollout = load_rollout_at(
         reference.path,
         camera="wrist",
@@ -142,10 +140,9 @@ async def capture_control_observation(
         if SimulationManager.get_physics_sim_view() is None:
             SimulationManager.initialize_physics()
         actuators = create_actuators(stage, Articulation(ROBOT_PATH))
-        ready = solve_waypoints()[0]
         origin = JointCommand(
-            ready.arm_positions + np.asarray(plan.initial_arm_offset_radians),
-            ready.waypoint.gripper_width_m,
+            np.asarray(context_steps[0].arm_positions),
+            context_steps[0].gripper_width_m,
         )
         timeline.play()
         actuators.apply(origin)
@@ -159,26 +156,34 @@ async def capture_control_observation(
         )
         await recorder.capture(initial, advance=False)
         current = origin
-        for target in warmup_targets:
+        for step in context_steps[1:]:
+            if step.plug_attached and not attachment.attached:
+                attachment.attach(world_pose(attachment.hand_prim)[0])
+            elif not step.plug_attached and attachment.attached:
+                raise ValueError("recorded control context loses its plug attachment")
             command = JointCommand(
-                origin.arm_positions + np.asarray(target.arm_offset_radians),
-                target.gripper_width_m,
+                np.asarray(step.arm_positions),
+                step.gripper_width_m,
             )
             await move_joint_command(
                 actuators,
                 current,
                 command,
                 attachment,
-                frame_count=target.frames,
+                frame_count=1,
                 phase=RecordingLabel(
                     (
-                        RecordingMoment.SETTLE
-                        if target.outcome == SegmentOutcome.STATIONARY
+                        RecordingMoment.ATTACHED
+                        if step.plug_attached
                         else RecordingMoment.MOTION
                     ),
-                    Phase.READY,
+                    Phase.GRASP if step.plug_attached else Phase.READY,
                 ),
-                stage=ObservationStage.APPROACHING_CABLE,
+                stage=(
+                    ObservationStage.CABLE_GRASPED
+                    if step.plug_attached
+                    else ObservationStage.APPROACHING_CABLE
+                ),
                 recorder=recorder,
                 sample_period_seconds=plan.sample_period_seconds,
             )
@@ -232,6 +237,8 @@ async def capture_control_observation(
         collision_detected=collision_detected,
         contact_force_newtons=contact_force,
         execution_policy=policy,
+        plug_position=tuple(float(value) for value in world_pose(attachment.prim)[0]),
+        plug_attached=attachment.attached,
     )
     session.write_capture(observation, state)
     bind_live_runtime(session_id, stage, actuators, attachment, sensor)
