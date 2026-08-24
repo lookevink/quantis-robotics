@@ -670,8 +670,46 @@ disabled while attached and seating is not force/compliance evidence. The v1
 artifact was rejected because palm-frame telemetry could not prove clasp
 clearance, v2 failed safely on a recorder type error, and v3 was rejected
 because USD finger-link origins are not the Lula gripper frame. All remain
-preserved as negative evidence. The next gate is contact-aware scripted
-insertion before collecting the 12-train/2-held-out JEPA-WM insertion corpus.
+preserved as negative evidence. It is superseded by the contact-aware baseline
+below and remains useful only as geometry/provenance evidence.
+
+That contact gate now has a nominal pass. Held-out artifact
+`contact-insert-20260824-held-12405-v9` contains 112 true-4-FPS task
+observations. The connector is a dynamic rigid body held by a physics fixed
+joint; its body/contact colliders and tip-local contact sensor are active. The
+RJ45 latch remains visual but non-colliding to represent its real compliant
+motion, and the nominal socket uses an explicitly recorded `1.05×` clearance
+allowance. Insertion is divided into 64 increments, and the live interlock
+polls every intermediate physics/render update and aborts above 2 N rather
+than waiting for the next recorded 4-FPS observation.
+
+Independent raw validation reconstructs `40.005 mm` gripper-frame clearance,
+`0.0036 mm` depth error, `0.0797 mm` lateral error, `0.00159 rad` orientation
+error, four retained seated observations, `6.287 mrad` maximum arm tracking
+error, `0.0048 mm` gripper error, no collision, and `0 N` maximum contact. The
+same dynamic sensor rejected v3 after measuring a rise from `5.6 N` to
+`142.4 N`; v4/v5 then stopped at their first `105.8 N` event under the new
+live abort. Those failures prove that the v9 zero-force result is measured
+clearance rather than an inactive sensor. Validate the pass with:
+
+```bash
+./ops/aws.sh jepa-wm-contact-insertion-validate \
+  contact-insert-20260824-held-12405-v9 held_out
+```
+
+The v6 pass has the same measured geometry but is superseded because its live
+interlock sampled only at recording cadence and its manifest did not bind the
+fixed-joint, latch-exclusion, scale, phase, and frame-count contract. V7 added
+those bindings but retained only the last sub-limit force sample in each 4-FPS
+window. V8 added interval maxima but did not reject a non-finite raw sensor
+reading before aggregation. V9 binds the runtime facts, accumulates each
+interval's maximum force, rejects invalid sensor values live, and fail-closes
+if any raw phase, stage, attachment, or telemetry field does not match.
+
+This authorizes insertion-dataset collection, not JEPA control or filming.
+The next gate is 12 TRAIN and two disjoint HELD_OUT recordings under this
+contact-aware contract, followed by insertion-conditioned proposal training
+and whole-seed readiness.
 
 The first grasp-domain JEPA-WM action adapter used all 1,980 bounded rollouts
 from the 20 training recordings. In a fixed eight-context CEM diagnostic it

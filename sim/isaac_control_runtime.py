@@ -3,13 +3,36 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from typing import Any
 
 from sim.isaac_demo_runtime import Actuators, PlugAttachment
-from sim.isaac_demo_scene import ROBOT_PATH
+from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH
 
 
 CONTACT_SENSOR_NAME = "QuantisControlContact"
+CONNECTOR_CONTACT_SENSOR_NAME = "QuantisConnectorContact"
+
+
+@dataclass(frozen=True)
+class ContactSensorSpec:
+    path: str
+    radius: float
+    missing_message: str
+    translations: tuple[tuple[float, float, float], ...] | None = None
+
+
+HAND_CONTACT_SENSOR = ContactSensorSpec(
+    f"{ROBOT_PATH}/panda_hand/{CONTACT_SENSOR_NAME}",
+    0.08,
+    "control contact sensor is missing",
+)
+CONNECTOR_CONTACT_SENSOR = ContactSensorSpec(
+    f"{PLUG_PATH}/{CONNECTOR_CONTACT_SENSOR_NAME}",
+    0.025,
+    "connector contact sensor is missing",
+    ((0.0, 0.0, 0.0),),
+)
 
 
 @dataclass(frozen=True)
@@ -47,22 +70,41 @@ def live_runtime_for(session_id: str, stage: Any) -> LiveControlRuntime | None:
     return runtime
 
 
-def contact_sensor(stage: Any, *, create: bool) -> Any:
+def _contact_sensor(stage: Any, spec: ContactSensorSpec, *, create: bool) -> Any:
     from isaacsim.sensors.experimental.physics import Contact, ContactSensor
 
-    path = f"{ROBOT_PATH}/panda_hand/{CONTACT_SENSOR_NAME}"
-    prim = stage.GetPrimAtPath(path)
+    prim = stage.GetPrimAtPath(spec.path)
     if create and not prim.IsValid():
+        arguments = {
+            "min_threshold": 0.0,
+            "max_threshold": 1000.0,
+            "radius": spec.radius,
+        }
+        if spec.translations is not None:
+            arguments["translations"] = [list(value) for value in spec.translations]
         return ContactSensor(
-            Contact.create(path, min_threshold=0.0, max_threshold=1000.0, radius=0.08)
+            Contact.create(spec.path, **arguments)
         )
     if not prim.IsValid():
-        raise RuntimeError("control contact sensor is missing")
-    return ContactSensor(path)
+        raise RuntimeError(spec.missing_message)
+    return ContactSensor(spec.path)
+
+
+def contact_sensor(stage: Any, *, create: bool) -> Any:
+    return _contact_sensor(stage, HAND_CONTACT_SENSOR, create=create)
+
+
+def connector_contact_sensor(stage: Any, *, create: bool) -> Any:
+    """Measure plug contacts in a tip-local radius under its rigid body."""
+
+    return _contact_sensor(stage, CONNECTOR_CONTACT_SENSOR, create=create)
 
 
 def read_contact(sensor: Any) -> tuple[bool, float]:
     reading = sensor.get_sensor_reading()
     if not reading.is_valid:
         raise RuntimeError("control contact sensor has no valid physics reading")
-    return bool(reading.in_contact), float(reading.value)
+    force = float(reading.value)
+    if not isfinite(force) or force < 0.0:
+        raise RuntimeError("control contact sensor returned an invalid force")
+    return bool(reading.in_contact), force

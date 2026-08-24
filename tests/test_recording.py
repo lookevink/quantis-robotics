@@ -14,6 +14,7 @@ from sim.recording import (
     RECORDING_SCHEMA,
     RecordingLabel,
     RecordingMoment,
+    RecordingSafetyTelemetry,
     RecordingSnapshot,
     RecordingWriter,
 )
@@ -75,6 +76,12 @@ class RecordingWriterTest(unittest.TestCase):
                     end_effector_world_position=[0.2, -0.25, 1.4],
                     gripper_frame_world_position=[0.1, -0.25, 1.4],
                     simulation_time_seconds=1.0,
+                    safety=RecordingSafetyTelemetry(
+                        collision_detected=True,
+                        contact_force_newtons=0.8,
+                        arm_tracking_error_rad=0.001,
+                        gripper_tracking_error_m=0.0002,
+                    ),
                 )
             )
             for path in writer.frame_paths().values():
@@ -111,6 +118,10 @@ class RecordingWriterTest(unittest.TestCase):
                 [1.0, 1.125],
             )
             self.assertEqual(manifest["schema"], RECORDING_SCHEMA)
+            self.assertTrue(step["collision_detected"])
+            self.assertEqual(step["contact_force_newtons"], 0.8)
+            self.assertEqual(step["arm_tracking_error_rad"], 0.001)
+            self.assertEqual(step["gripper_tracking_error_m"], 0.0002)
             self.assertEqual(manifest["fps"], 8)
             self.assertEqual(manifest["frames"], 2)
             self.assertEqual(

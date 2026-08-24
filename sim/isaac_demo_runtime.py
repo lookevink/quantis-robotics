@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from math import ceil
-from typing import Any
+from math import ceil, isfinite
+from typing import Any, Protocol
 
 import numpy as np
 
 from jepa.contract import ObservationStage
 from jepa_wm.action import DroidPose
+from jepa_wm.insertion_contract import COMPLIANT_COLLISION_PARTS
 from sim.isaac_demo_scene import (
     PLUG_PATH,
     RIGHT_GRIPPER_OFFSET_IN_HAND_METERS,
@@ -17,13 +19,38 @@ from sim.isaac_demo_scene import (
     STAGE_PATH,
     world_pose,
 )
-from sim.recording import RecordingLabel, RecordingSnapshot
+from sim.recording import (
+    RecordingLabel,
+    RecordingSafetyTelemetry,
+    RecordingSnapshot,
+)
 
 
 @dataclass(frozen=True)
 class JointCommand:
     arm_positions: np.ndarray
     gripper_width_m: float
+
+
+@dataclass(frozen=True)
+class ContactReading:
+    collision_detected: bool = False
+    force_newtons: float = 0.0
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.collision_detected, bool)
+            or isinstance(self.force_newtons, bool)
+            or not isfinite(self.force_newtons)
+            or self.force_newtons < 0.0
+        ):
+            raise ValueError("contact reading is invalid")
+
+    def peak(self, other: ContactReading) -> ContactReading:
+        return ContactReading(
+            self.collision_detected or other.collision_detected,
+            max(self.force_newtons, other.force_newtons),
+        )
 
 
 @dataclass
@@ -76,31 +103,48 @@ class Actuators:
         )
 
 
-@dataclass
-class PlugAttachment:
+class PlugMotion(Protocol):
     prim: Any
     hand_prim: Any
-    collision_attributes: list[Any]
+
+    @property
+    def attached(self) -> bool: ...
+
+    def world_pose(self) -> tuple[np.ndarray, np.ndarray]: ...
+
+    def follow(self, hand_position: np.ndarray) -> None: ...
+
+    def attach(self, hand_position: np.ndarray) -> None: ...
+
+    def detach_at(self, position: np.ndarray) -> None: ...
+
+
+@dataclass
+class KinematicPlugMotion:
+    prim: Any
+    hand_prim: Any
     hand_to_plug_offset: np.ndarray | None = None
 
     @property
     def attached(self) -> bool:
         return self.hand_to_plug_offset is not None
 
+    def world_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        return world_pose(self.prim)
+
     def follow(self, hand_position: np.ndarray) -> None:
         if not self.attached:
             return
+        position = hand_position + self.hand_to_plug_offset
         from pxr import Gf
 
         translate = self.prim.GetAttribute("xformOp:translate")
         if not translate.IsValid():
             raise RuntimeError(f"{PLUG_PATH} has no xformOp:translate attribute")
-        translate.Set(Gf.Vec3d(*(hand_position + self.hand_to_plug_offset)))
+        translate.Set(Gf.Vec3d(*position))
 
     def attach(self, hand_position: np.ndarray) -> None:
-        for attribute in self.collision_attributes:
-            attribute.Set(False)
-        plug_position, _ = world_pose(self.prim)
+        plug_position, _ = self.world_pose()
         self.hand_to_plug_offset = plug_position - hand_position
 
     def detach_at(self, position: np.ndarray) -> None:
@@ -108,6 +152,172 @@ class PlugAttachment:
 
         self.hand_to_plug_offset = None
         self.prim.GetAttribute("xformOp:translate").Set(Gf.Vec3d(*position))
+
+
+@dataclass
+class FixedJointPlugMotion:
+    prim: Any
+    hand_prim: Any
+    rigid_prim: Any
+    fixed_joint: Any
+    hand_to_plug_offset: np.ndarray | None = None
+
+    @property
+    def attached(self) -> bool:
+        return self.hand_to_plug_offset is not None
+
+    def world_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        positions, orientations = self.rigid_prim.get_world_poses()
+        if hasattr(positions, "numpy"):
+            positions = positions.numpy()
+        if hasattr(orientations, "numpy"):
+            orientations = orientations.numpy()
+        position_values = np.asarray(positions, dtype=np.float64)
+        orientation_values = np.asarray(orientations, dtype=np.float64)
+        if position_values.shape != (1, 3) or orientation_values.shape != (1, 4):
+            raise RuntimeError("plug rigid body returned invalid world poses")
+        return position_values[0], orientation_values[0]
+
+    def follow(self, hand_position: np.ndarray) -> None:
+        del hand_position
+
+    def attach(self, hand_position: np.ndarray) -> None:
+        plug_position, plug_orientation = self.world_pose()
+        self.hand_to_plug_offset = plug_position - hand_position
+        self._enable_fixed_joint(hand_position, plug_position, plug_orientation)
+
+    def detach_at(self, position: np.ndarray) -> None:
+        self.hand_to_plug_offset = None
+        self.fixed_joint.CreateJointEnabledAttr().Set(False)
+        self.rigid_prim.set_world_poses(positions=[position])
+
+    def _enable_fixed_joint(
+        self,
+        hand_position: np.ndarray,
+        plug_position: np.ndarray,
+        plug_orientation_wxyz: np.ndarray,
+    ) -> None:
+        from pxr import Gf, UsdPhysics
+        from scipy.spatial.transform import Rotation
+
+        _, hand_orientation_wxyz = world_pose(self.hand_prim)
+        hand_rotation = Rotation.from_quat(
+            [
+                hand_orientation_wxyz[1],
+                hand_orientation_wxyz[2],
+                hand_orientation_wxyz[3],
+                hand_orientation_wxyz[0],
+            ]
+        )
+        plug_rotation = Rotation.from_quat(
+            [
+                plug_orientation_wxyz[1],
+                plug_orientation_wxyz[2],
+                plug_orientation_wxyz[3],
+                plug_orientation_wxyz[0],
+            ]
+        )
+        local_position = hand_rotation.inv().apply(plug_position - hand_position)
+        local_xyzw = (hand_rotation.inv() * plug_rotation).as_quat()
+        self.fixed_joint.CreateLocalPos0Attr().Set(Gf.Vec3f(*local_position))
+        self.fixed_joint.CreateLocalRot0Attr().Set(
+            Gf.Quatf(
+                float(local_xyzw[3]),
+                Gf.Vec3f(*[float(value) for value in local_xyzw[:3]]),
+            )
+        )
+        self.fixed_joint.CreateLocalPos1Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
+        self.fixed_joint.CreateLocalRot1Attr().Set(
+            Gf.Quatf(1.0, Gf.Vec3f(0.0, 0.0, 0.0))
+        )
+        UsdPhysics.RigidBodyAPI(self.prim).CreateKinematicEnabledAttr().Set(False)
+        self.fixed_joint.CreateJointEnabledAttr().Set(True)
+
+
+@dataclass
+class PlugCollisionPolicy:
+    collision_attributes: list[Any]
+    excluded_collision_paths: frozenset[str] = frozenset()
+
+    @property
+    def compliant_collision_parts(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                {
+                    str(attribute.GetPath().GetPrimPath()).rsplit("/", 1)[-1]
+                    for attribute in self.collision_attributes
+                    if str(attribute.GetPath().GetPrimPath())
+                    in self.excluded_collision_paths
+                }
+            )
+        )
+
+    def set_collisions(self, enabled: bool) -> None:
+        for attribute in self.collision_attributes:
+            prim_path = str(attribute.GetPath().GetPrimPath())
+            attribute.Set(enabled and prim_path not in self.excluded_collision_paths)
+
+
+@dataclass
+class PlugAttachment:
+    motion: PlugMotion
+    collisions: PlugCollisionPolicy
+
+    @property
+    def prim(self) -> Any:
+        return self.motion.prim
+
+    @property
+    def hand_prim(self) -> Any:
+        return self.motion.hand_prim
+
+    @property
+    def attached(self) -> bool:
+        return self.motion.attached
+
+    @property
+    def compliant_collision_parts(self) -> tuple[str, ...]:
+        return self.collisions.compliant_collision_parts
+
+    def world_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        return self.motion.world_pose()
+
+    def follow(self, hand_position: np.ndarray) -> None:
+        self.motion.follow(hand_position)
+
+    def attach(self, hand_position: np.ndarray) -> None:
+        self.motion.attach(hand_position)
+        if isinstance(self.motion, KinematicPlugMotion):
+            self.set_collisions(False)
+
+    def detach_at(self, position: np.ndarray) -> None:
+        self.motion.detach_at(position)
+
+    def set_collisions(self, enabled: bool) -> None:
+        self.collisions.set_collisions(enabled)
+
+
+@dataclass(frozen=True)
+class FixedJointPlugPreparation:
+    prim: Any
+    hand_prim: Any
+    fixed_joint: Any
+    collisions: PlugCollisionPolicy
+
+    @property
+    def compliant_collision_parts(self) -> tuple[str, ...]:
+        return self.collisions.compliant_collision_parts
+
+    def bind_physics(self, rigid_prim: Any) -> PlugAttachment:
+        return PlugAttachment(
+            FixedJointPlugMotion(
+                self.prim,
+                self.hand_prim,
+                rigid_prim,
+                self.fixed_joint,
+            ),
+            self.collisions,
+        )
 
 
 async def reset_stage() -> dict[str, Any]:
@@ -159,7 +369,7 @@ def create_actuators(stage: Any, articulation: Any) -> Actuators:
     return Actuators(articulation, arm_attributes, finger_attributes)
 
 
-def prepare_plug(stage: Any) -> PlugAttachment:
+def _plug_prims(stage: Any) -> tuple[Any, Any, list[Any]]:
     from pxr import UsdPhysics
 
     plug = stage.GetPrimAtPath(PLUG_PATH)
@@ -169,13 +379,62 @@ def prepare_plug(stage: Any) -> PlugAttachment:
     if not hand.IsValid():
         raise RuntimeError(f"robot hand prim is missing: {ROBOT_PATH}/panda_hand")
     UsdPhysics.RigidBodyAPI(plug).CreateKinematicEnabledAttr().Set(True)
-    collision_attributes = [
-        UsdPhysics.CollisionAPI(prim).CreateCollisionEnabledAttr()
+    collision_prims = [
+        prim
         for prim in stage.Traverse()
         if prim.GetPath().HasPrefix(plug.GetPath())
         and prim.HasAPI(UsdPhysics.CollisionAPI)
     ]
-    return PlugAttachment(plug, hand, collision_attributes)
+    return plug, hand, collision_prims
+
+
+def prepare_plug(stage: Any) -> PlugAttachment:
+    from pxr import UsdPhysics
+
+    plug, hand, collision_prims = _plug_prims(stage)
+    collisions = PlugCollisionPolicy(
+        [
+            UsdPhysics.CollisionAPI(prim).CreateCollisionEnabledAttr()
+            for prim in collision_prims
+        ]
+    )
+    return PlugAttachment(KinematicPlugMotion(plug, hand), collisions)
+
+
+def prepare_fixed_joint_plug(stage: Any) -> FixedJointPlugPreparation:
+    from pxr import UsdPhysics
+
+    plug, hand, collision_prims = _plug_prims(stage)
+    excluded_collision_paths = frozenset(
+        str(prim.GetPath())
+        for prim in collision_prims
+        if prim.GetName() in COMPLIANT_COLLISION_PARTS
+    )
+    found_parts = frozenset(
+        prim.GetName()
+        for prim in collision_prims
+        if str(prim.GetPath()) in excluded_collision_paths
+    )
+    if found_parts != frozenset(COMPLIANT_COLLISION_PARTS):
+        missing = sorted(set(COMPLIANT_COLLISION_PARTS) - found_parts)
+        raise RuntimeError(f"plug compliant collision prims are missing: {missing}")
+    fixed_joint = UsdPhysics.FixedJoint.Define(
+        stage,
+        f"{PLUG_PATH}/QuantisGraspJoint",
+    )
+    fixed_joint.CreateBody0Rel().SetTargets([hand.GetPath()])
+    fixed_joint.CreateBody1Rel().SetTargets([plug.GetPath()])
+    fixed_joint.CreateCollisionEnabledAttr().Set(False)
+    fixed_joint.CreateJointEnabledAttr().Set(False)
+    collisions = PlugCollisionPolicy(
+        [
+            UsdPhysics.CollisionAPI(prim).CreateCollisionEnabledAttr()
+            for prim in collision_prims
+        ],
+        excluded_collision_paths,
+    )
+    collisions.set_collisions(True)
+    return FixedJointPlugPreparation(plug, hand, fixed_joint, collisions)
 
 
 def recording_snapshot(
@@ -183,13 +442,15 @@ def recording_snapshot(
     stage: ObservationStage,
     command: JointCommand,
     attachment: PlugAttachment,
+    *,
+    safety: RecordingSafetyTelemetry = RecordingSafetyTelemetry(),
 ) -> RecordingSnapshot:
     import omni.timeline
 
     hand_position, hand_orientation = world_pose(attachment.hand_prim)
     robot = attachment.hand_prim.GetStage().GetPrimAtPath(ROBOT_PATH)
     base_position, base_orientation = world_pose(robot)
-    plug_position, plug_orientation = world_pose(attachment.prim)
+    plug_position, plug_orientation = attachment.world_pose()
     from scipy.spatial.transform import Rotation
 
     hand_xyzw = np.asarray(
@@ -221,6 +482,7 @@ def recording_snapshot(
         end_effector_world_position=hand_position,
         gripper_frame_world_position=gripper_frame_position,
         simulation_time_seconds=omni.timeline.get_timeline_interface().get_current_time(),
+        safety=safety,
     )
 
 
@@ -228,25 +490,45 @@ def _smoothstep(progress: float) -> float:
     return progress * progress * (3.0 - 2.0 * progress)
 
 
-async def _advance_sample(sample_period_seconds: float | None) -> None:
+async def _advance_sample(
+    sample_period_seconds: float | None,
+    observe_safety: Callable[[], ContactReading] | None = None,
+) -> ContactReading:
     import omni.kit.app
     import omni.timeline
 
     app = omni.kit.app.get_app()
+    latest_safety = ContactReading()
     if sample_period_seconds is None:
         await app.next_update_async()
-        return
+        return observe_safety() if observe_safety is not None else latest_safety
     timeline = omni.timeline.get_timeline_interface()
     started_at = timeline.get_current_time()
     maximum_updates = max(120, ceil(sample_period_seconds * 1000))
     for _ in range(maximum_updates):
         await app.next_update_async()
+        if observe_safety is not None:
+            latest_safety = latest_safety.peak(observe_safety())
         if timeline.get_current_time() - started_at >= sample_period_seconds - 1e-6:
-            return
+            return latest_safety
     raise RuntimeError(
         f"simulation did not advance {sample_period_seconds:.3f}s "
         f"within {maximum_updates} updates"
     )
+
+
+async def advance_physics_updates(
+    update_count: int,
+    observe_safety: Callable[[], ContactReading] | None = None,
+) -> ContactReading:
+    """Advance exact render/physics updates while polling a live interlock."""
+
+    if update_count <= 0:
+        raise ValueError("update_count must be positive")
+    latest = ContactReading()
+    for _ in range(update_count):
+        latest = latest.peak(await _advance_sample(None, observe_safety))
+    return latest
 
 
 async def move_joint_command(
@@ -260,6 +542,7 @@ async def move_joint_command(
     stage: ObservationStage,
     recorder: Any | None,
     sample_period_seconds: float | None = None,
+    observe_safety: Callable[[], ContactReading] | None = None,
 ) -> tuple[float, ...]:
     """Interpolate one command and capture only after its required sim interval."""
 
@@ -274,9 +557,31 @@ async def move_joint_command(
             + (end.gripper_width_m - start.gripper_width_m) * blend,
         )
         actuators.apply(command)
-        await _advance_sample(sample_period_seconds)
+        contact_reading = await _advance_sample(
+            sample_period_seconds,
+            observe_safety,
+        )
         attachment.follow(world_pose(attachment.hand_prim)[0])
-        snapshot = recording_snapshot(phase, stage, command, attachment)
+        actual = actuators.actual_command()
+        arm_tracking_error = float(
+            np.max(np.abs(actual.arm_positions - command.arm_positions))
+        )
+        gripper_tracking_error = abs(
+            actual.gripper_width_m - command.gripper_width_m
+        )
+        safety = RecordingSafetyTelemetry(
+            collision_detected=contact_reading.collision_detected,
+            contact_force_newtons=contact_reading.force_newtons,
+            arm_tracking_error_rad=arm_tracking_error,
+            gripper_tracking_error_m=gripper_tracking_error,
+        )
+        snapshot = recording_snapshot(
+            phase,
+            stage,
+            command,
+            attachment,
+            safety=safety,
+        )
         if snapshot.simulation_time_seconds is not None:
             sample_times.append(snapshot.simulation_time_seconds)
         if recorder is not None:

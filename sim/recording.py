@@ -6,6 +6,7 @@ import json
 import re
 from dataclasses import asdict, dataclass
 from enum import Enum
+from math import isfinite
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -14,7 +15,11 @@ from jepa_wm.action import ACTION_RECORDING_CONTRACT, DroidPose, action_between
 from sim.demo_sequence import Phase
 
 
-RECORDING_SCHEMA = "quantis.demo_recording.v5"
+RECORDING_SCHEMA_V5 = "quantis.demo_recording.v5"
+RECORDING_SCHEMA_V6 = "quantis.demo_recording.v6"
+RECORDING_SCHEMA_V7 = "quantis.demo_recording.v7"
+RECORDING_SCHEMA_V8 = "quantis.demo_recording.v8"
+RECORDING_SCHEMA = "quantis.demo_recording.v9"
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -58,6 +63,51 @@ class RecordingLabel:
 
 
 @dataclass(frozen=True)
+class RecordingSafetyTelemetry:
+    collision_detected: bool = False
+    contact_force_newtons: float = 0.0
+    arm_tracking_error_rad: float = 0.0
+    gripper_tracking_error_m: float = 0.0
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.collision_detected, bool)
+            or isinstance(self.contact_force_newtons, bool)
+            or not isfinite(self.contact_force_newtons)
+            or self.contact_force_newtons < 0.0
+            or isinstance(self.arm_tracking_error_rad, bool)
+            or not isfinite(self.arm_tracking_error_rad)
+            or self.arm_tracking_error_rad < 0.0
+            or isinstance(self.gripper_tracking_error_m, bool)
+            or not isfinite(self.gripper_tracking_error_m)
+            or self.gripper_tracking_error_m < 0.0
+        ):
+            raise ValueError("recording safety telemetry is invalid")
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> RecordingSafetyTelemetry:
+        try:
+            raw_values = (
+                payload["contact_force_newtons"],
+                payload["arm_tracking_error_rad"],
+                payload["gripper_tracking_error_m"],
+            )
+            if any(
+                isinstance(value, bool) or not isinstance(value, (int, float))
+                for value in raw_values
+            ):
+                raise ValueError("numeric telemetry must be a JSON number")
+            return cls(
+                collision_detected=payload["collision_detected"],
+                contact_force_newtons=float(raw_values[0]),
+                arm_tracking_error_rad=float(raw_values[1]),
+                gripper_tracking_error_m=float(raw_values[2]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("recording safety telemetry is invalid") from error
+
+
+@dataclass(frozen=True)
 class RecordingSnapshot:
     phase: RecordingLabel
     stage: ObservationStage
@@ -70,6 +120,7 @@ class RecordingSnapshot:
     end_effector_world_position: Sequence[float]
     gripper_frame_world_position: Sequence[float]
     simulation_time_seconds: float | None = None
+    safety: RecordingSafetyTelemetry = RecordingSafetyTelemetry()
 
 
 @dataclass(frozen=True)
@@ -89,6 +140,10 @@ class RecordingStep:
     gripper_frame_world_position: list[float]
     action_from_previous: list[float] | None
     simulation_time_seconds: float | None
+    collision_detected: bool
+    contact_force_newtons: float
+    arm_tracking_error_rad: float
+    gripper_tracking_error_m: float
 
 
 class RecordingWriter:
@@ -186,6 +241,10 @@ class RecordingWriter:
                     list(action.values) if action is not None else None
                 ),
                 simulation_time_seconds=snapshot.simulation_time_seconds,
+                collision_detected=snapshot.safety.collision_detected,
+                contact_force_newtons=snapshot.safety.contact_force_newtons,
+                arm_tracking_error_rad=snapshot.safety.arm_tracking_error_rad,
+                gripper_tracking_error_m=snapshot.safety.gripper_tracking_error_m,
             )
         )
         self._previous_end_effector_pose = end_effector_pose

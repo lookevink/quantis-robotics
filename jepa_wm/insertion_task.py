@@ -47,6 +47,8 @@ class InsertionTaskLimits:
     maximum_lateral_error_meters: float = 0.003
     maximum_orientation_error_rad: float = 0.05
     maximum_contact_force_newtons: float = 2.0
+    maximum_arm_tracking_error_rad: float = 0.01
+    maximum_gripper_tracking_error_m: float = 0.003
 
     def __post_init__(self) -> None:
         values = (
@@ -55,6 +57,8 @@ class InsertionTaskLimits:
             self.maximum_lateral_error_meters,
             self.maximum_orientation_error_rad,
             self.maximum_contact_force_newtons,
+            self.maximum_arm_tracking_error_rad,
+            self.maximum_gripper_tracking_error_m,
         )
         if not all(isfinite(value) and value > 0.0 for value in values):
             raise ValueError("insertion task limits must be positive and finite")
@@ -112,6 +116,17 @@ class InsertionDecision:
     @property
     def passed(self) -> bool:
         return not self.failures
+
+    def evidence_dict(self) -> dict[str, object]:
+        return {
+            "acquisition_index": self.acquisition_index,
+            "seated_index": self.seated_index,
+            "seated_observations": len(self.seated_indices),
+            "grasp_clearance_meters": self.grasp_clearance_meters,
+            "seating_depth_error_meters": self.seating_depth_error_meters,
+            "seating_lateral_error_meters": self.seating_lateral_error_meters,
+            "seating_orientation_error_rad": self.seating_orientation_error_rad,
+        }
 
 
 def evaluate_insertion_geometry(
@@ -195,10 +210,17 @@ def evaluate_insertion(
     steps: Sequence[InsertionTaskStep],
     target: InsertionTarget,
     limits: InsertionTaskLimits = InsertionTaskLimits(),
+    *,
+    eligible_seating_indices: frozenset[int] | None = None,
 ) -> InsertionDecision:
     """Require a usable grasp retained through a safe, aligned seating event."""
 
-    geometry = evaluate_insertion_geometry(steps, target, limits)
+    geometry = evaluate_insertion_geometry(
+        steps,
+        target,
+        limits,
+        eligible_seating_indices=eligible_seating_indices,
+    )
     failures = list(geometry.failures)
     if any(not step.tracking_passed for step in steps):
         failures.append(InsertionFailure.TRACKING_FAILED)

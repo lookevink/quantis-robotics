@@ -408,3 +408,23 @@ def start_insertion_recording(
             dataset_split,
         ),
     )
+
+
+def start_contact_insertion_recording(
+    recording_id: str,
+    seed: int,
+    split: str,
+) -> dict[str, Any]:
+    """Start collision-enabled insertion with synchronized safety telemetry."""
+
+    from sim.isaac_exploration import record_contact_insertion_trajectory
+
+    dataset_split = DatasetSplit(split)
+    return _RECORDING_JOBS.start(
+        recording_id,
+        lambda job_recording_id: record_contact_insertion_trajectory(
+            job_recording_id,
+            seed,
+            dataset_split,
+        ),
+    )

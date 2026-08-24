@@ -375,7 +375,9 @@ Commands:
   demo-record-exploration RECORDING SEED train|held_out
   demo-record-grasp RECORDING SEED train|held_out
   demo-record-insertion RECORDING SEED train|held_out
+  demo-record-contact-insertion RECORDING SEED train|held_out
   jepa-wm-grasp-validate RECORDING train|held_out
+  jepa-wm-contact-insertion-validate RECORDING train|held_out
   jepa-wm-insertion-validate RECORDING train|held_out
   demo-dashboard REFERENCE [primary-camera] [jepa-camera]
   capture-smoke | jepa-embed [source-name] [camera]
@@ -509,11 +511,19 @@ case "${command}" in
   demo-record-insertion)
     record_seeded_task start_insertion_recording "${2:-}" "${3:-}" "${4:-}"
     ;;
+  demo-record-contact-insertion)
+    record_seeded_task start_contact_insertion_recording \
+      "${2:-}" "${3:-}" "${4:-}"
+    ;;
   jepa-wm-grasp-validate)
     validate_task_recording jepa_wm.grasp_recording_cli "${2:-}" "${3:-}"
     ;;
   jepa-wm-insertion-validate)
     validate_task_recording jepa_wm.insertion_recording_cli "${2:-}" "${3:-}"
+    ;;
+  jepa-wm-contact-insertion-validate)
+    validate_task_recording jepa_wm.contact_insertion_recording_cli \
+      "${2:-}" "${3:-}"
     ;;
   demo-dashboard)
     reference_name="${2:-}"

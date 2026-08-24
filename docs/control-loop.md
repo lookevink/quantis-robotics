@@ -417,9 +417,25 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     independently reconstructs `40.005 mm` clasp clearance, `0.0022 mm` depth
     error, `0.1075 mm` lateral error, zero orientation error, and four seated
     observations. It is kinematic-only; v1/v2/v3 remain negative evidence.
-18. [ ] Establish contact-aware scripted insertion. Enable accurate connector
+18. [x] Establish contact-aware scripted insertion. Enable accurate connector
     and receptacle collision/contact evidence during the insertion segment,
     preserve at least `30 mm` exposed tip, and require bounded force,
     orientation, depth, lateral error, and retained seating. Only after this
     baseline passes should we collect 12 training and two disjoint held-out
-    insertion recordings for JEPA-WM.
+    insertion recordings for JEPA-WM. Held-out artifact
+    `contact-insert-20260824-held-12405-v9` passed with a physics-jointed
+    connector, active body/contact colliders, a compliant latch exclusion,
+    an explicit `1.05×` nominal socket allowance, 64 insertion increments,
+    four seated observations, `0.0797 mm` lateral error, `0.0036 mm` depth
+    error, `0.00159 rad` orientation error, bounded tracking, and `0 N`
+    measured contact. The live interlock polls every intermediate physics
+    update. The same sensor measured `142.4 N` on the rejected v3; v4/v5 then
+    failed closed at `105.8 N`. V6 is superseded because its safety loop ran
+    only at 4 FPS and its manifest did not bind the exact runtime contract. V7
+    bound that contract but did not retain sub-limit transient force maxima;
+    v8 does, while v9 additionally rejects non-finite/negative sensor values
+    before aggregation.
+19. [ ] Collect the contact-aware insertion corpus. Record at least 12 unique
+    TRAIN seeds and two disjoint HELD_OUT seeds under the exact v9 contract,
+    then train/evaluate insertion-conditioned proposal and world-model
+    artifacts. No current insertion artifact grants JEPA control or filming.

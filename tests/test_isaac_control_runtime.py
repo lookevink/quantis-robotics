@@ -2,37 +2,32 @@ from __future__ import annotations
 
 import unittest
 
-from sim.isaac_control_runtime import bind_live_runtime, live_runtime_for
+from sim.isaac_control_runtime import read_contact
 
 
-class LiveControlRuntimeTest(unittest.TestCase):
-    def test_reuses_objects_only_for_the_bound_session_and_stage(self) -> None:
-        stage = object()
-        actuators = object()
-        attachment = object()
-        sensor = object()
+class _Reading:
+    def __init__(self, value: float) -> None:
+        self.is_valid = True
+        self.in_contact = False
+        self.value = value
 
-        runtime = bind_live_runtime(
-            "session-01", stage, actuators, attachment, sensor
-        )
 
-        self.assertIs(live_runtime_for("session-01", stage), runtime)
-        self.assertIsNone(live_runtime_for("session-02", stage))
-        self.assertIsNone(live_runtime_for("session-01", object()))
+class _Sensor:
+    def __init__(self, value: float) -> None:
+        self.reading = _Reading(value)
 
-    def test_rebinding_transfers_the_runtime_to_the_followup_session(self) -> None:
-        stage = object()
-        actuators = object()
-        attachment = object()
-        sensor = object()
-        bind_live_runtime("session-01", stage, actuators, attachment, sensor)
+    def get_sensor_reading(self) -> _Reading:
+        return self.reading
 
-        runtime = bind_live_runtime(
-            "session-02", stage, actuators, attachment, sensor
-        )
 
-        self.assertIsNone(live_runtime_for("session-01", stage))
-        self.assertIs(live_runtime_for("session-02", stage), runtime)
+class ContactReadingTest(unittest.TestCase):
+    def test_rejects_non_finite_force(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "invalid force"):
+            read_contact(_Sensor(float("nan")))
+
+    def test_rejects_negative_force(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "invalid force"):
+            read_contact(_Sensor(-0.1))
 
 
 if __name__ == "__main__":
