@@ -1,6 +1,22 @@
-# Quantis robotics bootstrap
+# Quantis robotics lab
 
-Simulation-first JEPA experiments for a narrow data-center manipulation demo.
+Simulation-first JEPA research for autonomous data-center manipulation.
+
+## Mission
+
+Quantis is building robotics for lights-out data-center operations: facilities
+that can remain dark and operate without routine human presence. The long-term
+intent is to help data-center operators:
+
+- reduce technicians' exposure to energized and high-voltage equipment;
+- respond to physical faults faster, at any hour;
+- reduce lighting and human-comfort cooling overhead where the facility's
+  operating envelope permits; and
+- make inspection and maintenance more consistent, repeatable, and auditable.
+
+This repository is the lab for that work. Its current cable reach-and-grasp
+experiments are deliberately narrow research milestones, not evidence that
+autonomous, human-free data-center operation is production-ready.
 
 The first embodiment is the **Franka Panda** because:
 
@@ -106,9 +122,9 @@ Bootstrap stores persistent content under `QUANTIS_ASSET_HOME` (configured as `/
 
 ### Cable/cord asset gap
 
-Neither downloaded pack supplies the task-ready power cord and matching receptacle needed for the plug-in demo. `/assets/cable` is reserved for that custom asset. For the first JEPA-controlled demo, use a vendor CAD/mesh pair for the connector and socket, convert them to USD, and author accurate collision geometry and insertion tolerances. Keep the connector rigid and represent the trailing cable as either a short articulated chain or a visually updated curve at first. Full flexible-cable contact is a separate physics milestone and would make policy debugging substantially harder.
+Neither downloaded pack supplies the task-ready power cord and matching receptacle needed for the plug-in lab task. `/assets/cable` is reserved for that custom asset. For the first JEPA-controlled lab experiment, use a vendor CAD/mesh pair for the connector and socket, convert them to USD, and author accurate collision geometry and insertion tolerances. Keep the connector rigid and represent the trailing cable as either a short articulated chain or a visually updated curve at first. Full flexible-cable contact is a separate physics milestone and would make policy debugging substantially harder.
 
-Bootstrap provisions and mounts the source assets. The implemented demo composes
+Bootstrap provisions and mounts the source assets. The implemented lab scene composes
 the Franka, rack/module proxy, rigid connector, and socket into the reusable
 `datacenter_demo.usda` stage. This remains a geometry-driven placeholder task:
 the connector has no deformable trailing cable and is not a production asset.
@@ -187,7 +203,7 @@ Install the [Isaac Sim WebRTC Streaming Client](https://docs.isaacsim.omniverse.
 
 Streaming is only remote display/control. It is **not** the training-data capture path.
 
-## 4. Run the deterministic plug-in demo
+## 4. Run the deterministic plug-in lab sequence
 
 With `isaacsim.code_editor.python_server` enabled in the live Isaac session, the AWS wrapper can preflight and execute the arm sequence through the server's loopback-only port:
 
@@ -199,9 +215,12 @@ With `isaacsim.code_editor.python_server` enabled in the live Isaac session, the
 ./ops/aws.sh demo-record
 ```
 
+The existing `demo-*` command and artifact identifiers remain unchanged for
+compatibility; “lab” is the project and capability language.
+
 The ordered sequence is `ready → pre-grasp → grasp → pre-insertion → insert → release`. Preflight solves all six poses before physics advances. The executor interpolates Isaac articulation positions, keeps the placeholder plug kinematic, carries it with the hand after grasp, and pauses on the final pose. It exports the result beside the reusable scene as `datacenter_demo_sequence_result.usda`; `demo-reset` reopens the clean starting stage.
 
-This is deliberately a deterministic coordinate/constraint demo. Plug collision is disabled while attached, and the final seating position is enforced geometrically. It does **not** yet model grasp force, insertion force, deformable cable dynamics, or collision-aware path planning. Those belong in the later force/contact-control milestone.
+This is deliberately a deterministic coordinate/constraint lab sequence. Plug collision is disabled while attached, and the final seating position is enforced geometrically. It does **not** yet model grasp force, insertion force, deformable cable dynamics, or collision-aware path planning. Those belong in the later force/contact-control milestone.
 
 `demo-capture` renders 1920×1080 RGB verification frames from `/World/ShotCam` and the arm-mounted `/World/Franka_R/panda_hand/WristCamera` into Isaac's persistent data directory at `/isaac-sim/.local/share/ov/data/quantis/captures`.
 
@@ -229,7 +248,7 @@ view and a synchronized metrics panel by naming a separate JEPA reference run:
 The metrics panel displays the recorded task phase, offline JEPA stage
 classification, cosine similarity and margin, joint positions, gripper width,
 plug position, and attachment state. It explicitly labels the controller as
-scripted position control; the demo does not report torque or claim JEPA control.
+scripted position control; this lab sequence does not report torque or claim JEPA control.
 The final `dashboard.mp4` is written beside the source camera videos and lossless
 frame streams.
 
@@ -279,7 +298,7 @@ from the latest recording with:
 ./ops/aws.sh jepa-embed demo-<UTC timestamp> presentation
 ```
 
-`latest` prefers the newest timestamped demo recording and falls back to the
+`latest` prefers the newest timestamped `demo-*` lab recording and falls back to the
 legacy capture-smoke episodes. The command uses the official
 `facebook/vjepa2-vitl-fpc64-256` checkpoint, automatically selects CUDA, Apple
 Metal, or CPU, and stores the normalized embedding beside the persistent source
@@ -290,7 +309,7 @@ Hugging Face cache.
 The first live AWS proof used recording `demo-20260822T194745Z`: 64 wrist frames became
 a normalized 1,024-dimensional `float32` embedding on CUDA at
 `/home/ubuntu/docker/isaac-sim/data/quantis/recordings/demo-20260822T194745Z/wrist_vjepa2_embedding.npy`.
-### Stage similarity demo
+### Stage similarity evaluation
 
 Build or reuse the four cached wrist-camera embeddings for a recording:
 
@@ -443,7 +462,7 @@ motion. The first AWS artifact, `grasp-20260824-held-11401-v1`, contains 102
 true-4-FPS frames, acquired the connector at frame 89, retained it for 13
 observations, and moved it `99.9997 mm` while attached.
 
-This artifact is a scripted training/evaluation demonstration, not evidence
+This artifact is a scripted training/evaluation example, not evidence
 that JEPA completed the task. Build the required 12-training-seed/two-held-out
 proposal dataset and offline gate with:
 
@@ -475,7 +494,7 @@ generic 1,188-rollout proposal failed the task gate with aggregate mean cosine
 task-window rollouts per seed improved those figures to `0.6861` and `79.6%`,
 but still failed the `0.9`/`98%` thresholds. A 16-unit regularized head reached
 `0.7112`/`85.2%` and also failed. These are retained negative results, not live
-task or demo evidence; no failed checkpoint is allowed to command the arm.
+task or validated lab evidence; no failed checkpoint is allowed to command the arm.
 
 Task-specific training and evaluation include the final stationary attached
 hold windows rather than silently dropping zero-action labels:
@@ -533,7 +552,7 @@ but did not attach the connector. The safety selector scaled gripper commands
 to one-quarter or one-eighth alongside pose corrections, leaving final
 closedness at `0.5541`; therefore `reach_and_grasp.passed` is false with
 `no_attachment_transition`. This is meaningful closed-loop progress, not task
-completion or demo authority. The next checkpoint must decouple bounded
+completion or authority to claim a successful lab result. The next checkpoint must decouple bounded
 gripper scaling from pose/IK scaling and repeat the attachment gate.
 
 That projection checkpoint now preserves full, bounded gripper intent while
@@ -615,7 +634,7 @@ restored the proposal's `0.986`/`100%`, so `1e-2` was frozen before one held-out
 run. On held-out seed 12400 it preserved the proposal exactly at
 `0.703`/`75%`, improving over candidate-aware CEM's `0.497`/`62.5%` but not over
 the proposal itself. This fixes planner degradation; it does not make the
-current proposal demo-worthy or grant live/filming authority.
+current proposal lab-ready or grant live/filming authority.
 
 ### Inverse-action proposal milestone
 
@@ -743,7 +762,7 @@ Motion-rich held-out rollout `rollout-20260824T032653Z-11401` selected context
 `15.440 mm`, and reduced translation-to-target error by `11.127 mm`. This is
 useful receding-horizon motion evidence, not a grasp or cable insertion: the
 plug was never attached and the task was not completed. It must not be shown as
-a task-success demo.
+a successful lab result.
 
 This remains narrow free-space execution evidence. The scale profiles are a
 small deterministic command-safety projection set. Each completed session
