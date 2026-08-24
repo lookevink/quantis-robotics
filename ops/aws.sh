@@ -321,6 +321,7 @@ Commands:
   jepa-wm-objective-calibrate CALIBRATION SESSION[,SESSION...]
   jepa-wm-control-rollout-report ROLLOUT SESSION[,SESSION...] REQUESTED_STEPS REFERENCE SEED [proposal] [policy]
   jepa-wm-control-apply SESSION
+  jepa-wm-candidate-film STRICT_REPORT [recording]
   jepa-wm-summarize EXPERIMENT TRAINING_CSV HELD_OUT_CSV [camera] [count]
   jepa-wm-milestone [train-count] [held-out-count] [steps] [base-seed]
   jepa-wm-eval-adapted RECORDING [camera] [start-index] [count] [stride]
@@ -794,6 +795,17 @@ case "${command}" in
     session_id="${2:-}"
     is_safe_identifier "${session_id}" || die "invalid control session"
     demo_python "await demo.apply_control_response('${session_id}')" 180
+    ;;
+  jepa-wm-candidate-film)
+    candidate_report="${2:-}"
+    recording_id="${3:-candidate-demo-$(date -u +%Y%m%dT%H%M%SZ)}"
+    is_safe_identifier "${candidate_report}" || die "invalid candidate report"
+    is_safe_identifier "${recording_id}" || die "invalid recording name"
+    demo_python \
+      "await demo.record_candidate_demo('${candidate_report}', '${recording_id}')" 1200
+    remote "bash ~/quantis-robotics/ops/encode_demo_recording.sh '${recording_id}'"
+    remote "bash ~/quantis-robotics/ops/render_demo_dashboard.sh '${recording_id}' wrist wrist"
+    printf 'Recording ID: %s\n' "${recording_id}"
     ;;
   jepa-wm-summarize)
     experiment_id="${2:-}"

@@ -233,6 +233,22 @@ scripted position control; the demo does not report torque or claim JEPA control
 The final `dashboard.mp4` is written beside the source camera videos and lossless
 frame streams.
 
+To film a high-resolution replay of a completed, strictly validated JEPA-WM
+reset-trial candidate, run:
+
+```bash
+./ops/aws.sh jepa-wm-candidate-film STRICT_CANDIDATE_REPORT [recording-name]
+```
+
+This first reconstructs the persisted candidate report from its raw sessions and
+requires its strict comparison gate to pass. It then recreates the candidate's
+held-out reset, verifies the initial and final arm/gripper state, monitors contact
+on every filmed frame, and records the already-realized transition from both the
+1080p wrist and presentation cameras. The dashboard reports the bounded CEM
+search, energy improvement, realized control action, and replay-derived tracking
+and contact evidence. It is a visualization artifact and does not create new
+control evidence or production authority.
+
 ## 5. Capture training data
 
 Run the standalone capture smoke test inside the container:

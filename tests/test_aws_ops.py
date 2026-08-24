@@ -400,6 +400,18 @@ class AwsLifecycleTests(unittest.TestCase):
         recording_ids = set(__import__("re").findall(r"demo-[0-9]{8}T[0-9]{6}Z", calls))
         self.assertEqual(len(recording_ids), 1)
 
+    def test_candidate_film_records_encodes_and_renders_the_validated_session(self):
+        result, calls = self.run_command(
+            "jepa-wm-candidate-film",
+            arguments=("candidate-proof-11401", "candidate-film-11401"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("record_candidate_demo", calls)
+        self.assertIn("candidate-proof-11401", calls)
+        self.assertIn("ops/encode_demo_recording.sh 'candidate-film-11401'", calls)
+        self.assertIn("ops/render_demo_dashboard.sh 'candidate-film-11401'", calls)
+
     def test_jepa_embed_forwards_recording_and_camera(self):
         result, calls = self.run_command(
             "jepa-embed",

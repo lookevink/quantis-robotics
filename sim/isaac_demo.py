@@ -27,6 +27,7 @@ from sim.isaac_control_bridge import (
     prepare_experimental_candidate_source,
     persist_baseline_response,
 )
+from sim.isaac_candidate_demo import record_candidate_demo
 from sim.isaac_demo_runtime import (
     Actuators,
     JointCommand,

@@ -32,6 +32,7 @@ def reload_demo_runtime() -> ModuleType:
         "jepa_wm.shadow_safety",
         "jepa_wm.trial_equivalence",
         "sim.recording",
+        "jepa_wm.candidate_demo",
         "jepa_wm.experimental_candidate",
         "sim.recording_jobs",
         "sim.exploration",
@@ -44,6 +45,10 @@ def reload_demo_runtime() -> ModuleType:
         "sim.isaac_demo_runtime",
         "sim.isaac_exploration",
         "sim.control_session",
+        "jepa_wm.control_rollout",
+        "jepa_wm.control_baselines",
+        "jepa_wm.calibration_sessions",
+        "jepa_wm.candidate_trial",
         "sim.isaac_control_runtime",
         "sim.isaac_control_capture",
         "sim.isaac_control_execution",
@@ -51,6 +56,7 @@ def reload_demo_runtime() -> ModuleType:
         "sim.isaac_shadow_safety",
         "sim.isaac_candidate_binding",
         "sim.isaac_baseline_response",
+        "sim.isaac_candidate_demo",
         "sim.isaac_control_bridge",
     ):
         _reload(module_name)

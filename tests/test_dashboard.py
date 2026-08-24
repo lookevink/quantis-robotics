@@ -11,6 +11,71 @@ from jepa.dashboard import PANEL_SIZE, render_dashboard_panels
 
 
 class DashboardTest(unittest.TestCase):
+    def test_renders_candidate_search_metrics_from_recording_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recording = Path(temp_dir)
+            (recording / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "fps": 12,
+                        "frames": 1,
+                        "metadata": {
+                            "candidate_demo": {
+                                "schema": "quantis.jepa_wm_candidate_demo.v1",
+                                "visualization_only": True,
+                                "report_id": "candidate-proof-11401",
+                                "candidate_session": "candidate-11401",
+                                "source_session": "source-11401",
+                                "seed": 11401,
+                                "policy": "reset_trial_candidate",
+                                "candidates_scored": 640,
+                                "energy_improvement": 0.00014,
+                                "actual_action": [0.002, 0.0, 0.0, 0.001, 0.0, 0.0, 0.03],
+                                "tracking_passed": True,
+                                "maximum_replay_joint_error_rad": 0.001,
+                                "maximum_replay_gripper_error_m": 0.0002,
+                                "maximum_replay_contact_force_newtons": 0.0,
+                                "replay_collision_detected": False,
+                                "selected_action_scale": {
+                                    "translation": 1.0,
+                                    "rotation": 1.0,
+                                    "gripper": 1.0,
+                                },
+                                "planner": {
+                                    "horizon": 3,
+                                    "iterations": 5,
+                                    "samples": 128,
+                                    "elites": 12,
+                                    "seed": 237,
+                                    "minimum_standard_deviation": 0.0001,
+                                },
+                            }
+                        },
+                    }
+                )
+            )
+            (recording / "steps.jsonl").write_text(
+                json.dumps(
+                    {
+                        "index": 0,
+                        "stage": "approaching_cable",
+                        "phase": "ready",
+                        "arm_positions": [0.0] * 7,
+                        "gripper_width_m": 0.07,
+                        "plug_position": [-0.02, -0.25, 1.32],
+                        "plug_attached": False,
+                    }
+                )
+                + "\n"
+            )
+
+            result = render_dashboard_panels(recording)
+
+            self.assertTrue(result["candidate_demo"])
+            self.assertTrue(
+                (recording / "dashboard" / "panel" / "frame_000000.png").is_file()
+            )
+
     def test_renders_one_synchronized_panel_per_recording_step(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             recording = Path(temp_dir) / "demo-20260822T031500Z"

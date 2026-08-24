@@ -168,6 +168,11 @@ class DemoRecorder:
             camera: self.output_dir / f"{camera}.mp4" for camera in self._writer.cameras
         }
 
+    def set_metadata(self, name: str, value: Any) -> None:
+        """Attach validated run metadata before the manifest is finalized."""
+
+        self._writer.metadata[name] = value
+
     async def initialize(self) -> None:
         """Warm Replicator before Isaac creates the physics articulation view."""
 
