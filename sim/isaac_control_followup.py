@@ -50,6 +50,8 @@ def validate_followup_continuity(
     current: JointCommand,
     current_pose: DroidPose,
     *,
+    current_plug_position: tuple[float, ...] | None = None,
+    current_plug_attached: bool = False,
     safety_limits: SimulatorSafetyLimits = SimulatorSafetyLimits(),
     tracking_limits: ActionTrackingLimits = ActionTrackingLimits(),
 ) -> None:
@@ -68,11 +70,24 @@ def validate_followup_continuity(
     rotation_drift = float(
         Rotation.from_euler("xyz", pose_drift.values[3:6]).magnitude()
     )
+    plug_drift = (
+        float(
+            np.linalg.norm(
+                np.asarray(current_plug_position)
+                - np.asarray(previous.plug_position)
+            )
+        )
+        if previous.plug_position is not None and current_plug_position is not None
+        else 0.0
+    )
     if (
         joint_drift > safety_limits.maximum_observation_joint_drift_radians
         or translation_drift > tracking_limits.maximum_translation_error_meters
         or rotation_drift > tracking_limits.maximum_rotation_error_radians
         or abs(pose_drift.values[6]) > tracking_limits.maximum_gripper_error
+        or previous.plug_attached != current_plug_attached
+        or (previous.plug_position is None) != (current_plug_position is None)
+        or plug_drift > safety_limits.maximum_observation_plug_drift_meters
     ):
         raise ValueError("live stage no longer matches the previous applied result")
 
@@ -150,6 +165,10 @@ async def capture_followup_observation(
             previous_result.post_action,
             current,
             snapshot.end_effector_pose,
+            current_plug_position=tuple(
+                float(value) for value in snapshot.plug_position
+            ),
+            current_plug_attached=snapshot.plug_attached,
         )
         captured_at = time()
     finally:

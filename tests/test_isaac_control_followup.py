@@ -54,6 +54,32 @@ class FollowupContinuityTest(unittest.TestCase):
                     DroidPose((0.41, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
                 )
 
+    def test_rejects_a_lost_connector_attachment(self) -> None:
+        previous = self._previous()
+        previous = PostActionEvidence(
+            previous.raw_proposed_action,
+            previous.commanded_action,
+            previous.actual_action,
+            previous.tracking,
+            previous.pose,
+            previous.joint_positions,
+            previous.maximum_joint_tracking_error_rad,
+            previous.contact_force_newtons,
+            previous.collision_detected,
+            previous.frame,
+            (0.4, 0.0, 0.5),
+            True,
+        )
+
+        with self.assertRaisesRegex(ValueError, "live stage"):
+            validate_followup_continuity(
+                previous,
+                JointCommand(np.asarray(previous.joint_positions), 0.04),
+                previous.pose,
+                current_plug_position=(0.4, 0.0, 0.5),
+                current_plug_attached=False,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

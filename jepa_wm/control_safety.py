@@ -67,6 +67,7 @@ class SimulatorSafetyLimits:
     upper_joint_limits: tuple[float, ...] = FRANKA_UPPER_JOINT_LIMITS
     maximum_joint_velocity_radians_per_second: float = 0.5
     maximum_observation_joint_drift_radians: float = 0.002
+    maximum_observation_plug_drift_meters: float = 0.002
     maximum_contact_force_newtons: float = 2.0
     maximum_observation_age_seconds: float = 3.0
     maximum_command_age_seconds: float = 2.5
@@ -85,6 +86,7 @@ class SimulatorSafetyLimits:
         scalars = (
             self.maximum_joint_velocity_radians_per_second,
             self.maximum_observation_joint_drift_radians,
+            self.maximum_observation_plug_drift_meters,
             self.maximum_contact_force_newtons,
             self.maximum_observation_age_seconds,
             self.maximum_command_age_seconds,
