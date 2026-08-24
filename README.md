@@ -775,7 +775,7 @@ uses a seeded shuffled epoch schedule so complete corpus coverage is explicit.
 
 The adapter checkpoint, sidecar, held-out reports, and failed readiness
 artifact bind the exact roster, context selection, and adapter SHA-256 and are
-recovery-backed up. Neither the proposal pass nor a future energy pass alone
+recovery-backed up. Neither the proposal pass nor an energy pass alone
 authorizes live insertion or filming.
 
 The next exact run uses one seeded shuffled pass over all 1,056 rollouts:
@@ -784,6 +784,25 @@ The next exact run uses one seeded shuffled pass over all 1,056 rollouts:
 ./ops/jepa_wm_insertion_wm_milestone.sh \
   1056 2600 contact-insertion-v9-2600
 ```
+
+That exact run passed on August 24, 2026. Adapter fingerprint
+`47969a0a7869fbf9ba507599cd30ba20937a6b826d26c812f6d8dc6f1f6ddaf9`
+visited all 1,056 training rollouts once in a seeded shuffled epoch. HELD_OUT
+seed `12600` produced `+6.13514e-5` mean improvement and `82.9545%`
+recorded-action wins; seed `12601` produced `+5.94737e-5` and `85.2273%`.
+Across all 176 rollouts the strict offline gate passed at `+6.04125e-5` and
+`84.0909%`. Peak PyTorch allocation was `7.845 GiB` and the adapter trained in
+`1719.489` seconds while sharing the L4 with Isaac Sim. The model, sidecar,
+two raw evaluation reports, readiness artifact, and exact roster are
+checksum-verified under `/mnt/quantis-assets/quantis-state`.
+
+This proves that the adapted JEPA-WM ranks the demonstrated insertion actions
+above zero action on two whole held-out seeds. It does **not** prove that a
+JEPA-selected action inserts the connector. The next checkpoint is offline,
+proposal-centered bounded candidate search on both held-out recordings. The
+passed insertion proposal supplies the initial three-action sequence; JEPA-WM
+may refine it only inside the planner bounds and must retain task direction,
+stationary holds, and positive energy improvement before any simulator trial.
 
 The first grasp-domain JEPA-WM action adapter used all 1,980 bounded rollouts
 from the 20 training recordings. In a fixed eight-context CEM diagnostic it

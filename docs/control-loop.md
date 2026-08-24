@@ -448,6 +448,10 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     `-4.12553e-5`/`47.7273%` mean improvement/win rate. Aggregate evidence was
     `-3.22139e-5`/`30.1136%`; a TRAIN diagnostic also failed, while adaptation
     still improved seed 12600 substantially over the base model. The result is
-    preserved and recovery-backed up. The next checkpoint must train with an
-    explicit seeded epoch schedule covering all 1,056 exact rollouts before
-    repeating the same two-seed gate.
+    preserved and recovery-backed up. The complete-epoch adapter, fingerprint
+    `47969a0a...af9`, then visited all 1,056 TRAIN rollouts exactly once and
+    passed both whole held-out seeds: `+6.13514e-5`/`82.9545%` and
+    `+5.94737e-5`/`85.2273%`. Aggregate evidence over 176 rollouts is
+    `+6.04125e-5`/`84.0909%`. This closes the offline insertion-energy
+    checkpoint only. Next is proposal-centered bounded candidate search on the
+    same held-out seeds; JEPA has not yet selected or executed an insertion.
