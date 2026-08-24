@@ -24,7 +24,12 @@ from sim.control_session import (
 )
 from sim.demo_sequence import Phase
 from sim.control_identity import control_proposal_path, observation_id_for_session
-from sim.isaac_control_runtime import contact_sensor, read_contact
+from sim.isaac_control_runtime import (
+    bind_live_runtime,
+    contact_sensor,
+    live_runtime_for,
+    read_contact,
+)
 from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, capture_camera_frame
 from sim.isaac_demo_runtime import (
     JointCommand,
@@ -96,16 +101,24 @@ async def capture_followup_observation(
     session = ControlSession.at(CONTROL_ROOT, session_id)
     session.create()
     timeline = omni.timeline.get_timeline_interface()
+    stage = omni.usd.get_context().get_stage()
+    runtime = live_runtime_for(previous_session_id, stage)
     timeline.play()
     try:
-        stage = omni.usd.get_context().get_stage()
-        if SimulationManager.get_physics_sim_view() is None:
-            SimulationManager.initialize_physics()
-        actuators = create_actuators(stage, Articulation(ROBOT_PATH))
-        attachment = prepare_plug(stage)
-        sensor = contact_sensor(stage, create=False)
+        if runtime is None:
+            if SimulationManager.get_physics_sim_view() is None:
+                SimulationManager.initialize_physics()
+            actuators = create_actuators(stage, Articulation(ROBOT_PATH))
+            attachment = prepare_plug(stage)
+            sensor = contact_sensor(stage, create=False)
+        else:
+            actuators = runtime.actuators
+            attachment = runtime.attachment
+            sensor = runtime.sensor
         context_path = session.path / "context.png"
         await omni.kit.app.get_app().next_update_async()
+        if not actuators.articulation.is_physics_tensor_entity_valid():
+            actuators = create_actuators(stage, Articulation(ROBOT_PATH))
         await capture_camera_frame(JEPA_WM_CAMERA_SPECS[0], context_path)
         current = actuators.actual_command()
         collision_detected, contact_force = read_contact(sensor)
@@ -148,6 +161,7 @@ async def capture_followup_observation(
         execution_policy=previous_state.execution_policy,
     )
     session.write_capture(observation, state)
+    bind_live_runtime(session_id, stage, actuators, attachment, sensor)
     return ControlCaptureResult(
         session_id,
         observation,

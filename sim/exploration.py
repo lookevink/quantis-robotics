@@ -59,6 +59,26 @@ class ExplorationPlan:
         }
 
 
+def exploration_prefix(
+    plan: ExplorationPlan,
+    context_index: int,
+) -> tuple[ExplorationTarget, ...]:
+    """Select complete seeded segments ending at one recorded frame boundary."""
+
+    if context_index <= 0:
+        raise ValueError("control context index must be positive")
+    elapsed_frames = 0
+    selected = []
+    for target in plan.targets:
+        selected.append(target)
+        elapsed_frames += target.frames
+        if elapsed_frames == context_index:
+            return tuple(selected)
+        if elapsed_frames > context_index:
+            raise ValueError("control context must end at an exploration segment boundary")
+    raise ValueError("control context exceeds the seeded exploration plan")
+
+
 def _rounded_uniform(generator: random.Random, lower: float, upper: float) -> float:
     return round(generator.uniform(lower, upper), 6)
 

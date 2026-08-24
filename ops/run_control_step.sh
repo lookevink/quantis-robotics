@@ -10,6 +10,7 @@ exploration_seed="${3:-}"
 control_identity="${4:-}"
 shadow_mode="${5:-immediate}"
 policy="${6:-direct}"
+context_index="${7:-4}"
 checkpoint_dir="${HOME}/docker/jepa-wm/checkpoints"
 venv_python="${HOME}/.venvs/quantis-jepa-wm/bin/python"
 
@@ -31,13 +32,14 @@ is_safe_identifier "${control_identity}" || {
   exit 1
 }
 validate_control_policy "${policy}" || exit 1
+require_positive_integer "context index" "${context_index}" || exit 1
 cd "${repo_dir}"
 proposal_name="$(control_proposal_from_identity \
   "${policy}" "${control_identity}" "${checkpoint_dir}" "${venv_python}")"
 
 isaac_server_call \
-  "await demo.capture_control_observation('${session_id}','${reference_name}',${exploration_seed},'${proposal_name}','${policy}')" \
-  180 true
+  "await demo.capture_control_observation('${session_id}','${reference_name}',${exploration_seed},'${proposal_name}','${policy}',${context_index})" \
+  600 true
 respond_to_control_session "${repo_dir}" "${session_id}" "${policy}"
 isaac_server_call "await demo.apply_control_response('${session_id}')" 180
 if [[ "${shadow_mode}" == "immediate" && "${policy}" == "direct" ]]; then

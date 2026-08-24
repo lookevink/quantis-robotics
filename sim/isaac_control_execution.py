@@ -29,7 +29,12 @@ from sim.control_session import (
     PostActionEvidence,
 )
 from sim.demo_sequence import Phase
-from sim.isaac_control_runtime import contact_sensor, read_contact
+from sim.isaac_control_runtime import (
+    bind_live_runtime,
+    contact_sensor,
+    live_runtime_for,
+    read_contact,
+)
 from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, capture_camera_frame
 from sim.isaac_demo_kinematics import SolvedPose, solve_droid_pose
 from sim.isaac_demo_runtime import (
@@ -189,8 +194,17 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
     stage = omni.usd.get_context().get_stage()
     if SimulationManager.get_physics_sim_view() is None:
         SimulationManager.initialize_physics()
-    actuators = create_actuators(stage, Articulation(ROBOT_PATH))
     timeline = omni.timeline.get_timeline_interface()
+    runtime = live_runtime_for(session_id, stage)
+    if runtime is None:
+        actuators = create_actuators(stage, Articulation(ROBOT_PATH))
+        attachment = prepare_plug(stage)
+        sensor = contact_sensor(stage, create=False)
+        bind_live_runtime(session_id, stage, actuators, attachment, sensor)
+    else:
+        actuators = runtime.actuators
+        attachment = runtime.attachment
+        sensor = runtime.sensor
     current = await synchronized_actual_command(
         actuators,
         timeline,
@@ -199,7 +213,6 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
     expected_current = np.asarray(
         persisted_state.current_joint_positions, dtype=np.float64
     )
-    sensor = contact_sensor(stage, create=False)
     try:
         # Follow-up capture leaves the stage synchronized and paused. Read the
         # live articulation/contact state without spending a render tick from
@@ -246,7 +259,6 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         if decision.passed and candidate is not None:
             try:
                 timeline.play()
-                attachment = prepare_plug(stage)
                 target = JointCommand(solved.arm_positions, solved.gripper_width_m)
                 await move_joint_command(
                     actuators,

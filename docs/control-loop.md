@@ -119,8 +119,9 @@ explicitly scopes this to simulator-only inverse action.
 
 The first simulator-only execution boundary is now implemented. Isaac and the
 resident JEPA-WM worker exchange `quantis.jepa_wm_control.v1` JSON over a Unix
-socket and shared EBS-backed session directory. Isaac captures four warm-up
-frames, sends the current wrist frame, reference goal frame, base-frame DROID
+socket and shared EBS-backed session directory. Isaac replays a deterministic
+exploration prefix through a complete segment boundary (at least four frames),
+sends the current wrist frame, reference goal frame, base-frame DROID
 pose, and previous action, then consumes only the returned first action. Every
 session is single-use and persists its immutable request/response and measured
 outcome.
@@ -130,7 +131,7 @@ seed and DROID/wrist-camera contract as the live variant. The request is bound
 to a unique session-derived nonce, an exact promoted-checkpoint path, and an
 ordered response timestamp. The gate then requires final simulator-only
 freshness checks—3.0 seconds from the synchronized observation and 2.5 seconds
-from the model response—four warm-up frames, bounded 7D action, workspace membership,
+from the model response—an established observation context, bounded 7D action, workspace membership,
 Franka joint position/velocity limits, no live hand contact, and at most 2 N.
 The executor tries bounded translation/rotation/gripper scale profiles, applies
 only the first profile whose pose, IK branch, joint velocity, and remaining
@@ -156,12 +157,20 @@ the preceding measured pose/joints and samples RGB plus state at one update
 boundary. The rollout exit finalizer persists incomplete orchestration attempts
 as terminal evidence. This does not validate cable contact or insertion.
 
+The live bridge now retains one bound articulation/runtime across follow-up
+calls, avoiding stale paused-physics tensors and repeated setup. Held-out
+rollout `rollout-20260824T032653Z-11401` selected the complete exploration
+boundary at context `44`, applied three JEPA proposals with 0 N contact, moved
+the end effector `15.440 mm`, and reduced translation-to-target error by
+`11.127 mm`. The plug was not attached. This is motion-rich closed-loop
+evidence, not a successful grasp, cable insertion, or publishable task demo.
+
 ### Next control milestone
 
 1. [x] Keep Isaac and the resident JEPA worker in separate processes and exchange a
    versioned observation/action envelope.
-2. [x] Require four synchronized observations before inference and reject stale or
-   out-of-order observation IDs.
+2. [x] Require a synchronized seeded observation prefix of at least four frames
+   before inference and reject stale or out-of-order observation IDs.
 3. [x] Enforce workspace, per-step Cartesian, gripper, joint, collision, and force
    limits before the first proposed action reaches the articulation.
 4. [x] Apply only the first bounded action in Isaac, observe again, and replan.
@@ -189,9 +198,21 @@ contact.
    Candidate `candidate-proof-20260823T220355Z-11401` beat the direct proposal
    on all axes and reversed the prior translation/rotation regression, but
    still trailed zero on translation and missed scripted translation tolerance.
-9. [ ] Add a positive translation margin, fit on disjoint whole-seed evidence,
-   and repeat isolated trials across whole held-out seeds before considering
-   candidate command authority.
+9. [x] Add a positive translation margin, fit on disjoint whole-seed evidence,
+   and repeat one fixed worker/search identity across whole held-out seeds.
+   The seed-237 worker passed the strict `2/2` isolated-candidate readiness gate;
+   production authority remains false.
+10. [x] Keep one live Isaac runtime resident across follow-up actions and select
+    a deterministic motion-rich context boundary. Rollout
+    `rollout-20260824T032653Z-11401` moved `15.440 mm` and made `11.127 mm`
+    target progress at 0 N, without grasping the plug.
+11. [ ] Complete a JEPA-controlled reach-and-grasp before filming again. The
+    hand must enter a defined pre-grasp region, close on the rigid connector,
+    persist a bound `plug_attached` transition, and retain the object through a
+    lift/hold while tracking, collision, and force gates pass. Validate the raw
+    multi-step sessions on two whole held-out seeds against zero and scripted
+    baselines. Free-space displacement or gripper closure alone does not count;
+    insertion follows only after this gate passes.
 
 ## Recommended process boundary
 
@@ -320,3 +341,9 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     every axis, and passed tracking at 0 N without collision. The strict
     readiness summary passes `2/2` globally disjoint held-out seeds against
     calibration seed 1400; production authority remains false.
+15. [ ] Demonstrate a meaningful JEPA-controlled reach-and-grasp before
+    producing another video. Require a defined pre-grasp approach, verified
+    rigid-connector attachment, retained lift/hold, safe force/collision and
+    tracking evidence, and two whole held-out seeds compared with zero and
+    scripted baselines. Free-space displacement and gripper closure are not
+    task success. Cable insertion is the subsequent milestone.

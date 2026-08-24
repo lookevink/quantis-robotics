@@ -10,6 +10,7 @@ exploration_seed="${3:-}"
 step_count="${4:-}"
 control_identity="${5:-}"
 policy="${6:-direct}"
+context_index="${7:-4}"
 data_root="${HOME}/docker/isaac-sim/data/quantis"
 venv_python="${HOME}/.venvs/quantis-jepa-wm/bin/python"
 
@@ -28,6 +29,7 @@ require_positive_integer "step count" "${step_count}" || exit 1
   exit 1
 }
 validate_control_policy "${policy}" || exit 1
+require_positive_integer "context index" "${context_index}" || exit 1
 proposal_name="$(control_proposal_from_identity \
   "${policy}" "${control_identity}" \
   "${HOME}/docker/jepa-wm/checkpoints" "${venv_python}")"
@@ -83,7 +85,7 @@ sessions="${first_session}"
 current_phase="initial_control_step"
 bash "${repo_dir}/ops/run_control_step.sh" \
   "${first_session}" "${reference_name}" "${exploration_seed}" \
-  "${control_identity}" deferred "${policy}"
+  "${control_identity}" deferred "${policy}" "${context_index}"
 previous_session="${first_session}"
 current_phase="initial_status"
 status="$(step_status "${first_session}")"

@@ -488,12 +488,14 @@ Run a bounded repeated rollout on the same live Isaac stage with:
 ```bash
 ./ops/aws.sh jepa-wm-control-rollout \
   domain-20260823T113209Z-1400-held-01 11401 3 \
-  quantis_wrist_control
+  quantis_wrist_control 44
 ```
 
 Isaac validates that the goal recording is the matching whole held-out seed,
-then captures four synchronized warm-up observations and writes a versioned
-request. A session-derived nonce, response timestamp, and exact promoted
+then replays a deterministic exploration prefix through a complete segment
+boundary (context index `44` above; the optional argument defaults to `4`),
+captures synchronized observations, and writes a versioned request. A
+session-derived nonce, response timestamp, and exact promoted
 checkpoint path bind the separate GPU worker's native three-action proposal to
 that request. Isaac consumes only a conservative first action after checking a
 final simulator-only freshness deadlines (3.0 seconds from the synchronized
@@ -541,6 +543,15 @@ and end-effector still match the preceding measured result, then captures RGB
 and state at the same update boundary. An exit finalizer also persists a typed
 terminal report when capture, inference, transport, or execution orchestration
 fails, including the incomplete final attempt rather than silently losing it.
+
+The live process now retains one bound Isaac articulation/runtime across
+follow-up calls, avoiding stale paused-physics tensors and repeated setup.
+Motion-rich held-out rollout `rollout-20260824T032653Z-11401` selected context
+`44`, applied all three JEPA proposals with 0 N contact, moved the end effector
+`15.440 mm`, and reduced translation-to-target error by `11.127 mm`. This is
+useful receding-horizon motion evidence, not a grasp or cable insertion: the
+plug was never attached and the task was not completed. It must not be shown as
+a task-success demo.
 
 This remains narrow free-space execution evidence. The scale profiles are a
 small deterministic command-safety projection set. Each completed session

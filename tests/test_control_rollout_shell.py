@@ -22,6 +22,7 @@ class ControlRolloutShellTest(unittest.TestCase):
                 """#!/usr/bin/env bash
 is_safe_identifier() { return 0; }
 require_nonnegative_integer() { return 0; }
+require_positive_integer() { return 0; }
 validate_control_policy() { return 0; }
 control_proposal_from_identity() {
   [[ \"${PWD}\" == \"${HOME}/quantis-robotics\" ]] || return 9

@@ -802,6 +802,7 @@ class AwsLifecycleTests(unittest.TestCase):
                 "11400",
                 "3",
                 "quantis_calibrated_control",
+                "44",
             ),
         )
 
@@ -809,6 +810,7 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/run_control_rollout.sh", calls)
         self.assertIn("'3'", calls)
         self.assertIn("quantis_calibrated_control", calls)
+        self.assertIn("direct '44'", calls)
 
     def test_jepa_wm_control_baseline_uses_an_explicit_non_model_policy(self):
         result, calls = self.run_command(

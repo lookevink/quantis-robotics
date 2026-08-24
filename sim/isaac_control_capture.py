@@ -31,8 +31,13 @@ from sim.control_session import (
 )
 from sim.control_identity import control_proposal_path, observation_id_for_session
 from sim.demo_sequence import Phase
-from sim.exploration import DatasetSplit, build_exploration_plan
-from sim.isaac_control_runtime import contact_sensor, read_contact
+from sim.exploration import (
+    DatasetSplit,
+    SegmentOutcome,
+    build_exploration_plan,
+    exploration_prefix,
+)
+from sim.isaac_control_runtime import bind_live_runtime, contact_sensor, read_contact
 from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, DemoRecorder
 from sim.isaac_demo_kinematics import solve_waypoints
 from sim.isaac_demo_runtime import (
@@ -84,8 +89,9 @@ async def capture_control_observation(
     seed: int,
     proposal_name: str,
     execution_policy: str = ControlExecutionPolicy.DIRECT.value,
+    context_index: int = 4,
 ) -> dict[str, Any]:
-    """Replay four safe warm-up frames and persist one live wrist observation."""
+    """Replay a seeded segment prefix and persist one live wrist observation."""
 
     import omni.kit.app
     import omni.timeline
@@ -101,6 +107,13 @@ async def capture_control_observation(
         raise ValueError(f"control session already exists: {session_id}")
     reference = validated_control_reference(reference_recording, seed, policy)
     plan = build_exploration_plan(seed, reference.split)
+    warmup_targets = exploration_prefix(plan, context_index)
+    reference_rollout = load_rollout_at(
+        reference.path,
+        camera="wrist",
+        context_index=context_index,
+        bounds=ActionSelectionBounds(minimum_action_norm=0.0),
+    )
     await reset_stage()
     stage = omni.usd.get_context().get_stage()
     stage.SetEditTarget(stage.GetSessionLayer())
@@ -111,7 +124,11 @@ async def capture_control_observation(
         fps=DROID_FPS,
         minimum_stage_frames=0,
         camera_specs=JEPA_WM_CAMERA_SPECS,
-        metadata={**plan.metadata(), "control_session": session_id},
+        metadata={
+            **plan.metadata(),
+            "control_session": session_id,
+            "control_context_index": context_index,
+        },
     )
     timeline = omni.timeline.get_timeline_interface()
     original_rendering_dt = RenderingManager.get_dt()
@@ -141,22 +158,31 @@ async def capture_control_observation(
             attachment,
         )
         await recorder.capture(initial, advance=False)
-        warmup = plan.targets[0]
-        warmup_command = JointCommand(
-            origin.arm_positions + np.asarray(warmup.arm_offset_radians),
-            warmup.gripper_width_m,
-        )
-        await move_joint_command(
-            actuators,
-            origin,
-            warmup_command,
-            attachment,
-            frame_count=warmup.frames,
-            phase=RecordingLabel(RecordingMoment.SETTLE, Phase.READY),
-            stage=ObservationStage.APPROACHING_CABLE,
-            recorder=recorder,
-            sample_period_seconds=plan.sample_period_seconds,
-        )
+        current = origin
+        for target in warmup_targets:
+            command = JointCommand(
+                origin.arm_positions + np.asarray(target.arm_offset_radians),
+                target.gripper_width_m,
+            )
+            await move_joint_command(
+                actuators,
+                current,
+                command,
+                attachment,
+                frame_count=target.frames,
+                phase=RecordingLabel(
+                    (
+                        RecordingMoment.SETTLE
+                        if target.outcome == SegmentOutcome.STATIONARY
+                        else RecordingMoment.MOTION
+                    ),
+                    Phase.READY,
+                ),
+                stage=ObservationStage.APPROACHING_CABLE,
+                recorder=recorder,
+                sample_period_seconds=plan.sample_period_seconds,
+            )
+            current = command
         collision_detected, contact_force = read_contact(sensor)
         actual_warmup = actuators.actual_command()
         timeline.pause()
@@ -174,25 +200,19 @@ async def capture_control_observation(
         for line in (output / "steps.jsonl").read_text().splitlines()
         if line
     )
-    if len(steps) != warmup.frames + 1:
+    if len(steps) != context_index + 1:
         raise RuntimeError("control warm-up recording has an unexpected frame count")
-    context_step = steps[warmup.frames]
+    context_step = steps[context_index]
     if (
-        context_step.get("index") != warmup.frames
+        context_step.get("index") != context_index
         or context_step.get("action_from_previous") is None
     ):
         raise RuntimeError("control warm-up telemetry is incomplete")
-    reference_rollout = load_rollout_at(
-        reference.path,
-        camera="wrist",
-        context_index=warmup.frames,
-        bounds=ActionSelectionBounds(minimum_action_norm=0.0),
-    )
     target = reference_rollout.target.path
     observation = ControlObservation(
         observation_id=observation_id_for_session(session_id),
         captured_at_unix_seconds=time(),
-        context_frame=(output / "wrist" / f"frame_{warmup.frames:06d}.png").relative_to(
+        context_frame=(output / "wrist" / f"frame_{context_index:06d}.png").relative_to(
             QUANTIS_DATA_ROOT
         ),
         target=ControlTarget(
@@ -201,7 +221,7 @@ async def capture_control_observation(
         expected_proposal=control_proposal_path(proposal_name),
         pose=DroidPose(tuple(context_step["end_effector_pose"])),
         previous_action=DroidAction(tuple(context_step["action_from_previous"])),
-        warmup_frames=warmup.frames,
+        warmup_frames=context_index,
     )
     state = ControlSessionState(
         session_id=session_id,
@@ -214,6 +234,7 @@ async def capture_control_observation(
         execution_policy=policy,
     )
     session.write_capture(observation, state)
+    bind_live_runtime(session_id, stage, actuators, attachment, sensor)
     return ControlCaptureResult(
         session_id,
         observation,

@@ -6,11 +6,22 @@ from sim.exploration import (
     DatasetSplit,
     SegmentOutcome,
     build_exploration_plan,
+    exploration_prefix,
     validate_sample_times,
 )
 
 
 class ExplorationPlanTest(unittest.TestCase):
+    def test_selects_only_complete_segments_for_a_control_context(self) -> None:
+        plan = build_exploration_plan(11401, DatasetSplit.HELD_OUT)
+
+        prefix = exploration_prefix(plan, 44)
+
+        self.assertEqual(sum(target.frames for target in prefix), 44)
+        self.assertEqual(prefix, plan.targets[:11])
+        with self.assertRaisesRegex(ValueError, "segment boundary"):
+            exploration_prefix(plan, 45)
+
     def test_rejects_samples_outside_the_droid_cadence(self) -> None:
         validate_sample_times((1.0, 1.25, 1.501), 0.25)
 
