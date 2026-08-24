@@ -438,4 +438,6 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
 19. [ ] Collect the contact-aware insertion corpus. Record at least 12 unique
     TRAIN seeds and two disjoint HELD_OUT seeds under the exact v9 contract,
     then train/evaluate insertion-conditioned proposal and world-model
-    artifacts. No current insertion artifact grants JEPA control or filming.
+    artifacts. The resumable `ops/jepa_wm_insertion_corpus.sh` workflow owns
+    the split/seed roster, strict per-recording validation, and exit backup. No
+    current insertion artifact grants JEPA control or filming.

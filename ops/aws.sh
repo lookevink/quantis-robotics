@@ -311,6 +311,10 @@ wait_recording_job() {
       printf '%s\n' "${response}"
       status="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])' \
         <<<"${response}")"
+      if [[ "${status}" == "running" ]]; then
+        sleep 5
+        continue
+      fi
       [[ "${status}" == "complete" ]]
       return
     fi
@@ -352,9 +356,30 @@ validate_task_recording() {
   local module="$1"
   local recording_id="$2"
   local dataset_split="$3"
+  shift 3
   validate_recording_split "${recording_id}" "${dataset_split}"
+  local argument
+  local quoted_arguments=""
+  for argument in "$@"; do
+    printf -v quoted_arguments '%s %q' "${quoted_arguments}" "${argument}"
+  done
   sync_repo
-  remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m ${module} ~/docker/isaac-sim/data/quantis/recordings/'${recording_id}' '${dataset_split}'"
+  remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m ${module} ~/docker/isaac-sim/data/quantis/recordings/'${recording_id}' '${dataset_split}'${quoted_arguments}"
+}
+
+contact_insertion_status() {
+  local recording_id="$1"
+  local dataset_split="$2"
+  local exploration_seed="$3"
+  require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+  validate_task_recording jepa_wm.contact_insertion_status_cli \
+    "${recording_id}" "${dataset_split}" "${exploration_seed}"
+}
+
+quarantine_partial_recording() {
+  local recording_id="$1"
+  is_safe_identifier "${recording_id}" || die "invalid recording name"
+  remote "set -euo pipefail; data=~/docker/isaac-sim/data/quantis; source=\"\${data}/recordings/${recording_id}\"; job=\"\${data}/recording_jobs/${recording_id}.json\"; test -f \"\${job}\"; quarantinable=\$(cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -c 'import json,sys; from sim.recording_jobs import job_is_quarantinable; print(\"true\" if job_is_quarantinable(json.load(open(sys.argv[1]))) else \"false\")' \"\${job}\"); test \"\${quarantinable}\" = true; if test -d \"\${source}\"; then test ! -f \"\${source}/manifest.json\"; fi; stamp=\$(date -u +%Y%m%dT%H%M%SZ); mkdir -p \"\${data}/recordings/incomplete\" \"\${data}/recording_jobs/incomplete\"; if test -d \"\${source}\"; then mv -- \"\${source}\" \"\${data}/recordings/incomplete/${recording_id}-\${stamp}\"; fi; mv -- \"\${job}\" \"\${data}/recording_jobs/incomplete/${recording_id}-\${stamp}.json\""
 }
 
 command="${1:-help}"
@@ -376,8 +401,11 @@ Commands:
   demo-record-grasp RECORDING SEED train|held_out
   demo-record-insertion RECORDING SEED train|held_out
   demo-record-contact-insertion RECORDING SEED train|held_out
+  demo-wait-recording RECORDING
   jepa-wm-grasp-validate RECORDING train|held_out
-  jepa-wm-contact-insertion-validate RECORDING train|held_out
+  jepa-wm-contact-insertion-validate RECORDING train|held_out [expected-seed]
+  jepa-wm-contact-insertion-status RECORDING train|held_out EXPECTED_SEED
+  demo-quarantine-partial-recording RECORDING
   jepa-wm-insertion-validate RECORDING train|held_out
   demo-dashboard REFERENCE [primary-camera] [jepa-camera]
   capture-smoke | jepa-embed [source-name] [camera]
@@ -515,6 +543,11 @@ case "${command}" in
     record_seeded_task start_contact_insertion_recording \
       "${2:-}" "${3:-}" "${4:-}"
     ;;
+  demo-wait-recording)
+    recording_id="${2:-}"
+    is_safe_identifier "${recording_id}" || die "invalid recording name"
+    wait_recording_job "${recording_id}"
+    ;;
   jepa-wm-grasp-validate)
     validate_task_recording jepa_wm.grasp_recording_cli "${2:-}" "${3:-}"
     ;;
@@ -522,8 +555,24 @@ case "${command}" in
     validate_task_recording jepa_wm.insertion_recording_cli "${2:-}" "${3:-}"
     ;;
   jepa-wm-contact-insertion-validate)
+    recording_id="${2:-}"
+    dataset_split="${3:-}"
+    expected_seed="${4:-}"
+    if [[ -n "${expected_seed}" ]]; then
+      require_nonnegative_integer "expected seed" "${expected_seed}" || exit 1
+    fi
+    validation_arguments=()
+    if [[ -n "${expected_seed}" ]]; then
+      validation_arguments=(--expected-seed "${expected_seed}")
+    fi
     validate_task_recording jepa_wm.contact_insertion_recording_cli \
-      "${2:-}" "${3:-}"
+      "${recording_id}" "${dataset_split}" "${validation_arguments[@]}"
+    ;;
+  jepa-wm-contact-insertion-status)
+    contact_insertion_status "${2:-}" "${3:-}" "${4:-}"
+    ;;
+  demo-quarantine-partial-recording)
+    quarantine_partial_recording "${2:-}"
     ;;
   demo-dashboard)
     reference_name="${2:-}"

@@ -68,11 +68,16 @@ class _ParsedInsertionRecording:
         *,
         expected_split: str,
         expected_mode: str,
+        expected_seed: int | None = None,
     ) -> _ParsedInsertionRecording:
         recording = DomainRecording.from_path(
             path,
             expected_split=DatasetSplit(expected_split),
         )
+        if expected_seed is not None and recording.seed != expected_seed:
+            raise ValueError(
+                f"recording seed {recording.seed} does not match {expected_seed}"
+            )
         manifest = dict(recording.manifest)
         metadata = manifest.get("metadata")
         target_payload = (
@@ -247,11 +252,13 @@ class ContactInsertionEvidence:
         *,
         expected_split: str,
         limits: InsertionTaskLimits = InsertionTaskLimits(),
+        expected_seed: int | None = None,
     ) -> ContactInsertionEvidence:
         parsed = _ParsedInsertionRecording.load(
             path,
             expected_split=expected_split,
             expected_mode=CONTACT_AWARE_INSERTION_MODE,
+            expected_seed=expected_seed,
         )
         CONTACT_INSERTION_RECORDING.validate_instrumentation(parsed.target_payload)
         if len(parsed.steps) != CONTACT_INSERTION_RECORDING.frame_count:

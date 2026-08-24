@@ -18,14 +18,19 @@ is_safe_identifier "${recording_id}" || {
 }
 
 deadline=$((SECONDS + timeout_seconds))
-while [[ ! -f "${job_file}" ]]; do
+while true; do
   if (( SECONDS >= deadline )); then
     printf 'error: recording job timed out: %s\n' "${recording_id}" >&2
     exit 1
   fi
+  if [[ -f "${job_file}" ]]; then
+    status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "${job_file}")"
+    if [[ "${status}" != "running" ]]; then
+      break
+    fi
+  fi
   sleep 1
 done
 
-status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "${job_file}")"
 cat "${job_file}"
 [[ "${status}" == "complete" ]] || exit 1

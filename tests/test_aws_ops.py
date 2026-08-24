@@ -470,13 +470,37 @@ class AwsLifecycleTests(unittest.TestCase):
     def test_contact_insertion_validation_runs_against_persistent_data(self):
         result, calls = self.run_command(
             "jepa-wm-contact-insertion-validate",
-            arguments=("contact-insert-held-12402", "held_out"),
+            arguments=("contact-insert-held-12402", "held_out", "12402"),
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("jepa_wm.contact_insertion_recording_cli", calls)
         self.assertIn("contact-insert-held-12402", calls)
         self.assertIn("held_out", calls)
+        self.assertIn("--expected-seed 12402", calls)
+
+    def test_contact_insertion_status_binds_expected_seed(self):
+        result, calls = self.run_command(
+            "jepa-wm-contact-insertion-status",
+            arguments=("contact-insert-held-12402", "held_out", "12402"),
+            extra_env={"FAKE_SSH_RESPONSE": "valid"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("jepa_wm.contact_insertion_status_cli", calls)
+        self.assertIn("contact-insert-held-12402", calls)
+        self.assertIn("12402", calls)
+
+    def test_partial_recording_quarantine_is_recoverable_and_scoped(self):
+        result, calls = self.run_command(
+            "demo-quarantine-partial-recording",
+            arguments=("contact-insert-held-12402",),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("recordings/incomplete/contact-insert-held-12402", calls)
+        self.assertIn("job_is_quarantinable", calls)
+        self.assertIn("test ! -f", calls)
 
     def test_demo_dashboard_records_scores_and_renders_one_recording(self):
         result, calls = self.run_command(

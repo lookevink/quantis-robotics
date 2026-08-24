@@ -304,6 +304,19 @@ class InsertionDemonstrationTest(unittest.TestCase):
                     expected_split="held_out",
                 )
 
+    def test_rejects_wrong_expected_contact_seed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            recording = self._write_recording(
+                Path(temporary_directory),
+                contact_aware=True,
+            )
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                ContactInsertionEvidence.from_recording(
+                    recording,
+                    expected_split="held_out",
+                    expected_seed=12403,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

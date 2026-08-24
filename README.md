@@ -711,6 +711,19 @@ The next gate is 12 TRAIN and two disjoint HELD_OUT recordings under this
 contact-aware contract, followed by insertion-conditioned proposal training
 and whole-seed readiness.
 
+Start or resume that exact corpus with a stable experiment ID:
+
+```bash
+./ops/jepa_wm_insertion_corpus.sh \
+  12 2 2600 contact-insertion-v9-2600
+```
+
+The workflow reuses only recordings that already pass the strict v9 validator,
+fails closed on an invalid existing artifact, keeps TRAIN seeds `2600–2611`
+disjoint from HELD_OUT seeds `12600–12601`, and recovery-backs up on every exit.
+Rerun the same command after an interruption to continue without recapturing
+completed recordings.
+
 The first grasp-domain JEPA-WM action adapter used all 1,980 bounded rollouts
 from the 20 training recordings. In a fixed eight-context CEM diagnostic it
 lowered latent energy below both zero and recorded actions on every context,
