@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 
@@ -10,7 +13,11 @@ except ModuleNotFoundError:
 
 if torch is not None:
     from jepa_wm.action import DroidAction
-    from jepa_wm.adapt_recording import mismatched_negative_candidates
+    from jepa_wm.adapt_recording import (
+        ContrastiveTermConfig,
+        mismatched_negative_candidates,
+        validated_training_recordings,
+    )
     from jepa_wm.control_protocol import TaskContextIndex
 
 
@@ -45,6 +52,56 @@ class MismatchedNegativeCandidatesTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "different-context"):
             mismatched_negative_candidates(rollouts)
+
+    def test_contrastive_term_owns_weight_and_margin(self) -> None:
+        term = ContrastiveTermConfig(weight=2.0, margin=0.5)
+
+        loss = term.loss(torch.tensor((1.0,)), torch.tensor((1.25,)))
+
+        torch.testing.assert_close(loss, torch.tensor(0.5))
+        self.assertEqual(term.to_dict(), {"weight": 2.0, "margin": 0.5})
+
+    @staticmethod
+    def _recording(root: Path, name: str, split: str, seed: int) -> Path:
+        recording = root / name
+        recording.mkdir()
+        (recording / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "recording_id": name,
+                    "metadata": {
+                        "dataset": "jepa_wm_domain_v1",
+                        "split": split,
+                        "seed": seed,
+                    },
+                }
+            )
+        )
+        return recording
+
+    def test_accepts_unique_training_domain_recordings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paths = (
+                self._recording(root, "train-a", "train", 10),
+                self._recording(root, "train-b", "train", 11),
+            )
+
+            recordings = validated_training_recordings(paths)
+
+            self.assertEqual(tuple(item.seed for item in recordings), (10, 11))
+
+    def test_rejects_held_out_or_duplicate_seed_training_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            held_out = self._recording(root, "held", "held_out", 20)
+            with self.assertRaisesRegex(ValueError, "expected 'train'"):
+                validated_training_recordings((held_out,))
+
+            first = self._recording(root, "train-a", "train", 30)
+            second = self._recording(root, "train-b", "train", 30)
+            with self.assertRaisesRegex(ValueError, "unique identities and seeds"):
+                validated_training_recordings((first, second))
 
 
 if __name__ == "__main__":

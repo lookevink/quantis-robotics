@@ -366,4 +366,8 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     and `37.5%` gate despite lowering energy below recorded actions on all eight
     diagnostic contexts. Uniformly sampled mismatched rollout negatives improved the
     controlled comparison to `0.489`/`50%`, still a strict negative. Candidate-
-    aware ranking and stronger proposal-centered regularization are next.
+    aware online mining over four bounded local candidates moved the same
+    diagnostic to `0.497` active cosine and `62.5%` gate. The unrefined proposal
+    itself scores `0.703`/`75%` there, so the remaining planner failure is weak
+    proposal-centered regularization. This remains offline-only and has no live
+    or filming authority.

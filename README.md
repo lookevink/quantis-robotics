@@ -522,6 +522,17 @@ negative evidence. The next adapter iteration needs stronger candidate-aware
 ranking and proposal-centered regularization; no current grasp artifact may
 command or film the arm.
 
+The next train-only adapter adds online bounded candidate mining: for every
+positive rollout it samples four local candidates inside the simulator planner
+limits, selects the candidate the current JEPA energy ranks most deceptively,
+and learns a margin against it. On the same fixed held-out eight-context CEM
+diagnostic, this moved active cosine to `0.497` and first-action passes to
+`62.5%` (`37.5%` baseline, `50%` mismatched-negative). The improvement is real
+but remains an offline negative: the proposal alone scores `0.703`/`75%` on
+those contexts, showing that weak proposal-centered regularization still lets
+CEM trade away action agreement for small latent-energy gains. No live or
+filming authority is granted.
+
 ### Inverse-action proposal milestone
 
 The repository now has a deterministic bounded CEM implementation, empirical

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
-from typing import Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 
@@ -79,6 +79,25 @@ class PlannerActionBounds:
         )
         return bounded
 
+    def clip_tensor(self, candidates):
+        """Apply the same planner bounds to a Torch candidate tensor."""
+
+        import torch
+
+        if candidates.ndim < 2 or candidates.shape[-1] != ACTION_DIMENSIONS:
+            raise ValueError("candidate actions must end with the seven DROID values")
+        bounded = candidates.clone()
+        bounded[..., :3] = self._clip_tensor_vector_norm(
+            bounded[..., :3], self.maximum_translation_norm, torch
+        )
+        bounded[..., 3:6] = self._clip_tensor_vector_norm(
+            bounded[..., 3:6], self.maximum_rotation_norm, torch
+        )
+        bounded[..., 6].clamp_(
+            -self.maximum_gripper_delta, self.maximum_gripper_delta
+        )
+        return bounded
+
     def accepts(self, actions: Sequence[DroidAction]) -> bool:
         return bool(actions) and all(
             np.linalg.norm(action.values[:3])
@@ -96,11 +115,27 @@ class PlannerActionBounds:
             "maximum_gripper_delta": self.maximum_gripper_delta,
         }
 
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> PlannerActionBounds:
+        return cls(
+            maximum_translation_norm=float(payload["maximum_translation_norm"]),
+            maximum_rotation_norm=float(payload["maximum_rotation_norm"]),
+            maximum_gripper_delta=float(payload["maximum_gripper_delta"]),
+        )
+
     @staticmethod
     def _clip_vector_norm(vectors: np.ndarray, maximum_norm: float) -> None:
         norms = np.linalg.norm(vectors, axis=2, keepdims=True)
         scales = np.minimum(1.0, maximum_norm / np.maximum(norms, 1e-12))
         vectors *= scales
+
+    @staticmethod
+    def _clip_tensor_vector_norm(vectors, maximum_norm: float, torch):
+        norms = torch.linalg.vector_norm(vectors, dim=-1, keepdim=True)
+        scales = torch.clamp(
+            maximum_norm / torch.clamp_min(norms, 1e-12), max=1.0
+        )
+        return vectors * scales
 
 
 @dataclass(frozen=True)

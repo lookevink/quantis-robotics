@@ -19,17 +19,41 @@ from jepa_wm.adapter import (
     save_action_adapter,
 )
 from jepa_wm.contract import MODEL_ID
+from jepa_wm.candidate_negatives import (
+    CandidateMiningConfig,
+    mine_lowest_energy_candidates,
+    sample_local_candidates,
+)
 from jepa_wm.frames import encode_clips
+from jepa_wm.domain_recording import DomainRecording
 from jepa_wm.model import load_headless_model
 from jepa_wm.rollout_scoring import (
     rollout_action_tensor,
+    score_actions,
     score_recorded_against_mismatched,
 )
 from jepa_wm.trajectory import RecordedRollout, load_rollouts
 from jepa_wm.training_artifact import TrainingArtifactMetadata, training_report_path
+from sim.exploration import DatasetSplit
 
 
 TRAINING_BOUNDS = ActionSelectionBounds(minimum_action_norm=0.0)
+
+
+@dataclass(frozen=True)
+class ContrastiveTermConfig:
+    weight: float = 1.0
+    margin: float = 1e-3
+
+    def __post_init__(self) -> None:
+        if self.weight < 0.0 or self.margin < 0.0:
+            raise ValueError("contrastive weight and margin must be non-negative")
+
+    def loss(self, recorded: torch.Tensor, negative: torch.Tensor) -> torch.Tensor:
+        return self.weight * torch.relu(self.margin + recorded - negative).mean()
+
+    def to_dict(self) -> dict[str, float]:
+        return {"weight": self.weight, "margin": self.margin}
 
 
 @dataclass(frozen=True)
@@ -37,48 +61,42 @@ class AdaptationConfig:
     steps: int = 100
     batch_size: int = 2
     learning_rate: float = 1e-3
-    zero_negative_weight: float = 1.0
-    zero_negative_margin: float = 1e-3
-    mismatched_negative_weight: float = 1.0
-    mismatched_negative_margin: float = 1e-3
+    zero_negative: ContrastiveTermConfig = ContrastiveTermConfig()
+    mismatched_negative: ContrastiveTermConfig = ContrastiveTermConfig()
+    candidate_negative: ContrastiveTermConfig = ContrastiveTermConfig()
+    candidate_mining: CandidateMiningConfig = CandidateMiningConfig()
     encoding_batch_size: int = 4
     seed: int = 234
 
     def __post_init__(self) -> None:
         if self.steps <= 0 or self.batch_size <= 0 or self.encoding_batch_size <= 0:
             raise ValueError("training steps and batch sizes must be positive")
-        if (
-            self.learning_rate <= 0
-            or self.zero_negative_margin < 0
-            or self.mismatched_negative_margin < 0
-        ):
-            raise ValueError("learning rate must be positive and margin non-negative")
-        if self.zero_negative_weight < 0 or self.mismatched_negative_weight < 0:
-            raise ValueError("contrastive weight must be non-negative")
+        if self.learning_rate <= 0:
+            raise ValueError("learning rate must be positive")
 
-    def to_dict(self) -> dict[str, int | float]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "steps": self.steps,
             "batch_size": self.batch_size,
             "learning_rate": self.learning_rate,
-            "zero_negative_weight": self.zero_negative_weight,
-            "zero_negative_margin": self.zero_negative_margin,
-            "mismatched_negative_weight": self.mismatched_negative_weight,
-            "mismatched_negative_margin": self.mismatched_negative_margin,
+            "zero_negative": self.zero_negative.to_dict(),
+            "mismatched_negative": self.mismatched_negative.to_dict(),
+            "candidate_negative": self.candidate_negative.to_dict(),
+            "candidate_mining": self.candidate_mining.to_dict(),
             "encoding_batch_size": self.encoding_batch_size,
             "seed": self.seed,
         }
 
 
 def _load_training_rollouts(
-    recordings: Sequence[Path],
+    recordings: Sequence[DomainRecording],
     camera: str,
 ) -> tuple[RecordedRollout, ...]:
     rollouts = tuple(
         rollout
         for recording in recordings
         for rollout in load_rollouts(
-            recording,
+            recording.path,
             camera=camera,
             bounds=TRAINING_BOUNDS,
         )
@@ -86,6 +104,22 @@ def _load_training_rollouts(
     if len(rollouts) < 2:
         raise ValueError("adaptation requires at least two bounded rollouts")
     return rollouts
+
+
+def validated_training_recordings(
+    recordings: Sequence[Path],
+) -> tuple[DomainRecording, ...]:
+    validated = tuple(
+        DomainRecording.from_path(path, expected_split=DatasetSplit.TRAIN)
+        for path in recordings
+    )
+    if not validated:
+        raise ValueError("at least one training recording is required")
+    names = {recording.name for recording in validated}
+    seeds = {recording.seed for recording in validated}
+    if len(names) != len(validated) or len(seeds) != len(validated):
+        raise ValueError("adaptation recordings require unique identities and seeds")
+    return validated
 
 
 def mismatched_negative_candidates(
@@ -136,8 +170,7 @@ def adapt_recordings(
 ) -> dict[str, Any]:
     if not torch.cuda.is_available():
         raise RuntimeError("JEPA-WM adaptation requires CUDA")
-    if not recordings:
-        raise ValueError("at least one training recording is required")
+    training_recordings = validated_training_recordings(recordings)
 
     device_index = torch.cuda.current_device()
     device = torch.device("cuda", device_index)
@@ -146,7 +179,7 @@ def adapt_recordings(
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats(device_index)
 
-    rollouts = _load_training_rollouts(recordings, camera)
+    rollouts = _load_training_rollouts(training_recordings, camera)
     load_started = monotonic()
     model = load_headless_model(source, checkpoint, device=device)
     load_seconds = monotonic() - load_started
@@ -173,6 +206,7 @@ def adapt_recordings(
 
     optimizer = torch.optim.AdamW(adapter_parameters, lr=config.learning_rate)
     generator = torch.Generator(device="cpu").manual_seed(config.seed)
+    candidate_generator = torch.Generator(device=device).manual_seed(config.seed)
     losses = []
     training_started = monotonic()
     model.eval()
@@ -191,6 +225,17 @@ def adapt_recordings(
             generator,
         )
         mismatched_negative_batch = actions[:, negative_indices].to(device)
+        local_candidates = sample_local_candidates(
+            action_batch,
+            config=config.candidate_mining,
+            generator=candidate_generator,
+        )
+        candidate_negative_actions = mine_lowest_energy_candidates(
+            model,
+            context,
+            target,
+            local_candidates,
+        )
         energies = score_recorded_against_mismatched(
             model,
             context,
@@ -198,19 +243,21 @@ def adapt_recordings(
             action_batch,
             mismatched_negative_batch,
         )
-        zero_contrastive = torch.relu(
-            config.zero_negative_margin + energies.recorded - energies.zero
-        )
-        mismatched_negative_contrastive = torch.relu(
-            config.mismatched_negative_margin
-            + energies.recorded
-            - energies.mismatched_negative
+        candidate_negative_energy = score_actions(
+            model,
+            context,
+            target,
+            candidate_negative_actions,
         )
         loss = (
             energies.recorded.mean()
-            + config.zero_negative_weight * zero_contrastive.mean()
-            + config.mismatched_negative_weight
-            * mismatched_negative_contrastive.mean()
+            + config.zero_negative.loss(energies.recorded, energies.zero)
+            + config.mismatched_negative.loss(
+                energies.recorded, energies.mismatched_negative
+            )
+            + config.candidate_negative.loss(
+                energies.recorded, candidate_negative_energy
+            )
         )
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -223,7 +270,7 @@ def adapt_recordings(
         base_model=MODEL_ID,
         source_revision=os.environ.get("JEPA_WM_REVISION", "unknown"),
         camera=camera,
-        training_recordings=tuple(recording.name for recording in recordings),
+        training_recordings=tuple(recording.name for recording in training_recordings),
         training_steps=config.steps,
     )
     save_action_adapter(model, output, metadata)
