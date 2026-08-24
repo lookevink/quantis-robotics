@@ -19,10 +19,11 @@ from jepa_wm.action import (
     ActionSelectionBounds,
 )
 from jepa_wm.contract import MODEL_ID
-from jepa_wm.frames import video_batch
+from jepa_wm.frames import encode_clips
 from jepa_wm.model import load_headless_model
 from jepa_wm.readiness import ActionControlGate
 from jepa_wm.rollout_scoring import (
+    RolloutEnergies,
     rollout_action_tensor,
     score_recorded_against_zero,
 )
@@ -62,6 +63,19 @@ class RolloutEvaluation:
         }
 
 
+@dataclass(frozen=True)
+class EvaluationResourceBatches:
+    encoding: int = 4
+    evaluation: int = 2
+
+    def __post_init__(self) -> None:
+        if self.encoding <= 0 or self.evaluation <= 0:
+            raise ValueError("evaluation resource batch sizes must be positive")
+
+    def to_dict(self) -> dict[str, int]:
+        return {"encoding": self.encoding, "evaluation": self.evaluation}
+
+
 def _rollout_evaluations(
     rollouts: Sequence[RecordedRollout],
     recorded_energy: torch.Tensor,
@@ -77,6 +91,39 @@ def _rollout_evaluations(
     )
 
 
+def score_evaluation_batches(
+    model: Any,
+    context_latents: torch.Tensor,
+    target_latents: torch.Tensor,
+    actions: torch.Tensor,
+    *,
+    batch_size: int,
+    device: torch.device,
+) -> RolloutEnergies:
+    if batch_size <= 0:
+        raise ValueError("evaluation batch size must be positive")
+    rollout_count = context_latents.shape[0]
+    if target_latents.shape[0] != rollout_count or actions.shape[1] != rollout_count:
+        raise ValueError("evaluation tensors must share one rollout count")
+    recorded_chunks = []
+    zero_chunks = []
+    with torch.inference_mode():
+        for start in range(0, rollout_count, batch_size):
+            stop = start + batch_size
+            energies = score_recorded_against_zero(
+                model,
+                context_latents[start:stop].to(device),
+                target_latents[start:stop].to(device),
+                actions[:, start:stop].to(device),
+            )
+            recorded_chunks.append(energies.recorded.cpu())
+            zero_chunks.append(energies.zero.cpu())
+    return RolloutEnergies(
+        recorded=torch.cat(recorded_chunks),
+        zero=torch.cat(zero_chunks),
+    )
+
+
 def evaluate_recording(
     source: Path,
     checkpoint: Path,
@@ -87,6 +134,7 @@ def evaluate_recording(
     bounds: ActionSelectionBounds,
     protocol: RolloutProtocol = DROID_ROLLOUT_PROTOCOL,
     adapter: Path | None = None,
+    resource_batches: EvaluationResourceBatches = EvaluationResourceBatches(),
 ) -> dict[str, Any]:
     if not torch.cuda.is_available():
         raise RuntimeError("JEPA-WM recording evaluation requires CUDA")
@@ -111,20 +159,29 @@ def evaluate_recording(
         adapter=adapter,
     )
     load_seconds = monotonic() - load_started
-    context_frames = video_batch([rollout.context_paths for rollout in rollouts])
-    target_frames = video_batch([rollout.target_clip for rollout in rollouts])
-    actions = rollout_action_tensor(rollouts, device=device)
+    encoding_started = monotonic()
+    context_latents = encode_clips(
+        model,
+        [rollout.context_paths for rollout in rollouts],
+        batch_size=resource_batches.encoding,
+    )
+    target_latents = encode_clips(
+        model,
+        [rollout.target_clip for rollout in rollouts],
+        batch_size=resource_batches.encoding,
+    )
+    encoding_seconds = monotonic() - encoding_started
+    actions = rollout_action_tensor(rollouts)
 
     evaluation_started = monotonic()
-    with torch.inference_mode():
-        context_latents = model.encode(context_frames)
-        target_latents = model.encode(target_frames)
-        energies = score_recorded_against_zero(
-            model,
-            context_latents,
-            target_latents,
-            actions,
-        )
+    energies = score_evaluation_batches(
+        model,
+        context_latents,
+        target_latents,
+        actions,
+        batch_size=resource_batches.evaluation,
+        device=device,
+    )
     torch.cuda.synchronize(device)
     evaluation_seconds = monotonic() - evaluation_started
 
@@ -157,12 +214,14 @@ def evaluate_recording(
         "action_selection": bounds.to_dict(),
         "action_format": ACTION_RECORDING_CONTRACT.format,
         "objective": "terminal_latent_l2",
+        "resource_batches": resource_batches.to_dict(),
         "mean_recorded_action_energy": float(energies.recorded.mean().item()),
         "mean_zero_action_energy": float(energies.zero.mean().item()),
         "mean_improvement_over_zero": mean_improvement,
         "recorded_action_win_rate": win_rate,
         "control_gate": control_gate.to_dict(),
         "load_seconds": round(load_seconds, 3),
+        "encoding_seconds": round(encoding_seconds, 3),
         "evaluation_seconds": round(evaluation_seconds, 3),
         "peak_allocated_gib": round(
             torch.cuda.max_memory_allocated(device_index) / 2**30,
@@ -197,6 +256,8 @@ def main() -> None:
     parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--count", type=int, default=8)
     parser.add_argument("--stride", type=int, default=1)
+    parser.add_argument("--encoding-batch-size", type=int, default=4)
+    parser.add_argument("--evaluation-batch-size", type=int, default=2)
     parser.add_argument(
         "--minimum-action-norm",
         type=float,
@@ -231,6 +292,10 @@ def main() -> None:
                     maximum_gripper_action=args.maximum_gripper_action,
                 ),
                 adapter=args.adapter,
+                resource_batches=EvaluationResourceBatches(
+                    encoding=args.encoding_batch_size,
+                    evaluation=args.evaluation_batch_size,
+                ),
             ),
             indent=2,
         )
