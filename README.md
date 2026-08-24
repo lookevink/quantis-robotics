@@ -634,6 +634,17 @@ as a visualization with no production authority. Outputs are under
 `/home/ubuntu/docker/isaac-sim/data/quantis/recordings/<recording>/`, including
 `wrist.mp4`, `presentation.mp4`, and the 2560×1440 `dashboard.mp4`.
 
+The seed-12401 visualization completed as
+`grasp-demo-20260824-seed12401-v1`: 78 frames at 12 FPS, with the 1080p wrist
+view as the primary image. It is bound to proposal SHA-256
+`6aa4b94b610bfd8fff07e9356e932574a11342533d55c69b06c1c2ab20e9fd2d` and
+source rollout `rollout-20260824T132311Z-12401`. The source task acquired the
+connector at action 1 and retained it across eight observations for
+`58.508 mm`; replay verification measured at most `0.633 mrad` joint error,
+`0.0011 mm` gripper error, zero contact force, and no collision. This is a
+truthful reach-and-grasp visualization, not evidence of cable insertion or
+production authority.
+
 The first grasp-domain JEPA-WM action adapter used all 1,980 bounded rollouts
 from the 20 training recordings. In a fixed eight-context CEM diagnostic it
 lowered latent energy below both zero and recorded actions on every context,

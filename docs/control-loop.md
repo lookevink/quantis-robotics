@@ -397,8 +397,15 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     two-seed task readiness
     gate now passes; filming this grasp is authorized, but production command
     authority and cable-insertion capability remain false.
-16. [ ] Produce the readiness-bound reach-and-grasp visualization. Reload the
+16. [x] Produce the readiness-bound reach-and-grasp visualization. Reload the
     persisted two-seed gate, replay one complete eight-action direct rollout,
     verify every rendered arm/gripper target plus contact and collision state,
     and encode the 1080p wrist-primary dashboard. Treat source task evidence and
     replay telemetry as separate contracts; the video remains visualization-only.
+    `grasp-demo-20260824-seed12401-v1` contains 78 frames at 12 FPS and binds
+    source rollout `rollout-20260824T132311Z-12401` to proposal fingerprint
+    `6aa4b94b610bfd8fff07e9356e932574a11342533d55c69b06c1c2ab20e9fd2d`.
+    Replay verification passed with `0.633 mrad` maximum arm error,
+    `0.0011 mm` maximum gripper error, zero contact force, and no collision.
+    The source task retained the connector for `58.508 mm`; insertion and
+    production authority remain explicitly unproven.
