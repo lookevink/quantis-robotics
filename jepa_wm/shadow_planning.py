@@ -369,7 +369,7 @@ class ShadowSearchEvidence:
         expected_gate = FirstActionGate(
             self.config.first_action_thresholds
         ).evaluate(self.direct.actions[0], self.planned.actions[0])
-        if self.first_action_gate != expected_gate:
+        if not self.first_action_gate.equivalent_to(expected_gate):
             raise ValueError("shadow first-action decision is inconsistent")
         if (
             self.candidates_scored

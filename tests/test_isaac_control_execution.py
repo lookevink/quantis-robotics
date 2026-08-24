@@ -3,14 +3,19 @@ from __future__ import annotations
 import asyncio
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
 from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
 from jepa_wm.control_safety import ControlGateReason, SimulatorSafetyLimits
-from sim.isaac_control_execution import synchronized_actual_command
-from sim.isaac_control_execution import ExecutionSafetyContext, select_safe_projection
+from sim.isaac_control_execution import (
+    ExecutionSafetyContext,
+    capture_synchronized_post_action,
+    select_safe_projection,
+    synchronized_actual_command,
+)
 from sim.isaac_demo_kinematics import SolvedPose
 from sim.isaac_demo_runtime import JointCommand
 
@@ -69,7 +74,7 @@ class ControlProjectionTest(unittest.TestCase):
         self.assertIsNotNone(selected)
         self.assertEqual(
             attempts[1].scale,
-            DroidActionScale(0.5, 0.125, 0.125),
+            DroidActionScale(0.5, 0.125, 1.0),
         )
 
 
@@ -104,6 +109,43 @@ class FakeActuators:
 
 
 class IsaacControlExecutionTest(unittest.TestCase):
+    def test_reads_post_action_state_after_camera_capture_advances_physics(self) -> None:
+        before = JointCommand(np.zeros(7), 0.04)
+        after = JointCommand(np.ones(7), 0.02)
+        actuators = FakeActuators(valid=True)
+        actuators.command = before
+        snapshot = object()
+
+        async def capture(*_args: object) -> dict[str, object]:
+            actuators.command = after
+            return {"path": "/tmp/post.png", "shape": [512, 512, 4]}
+
+        with (
+            patch("sim.isaac_control_execution.capture_camera_frame", capture),
+            patch(
+                "sim.isaac_control_execution.read_contact",
+                return_value=(False, 0.5),
+            ),
+            patch(
+                "sim.isaac_control_execution.recording_snapshot",
+                return_value=snapshot,
+            ) as recording,
+        ):
+            captured = asyncio.run(
+                capture_synchronized_post_action(
+                    actuators,
+                    object(),
+                    object(),
+                    Path("/tmp/post.png"),
+                )
+            )
+
+        self.assertIs(captured.command, after)
+        self.assertIs(captured.snapshot, snapshot)
+        self.assertEqual(captured.contact_force_newtons, 0.5)
+        recording.assert_called_once()
+        self.assertIs(recording.call_args.args[2], after)
+
     def test_refreshes_a_stale_paused_physics_tensor_before_reading(self) -> None:
         actuators = FakeActuators(valid=False)
         timeline = FakeTimeline()

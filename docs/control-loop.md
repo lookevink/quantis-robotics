@@ -212,7 +212,12 @@ contact.
     lift/hold while tracking, collision, and force gates pass. Validate the raw
     multi-step sessions on two whole held-out seeds against zero and scripted
     baselines. Free-space displacement or gripper closure alone does not count;
-    insertion follows only after this gate passes.
+    insertion follows only after this gate passes. The strict held-out rollout
+    `rollout-20260824T105547Z-12400` is the first validated partial success: JEPA
+    acquired the connector on action one, retained attachment across four safe
+    observations, and moved it `5.615 mm` at 0 N. It remains below the 20 mm
+    retained-motion threshold with `insufficient_lift`, so this item and filming
+    authority remain open.
 
 ## Recommended process boundary
 
@@ -372,5 +377,10 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     proposal-centered regularization. A split-validated TRAIN calibration chose
     a `1e-2` proposal prior after it restored `0.986` cosine and `100%` passes;
     one frozen held-out run then preserved the proposal at `0.703`/`75%`. This
-    removes CEM degradation but does not improve the proposal, so the checkpoint
-    remains offline-only with no live or filming authority.
+    removes CEM degradation but does not improve the proposal. The promoted
+    gripper-timing head subsequently cleared the strict offline gate and its
+    first strict live rerun acquired and retained the connector for four
+    observations, moving it `5.615 mm` without force or collision. The task
+    still fails only `insufficient_lift`; no live result yet clears the 20 mm
+    retained-motion threshold or the required second held-out seed, so filming
+    authority remains false.

@@ -20,13 +20,35 @@ FRANKA_UPPER_JOINT_LIMITS = (
     2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973,
 )
 
-# Ordered fail-closed projections shared by execution and evidence validation.
-ACTION_SCALES = (
+# Historical ordered projections remain readable in persisted shadow evidence.
+LEGACY_ACTION_SCALES = (
     DroidActionScale(1.0, 0.25, 0.25),
     DroidActionScale(0.5, 0.125, 0.125),
     DroidActionScale.uniform(0.25),
     DroidActionScale.uniform(0.125),
 )
+
+# Preserve bounded gripper intent while independently reducing pose motion for IK.
+# Every candidate still passes the complete simulator safety gate below.
+ACTION_SCALES = (
+    DroidActionScale(1.0, 0.25, 1.0),
+    DroidActionScale(0.5, 0.125, 1.0),
+    *LEGACY_ACTION_SCALES,
+)
+
+ACTION_SCALE_POLICIES = (ACTION_SCALES, LEGACY_ACTION_SCALES)
+
+
+def projection_policy_for_attempts(
+    attempted_scales: Sequence[DroidActionScale],
+) -> tuple[DroidActionScale, ...]:
+    """Return the current or historical policy matching an ordered attempt prefix."""
+
+    scales = tuple(attempted_scales)
+    for policy in ACTION_SCALE_POLICIES:
+        if scales and scales == policy[: len(scales)]:
+            return policy
+    raise ValueError("safety projection order is invalid")
 
 
 def _finite_tuple(name: str, values: Sequence[float], count: int) -> tuple[float, ...]:

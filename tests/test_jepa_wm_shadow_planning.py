@@ -151,6 +151,12 @@ class ShadowCandidatePlanningTest(unittest.TestCase):
             ShadowSearchEvidence.from_dict(evidence.to_dict()),
             evidence,
         )
+        runtime_rounding = evidence.to_dict()
+        runtime_rounding["first_action_gate"]["cosine"] += 5e-16
+        self.assertEqual(
+            ShadowSearchEvidence.from_dict(runtime_rounding).first_action_gate.reasons,
+            evidence.first_action_gate.reasons,
+        )
         objective_tamper = evidence.to_dict()
         objective_tamper["planned"]["objective"] += 1.0
         with self.assertRaisesRegex(ValueError, "objective"):

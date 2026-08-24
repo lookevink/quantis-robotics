@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from math import fsum, isfinite, sqrt
+from math import fsum, isclose, isfinite, sqrt
 from typing import Any, Sequence
 
 from jepa_wm.action import DroidAction
@@ -78,6 +78,15 @@ class FirstActionDecision:
     @property
     def passed(self) -> bool:
         return not self.reasons
+
+    def equivalent_to(self, other: FirstActionDecision) -> bool:
+        """Compare semantic gate evidence across floating-point runtimes."""
+
+        return (
+            self.recorded_action_is_active is other.recorded_action_is_active
+            and self.reasons == other.reasons
+            and isclose(self.cosine, other.cosine, rel_tol=0.0, abs_tol=1e-12)
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from time import time
 from typing import Any, Callable
 
@@ -39,14 +40,16 @@ from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, capture_camera_frame
 from sim.grasp_task import evaluate_grasp_acquisition
 from sim.isaac_demo_kinematics import SolvedPose, solve_droid_pose, solve_waypoints
 from sim.isaac_demo_runtime import (
+    Actuators,
     JointCommand,
+    PlugAttachment,
     create_actuators,
     move_joint_command,
     prepare_plug,
     recording_snapshot,
 )
 from sim.isaac_demo_scene import ROBOT_PATH, world_pose
-from sim.recording import RecordingLabel, RecordingMoment
+from sim.recording import RecordingLabel, RecordingMoment, RecordingSnapshot
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,41 @@ class SafeProjection:
     proposal: ProposedControl
     solved_pose: SolvedPose
     decision: ControlGateDecision
+
+
+@dataclass(frozen=True)
+class CapturedPostActionState:
+    frame: dict[str, Any]
+    command: JointCommand
+    collision_detected: bool
+    contact_force_newtons: float
+    snapshot: RecordingSnapshot
+
+
+async def capture_synchronized_post_action(
+    actuators: Actuators,
+    attachment: PlugAttachment,
+    sensor: Any,
+    destination: Path,
+) -> CapturedPostActionState:
+    """Capture RGB first, then read telemetry from the resulting physics tick."""
+
+    frame = await capture_camera_frame(JEPA_WM_CAMERA_SPECS[0], destination)
+    command = actuators.actual_command()
+    collision_detected, contact_force_newtons = read_contact(sensor)
+    snapshot = recording_snapshot(
+        RecordingLabel(RecordingMoment.MOTION, Phase.READY),
+        ObservationStage.APPROACHING_CABLE,
+        command,
+        attachment,
+    )
+    return CapturedPostActionState(
+        frame,
+        command,
+        collision_detected,
+        contact_force_newtons,
+        snapshot,
+    )
 
 
 def project_control_candidate(
@@ -279,14 +317,16 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     ) <= 0.01:
                         break
                     await omni.kit.app.get_app().next_update_async()
-                actual = actuators.actual_command()
-                post_collision, post_force = read_contact(sensor)
-                post_snapshot = recording_snapshot(
-                    RecordingLabel(RecordingMoment.MOTION, Phase.READY),
-                    ObservationStage.APPROACHING_CABLE,
-                    actual,
+                captured = await capture_synchronized_post_action(
+                    actuators,
                     attachment,
+                    sensor,
+                    session.path / "post_action.png",
                 )
+                actual = captured.command
+                post_collision = captured.collision_detected
+                post_force = captured.contact_force_newtons
+                post_snapshot = captured.snapshot
                 actual_action = action_between(
                     observation.pose, post_snapshot.end_effector_pose
                 )
@@ -294,9 +334,6 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     candidate.first_action,
                     actual_action,
                     tracking_limits_for_policy(persisted_state.execution_policy),
-                )
-                capture = await capture_camera_frame(
-                    JEPA_WM_CAMERA_SPECS[0], session.path / "post_action.png"
                 )
                 joint_tracking_error = float(
                     np.max(np.abs(actual.arm_positions - solved.arm_positions))
@@ -330,7 +367,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     joint_tracking_error,
                     post_force,
                     post_collision,
-                    capture,
+                    captured.frame,
                     tuple(float(value) for value in post_snapshot.plug_position),
                     post_snapshot.plug_attached,
                 )

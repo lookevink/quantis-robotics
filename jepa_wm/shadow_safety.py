@@ -7,7 +7,10 @@ from math import isfinite
 from typing import Any
 
 from jepa_wm.action import DroidAction, DroidActionScale
-from jepa_wm.control_safety import ACTION_SCALES, SafetyProjectionAttempt
+from jepa_wm.control_safety import (
+    SafetyProjectionAttempt,
+    projection_policy_for_attempts,
+)
 from jepa_wm.shadow_planning import CandidateAuthority
 
 
@@ -44,10 +47,9 @@ class ShadowSafetyEvidence:
         )
         if (self.selected_action_scale is None) == bool(selected):
             raise ValueError("shadow safety selection is inconsistent")
-        if tuple(attempt.scale for attempt in self.attempts) != ACTION_SCALES[
-            : len(self.attempts)
-        ]:
-            raise ValueError("shadow safety projection order is invalid")
+        projection_policy = projection_policy_for_attempts(
+            attempt.scale for attempt in self.attempts
+        )
         if any(
             attempt.gate.observation_id != self.observation_id
             for attempt in self.attempts
@@ -59,7 +61,7 @@ class ShadowSafetyEvidence:
             if self.selected_action_scale != self.attempts[-1].scale:
                 raise ValueError("shadow safety selected the wrong projection")
         elif self.selected_action_scale is not None or len(self.attempts) != len(
-            ACTION_SCALES
+            projection_policy
         ):
             raise ValueError("shadow safety stopped before exhausting projections")
 

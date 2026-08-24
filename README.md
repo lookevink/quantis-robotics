@@ -536,6 +536,20 @@ closedness at `0.5541`; therefore `reach_and_grasp.passed` is false with
 completion or demo authority. The next checkpoint must decouple bounded
 gripper scaling from pose/IK scaling and repeat the attachment gate.
 
+That projection checkpoint now preserves full, bounded gripper intent while
+independently reducing translation and rotation for IK/joint-velocity safety;
+all existing action, freshness, tracking, force, contact, and collision gates
+remain unchanged. Historical coupled-scale shadow evidence remains readable.
+The strict rerun `rollout-20260824T105547Z-12400` applied all four JEPA actions
+and acquired the connector on its first action. Attachment persisted for all
+four observations at 0 N without collision, while the final retreat retained
+the connector over `5.615 mm`. Its task gate is still false only for
+`insufficient_lift` because the defined completion threshold is 20 mm. This is
+the first validated JEPA-controlled cable grasp, but it is not yet the complete
+reach-and-grasp task and does not authorize filming. The next run must extend
+the same held-out receding-horizon sequence through at least 20 mm of retained
+motion, then reproduce it on held-out seed 12401.
+
 The first grasp-domain JEPA-WM action adapter used all 1,980 bounded rollouts
 from the 20 training recordings. In a fixed eight-context CEM diagnostic it
 lowered latent energy below both zero and recorded actions on every context,

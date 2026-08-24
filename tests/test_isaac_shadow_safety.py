@@ -5,6 +5,7 @@ import unittest
 from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_safety import (
     ACTION_SCALES,
+    LEGACY_ACTION_SCALES,
     ControlGateDecision,
     ControlGateReason,
     SafetyProjectionAttempt,
@@ -31,6 +32,24 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
 
         self.assertTrue(evidence.passed)
         self.assertEqual(evidence.to_dict()["authority"], "shadow_only")
+        self.assertEqual(ShadowSafetyEvidence.from_dict(evidence.to_dict()), evidence)
+
+    def test_round_trips_persisted_legacy_projection_evidence(self) -> None:
+        scale = LEGACY_ACTION_SCALES[0]
+        gate = ControlGateDecision(
+            9,
+            DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
+            (),
+        )
+        evidence = ShadowSafetyEvidence(
+            observation_id=9,
+            evaluated_at_unix_seconds=101.0,
+            counterfactual_as_of_unix_seconds=100.2,
+            planned_actions=(DroidAction((0.0,) * 7),) * 3,
+            attempts=(SafetyProjectionAttempt(scale, gate, 0.01, (0.0,) * 7),),
+            selected_action_scale=scale,
+        )
+
         self.assertEqual(ShadowSafetyEvidence.from_dict(evidence.to_dict()), evidence)
 
     def test_rejects_a_selected_scale_without_a_passing_attempt(self) -> None:
