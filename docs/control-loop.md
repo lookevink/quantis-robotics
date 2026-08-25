@@ -435,7 +435,7 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     bound that contract but did not retain sub-limit transient force maxima;
     v8 does, while v9 additionally rejects non-finite/negative sensor values
     before aggregation.
-19. [ ] Complete insertion-domain JEPA-WM readiness. The exact contact-aware
+19. [x] Complete insertion-domain JEPA-WM readiness. The exact contact-aware
     corpus now contains 12 unique TRAIN seeds and two disjoint HELD_OUT seeds
     under the v9 contract. Proposal fingerprint `ea7ce27c...ea255` passed all
     176 held-out post-attachment rollouts with `0.998534` mean active cosine
@@ -558,6 +558,18 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     readiness distinguishes the exact current policy from preserved historical
     reports. Since `32600–32601` informed the change, this remains diagnostic;
     a new disjoint two-seed pair is still required before live authority.
+    The committed policy then passed untouched reserved seeds `42600–42601`.
+    Both contact-aware v9 recordings validated all 112 frames with `0 N`
+    measured contact. The frozen adapter passed both 88-rollout energy gates
+    at `+6.19085e-5`/`81.8182%` and `+4.72146e-5`/`79.5455%`. The exact
+    268-candidate planner selected `8/8` contexts on each seed, passed every
+    direction/goal gate, and beat zero plus recorded actions `8/8` on both.
+    Mean selected improvements over zero/recorded were
+    `+5.84725e-5`/`+3.94733e-5` and
+    `+2.33684e-5`/`+1.70866e-5`. Reconstructive readiness is `2/2`; all raw
+    evidence and the verified 12 GB recovery copy are preserved. This closes
+    frozen offline planner readiness and opens only the live simulator
+    shadow/safety milestone. Actuation, filming, and production remain closed.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

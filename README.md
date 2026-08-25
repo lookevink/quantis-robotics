@@ -1014,6 +1014,22 @@ instead of guessing by filename. Because these seeds informed this revision,
 the result is diagnostic only. The identical frozen policy must pass a new
 disjoint two-seed pair before any live insertion gate can open.
 
+That untouched promotion pair is now complete. Contact-aware v9 recordings
+`contact-insertion-v9-2600-fresh-42600-held-00` and `...held-01` were captured
+at reserved seeds `42600–42601` after the policy was committed, with zero
+measured contact and strict 112-frame validation. The frozen adapter first
+passed all 88 rollouts per seed: `+6.19085e-5`/`81.8182%` and
+`+4.72146e-5`/`79.5455%` mean improvement/recorded-action wins. The exact
+268-candidate planner then selected all eight fixed contexts on both seeds,
+passed every first-action and goal-alignment gate, and beat zero and recorded
+actions `8/8` on each. Seed `42600` improved by
+`+5.84725e-5`/`+3.94733e-5`; seed `42601` by
+`+2.33684e-5`/`+1.70866e-5`. Reconstructive readiness passed `2/2`, and the
+raw recordings, reports, typed rosters, readiness artifacts, and verified
+12 GB recovery copy are preserved. This closes the frozen offline planner
+milestone and opens development of the live simulator shadow/safety gate. It
+does not yet authorize actuation, insertion filming, or production control.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded
