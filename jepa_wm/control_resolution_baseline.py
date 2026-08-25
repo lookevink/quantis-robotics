@@ -30,7 +30,7 @@ class ControlResolutionBaselinePolicy:
     observation_period_seconds: float = 0.25
     maximum_interval_overrun_seconds: float = 0.05
     required_consecutive_intervals: int = 2
-    maximum_intervals: int = 8
+    maximum_intervals: int = 40
     tolerances: ResetEquivalenceTolerances = (
         CONTROL_RESOLUTION_BASELINE_TOLERANCES
     )
@@ -91,6 +91,12 @@ class ControlResolutionBaselineTrace:
     states: tuple[TrialResetState, ...]
     interval_seconds: tuple[float, ...]
     interlock: ControlInterlockEvidence
+
+    @property
+    def initial_reset(self) -> TrialResetState:
+        if not self.states:
+            raise ValueError("control resolution baseline has no states")
+        return self.states[0]
 
     def interval_passes(
         self,
@@ -182,6 +188,10 @@ class ControlResolutionBaselineTrace:
 class ControlResolutionBaselineAttempt:
     trace: ControlResolutionBaselineTrace
 
+    @property
+    def initial_reset(self) -> TrialResetState:
+        return self.trace.initial_reset
+
     def validate(
         self,
         policy: ControlResolutionBaselinePolicy,
@@ -210,6 +220,10 @@ class ControlResolutionBaselineAttempt:
 @dataclass(frozen=True)
 class ControlResolutionBaselineEvidence:
     trace: ControlResolutionBaselineTrace
+
+    @property
+    def initial_reset(self) -> TrialResetState:
+        return self.trace.initial_reset
 
     @property
     def reference_reset(self) -> TrialResetState:

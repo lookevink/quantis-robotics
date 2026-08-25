@@ -50,7 +50,10 @@ CONTROL_RESOLUTION_SCHEMA = "quantis.jepa_wm_control_resolution.v2"
 CONTROL_RESOLUTION_FAILURE_SCHEMA_V1 = (
     "quantis.jepa_wm_control_resolution_failure.v1"
 )
-CONTROL_RESOLUTION_FAILURE_SCHEMA = "quantis.jepa_wm_control_resolution_failure.v2"
+CONTROL_RESOLUTION_FAILURE_SCHEMA_V2 = (
+    "quantis.jepa_wm_control_resolution_failure.v2"
+)
+CONTROL_RESOLUTION_FAILURE_SCHEMA = "quantis.jepa_wm_control_resolution_failure.v3"
 CONTROL_RESOLUTION_RESET_TOLERANCES = ResetEquivalenceTolerances(
     maximum_translation_difference_meters=5e-4,
     maximum_rotation_difference_radians=1e-3,
@@ -702,6 +705,60 @@ class ControlResolutionResetPhase(str, Enum):
 
 
 @dataclass(frozen=True)
+class ControlResolutionCaptureIdentity:
+    reference_recording: str
+    seed: int
+    context_index: int
+    observation_id: int
+
+    def __post_init__(self) -> None:
+        validate_recording_id(self.reference_recording)
+        if (
+            isinstance(self.seed, bool)
+            or not isinstance(self.seed, int)
+            or self.seed < 0
+            or isinstance(self.context_index, bool)
+            or not isinstance(self.context_index, int)
+            or self.context_index <= 0
+            or isinstance(self.observation_id, bool)
+            or not isinstance(self.observation_id, int)
+            or self.observation_id <= 0
+        ):
+            raise ValueError("control resolution capture identity is invalid")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "reference_recording": self.reference_recording,
+            "seed": self.seed,
+            "context_index": self.context_index,
+            "observation_id": self.observation_id,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ControlResolutionCaptureIdentity:
+        if not isinstance(payload, Mapping):
+            raise ValueError("control resolution capture identity must be an object")
+        values = (
+            payload.get("seed"),
+            payload.get("context_index"),
+            payload.get("observation_id"),
+        )
+        if any(isinstance(value, bool) or not isinstance(value, int) for value in values):
+            raise ValueError("control resolution capture identity counts are invalid")
+        try:
+            return cls(
+                str(payload["reference_recording"]),
+                values[0],
+                values[1],
+                values[2],
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "control resolution capture identity is incomplete"
+            ) from error
+
+
+@dataclass(frozen=True)
 class RejectedControlResolutionReset:
     phase: ControlResolutionResetPhase
     sample_index: int | None
@@ -942,6 +999,31 @@ class ControlResolutionSample:
         return sample
 
 
+def _control_resolution_capture(
+    request: Any,
+    state: Any,
+    load: ControlResolutionLoad,
+) -> tuple[ControlObservation, Any, TrialResetState]:
+    from sim.control_session import ControlSession, ControlSessionState
+
+    observation = ControlObservation.from_dict(request)
+    session_state = ControlSessionState.from_dict(state)
+    captured_reset = ControlSession.trial_context(
+        observation,
+        session_state,
+    ).reset
+    if load is ControlResolutionLoad.UNLOADED:
+        captured_reset = TrialResetState(
+            captured_reset.pose,
+            captured_reset.joint_positions,
+            captured_reset.collision_detected,
+            captured_reset.contact_force_newtons,
+            captured_reset.plug_position,
+            False,
+        )
+    return observation, session_state, captured_reset
+
+
 @dataclass(frozen=True)
 class ControlResolutionFailureEvidence:
     session_id: str
@@ -954,9 +1036,17 @@ class ControlResolutionFailureEvidence:
     load: ControlResolutionLoad = ControlResolutionLoad.ATTACHED
     baseline: ControlResolutionBaselineEvidence | None = None
     baseline_attempt: ControlResolutionBaselineAttempt | None = None
+    capture_identity: ControlResolutionCaptureIdentity | None = None
 
     def __post_init__(self) -> None:
         validate_recording_id(self.session_id)
+        if (
+            self.protocol.baseline_policy is None
+            and self.capture_identity is not None
+        ):
+            raise ValueError(
+                "legacy control resolution failure cannot carry capture identity"
+            )
         if self.completed_samples and self.reference_reset is None:
             raise ValueError(
                 "completed control resolution samples require a reference reset"
@@ -1035,7 +1125,9 @@ class ControlResolutionFailureEvidence:
                 capture_failure
                 and (
                     self.completed_samples
-                    or self.rejected_reset.candidate != self.reference_reset
+                    or self.baseline is None
+                    or self.rejected_reset.candidate
+                    != self.baseline.initial_reset
                 )
             )
             or (
@@ -1061,13 +1153,70 @@ class ControlResolutionFailureEvidence:
     def production_authority_granted(self) -> bool:
         return False
 
+    def validate_capture(self, request: Any, state: Any) -> None:
+        """Bind authenticated failure evidence to its raw captured session."""
+
+        if self.capture_identity is None:
+            raise ValueError(
+                "legacy control resolution failure has no capture identity"
+            )
+        observation, session_state, captured_reset = _control_resolution_capture(
+            request,
+            state,
+            self.load,
+        )
+        if (
+            session_state.session_id != self.session_id
+            or session_state.reference_recording
+            != self.capture_identity.reference_recording
+            or session_state.seed != self.capture_identity.seed
+            or observation.warmup_frames != self.capture_identity.context_index
+            or observation.observation_id != self.capture_identity.observation_id
+            or session_state.execution_policy
+            is not ControlExecutionPolicy.INSERTION_RESOLUTION_MEASUREMENT
+        ):
+            raise ValueError(
+                "control resolution failure is not bound to its capture"
+            )
+        capture_failure = (
+            self.rejected_reset is not None
+            and self.rejected_reset.phase
+            is ControlResolutionResetPhase.CAPTURE_TO_BASELINE
+        )
+        if capture_failure:
+            if self.rejected_reset.reference != captured_reset:
+                raise ValueError(
+                    "control resolution failure capture reset is inconsistent"
+                )
+            return
+        initial_reset = (
+            self.baseline.initial_reset
+            if self.baseline is not None
+            else (
+                self.baseline_attempt.initial_reset
+                if self.baseline_attempt is not None
+                else None
+            )
+        )
+        if initial_reset is not None:
+            validate_reset_equivalence(
+                captured_reset,
+                initial_reset,
+                tolerances=self.protocol.capture_tolerances,
+            )
+
     def to_dict(self) -> dict[str, Any]:
         current = self.protocol.baseline_policy is not None
+        authenticated = current and self.capture_identity is not None
         return {
             "schema": (
                 CONTROL_RESOLUTION_FAILURE_SCHEMA
-                if current
-                else CONTROL_RESOLUTION_FAILURE_SCHEMA_V1
+                if authenticated
+                else (
+                    CONTROL_RESOLUTION_FAILURE_SCHEMA_V2
+                    if current
+                    else CONTROL_RESOLUTION_FAILURE_SCHEMA_V1
+                )
             ),
             "session_id": self.session_id,
             "failed_at_unix_seconds": self.failed_at_unix_seconds,
@@ -1097,6 +1246,11 @@ class ControlResolutionFailureEvidence:
                 if self.baseline_attempt is not None
                 else {}
             ),
+            **(
+                {"capture_identity": self.capture_identity.to_dict()}
+                if self.capture_identity is not None
+                else {}
+            ),
             "diagnostic_only": self.diagnostic_only,
             "multi_step_authority_granted": self.multi_step_authority_granted,
             "production_authority_granted": self.production_authority_granted,
@@ -1109,14 +1263,20 @@ class ControlResolutionFailureEvidence:
             or payload.get("schema")
             not in (
                 CONTROL_RESOLUTION_FAILURE_SCHEMA_V1,
+                CONTROL_RESOLUTION_FAILURE_SCHEMA_V2,
                 CONTROL_RESOLUTION_FAILURE_SCHEMA,
             )
         ):
             raise ValueError("control resolution failure schema is invalid")
         try:
-            current = payload["schema"] == CONTROL_RESOLUTION_FAILURE_SCHEMA
+            current = payload["schema"] != CONTROL_RESOLUTION_FAILURE_SCHEMA_V1
+            authenticated = payload["schema"] == CONTROL_RESOLUTION_FAILURE_SCHEMA
             if current != ("load" in payload):
                 raise ValueError("control resolution failure load is missing")
+            if authenticated != ("capture_identity" in payload):
+                raise ValueError(
+                    "control resolution failure capture identity is missing"
+                )
             evidence = cls(
                 session_id=str(payload["session_id"]),
                 failed_at_unix_seconds=float(payload["failed_at_unix_seconds"]),
@@ -1153,6 +1313,13 @@ class ControlResolutionFailureEvidence:
                         payload["baseline_attempt"]
                     )
                     if "baseline_attempt" in payload
+                    else None
+                ),
+                capture_identity=(
+                    ControlResolutionCaptureIdentity.from_dict(
+                        payload["capture_identity"]
+                    )
+                    if "capture_identity" in payload
                     else None
                 ),
             )
@@ -1533,22 +1700,11 @@ class ControlResolutionReport:
     def validate_capture(self, request: Any, state: Any) -> None:
         """Bind the diagnostic to the raw captured session it measured."""
 
-        from sim.control_session import ControlSession, ControlSessionState
-
-        observation = ControlObservation.from_dict(request)
-        session_state = ControlSessionState.from_dict(state)
-        captured_reset = ControlSession.trial_context(
-            observation, session_state
-        ).reset
-        if self.load is ControlResolutionLoad.UNLOADED:
-            captured_reset = TrialResetState(
-                captured_reset.pose,
-                captured_reset.joint_positions,
-                captured_reset.collision_detected,
-                captured_reset.contact_force_newtons,
-                captured_reset.plug_position,
-                False,
-            )
+        observation, session_state, captured_reset = _control_resolution_capture(
+            request,
+            state,
+            self.load,
+        )
         if (
             observation.observation_id != self.observation_id
             or observation.pose != self.captured_pose
@@ -1563,7 +1719,11 @@ class ControlResolutionReport:
             raise ValueError("control resolution report is not bound to its capture")
         validate_reset_equivalence(
             captured_reset,
-            self.reference_reset,
+            (
+                self.baseline.initial_reset
+                if self.baseline is not None
+                else self.reference_reset
+            ),
             tolerances=self.protocol.capture_tolerances,
         )
 

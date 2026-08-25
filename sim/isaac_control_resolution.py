@@ -25,6 +25,7 @@ from jepa_wm.control_resolution import (
     ControlResolutionBaselineAttempt,
     ControlResolutionBaselinePolicy,
     ControlResolutionBaselineTrace,
+    ControlResolutionCaptureIdentity,
     ControlResolutionLoad,
     ControlResolutionMotionTiming,
     RejectedControlResolutionReset,
@@ -162,6 +163,7 @@ def resolution_failure_evidence(
     error: Exception,
     load: ControlResolutionLoad,
     baseline: ControlResolutionBaselineEvidence | None,
+    capture_identity: ControlResolutionCaptureIdentity,
 ) -> ControlResolutionFailureEvidence:
     """Bind a runtime failure to its exact acquired resolution evidence."""
 
@@ -184,6 +186,7 @@ def resolution_failure_evidence(
             if isinstance(error, UnstableControlResolutionBaseline)
             else None
         ),
+        capture_identity=capture_identity,
     )
 
 
@@ -439,7 +442,7 @@ async def measure_insertion_control_resolution(
             captured_reset = replace(captured_reset, plug_attached=False)
         _require_resolution_reset(
             captured_reset,
-            reference_reset,
+            baseline.initial_reset,
             protocol.capture_tolerances,
             ControlResolutionResetPhase.CAPTURE_TO_BASELINE,
         )
@@ -633,6 +636,12 @@ async def measure_insertion_control_resolution(
             error,
             load,
             baseline,
+            ControlResolutionCaptureIdentity(
+                state.reference_recording,
+                state.seed,
+                observation.warmup_frames,
+                observation.observation_id,
+            ),
         )
         write_json_atomic(failure_path, failure.to_dict())
         raise

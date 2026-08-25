@@ -25,6 +25,7 @@ from jepa_wm.control_resolution import (
     ControlResolutionBaselineAttempt,
     ControlResolutionBaselinePolicy,
     ControlResolutionBaselineTrace,
+    ControlResolutionCaptureIdentity,
     ControlResolutionLoad,
     ControlResolutionMotionTiming,
     RejectedControlResolutionReset,
@@ -80,6 +81,15 @@ def _baseline(
             (0.25, 0.25),
             ControlInterlockEvidence(0.0, False),
         )
+    )
+
+
+def _capture_identity() -> ControlResolutionCaptureIdentity:
+    return ControlResolutionCaptureIdentity(
+        "contact-insertion-held-00",
+        52600,
+        43,
+        123,
     )
 
 
@@ -197,6 +207,11 @@ class ControlResolutionReportTest(unittest.TestCase):
             )
 
     def test_baseline_requires_two_stable_observation_intervals(self) -> None:
+        policy = ControlResolutionBaselinePolicy()
+        self.assertEqual(
+            policy.maximum_intervals * policy.observation_period_seconds,
+            10.0,
+        )
         reference = _reset()
         drifted = replace(
             reference,
@@ -225,7 +240,7 @@ class ControlResolutionReportTest(unittest.TestCase):
         )
 
         evidence.validate(
-            ControlResolutionBaselinePolicy(),
+            policy,
             ControlResolutionLoad.ATTACHED,
         )
 
@@ -237,7 +252,7 @@ class ControlResolutionReportTest(unittest.TestCase):
                     interlock=ControlInterlockEvidence(0.0, False),
                 )
             ).validate(
-                ControlResolutionBaselinePolicy(),
+                policy,
                 ControlResolutionLoad.ATTACHED,
             )
 
@@ -258,7 +273,7 @@ class ControlResolutionReportTest(unittest.TestCase):
                     interlock=ControlInterlockEvidence(0.0, False),
                 ),
             ).validate(
-                ControlResolutionBaselinePolicy(),
+                policy,
                 ControlResolutionLoad.ATTACHED,
             )
 
@@ -443,6 +458,7 @@ class ControlResolutionReportTest(unittest.TestCase):
             error="ValueError: reset mismatch",
             rejected_reset=rejected,
             baseline=_baseline(reference),
+            capture_identity=_capture_identity(),
         )
 
         restored = ControlResolutionFailureEvidence.from_dict(failure.to_dict())
@@ -473,6 +489,7 @@ class ControlResolutionReportTest(unittest.TestCase):
             completed_samples=(),
             error="RuntimeError: baseline did not stabilize",
             load=ControlResolutionLoad.UNLOADED,
+            capture_identity=_capture_identity(),
         )
 
         payload = failure.to_dict()
@@ -481,6 +498,13 @@ class ControlResolutionReportTest(unittest.TestCase):
         self.assertEqual(payload["schema"], CONTROL_RESOLUTION_FAILURE_SCHEMA)
         self.assertEqual(payload["load"], "unloaded")
         self.assertEqual(restored, failure)
+        legacy_protocol = replace(
+            CONTROL_RESOLUTION_PROTOCOL,
+            baseline_policy=None,
+            settlement=FixedUpdateSettlement(8),
+        )
+        with self.assertRaisesRegex(ValueError, "legacy.*capture identity"):
+            replace(failure, protocol=legacy_protocol)
 
     def test_unstable_baseline_failure_preserves_every_observed_state(self) -> None:
         states = tuple(
@@ -490,12 +514,12 @@ class ControlResolutionReportTest(unittest.TestCase):
                     DroidAction((index * 2e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
                 ),
             )
-            for index in range(9)
+            for index in range(41)
         )
         attempt = ControlResolutionBaselineAttempt(
             ControlResolutionBaselineTrace(
                 states,
-                (0.25,) * 8,
+                (0.25,) * 40,
                 ControlInterlockEvidence(0.0, False),
             )
         )
@@ -506,12 +530,13 @@ class ControlResolutionReportTest(unittest.TestCase):
             completed_samples=(),
             error="RuntimeError: baseline did not stabilize",
             baseline_attempt=attempt,
+            capture_identity=_capture_identity(),
         )
 
         restored = ControlResolutionFailureEvidence.from_dict(failure.to_dict())
 
         self.assertEqual(restored, failure)
-        self.assertEqual(len(restored.baseline_attempt.trace.states), 9)
+        self.assertEqual(len(restored.baseline_attempt.trace.states), 41)
 
         runtime_failure = resolution_failure_evidence(
             "resolution-attached-52600-c43",
@@ -521,8 +546,73 @@ class ControlResolutionReportTest(unittest.TestCase):
             UnstableControlResolutionBaseline(attempt),
             ControlResolutionLoad.ATTACHED,
             None,
+            _capture_identity(),
         )
         self.assertEqual(runtime_failure.baseline_attempt, attempt)
+
+    def test_capture_failure_authenticates_rejected_reference_to_raw_state(self) -> None:
+        baseline = _baseline()
+        captured = replace(
+            _reset(),
+            joint_positions=(0.002, *_reset().joint_positions[1:]),
+        )
+        rejected = RejectedControlResolutionReset(
+            phase=ControlResolutionResetPhase.CAPTURE_TO_BASELINE,
+            sample_index=None,
+            reference=captured,
+            candidate=baseline.initial_reset,
+            tolerances=CONTROL_RESOLUTION_PROTOCOL.capture_tolerances,
+        )
+        failure = ControlResolutionFailureEvidence(
+            session_id="resolution-52600-c43",
+            failed_at_unix_seconds=123.0,
+            reference_reset=baseline.reference_reset,
+            completed_samples=(),
+            error="ValueError: capture changed before baseline",
+            rejected_reset=rejected,
+            baseline=baseline,
+            capture_identity=_capture_identity(),
+        )
+        observation = ControlObservation(
+            observation_id=123,
+            captured_at_unix_seconds=1.0,
+            context_frame=Path("context.png"),
+            target=ControlTarget(Path("target.png"), _reset().pose),
+            expected_proposal=Path("/tmp/control-resolution-measurement.pth"),
+            pose=captured.pose,
+            previous_action=DroidAction((0.0,) * 7),
+            warmup_frames=43,
+        )
+        state = {
+            "session_id": failure.session_id,
+            "reference_recording": "contact-insertion-held-00",
+            "seed": 52600,
+            "recording": "control-resolution-recording",
+            "previous_session_id": None,
+            "execution_policy": (
+                ControlExecutionPolicy.INSERTION_RESOLUTION_MEASUREMENT.value
+            ),
+            "current_joint_positions": list(captured.joint_positions),
+            "collision_detected": False,
+            "contact_force_newtons": 0.0,
+            "plug_position": list(captured.plug_position),
+            "plug_attached": True,
+            "current_gripper_width_m": 0.04,
+        }
+
+        restored = ControlResolutionFailureEvidence.from_dict(failure.to_dict())
+        restored.validate_capture(observation.to_dict(), state)
+
+        substituted = replace(
+            captured,
+            joint_positions=(0.003, *captured.joint_positions[1:]),
+        )
+        tampered = replace(
+            restored,
+            rejected_reset=replace(rejected, reference=substituted),
+        )
+        with self.assertRaisesRegex(ValueError, "capture reset"):
+            tampered.validate_capture(observation.to_dict(), state)
 
     def test_unsafe_reset_is_captured_before_typed_rejection(self) -> None:
         command = JointCommand(np.zeros(7), 0.04)
@@ -588,6 +678,7 @@ class ControlResolutionReportTest(unittest.TestCase):
             completed_samples=(_sample(0, 0.0),),
             error="RuntimeError: stopped",
             baseline=_baseline(),
+            capture_identity=_capture_identity(),
         )
 
         self.assertEqual(
@@ -800,6 +891,85 @@ class ControlResolutionReportTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "restricted insertion"):
                 session.claim_execution()
 
+    def test_capture_is_bound_to_baseline_start_before_settling(self) -> None:
+        reference = _reset()
+        captured = replace(
+            reference,
+            pose=reference.pose.applied(
+                DroidAction((0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            ),
+            joint_positions=(
+                reference.joint_positions[0] + 0.01,
+                *reference.joint_positions[1:],
+            ),
+            plug_position=(
+                reference.plug_position[0] + 0.01,
+                *reference.plug_position[1:],
+            ),
+        )
+        baseline = ControlResolutionBaselineEvidence(
+            ControlResolutionBaselineTrace(
+                (captured, reference, reference, reference),
+                (0.25, 0.25, 0.25),
+                ControlInterlockEvidence(0.0, False),
+            )
+        )
+        report = ControlResolutionReport(
+            session_id="resolution-52600-c43",
+            reference_recording="contact-insertion-held-00",
+            seed=52600,
+            context_index=43,
+            observation_id=123,
+            captured_pose=captured.pose,
+            recorded_target_pose=DroidPose(
+                (0.401, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)
+            ),
+            reference_reset=reference,
+            samples=tuple(
+                _sample(index, magnitude)
+                for index, magnitude in enumerate(
+                    CONTROL_RESOLUTION_PROTOCOL.requested_translations
+                )
+            ),
+            baseline=baseline,
+        )
+        observation = ControlObservation(
+            observation_id=123,
+            captured_at_unix_seconds=1.0,
+            context_frame=Path("context.png"),
+            target=ControlTarget(Path("target.png"), report.recorded_target_pose),
+            expected_proposal=Path("/tmp/control-resolution-measurement.pth"),
+            pose=captured.pose,
+            previous_action=DroidAction((0.0,) * 7),
+            warmup_frames=43,
+        )
+        state = {
+            "session_id": report.session_id,
+            "reference_recording": report.reference_recording,
+            "seed": report.seed,
+            "recording": "control-resolution-recording",
+            "previous_session_id": None,
+            "execution_policy": (
+                ControlExecutionPolicy.INSERTION_RESOLUTION_MEASUREMENT.value
+            ),
+            "current_joint_positions": list(captured.joint_positions),
+            "collision_detected": False,
+            "contact_force_newtons": 0.0,
+            "plug_position": list(captured.plug_position),
+            "plug_attached": True,
+            "current_gripper_width_m": 0.04,
+        }
+
+        report.validate_capture(observation.to_dict(), state)
+
+        drifted = dict(state)
+        drifted["current_joint_positions"] = [
+            captured.joint_positions[0] + 0.002,
+            *captured.joint_positions[1:],
+        ]
+        with self.assertRaisesRegex(ValueError, "reset state"):
+            report.validate_capture(observation.to_dict(), drifted)
+
     def test_unloaded_report_requires_detached_noncolliding_evidence(self) -> None:
         unloaded_reset = replace(_reset(), plug_attached=False)
         samples = tuple(
@@ -1000,7 +1170,7 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
             await stabilize_resolution_baseline(
                 SimpleNamespace(),
                 interlock,
-                ControlResolutionBaselinePolicy(),
+                ControlResolutionBaselinePolicy(maximum_intervals=8),
                 Mock(side_effect=tuple(index * 0.25 for index in range(9))),
             )
 
