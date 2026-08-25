@@ -12,6 +12,7 @@ from typing import Any
 from jepa_wm.action import DROID_FPS, DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.control_safety import (
+    ControlInterlockEvidence,
     ControlGateDecision,
     ControlGateReason,
     SafetyProjectionAttempt,
@@ -27,13 +28,19 @@ from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.experimental_candidate import (
     CandidateExecutionEvidence,
     CandidateSourceEvidence,
-    CandidateTrialContext,
     ExperimentalCandidateBinding,
 )
+from jepa_wm.insertion_trial import (
+    InsertionTrialBinding,
+    InsertionTrialExecutionEvidence,
+    InsertionTrialSourceEvidence,
+)
+from jepa_wm.insertion_contract import INSERTION_TASK_ID
 from jepa_wm.persistence import write_json_atomic
 from jepa_wm.shadow_planning import ShadowPlanningRequest, ShadowSearchEvidence
 from jepa_wm.shadow_safety import ShadowSafetyEvidence
-from jepa_wm.trial_equivalence import TrialResetState
+from jepa_wm.trial_equivalence import ControlTrialContext, TrialResetState
+from sim.control_context import recording_task
 from sim.recording import validate_recording_id
 
 
@@ -51,7 +58,9 @@ class ControlResultStatus(str, Enum):
     APPLIED = "applied"
     ROLLED_BACK_TRACKING = "rolled_back_after_tracking_failure"
     ROLLED_BACK_CONTACT = "rolled_back_after_contact"
+    ROLLED_BACK_ATTACHMENT = "rolled_back_after_attachment_loss"
     ROLLED_BACK_EXECUTION = "rolled_back_after_execution_failure"
+    ROLLBACK_FAILED = "rollback_failed"
 
 
 @dataclass(frozen=True)
@@ -272,10 +281,12 @@ class ControlResult:
     pre_action_contact_force_newtons: float
     post_action: PostActionEvidence | None = None
     execution_error: str | None = None
+    execution_interlock: ControlInterlockEvidence | None = None
 
     def __post_init__(self) -> None:
         blocked = self.status == ControlResultStatus.BLOCKED
         execution_failed = self.status == ControlResultStatus.ROLLED_BACK_EXECUTION
+        rollback_failed = self.status == ControlResultStatus.ROLLBACK_FAILED
         has_post_action = self.post_action is not None
         selected_attempts = tuple(
             attempt
@@ -288,8 +299,16 @@ class ControlResult:
         ) or (
             not blocked
             and (not self.gate.passed or self.selected_action_scale is None)
-        ) or (not blocked and execution_failed == has_post_action) or (
-            execution_failed != (self.execution_error is not None)
+        ) or (
+            execution_failed and has_post_action
+        ) or (
+            not blocked
+            and not execution_failed
+            and not rollback_failed
+            and not has_post_action
+        ) or (
+            (execution_failed or rollback_failed)
+            != (self.execution_error is not None)
         ) or any(
             attempt.gate.observation_id != self.gate.observation_id
             for attempt in self.projection_attempts
@@ -297,6 +316,8 @@ class ControlResult:
             self.selected_action_scale is not None and not selected_attempts
         ) or (
             self.execution_error is not None and not self.execution_error
+        ) or (
+            self.execution_interlock is not None and blocked
         ):
             raise ValueError("control result status and evidence are inconsistent")
         scalars = tuple(
@@ -334,6 +355,8 @@ class ControlResult:
             payload.update(self.post_action.to_dict())
         if self.execution_error is not None:
             payload["execution_error"] = self.execution_error
+        if self.execution_interlock is not None:
+            payload["execution_interlock"] = self.execution_interlock.to_dict()
         return payload
 
     @classmethod
@@ -350,6 +373,7 @@ class ControlResult:
             execution_error = payload.get("execution_error")
             if execution_error is not None:
                 execution_error = str(execution_error)
+            execution_interlock = payload.get("execution_interlock")
             return cls(
                 status=ControlResultStatus(payload["status"]),
                 session_id=str(payload["session"]),
@@ -384,6 +408,11 @@ class ControlResult:
                 ),
                 post_action=post_action,
                 execution_error=execution_error,
+                execution_interlock=(
+                    ControlInterlockEvidence.from_dict(execution_interlock)
+                    if execution_interlock is not None
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("control result is incomplete") from error
@@ -474,6 +503,10 @@ class ControlSession:
     def candidate_binding_path(self) -> Path:
         return self.path / "experimental_candidate.json"
 
+    @property
+    def insertion_trial_binding_path(self) -> Path:
+        return self.path / "insertion_trial.json"
+
     def create(self) -> None:
         if self.path.exists():
             raise ValueError(f"control session already exists: {self.session_id}")
@@ -525,10 +558,17 @@ class ControlSession:
         is_candidate = (
             state.execution_policy is ControlExecutionPolicy.RESET_TRIAL_CANDIDATE
         )
+        is_insertion_trial = (
+            state.execution_policy is ControlExecutionPolicy.INSERTION_RESET_TRIAL
+        )
         if is_candidate:
             self.load_candidate_binding(proposal)
         elif self.candidate_binding_path.exists():
             raise ValueError("non-experimental session contains a candidate binding")
+        if is_insertion_trial:
+            self.load_insertion_trial_binding(proposal)
+        elif self.insertion_trial_binding_path.exists():
+            raise ValueError("non-insertion session contains an insertion trial binding")
         return observation, proposal, state
 
     def load_response(self) -> ProposedControl:
@@ -570,43 +610,36 @@ class ControlSession:
         binding.validate_execution(
             source_evidence,
             CandidateExecutionEvidence(
-                CandidateTrialContext(
-                    observation,
-                    TrialResetState(
-                        observation.pose,
-                        state.current_joint_positions,
-                        state.collision_detected,
-                        state.contact_force_newtons,
-                        state.plug_position,
-                        state.plug_attached,
-                    ),
-                    state.execution_policy,
-                    state.reference_recording,
-                    state.seed,
-                    state.previous_session_id,
-                ),
+                self.trial_context(observation, state),
                 response,
             ),
+        )
+
+    @staticmethod
+    def trial_context(
+        observation: ControlObservation,
+        state: ControlSessionState,
+    ) -> ControlTrialContext:
+        return ControlTrialContext(
+            observation,
+            TrialResetState(
+                observation.pose,
+                state.current_joint_positions,
+                state.collision_detected,
+                state.contact_force_newtons,
+                state.plug_position,
+                state.plug_attached,
+            ),
+            state.execution_policy,
+            state.reference_recording,
+            state.seed,
+            state.previous_session_id,
         )
 
     def load_candidate_source_evidence(self) -> CandidateSourceEvidence:
         observation, state = self.load_capture()
         return CandidateSourceEvidence(
-            CandidateTrialContext(
-                observation,
-                TrialResetState(
-                    observation.pose,
-                    state.current_joint_positions,
-                    state.collision_detected,
-                    state.contact_force_newtons,
-                    state.plug_position,
-                    state.plug_attached,
-                ),
-                state.execution_policy,
-                state.reference_recording,
-                state.seed,
-                state.previous_session_id,
-            ),
+            self.trial_context(observation, state),
             self.load_shadow(),
             self.load_shadow_safety(),
         )
@@ -636,6 +669,73 @@ class ControlSession:
                 f"control session has no valid candidate evidence: {self.session_id}"
             ) from error
         self._validate_candidate_binding(binding, response or self.load_response())
+        return binding
+
+    def load_insertion_trial_source_evidence(self) -> InsertionTrialSourceEvidence:
+        observation, state = self.load_capture()
+        if (
+            recording_task(
+                self.path.parent.parent / "recordings" / state.reference_recording
+            )
+            != INSERTION_TASK_ID
+        ):
+            raise ValueError("insertion trial source does not reference insertion evidence")
+        return InsertionTrialSourceEvidence(
+            self.trial_context(observation, state),
+            self.load_response(),
+            self.load_direct_safety(),
+        )
+
+    def _validate_insertion_trial_binding(
+        self,
+        binding: InsertionTrialBinding,
+        response: ProposedControl | None,
+        source_evidence: InsertionTrialSourceEvidence | None = None,
+    ) -> None:
+        observation, state = self.load_capture()
+        source = ControlSession.at(self.path.parent, binding.source_session_id)
+        if source_evidence is None:
+            source_evidence = source.load_insertion_trial_source_evidence()
+        if (
+            binding.execution_session_id != self.session_id
+            or binding.source_session_id != source.session_id
+        ):
+            raise ValueError("insertion trial is not bound to its safety source")
+        binding.validate_execution(
+            source_evidence,
+            InsertionTrialExecutionEvidence(
+                self.trial_context(observation, state),
+                response,
+            ),
+        )
+
+    def write_insertion_trial_binding(
+        self,
+        binding: InsertionTrialBinding,
+        source_evidence: InsertionTrialSourceEvidence | None = None,
+    ) -> None:
+        if self.insertion_trial_binding_path.exists():
+            raise ValueError(
+                f"control session already has insertion trial evidence: {self.session_id}"
+            )
+        self._validate_insertion_trial_binding(binding, None, source_evidence)
+        write_json_atomic(self.insertion_trial_binding_path, binding.to_dict())
+
+    def load_insertion_trial_binding(
+        self,
+        response: ProposedControl | None = None,
+    ) -> InsertionTrialBinding:
+        try:
+            binding = InsertionTrialBinding.from_dict(
+                json.loads(self.insertion_trial_binding_path.read_text())
+            )
+        except (FileNotFoundError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError(
+                f"control session has no valid insertion trial evidence: {self.session_id}"
+            ) from error
+        self._validate_insertion_trial_binding(
+            binding, response or self.load_response()
+        )
         return binding
 
     def load_shadow(self) -> ShadowSearchEvidence:

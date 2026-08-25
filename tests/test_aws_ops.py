@@ -1199,6 +1199,41 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/run_insertion_safety_check.sh", calls)
         self.assertIn("ops/backup_state.sh", calls)
 
+    def test_insertion_trial_forwards_exact_source_and_always_backs_up(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-trial",
+            arguments=(
+                "insertion-fresh-held-00",
+                "52600",
+                "contact-insertion-v9-2600-dense-control",
+                "insertion-safety-source",
+                "43",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/run_insertion_reset_trial.sh", calls)
+        self.assertIn("'insertion-safety-source'", calls)
+        self.assertIn("'43'", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+
+    def test_insertion_trial_backs_up_a_failed_execution(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-trial",
+            arguments=(
+                "insertion-fresh-held-00",
+                "52600",
+                "contact-insertion-v9-2600-dense-control",
+                "insertion-safety-source",
+                "43",
+            ),
+            extra_env={"FAKE_SSH_FAIL_MATCH": "run_insertion_reset_trial.sh"},
+        )
+
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertIn("ops/run_insertion_reset_trial.sh", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+
     def test_jepa_wm_control_rollout_forwards_a_bounded_step_count(self):
         result, calls = self.run_command(
             "jepa-wm-control-rollout",

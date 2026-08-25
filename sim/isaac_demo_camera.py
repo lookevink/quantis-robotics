@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 
@@ -247,7 +247,12 @@ async def capture_cameras(
     }
 
 
-async def capture_camera_frame(spec: CameraSpec, path: Path) -> dict[str, Any]:
+async def capture_camera_frame(
+    spec: CameraSpec,
+    path: Path,
+    *,
+    observe_safety: Callable[[], Any] | None = None,
+) -> dict[str, Any]:
     """Capture one current RGB observation to an explicit shared path."""
 
     import omni.replicator.core as rep
@@ -262,10 +267,16 @@ async def capture_camera_frame(spec: CameraSpec, path: Path) -> dict[str, Any]:
     annotator = rep.AnnotatorRegistry.get_annotator("rgb")
     try:
         annotator.attach([render_product])
+
+        async def advance_and_observe() -> None:
+            await omni.kit.app.get_app().next_update_async()
+            if observe_safety is not None:
+                observe_safety()
+
         pixels = (
             await _wait_for_rgb(
                 {spec.label: annotator},
-                omni.kit.app.get_app().next_update_async,
+                advance_and_observe,
             )
         )[spec.label]
         path.parent.mkdir(parents=True, exist_ok=True)

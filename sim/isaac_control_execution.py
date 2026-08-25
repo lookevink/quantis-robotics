@@ -12,6 +12,7 @@ import numpy as np
 from jepa.contract import ObservationStage
 from jepa_wm.action import DROID_FPS, DroidActionScale, DroidPose, action_between
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
+from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_safety import (
     ACTION_SCALES,
     ControlGateDecision,
@@ -33,6 +34,7 @@ from sim.control_session import (
 from sim.demo_sequence import Phase
 from sim.control_context import recording_task
 from sim.isaac_control_runtime import (
+    LiveContactInterlock,
     bind_live_runtime,
     contact_sensor,
     live_runtime_for,
@@ -43,6 +45,7 @@ from sim.grasp_task import evaluate_grasp_acquisition
 from sim.isaac_demo_kinematics import SolvedPose, solve_droid_pose, solve_waypoints
 from sim.isaac_demo_runtime import (
     Actuators,
+    ContactReading,
     JointCommand,
     PlugAttachment,
     create_actuators,
@@ -106,10 +109,16 @@ async def capture_synchronized_post_action(
     attachment: PlugAttachment,
     sensor: Any,
     destination: Path,
+    *,
+    observe_safety: Callable[[], ContactReading] | None = None,
 ) -> CapturedPostActionState:
     """Capture RGB first, then read telemetry from the resulting physics tick."""
 
-    frame = await capture_camera_frame(JEPA_WM_CAMERA_SPECS[0], destination)
+    frame = await capture_camera_frame(
+        JEPA_WM_CAMERA_SPECS[0],
+        destination,
+        observe_safety=observe_safety,
+    )
     command = actuators.actual_command()
     collision_detected, contact_force_newtons = read_control_contact(sensor)
     snapshot = recording_snapshot(
@@ -125,6 +134,57 @@ async def capture_synchronized_post_action(
         contact_force_newtons,
         snapshot,
     )
+
+
+async def settle_joint_command(
+    actuators: Actuators,
+    target_arm_positions: np.ndarray,
+    advance: Callable[[], Any],
+    *,
+    observe_safety: Callable[[], ContactReading] | None = None,
+    maximum_updates: int = 8,
+) -> None:
+    """Settle toward a target while polling the interlock after every update."""
+
+    if maximum_updates <= 0:
+        raise ValueError("settling update count must be positive")
+    for _ in range(maximum_updates):
+        actual = actuators.actual_command()
+        if np.max(np.abs(actual.arm_positions - target_arm_positions)) <= 0.01:
+            return
+        await advance()
+        if observe_safety is not None:
+            observe_safety()
+
+
+async def rollback_control_command(
+    actuators: Actuators,
+    target: JointCommand,
+    attachment: PlugAttachment,
+    advance: Callable[[], Any],
+    *,
+    expected_attachment: bool,
+    observe_safety: Callable[[], ContactReading] | None = None,
+) -> None:
+    """Apply and verify one rollback update through the same live interlock."""
+
+    actuators.apply(target)
+    await advance()
+    if observe_safety is not None:
+        observe_safety()
+    actual = actuators.actual_command()
+    arm_error = float(np.max(np.abs(actual.arm_positions - target.arm_positions)))
+    gripper_error = abs(actual.gripper_width_m - target.gripper_width_m)
+    if arm_error > 0.01 or gripper_error > 0.003:
+        raise RuntimeError(
+            "rollback command did not track: "
+            f"arm_error={arm_error:.6f} rad, "
+            f"gripper_error={gripper_error:.6f} m"
+        )
+    if attachment.attached is not expected_attachment:
+        raise RuntimeError(
+            "rollback attachment state did not match its captured reset"
+        )
 
 
 def project_control_candidate(
@@ -183,9 +243,12 @@ def select_safe_projection(
     *,
     solve: Callable[[DroidPose, np.ndarray], SolvedPose] = solve_droid_pose,
     now_unix_seconds: float | None = None,
+    action_scales: tuple[DroidActionScale, ...] = ACTION_SCALES,
 ) -> tuple[tuple[SafetyProjectionAttempt, ...], SafeProjection | None]:
     attempts = []
-    for action_scale in ACTION_SCALES:
+    if not action_scales:
+        raise ValueError("safety projection requires at least one action scale")
+    for action_scale in action_scales:
         attempt, selected = project_control_candidate(
             context,
             proposal,
@@ -267,7 +330,18 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             collision_detected,
             limits,
         )
-        attempts, selected = select_safe_projection(safety, proposal)
+        action_scales = ACTION_SCALES
+        if (
+            persisted_state.execution_policy
+            is ControlExecutionPolicy.INSERTION_RESET_TRIAL
+        ):
+            binding = session.load_insertion_trial_binding(proposal)
+            action_scales = binding.allowed_projection_scales
+        attempts, selected = select_safe_projection(
+            safety,
+            proposal,
+            action_scales=action_scales,
+        )
 
         candidate = None
         if selected is None:
@@ -296,8 +370,20 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         status = ControlResultStatus.BLOCKED
         post_action = None
         execution_error = None
+        execution_interlock = None
         if decision.passed and candidate is not None:
+            insertion_reset_trial = (
+                persisted_state.execution_policy
+                is ControlExecutionPolicy.INSERTION_RESET_TRIAL
+            )
             try:
+                live_interlock = LiveContactInterlock(
+                    sensor,
+                    limits.maximum_contact_force_newtons,
+                    "insertion reset trial",
+                    ContactReading(collision_detected, contact_force),
+                )
+
                 timeline.play()
                 target = JointCommand(solved.arm_positions, solved.gripper_width_m)
                 await move_joint_command(
@@ -310,23 +396,47 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     stage=ObservationStage.APPROACHING_CABLE,
                     recorder=None,
                     sample_period_seconds=1.0 / DROID_FPS,
+                    observe_safety=(
+                        live_interlock.observe
+                        if persisted_state.execution_policy
+                        is ControlExecutionPolicy.INSERTION_RESET_TRIAL
+                        else None
+                    ),
                 )
-                for _ in range(8):
-                    actual = actuators.actual_command()
-                    if np.max(
-                        np.abs(actual.arm_positions - solved.arm_positions)
-                    ) <= 0.01:
-                        break
-                    await omni.kit.app.get_app().next_update_async()
+                await settle_joint_command(
+                    actuators,
+                    solved.arm_positions,
+                    omni.kit.app.get_app().next_update_async,
+                    observe_safety=(
+                        live_interlock.observe
+                        if insertion_reset_trial
+                        else None
+                    ),
+                )
                 captured = await capture_synchronized_post_action(
                     actuators,
                     attachment,
                     sensor,
                     session.path / "post_action.png",
+                    observe_safety=(
+                        live_interlock.observe
+                        if insertion_reset_trial
+                        else None
+                    ),
                 )
                 actual = captured.command
-                post_collision = captured.collision_detected
-                post_force = captured.contact_force_newtons
+                post_collision = captured.collision_detected or (
+                    insertion_reset_trial
+                    and live_interlock.evidence.collision_detected
+                )
+                post_force = (
+                    max(
+                        captured.contact_force_newtons,
+                        live_interlock.evidence.maximum_contact_force_newtons,
+                    )
+                    if insertion_reset_trial
+                    else captured.contact_force_newtons
+                )
                 post_snapshot = captured.snapshot
                 actual_action = action_between(
                     observation.pose, post_snapshot.end_effector_pose
@@ -374,18 +484,64 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                 )
                 status = ControlResultStatus.APPLIED
             except Exception as error:
-                actuators.apply(current)
-                status = ControlResultStatus.ROLLED_BACK_EXECUTION
                 execution_error = f"{type(error).__name__}: {error}"
+                try:
+                    await rollback_control_command(
+                        actuators,
+                        current,
+                        attachment,
+                        omni.kit.app.get_app().next_update_async,
+                        expected_attachment=persisted_state.plug_attached,
+                        observe_safety=(
+                            live_interlock.observe
+                            if insertion_reset_trial
+                            else None
+                        ),
+                    )
+                    status = ControlResultStatus.ROLLED_BACK_EXECUTION
+                except Exception as rollback_error:
+                    status = ControlResultStatus.ROLLBACK_FAILED
+                    execution_error += (
+                        "; rollback verification failed: "
+                        f"{type(rollback_error).__name__}: {rollback_error}"
+                    )
+                if insertion_reset_trial:
+                    execution_interlock = live_interlock.evidence
             if post_action is not None:
+                rollback_status = None
                 if joint_tracking_error > 0.01 or not tracking.passed:
-                    actuators.apply(current)
-                    await omni.kit.app.get_app().next_update_async()
-                    status = ControlResultStatus.ROLLED_BACK_TRACKING
+                    rollback_status = ControlResultStatus.ROLLED_BACK_TRACKING
                 elif post_collision or post_force > limits.maximum_contact_force_newtons:
-                    actuators.apply(current)
-                    await omni.kit.app.get_app().next_update_async()
-                    status = ControlResultStatus.ROLLED_BACK_CONTACT
+                    rollback_status = ControlResultStatus.ROLLED_BACK_CONTACT
+                elif (
+                    persisted_state.execution_policy
+                    is ControlExecutionPolicy.INSERTION_RESET_TRIAL
+                    and not post_snapshot.plug_attached
+                ):
+                    rollback_status = ControlResultStatus.ROLLED_BACK_ATTACHMENT
+                if rollback_status is not None:
+                    try:
+                        await rollback_control_command(
+                            actuators,
+                            current,
+                            attachment,
+                            omni.kit.app.get_app().next_update_async,
+                            expected_attachment=persisted_state.plug_attached,
+                            observe_safety=(
+                                live_interlock.observe
+                                if insertion_reset_trial
+                                else None
+                            ),
+                        )
+                        status = rollback_status
+                    except Exception as rollback_error:
+                        status = ControlResultStatus.ROLLBACK_FAILED
+                        execution_error = (
+                            "rollback verification failed: "
+                            f"{type(rollback_error).__name__}: {rollback_error}"
+                        )
+                if insertion_reset_trial:
+                    execution_interlock = live_interlock.evidence
 
         result = ControlResult(
             status=status,
@@ -401,6 +557,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             pre_action_contact_force_newtons=contact_force,
             post_action=post_action,
             execution_error=execution_error,
+            execution_interlock=execution_interlock,
         )
         session.write_result(result)
         return result.to_dict()

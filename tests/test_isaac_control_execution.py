@@ -14,6 +14,8 @@ from sim.isaac_control_execution import (
     ExecutionSafetyContext,
     capture_synchronized_post_action,
     select_safe_projection,
+    rollback_control_command,
+    settle_joint_command,
     synchronized_actual_command,
 )
 from sim.isaac_demo_kinematics import SolvedPose
@@ -77,6 +79,19 @@ class ControlProjectionTest(unittest.TestCase):
             DroidActionScale(0.5, 0.125, 1.0),
         )
 
+        bounded_attempts, bounded = select_safe_projection(
+            context,
+            proposal,
+            solve=solve,
+            now_unix_seconds=100.2,
+            action_scales=(DroidActionScale(0.5, 0.125, 1.0),),
+        )
+        self.assertIsNotNone(bounded)
+        self.assertEqual(
+            tuple(attempt.scale for attempt in bounded_attempts),
+            (DroidActionScale(0.5, 0.125, 1.0),),
+        )
+
 
 class FakeTimeline:
     def __init__(self) -> None:
@@ -116,7 +131,18 @@ class IsaacControlExecutionTest(unittest.TestCase):
         actuators.command = before
         snapshot = object()
 
-        async def capture(*_args: object) -> dict[str, object]:
+        observed = 0
+
+        def observe_safety() -> object:
+            nonlocal observed
+            observed += 1
+            return object()
+
+        async def capture(
+            *_args: object, observe_safety=None
+        ) -> dict[str, object]:
+            self.assertIsNotNone(observe_safety)
+            observe_safety()
             actuators.command = after
             return {"path": "/tmp/post.png", "shape": [512, 512, 4]}
 
@@ -137,12 +163,14 @@ class IsaacControlExecutionTest(unittest.TestCase):
                     object(),
                     object(),
                     Path("/tmp/post.png"),
+                    observe_safety=observe_safety,
                 )
             )
 
         self.assertIs(captured.command, after)
         self.assertIs(captured.snapshot, snapshot)
         self.assertEqual(captured.contact_force_newtons, 0.5)
+        self.assertEqual(observed, 1)
         recording.assert_called_once()
         self.assertIs(recording.call_args.args[2], after)
 
@@ -176,6 +204,65 @@ class IsaacControlExecutionTest(unittest.TestCase):
         self.assertIs(command, actuators.command)
         self.assertFalse(advanced)
         self.assertEqual(timeline.events, [])
+
+    def test_settling_polls_safety_after_every_physics_update(self) -> None:
+        actuators = FakeActuators(valid=True)
+        actuators.command = JointCommand(np.zeros(7), 0.04)
+        updates = 0
+        observations = 0
+
+        async def advance() -> None:
+            nonlocal updates
+            updates += 1
+
+        def observe_safety() -> object:
+            nonlocal observations
+            observations += 1
+            if observations == 2:
+                raise RuntimeError("transient force")
+            return object()
+
+        with self.assertRaisesRegex(RuntimeError, "transient force"):
+            asyncio.run(
+                settle_joint_command(
+                    actuators,
+                    np.ones(7),
+                    advance,
+                    observe_safety=observe_safety,
+                )
+            )
+
+        self.assertEqual(updates, 2)
+        self.assertEqual(observations, 2)
+
+    def test_rollback_is_observed_and_verified_after_its_physics_update(self) -> None:
+        target = JointCommand(np.zeros(7), 0.04)
+        actuators = FakeActuators(valid=True)
+        actuators.command = JointCommand(np.ones(7), 0.02)
+        actuators.apply = lambda command: setattr(actuators, "command", command)
+        events = []
+
+        async def advance() -> None:
+            events.append("advance")
+
+        def observe_safety() -> object:
+            events.append("observe")
+            return object()
+
+        attachment = type("Attachment", (), {"attached": True})()
+        asyncio.run(
+            rollback_control_command(
+                actuators,
+                target,
+                attachment,
+                advance,
+                expected_attachment=True,
+                observe_safety=observe_safety,
+            )
+        )
+
+        self.assertEqual(events, ["advance", "observe"])
+        self.assertIs(actuators.command, target)
 
 
 if __name__ == "__main__":

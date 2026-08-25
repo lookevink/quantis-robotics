@@ -89,10 +89,14 @@ load_control_policy_descriptor() {
   local policy="$1"
   local direct_proposal="${2:-direct-proposal}"
   case "${policy}" in
-    direct|calibration_collection|insertion_safety_evaluation)
+    direct|calibration_collection|insertion_safety_evaluation|insertion_reset_trial)
       CONTROL_POLICY_PROPOSAL="${direct_proposal}"
       CONTROL_POLICY_REQUIRES_CHECKPOINT=true
-      CONTROL_POLICY_RESPONDER=direct
+      if [[ "${policy}" == "insertion_reset_trial" ]]; then
+        CONTROL_POLICY_RESPONDER=insertion_trial
+      else
+        CONTROL_POLICY_RESPONDER=direct
+      fi
       ;;
     zero|scripted)
       CONTROL_POLICY_PROPOSAL="baseline_${policy}"
@@ -162,6 +166,14 @@ respond_to_control_session() {
       bash "${repository}/ops/jepa_wm.sh" control-candidate-session \
         --session "${session_id}" --source-session "${source_session_id}"
       ;;
+    insertion_trial)
+      is_safe_identifier "${source_session_id}" || {
+        printf 'error: insertion trial policy requires a source session\n' >&2
+        return 1
+      }
+      isaac_server_call \
+        "demo.persist_insertion_trial_response('${session_id}','${source_session_id}')" 120
+      ;;
   esac
 }
 
@@ -175,6 +187,7 @@ capture_and_respond_control_session() {
   local context_index="$7"
   local checkpoint_root="$8"
   local python_bin="$9"
+  local source_session_id="${10:-}"
   local proposal_name
   for identifier in "${session_id}" "${reference_name}" "${control_identity}"; do
     is_safe_identifier "${identifier}" || {
@@ -192,7 +205,68 @@ capture_and_respond_control_session() {
   isaac_server_call \
     "await demo.capture_control_observation('${session_id}','${reference_name}',${exploration_seed},'${proposal_name}','${policy}',${context_index})" \
     900 true
-  respond_to_control_session "${repository}" "${session_id}" "${policy}"
+  respond_to_control_session \
+    "${repository}" "${session_id}" "${policy}" "${source_session_id}"
+}
+
+finalize_reset_trial_control_session() {
+  local command_status=$?
+  local report_status=0
+  local -a report_arguments=(
+    --rollout "${RESET_TRIAL_SESSION_ID}"
+    --reference "${RESET_TRIAL_REFERENCE}"
+    --seed "${RESET_TRIAL_SEED}"
+    --proposal "${RESET_TRIAL_PROPOSAL}"
+    --policy "${RESET_TRIAL_POLICY}"
+    --sessions "${RESET_TRIAL_SESSION_ID}"
+    --requested-steps 1
+  )
+  trap - EXIT
+  if (( command_status != 0 )); then
+    report_arguments+=(
+      --orchestration-failure "${RESET_TRIAL_PHASE}:exit_${command_status}"
+    )
+  fi
+  set +e
+  bash "${RESET_TRIAL_REPOSITORY}/ops/jepa_wm.sh" control-rollout-report \
+    "${report_arguments[@]}"
+  report_status=$?
+  set -e
+  if (( command_status == 0 && report_status != 0 )); then
+    command_status=${report_status}
+  fi
+  exit "${command_status}"
+}
+
+run_reset_trial_control_session() {
+  RESET_TRIAL_REPOSITORY="$1"
+  RESET_TRIAL_SESSION_ID="$2"
+  RESET_TRIAL_REFERENCE="$3"
+  RESET_TRIAL_SEED="$4"
+  RESET_TRIAL_PROPOSAL="$5"
+  RESET_TRIAL_POLICY="$6"
+  local source_session_id="$7"
+  local context_index="$8"
+  local capture_timeout="$9"
+  local prepare_function="${10}"
+  local persist_function="${11}"
+  RESET_TRIAL_PHASE="source_preflight"
+  trap finalize_reset_trial_control_session EXIT
+  isaac_server_call \
+    "demo.${prepare_function}('${source_session_id}')" 180 true
+  RESET_TRIAL_PHASE="capture"
+  isaac_server_call \
+    "await demo.capture_control_observation('${RESET_TRIAL_SESSION_ID}','${RESET_TRIAL_REFERENCE}',${RESET_TRIAL_SEED},'${RESET_TRIAL_PROPOSAL}','${RESET_TRIAL_POLICY}',${context_index})" \
+    "${capture_timeout}"
+  RESET_TRIAL_PHASE="binding"
+  isaac_server_call \
+    "demo.${persist_function}('${RESET_TRIAL_SESSION_ID}','${source_session_id}')" \
+    180
+  RESET_TRIAL_PHASE="apply"
+  isaac_server_call \
+    "await demo.apply_control_response('${RESET_TRIAL_SESSION_ID}')" 180
+  RESET_TRIAL_PHASE="complete"
+  finalize_reset_trial_control_session
 }
 
 isaac_demo_code() {

@@ -11,7 +11,7 @@ from sim.isaac_candidate_binding import (
 
 
 class CandidateBindingServiceTest(unittest.TestCase):
-    @patch.dict("sim.isaac_candidate_binding._PREPARED_SOURCES", clear=True)
+    @patch.dict("sim.isaac_candidate_binding._PREPARED_SOURCES._sources", clear=True)
     @patch("sim.isaac_candidate_binding.ControlSession.at")
     def test_preflights_source_before_live_capture(self, session_at: MagicMock) -> None:
         source = session_at.return_value
@@ -30,7 +30,7 @@ class CandidateBindingServiceTest(unittest.TestCase):
         self.assertTrue(result["shadow_gate_passed"])
         self.assertTrue(result["safety_passed"])
 
-    @patch.dict("sim.isaac_candidate_binding._PREPARED_SOURCES", clear=True)
+    @patch.dict("sim.isaac_candidate_binding._PREPARED_SOURCES._sources", clear=True)
     @patch("sim.isaac_candidate_binding.build_experimental_candidate_response")
     @patch("sim.isaac_candidate_binding.ControlSession.at")
     def test_timestamps_and_persists_after_source_validation(

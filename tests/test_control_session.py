@@ -165,6 +165,46 @@ class ControlSessionTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "non-experimental"):
                 session.load()
 
+    def test_insertion_reset_trials_fail_closed_without_their_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            session = ControlSession.at(Path(temp_dir), "insertion-trial")
+            proposal = Path("/tmp/proposal.pth")
+            observation = ControlObservation(
+                123,
+                100.0,
+                Path("context.png"),
+                ControlTarget(Path("target.png")),
+                proposal,
+                DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
+                DroidAction((0.0,) * 7),
+                43,
+            )
+            state = ControlSessionState(
+                "insertion-trial",
+                "held-reference",
+                52600,
+                "control-insertion-trial",
+                (0.0,) * 7,
+                False,
+                0.0,
+                execution_policy=ControlExecutionPolicy.INSERTION_RESET_TRIAL,
+                plug_position=(0.4, 0.0, 0.5),
+                plug_attached=True,
+            )
+            session.write_capture(observation, state)
+            session.write_response(
+                ProposedControl(
+                    123,
+                    100.1,
+                    (DroidAction((0.0,) * 7),) * 3,
+                    proposal,
+                    "a" * 64,
+                )
+            )
+
+            with self.assertRaisesRegex(ValueError, "insertion trial evidence"):
+                session.load()
+
 
 if __name__ == "__main__":
     unittest.main()

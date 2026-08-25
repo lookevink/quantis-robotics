@@ -8,6 +8,8 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from jepa_wm.action import DroidPose, action_between
+from jepa_wm.control_policy import ControlExecutionPolicy
+from jepa_wm.control_protocol import ControlObservation
 
 
 @dataclass(frozen=True)
@@ -58,6 +60,16 @@ class TrialResetState:
             or not isinstance(self.plug_attached, bool)
         ):
             raise ValueError("trial reset state is invalid")
+
+
+@dataclass(frozen=True)
+class ControlTrialContext:
+    observation: ControlObservation
+    reset: TrialResetState
+    policy: ControlExecutionPolicy
+    reference_recording: str
+    seed: int
+    previous_session_id: str | None
 
 
 def validate_reset_equivalence(

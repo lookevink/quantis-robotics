@@ -25,7 +25,7 @@ from jepa_wm.insertion_contract import (
     INSERTION_TASK_ID,
 )
 from jepa_wm.insertion_recording import ContactInsertionEvidence
-from jepa_wm.insertion_task import InsertionTaskLimits
+from jepa_wm.control_safety import SimulatorSafetyLimits
 from jepa_wm.trajectory import load_rollout_at
 from sim.control_session import (
     CONTROL_ROOT,
@@ -44,13 +44,13 @@ from sim.exploration import (
     build_exploration_plan,
 )
 from sim.isaac_control_runtime import (
+    LiveContactInterlock,
     bind_live_runtime,
     control_contact_sensors,
     read_control_contact,
 )
 from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, DemoRecorder
 from sim.isaac_demo_runtime import (
-    ContactReading,
     JointCommand,
     advance_physics_updates,
     create_actuators,
@@ -177,14 +177,11 @@ async def capture_control_observation(
             include_connector=insertion_control,
         )
 
-        def observe_safety() -> ContactReading:
-            collision, force = read_control_contact(sensor)
-            if collision or force > InsertionTaskLimits().maximum_contact_force_newtons:
-                raise RuntimeError(
-                    "insertion control warm-up exceeded its live safety limit: "
-                    f"collision={collision}, force={force:.3f} N"
-                )
-            return ContactReading(collision, force)
+        warmup_interlock = LiveContactInterlock(
+            sensor,
+            SimulatorSafetyLimits().maximum_contact_force_newtons,
+            "insertion control warm-up",
+        )
 
         await omni.kit.app.get_app().next_update_async()
         if SimulationManager.get_physics_sim_view() is None:
@@ -205,7 +202,7 @@ async def capture_control_observation(
         timeline.play()
         actuators.apply(origin)
         if insertion_control:
-            await advance_physics_updates(16, observe_safety)
+            await advance_physics_updates(16, warmup_interlock.observe)
         else:
             for _ in range(16):
                 await omni.kit.app.get_app().next_update_async()
@@ -254,7 +251,9 @@ async def capture_control_observation(
                 ),
                 recorder=recorder,
                 sample_period_seconds=plan.sample_period_seconds,
-                observe_safety=observe_safety if insertion_control else None,
+                observe_safety=(
+                    warmup_interlock.observe if insertion_control else None
+                ),
             )
             current = command
         collision_detected, contact_force = read_control_contact(sensor)

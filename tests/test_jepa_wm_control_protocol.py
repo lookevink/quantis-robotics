@@ -8,6 +8,7 @@ from jepa_wm.control_protocol import (
     ProposedControl,
 )
 from jepa_wm.control_safety import (
+    ControlInterlockEvidence,
     ControlGateReason,
     SimulatorControlGate,
     SimulatorSafetyState,
@@ -73,6 +74,20 @@ def _state(**overrides) -> SimulatorSafetyState:
 
 
 class SimulatorControlGateTest(unittest.TestCase):
+    def test_interlock_evidence_round_trips_peak_contact(self) -> None:
+        evidence = ControlInterlockEvidence(2.5, True)
+
+        self.assertEqual(
+            ControlInterlockEvidence.from_dict(evidence.to_dict()), evidence
+        )
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            ControlInterlockEvidence.from_dict(
+                {
+                    "maximum_contact_force_newtons": "2.5",
+                    "collision_detected": True,
+                }
+            )
+
     def test_accepts_one_fresh_bounded_free_space_action(self) -> None:
         decision = SimulatorControlGate().evaluate(
             _observation(),
@@ -218,9 +233,17 @@ class SimulatorControlGateTest(unittest.TestCase):
                 ControlExecutionPolicy.RESET_TRIAL_CANDIDATE
             ),
         )
+        insertion_trial = evaluate_action_tracking(
+            commanded,
+            realized,
+            tracking_limits_for_policy(
+                ControlExecutionPolicy.INSERTION_RESET_TRIAL
+            ),
+        )
 
         self.assertTrue(direct.passed)
         self.assertFalse(candidate.passed)
+        self.assertEqual(insertion_trial, candidate)
 
 
 if __name__ == "__main__":

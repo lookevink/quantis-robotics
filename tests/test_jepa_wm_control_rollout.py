@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 import tempfile
@@ -16,7 +17,11 @@ from jepa_wm.control_rollout import (
     OrchestrationFailure,
     OrchestrationOperation,
 )
-from jepa_wm.control_safety import ControlGateDecision, SafetyProjectionAttempt
+from jepa_wm.control_safety import (
+    ControlGateDecision,
+    ControlInterlockEvidence,
+    SafetyProjectionAttempt,
+)
 from jepa_wm.control_tracking import ActionTrackingDecision
 from jepa_wm.planner import CEMConfig
 from jepa_wm.planner_readiness import FirstActionThresholds
@@ -165,6 +170,40 @@ class ControlRolloutTest(unittest.TestCase):
             )
             + "\n"
         )
+
+    def test_terminal_summary_retains_execution_interlock_peak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._write_step(
+                root,
+                "session-1",
+                previous_session_id=None,
+                pose_x=0.4,
+                post_x=0.401,
+            )
+            session = ControlSession.at(root / "control_sessions", "session-1")
+            applied = session.load_result()
+            rolled_back = replace(
+                applied,
+                status=ControlResultStatus.ROLLED_BACK_EXECUTION,
+                post_action=None,
+                execution_error="RuntimeError: transient force",
+                execution_interlock=ControlInterlockEvidence(2.5, True),
+            )
+            session.result_path.write_text(json.dumps(rolled_back.to_dict()))
+
+            summary = ControlStepSummary.from_session(session).to_dict()
+
+            self.assertEqual(
+                summary["execution_interlock"],
+                {
+                    "maximum_contact_force_newtons": 2.5,
+                    "collision_detected": True,
+                },
+            )
+            self.assertEqual(
+                summary["execution_error"], "RuntimeError: transient force"
+            )
 
     def test_summarizes_a_provenance_bound_rollout_and_goal_progress(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

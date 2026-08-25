@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import isfinite
 from typing import Any
 
+from jepa_wm.control_safety import ControlInterlockEvidence
 from sim.isaac_demo_runtime import Actuators, PlugAttachment
+from sim.isaac_demo_runtime import ContactReading
 from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH
 
 
@@ -41,6 +43,44 @@ class ControlContactSensors:
 
     hand: Any
     connector: Any | None = None
+
+
+@dataclass
+class LiveContactInterlock:
+    """Poll one live sensor boundary while retaining its interval peak."""
+
+    sensors: ControlContactSensors | Any
+    maximum_contact_force_newtons: float
+    operation: str
+    initial_reading: ContactReading = ContactReading()
+    _peak: ContactReading = field(default_factory=ContactReading, init=False)
+
+    def __post_init__(self) -> None:
+        if (
+            not isfinite(self.maximum_contact_force_newtons)
+            or self.maximum_contact_force_newtons <= 0.0
+            or not self.operation
+        ):
+            raise ValueError("live contact interlock configuration is invalid")
+        self._peak = self.initial_reading
+
+    def observe(self) -> ContactReading:
+        collision, force = read_control_contact(self.sensors)
+        reading = ContactReading(collision, force)
+        self._peak = self._peak.peak(reading)
+        if collision or force > self.maximum_contact_force_newtons:
+            raise RuntimeError(
+                f"{self.operation} exceeded its live safety limit: "
+                f"collision={collision}, force={force:.3f} N"
+            )
+        return reading
+
+    @property
+    def evidence(self) -> ControlInterlockEvidence:
+        return ControlInterlockEvidence(
+            self._peak.force_newtons,
+            self._peak.collision_detected,
+        )
 
 
 @dataclass(frozen=True)

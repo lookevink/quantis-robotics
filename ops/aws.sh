@@ -438,6 +438,7 @@ Commands:
   jepa-wm-control-worker-start [artifacts] | jepa-wm-control-worker-status | jepa-wm-control-worker-stop
   jepa-wm-control-step REFERENCE_RECORDING SEED [artifacts] [context-index]
   jepa-wm-insertion-safety REFERENCE_RECORDING SEED [artifacts] [context-index]
+  jepa-wm-insertion-trial REFERENCE_RECORDING SEED ARTIFACTS SOURCE_SESSION [context-index]
   jepa-wm-control-rollout REFERENCE_RECORDING SEED STEPS [artifacts] [context-index]
   jepa-wm-control-baseline REFERENCE_RECORDING SEED STEPS zero|scripted [context-index]
   jepa-wm-control-baselines EXPERIMENT DIRECT ZERO SCRIPTED REFERENCE SEED STEPS [direct-proposal] [direct-sessions]
@@ -1014,6 +1015,34 @@ case "${command}" in
       command_status=${backup_status}
     fi
     printf 'Insertion safety session: %s\n' "${session_id}"
+    exit "${command_status}"
+    ;;
+  jepa-wm-insertion-trial)
+    reference_name="${2:-}"
+    exploration_seed="${3:-}"
+    artifacts_name="${4:-}"
+    source_session_id="${5:-}"
+    context_index="${6:-43}"
+    for identifier in \
+      "${reference_name}" "${artifacts_name}" "${source_session_id}"; do
+      is_safe_identifier "${identifier}" || die "invalid insertion trial identifier"
+    done
+    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+    require_positive_integer "context index" "${context_index}" || exit 1
+    session_id="insertion-trial-$(date -u +%Y%m%dT%H%M%SZ)-${exploration_seed}-c${context_index}"
+    command_status=0
+    sync_repo || command_status=$?
+    if (( command_status == 0 )); then
+      remote "bash ~/quantis-robotics/ops/run_insertion_reset_trial.sh '${session_id}' '${reference_name}' '${exploration_seed}' '${artifacts_name}' '${source_session_id}' '${context_index}'" \
+        || command_status=$?
+    fi
+    backup_status=0
+    remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' \
+      || backup_status=$?
+    if (( command_status == 0 && backup_status != 0 )); then
+      command_status=${backup_status}
+    fi
+    printf 'Insertion trial session: %s\n' "${session_id}"
     exit "${command_status}"
     ;;
   jepa-wm-control-rollout)

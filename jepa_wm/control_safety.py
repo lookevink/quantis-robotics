@@ -59,6 +59,43 @@ def _finite_tuple(name: str, values: Sequence[float], count: int) -> tuple[float
 
 
 @dataclass(frozen=True)
+class ControlInterlockEvidence:
+    """Peak collision/contact evidence retained across one execution interval."""
+
+    maximum_contact_force_newtons: float
+    collision_detected: bool
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.maximum_contact_force_newtons, bool)
+            or not isfinite(self.maximum_contact_force_newtons)
+            or self.maximum_contact_force_newtons < 0.0
+            or not isinstance(self.collision_detected, bool)
+        ):
+            raise ValueError("control interlock evidence is invalid")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "maximum_contact_force_newtons": self.maximum_contact_force_newtons,
+            "collision_detected": self.collision_detected,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ControlInterlockEvidence:
+        if not isinstance(payload, dict):
+            raise ValueError("control interlock evidence must be an object")
+        force = payload.get("maximum_contact_force_newtons")
+        collision = payload.get("collision_detected")
+        if (
+            isinstance(force, bool)
+            or not isinstance(force, (int, float))
+            or not isinstance(collision, bool)
+        ):
+            raise ValueError("control interlock evidence is incomplete")
+        return cls(float(force), collision)
+
+
+@dataclass(frozen=True)
 class SimulatorSafetyState:
     observed_joint_positions: tuple[float, ...]
     current_joint_positions: tuple[float, ...]

@@ -8,9 +8,10 @@ from typing import Any
 from jepa_wm.experimental_candidate import build_experimental_candidate_response
 from jepa_wm.experimental_candidate import CandidateSourceEvidence
 from sim.control_session import CONTROL_ROOT, ControlSession
+from sim.trial_source_cache import ResidentTrialSourceCache
 
 
-_PREPARED_SOURCES: dict[tuple[Path, str], CandidateSourceEvidence] = {}
+_PREPARED_SOURCES = ResidentTrialSourceCache[CandidateSourceEvidence]()
 
 
 def prepare_experimental_candidate_source(
@@ -20,13 +21,15 @@ def prepare_experimental_candidate_source(
 ) -> dict[str, Any]:
     """Warm and validate immutable source evidence before live capture begins."""
 
-    source = ControlSession.at(control_root, source_session_id)
-    evidence = source.load_candidate_source_evidence()
+    source_session = ControlSession.at(control_root, source_session_id)
+    evidence = _PREPARED_SOURCES.prepare(
+        source_session,
+        source_session.load_candidate_source_evidence,
+    )
     shadow = evidence.shadow
     safety = evidence.safety
     if not shadow.passes_shadow_gate or not safety.passed:
         raise ValueError("candidate source did not pass shadow search and safety")
-    _PREPARED_SOURCES[(control_root.resolve(), source_session_id)] = evidence
     return {
         "source_session_id": source_session_id,
         "observation_id": shadow.observation_id,
@@ -44,13 +47,12 @@ def persist_experimental_candidate_response(
     """Validate immutable source evidence and timestamp the response afterward."""
 
     session = ControlSession.at(control_root, session_id)
-    source = ControlSession.at(control_root, source_session_id)
     observation, _ = session.load_capture()
-    source_evidence = _PREPARED_SOURCES.pop(
-        (control_root.resolve(), source_session_id), None
+    source_session = ControlSession.at(control_root, source_session_id)
+    source_evidence = _PREPARED_SOURCES.consume(
+        source_session,
+        source_session.load_candidate_source_evidence,
     )
-    if source_evidence is None:
-        source_evidence = source.load_candidate_source_evidence()
     shadow = source_evidence.shadow
     safety = source_evidence.safety
     binding, response = build_experimental_candidate_response(

@@ -14,7 +14,7 @@ from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.shadow_planning import ShadowSearchEvidence
 from jepa_wm.shadow_safety import ShadowSafetyEvidence
-from jepa_wm.trial_equivalence import TrialResetState, validate_reset_equivalence
+from jepa_wm.trial_equivalence import ControlTrialContext, validate_reset_equivalence
 from sim.recording import validate_recording_id
 
 
@@ -159,25 +159,15 @@ class ExperimentalCandidateBinding:
 
 
 @dataclass(frozen=True)
-class CandidateTrialContext:
-    observation: ControlObservation
-    reset: TrialResetState
-    policy: ControlExecutionPolicy
-    reference_recording: str
-    seed: int
-    previous_session_id: str | None
-
-
-@dataclass(frozen=True)
 class CandidateSourceEvidence:
-    context: CandidateTrialContext
+    context: ControlTrialContext
     shadow: ShadowSearchEvidence
     safety: ShadowSafetyEvidence
 
 
 @dataclass(frozen=True)
 class CandidateExecutionEvidence:
-    context: CandidateTrialContext
+    context: ControlTrialContext
     response: ProposedControl | None
 
 

@@ -39,13 +39,16 @@ class RuntimeLoaderTest(unittest.TestCase):
         source = """
 from sim.runtime_loader import reload_demo_runtime
 reload_demo_runtime()
-from jepa_wm import action, control_safety, direct_safety, experimental_candidate, insertion_contract, insertion_recording, objective_calibration, shadow_planning, shadow_safety
-from sim import control_identity, demo_sequence, isaac_demo_kinematics, isaac_exploration, recording
+from jepa_wm import action, control_safety, direct_safety, experimental_candidate, insertion_contract, insertion_recording, insertion_trial, objective_calibration, shadow_planning, shadow_safety
+from sim import control_identity, control_session, demo_sequence, isaac_demo_kinematics, isaac_exploration, isaac_insertion_trial, recording, trial_source_cache
 assert control_safety.DroidActionScale is action.DroidActionScale
 assert control_safety.DroidPose is action.DroidPose
 assert direct_safety.SafetyProjectionAttempt is control_safety.SafetyProjectionAttempt
 assert experimental_candidate.validate_recording_id is recording.validate_recording_id
 assert control_identity.validate_recording_id is recording.validate_recording_id
+assert control_session.InsertionTrialBinding is insertion_trial.InsertionTrialBinding
+assert isaac_insertion_trial.InsertionTrialSourceEvidence is insertion_trial.InsertionTrialSourceEvidence
+assert trial_source_cache.ControlSession is control_session.ControlSession
 assert shadow_planning.TaskProgressObjective is objective_calibration.TaskProgressObjective
 assert isaac_demo_kinematics.build_demo_sequence is demo_sequence.build_demo_sequence
 assert isaac_exploration.INSERTION_TASK_ID == insertion_contract.INSERTION_TASK_ID

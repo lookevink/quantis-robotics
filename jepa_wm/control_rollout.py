@@ -18,6 +18,7 @@ from jepa_wm.control_tracking import (
     tracking_limits_for_policy,
 )
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
+from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.grasp_task import (
     GraspTaskStep,
     ReachAndGraspDecision,
@@ -193,6 +194,24 @@ class ControlStepSummary:
         result = session.load_result()
         limits = SimulatorSafetyLimits()
         timing = ControlStepTiming.from_step(observation, response, result)
+        if state.execution_policy is ControlExecutionPolicy.INSERTION_RESET_TRIAL:
+            binding = session.load_insertion_trial_binding(response)
+            attempted_scales = tuple(
+                attempt.scale for attempt in result.projection_attempts
+            )
+            try:
+                binding.validate_attempted_projection_scales(attempted_scales)
+            except ValueError as error:
+                raise ValueError(
+                    f"insertion trial exceeded its source projection: {session.session_id}"
+                ) from error
+            if (
+                result.status is not ControlResultStatus.BLOCKED
+                and result.execution_interlock is None
+            ):
+                raise ValueError(
+                    f"insertion trial execution interlock is missing: {session.session_id}"
+                )
         if (
             response.observation_id != observation.observation_id
             or response.proposal != observation.expected_proposal
@@ -315,6 +334,12 @@ class ControlStepSummary:
             "plug_attached": (
                 self.result.post_action.plug_attached
                 if self.result.post_action is not None
+                else None
+            ),
+            "execution_error": self.result.execution_error,
+            "execution_interlock": (
+                self.result.execution_interlock.to_dict()
+                if self.result.execution_interlock is not None
                 else None
             ),
             "shadow_search": self.shadow.to_dict() if self.shadow is not None else None,
