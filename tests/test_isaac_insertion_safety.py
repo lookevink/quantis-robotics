@@ -121,7 +121,10 @@ class DirectInsertionSafetyRuntimeTest(unittest.TestCase):
             patch(
                 "sim.isaac_insertion_safety.synchronized_insertion_safety_snapshot",
                 new_callable=AsyncMock,
-                return_value=state.require_safety_snapshot(),
+                return_value=SimpleNamespace(
+                    runtime=runtime,
+                    safety=state.require_safety_snapshot(),
+                ),
             ),
             patch(
                 "sim.isaac_insertion_safety.select_safe_projection",

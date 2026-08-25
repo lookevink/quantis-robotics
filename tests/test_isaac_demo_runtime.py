@@ -30,6 +30,28 @@ class _RigidPrim:
 
 
 class PlugAttachmentTest(unittest.TestCase):
+    def test_refreshes_fixed_joint_tensor_handle_without_losing_attachment(self) -> None:
+        original_rigid = _RigidPrim()
+        refreshed_rigid = _RigidPrim()
+        offset = np.array([0.04, 0.0, 0.0])
+        attachment = PlugAttachment(
+            motion=FixedJointPlugMotion(
+                prim=object(),
+                hand_prim=object(),
+                rigid_prim=original_rigid,
+                fixed_joint=object(),
+                hand_to_plug_offset=offset,
+            ),
+            collisions=PlugCollisionPolicy([]),
+        )
+
+        refreshed = attachment.with_refreshed_physics(refreshed_rigid)
+
+        self.assertIs(refreshed.motion.rigid_prim, refreshed_rigid)
+        self.assertTrue(refreshed.attached)
+        np.testing.assert_array_equal(refreshed.motion.hand_to_plug_offset, offset)
+        self.assertIsNot(refreshed.motion.hand_to_plug_offset, offset)
+
     def test_follow_updates_the_bound_physics_body(self) -> None:
         rigid = _RigidPrim()
         attachment = PlugAttachment(

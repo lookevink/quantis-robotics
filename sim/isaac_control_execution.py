@@ -329,7 +329,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
     if insertion_reset_trial:
         if runtime is None:
             raise RuntimeError("live insertion runtime was lost before execution")
-        live_state = await synchronized_insertion_safety_snapshot(
+        synchronized = await synchronized_insertion_safety_snapshot(
             runtime,
             timeline,
             omni.kit.app.get_app().next_update_async,
@@ -337,6 +337,11 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             limits,
             operation="insertion reset trial synchronization",
         )
+        runtime = synchronized.runtime
+        actuators = runtime.actuators
+        attachment = runtime.attachment
+        sensor = runtime.sensor
+        live_state = synchronized.safety
         current = JointCommand(
             np.asarray(live_state.joint_positions),
             live_state.gripper_width_m,

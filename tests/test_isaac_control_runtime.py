@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+from types import ModuleType
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
 from sim.isaac_control_runtime import (
     ControlContactSensors,
+    LiveControlRuntime,
     LiveContactInterlock,
     read_contact,
     read_control_contact,
+    refresh_live_control_runtime,
     synchronized_control_safety_snapshot,
 )
 
@@ -47,6 +51,64 @@ class _Sensor:
 
 
 class ContactReadingTest(unittest.TestCase):
+    def test_recreates_every_tensor_backed_runtime_wrapper(self) -> None:
+        prims = ModuleType("isaacsim.core.experimental.prims")
+        articulation_token = object()
+        rigid_token = object()
+        prims.Articulation = lambda path: (articulation_token, path)
+        prims.RigidPrim = lambda path: (rigid_token, path)
+        isaacsim = ModuleType("isaacsim")
+        core = ModuleType("isaacsim.core")
+        experimental = ModuleType("isaacsim.core.experimental")
+        isaacsim.core = core
+        core.experimental = experimental
+        experimental.prims = prims
+        stage = object()
+        attachment = Mock()
+        refreshed_attachment = Mock()
+        attachment.with_refreshed_physics.return_value = refreshed_attachment
+        old_runtime = LiveControlRuntime(
+            "session",
+            stage,
+            Mock(),
+            attachment,
+            ControlContactSensors(Mock(), Mock()),
+        )
+        refreshed_actuators = Mock()
+        refreshed_sensors = Mock()
+
+        with (
+            patch.dict(
+                sys.modules,
+                {
+                    "isaacsim": isaacsim,
+                    "isaacsim.core": core,
+                    "isaacsim.core.experimental": experimental,
+                    "isaacsim.core.experimental.prims": prims,
+                },
+            ),
+            patch(
+                "sim.isaac_control_runtime.create_actuators",
+                return_value=refreshed_actuators,
+            ) as create,
+            patch(
+                "sim.isaac_control_runtime.control_contact_sensors",
+                return_value=refreshed_sensors,
+            ) as sensors,
+        ):
+            refreshed = refresh_live_control_runtime(old_runtime)
+
+        create.assert_called_once_with(stage, (articulation_token, "/World/Franka_R"))
+        attachment.with_refreshed_physics.assert_called_once_with(
+            (rigid_token, "/World/RJ45_Plug")
+        )
+        sensors.assert_called_once_with(
+            stage, create=False, include_connector=True
+        )
+        self.assertIs(refreshed.actuators, refreshed_actuators)
+        self.assertIs(refreshed.attachment, refreshed_attachment)
+        self.assertIs(refreshed.sensor, refreshed_sensors)
+
     def test_pauses_when_resuming_the_timeline_fails(self) -> None:
         timeline = Mock()
         timeline.is_playing.return_value = False

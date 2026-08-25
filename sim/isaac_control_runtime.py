@@ -8,7 +8,7 @@ from typing import Any
 
 from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimits
 from jepa_wm.direct_safety import ControlSafetySnapshot
-from sim.isaac_demo_runtime import Actuators, PlugAttachment
+from sim.isaac_demo_runtime import Actuators, PlugAttachment, create_actuators
 from sim.isaac_demo_runtime import ContactReading
 from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH
 
@@ -86,13 +86,68 @@ class LiveContactInterlock:
 
 @dataclass(frozen=True)
 class LiveControlRuntime:
-    """Session-bound Isaac objects whose tensor handles survive server calls."""
+    """Session-bound Isaac objects whose tensor handles can be refreshed."""
 
     session_id: str
     stage: Any
     actuators: Actuators
     attachment: PlugAttachment
     sensor: Any
+
+
+@dataclass(frozen=True)
+class SynchronizedInsertionRuntime:
+    runtime: LiveControlRuntime
+    safety: ControlSafetySnapshot
+
+
+@dataclass(frozen=True)
+class _ControlSafetyHandles:
+    actuators: Actuators
+    attachment: PlugAttachment
+    sensors: ControlContactSensors | Any
+
+
+def _control_safety_snapshot(
+    actuators: Actuators,
+    attachment: PlugAttachment,
+    sensors: ControlContactSensors | Any,
+) -> ControlSafetySnapshot:
+    collision_detected, contact_force = read_control_contact(sensors)
+    current = actuators.actual_command()
+    return ControlSafetySnapshot(
+        joint_positions=tuple(float(value) for value in current.arm_positions),
+        gripper_width_m=current.gripper_width_m,
+        plug_position=tuple(float(value) for value in attachment.world_pose()[0]),
+        contact_force_newtons=contact_force,
+        collision_detected=collision_detected,
+        plug_attached=attachment.attached,
+    )
+
+
+async def _synchronized_live_read(
+    timeline: Any,
+    advance: Any,
+    state: Any,
+    read: Any,
+    *,
+    refresh: Any | None = None,
+    observe_safety: Any | None = None,
+) -> tuple[Any, Any]:
+    """Own the pause-sensitive resume, refresh, observe, read, pause lifecycle."""
+
+    resume = not timeline.is_playing()
+    try:
+        if resume:
+            timeline.play()
+            if refresh is not None:
+                state = refresh(state)
+            await advance()
+        if observe_safety is not None:
+            observe_safety(state)
+        return state, read(state)
+    finally:
+        timeline.pause()
 
 
 async def synchronized_control_safety_snapshot(
@@ -106,27 +161,21 @@ async def synchronized_control_safety_snapshot(
 ) -> ControlSafetySnapshot:
     """Read every physics-backed control value while live, then pause."""
 
-    resume = not timeline.is_playing()
-    try:
-        if resume:
-            timeline.play()
-            await advance()
-            if observe_safety is not None:
-                observe_safety()
-        collision_detected, contact_force = read_control_contact(sensors)
-        current = actuators.actual_command()
-        return ControlSafetySnapshot(
-            joint_positions=tuple(float(value) for value in current.arm_positions),
-            gripper_width_m=current.gripper_width_m,
-            plug_position=tuple(
-                float(value) for value in attachment.world_pose()[0]
-            ),
-            contact_force_newtons=contact_force,
-            collision_detected=collision_detected,
-            plug_attached=attachment.attached,
-        )
-    finally:
-        timeline.pause()
+    handles = _ControlSafetyHandles(actuators, attachment, sensors)
+    _, snapshot = await _synchronized_live_read(
+        timeline,
+        advance,
+        handles,
+        lambda value: _control_safety_snapshot(
+            value.actuators, value.attachment, value.sensors
+        ),
+        observe_safety=(
+            (lambda _: observe_safety())
+            if observe_safety is not None
+            else None
+        ),
+    )
+    return snapshot
 
 
 async def synchronized_insertion_safety_snapshot(
@@ -137,27 +186,32 @@ async def synchronized_insertion_safety_snapshot(
     limits: SimulatorSafetyLimits,
     *,
     operation: str,
-) -> ControlSafetySnapshot:
+) -> SynchronizedInsertionRuntime:
     """Refresh, interlock, and rebind one paused insertion runtime."""
 
-    interlock = LiveContactInterlock(
-        runtime.sensor,
-        limits.maximum_contact_force_newtons,
-        operation,
-    )
-    live = await synchronized_control_safety_snapshot(
+    def observe_safety(value: LiveControlRuntime) -> None:
+        interlock = LiveContactInterlock(
+            value.sensor,
+            limits.maximum_contact_force_newtons,
+            operation,
+        )
+        interlock.observe()
+
+    runtime, live = await _synchronized_live_read(
         timeline,
-        runtime.actuators,
-        runtime.attachment,
-        runtime.sensor,
         advance,
-        observe_safety=interlock.observe,
+        runtime,
+        lambda value: _control_safety_snapshot(
+            value.actuators, value.attachment, value.sensor
+        ),
+        refresh=refresh_live_control_runtime,
+        observe_safety=observe_safety,
     )
     try:
         live.validate_continuity(captured, limits)
     except ValueError as error:
         raise RuntimeError("live insertion state changed after capture") from error
-    return live
+    return SynchronizedInsertionRuntime(runtime, live)
 
 
 _live_runtime: LiveControlRuntime | None = None
@@ -175,6 +229,30 @@ def bind_live_runtime(
         session_id, stage, actuators, attachment, sensor
     )
     return _live_runtime
+
+
+def refresh_live_control_runtime(runtime: LiveControlRuntime) -> LiveControlRuntime:
+    """Recreate experimental physics wrappers invalidated by a timeline pause."""
+
+    from isaacsim.core.experimental.prims import Articulation, RigidPrim
+
+    actuators = create_actuators(runtime.stage, Articulation(ROBOT_PATH))
+    attachment = runtime.attachment.with_refreshed_physics(RigidPrim(PLUG_PATH))
+    sensor = control_contact_sensors(
+        runtime.stage,
+        create=False,
+        include_connector=(
+            isinstance(runtime.sensor, ControlContactSensors)
+            and runtime.sensor.connector is not None
+        ),
+    )
+    return bind_live_runtime(
+        runtime.session_id,
+        runtime.stage,
+        actuators,
+        attachment,
+        sensor,
+    )
 
 
 def live_runtime_for(session_id: str, stage: Any) -> LiveControlRuntime | None:

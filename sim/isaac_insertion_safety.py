@@ -56,7 +56,7 @@ async def evaluate_direct_insertion_candidate(session_id: str) -> dict[str, Any]
         raise RuntimeError("live insertion runtime was lost before safety evaluation")
 
     limits = SimulatorSafetyLimits()
-    live_state = await synchronized_insertion_safety_snapshot(
+    synchronized = await synchronized_insertion_safety_snapshot(
         runtime,
         omni.timeline.get_timeline_interface(),
         omni.kit.app.get_app().next_update_async,
@@ -64,6 +64,7 @@ async def evaluate_direct_insertion_candidate(session_id: str) -> dict[str, Any]
         limits,
         operation="insertion safety synchronization",
     )
+    live_state = synchronized.safety
 
     evaluated_at = time()
     safety = ExecutionSafetyContext(

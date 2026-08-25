@@ -296,6 +296,23 @@ class PlugAttachment:
     def set_collisions(self, enabled: bool) -> None:
         self.collisions.set_collisions(enabled)
 
+    def with_refreshed_physics(self, rigid_prim: Any) -> PlugAttachment:
+        """Rebind tensor-backed plug motion while preserving attachment state."""
+
+        if not isinstance(self.motion, FixedJointPlugMotion):
+            return self
+        offset = self.motion.hand_to_plug_offset
+        return PlugAttachment(
+            FixedJointPlugMotion(
+                self.motion.prim,
+                self.motion.hand_prim,
+                rigid_prim,
+                self.motion.fixed_joint,
+                None if offset is None else offset.copy(),
+            ),
+            self.collisions,
+        )
+
 
 @dataclass(frozen=True)
 class FixedJointPlugPreparation:
