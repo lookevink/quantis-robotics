@@ -480,8 +480,13 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     stationary branch. That fail-closed result is recovery-backed up. The
     corrected exact-corpus preflight classifies 960 active and 96 stationary
     first actions; all active actions clear the cone with minimum cosine
-    `0.988497`. Existing held-out seeds are diagnostic only after informing
-    this change.
+    `0.988497`. A second fail-closed run found 24 context-36/37 active actions
+    with `21.0–21.9 mm` demonstrated translation outside the planner's `20 mm`
+    bound. Projecting those fallbacks through the canonical bounds preserves
+    the goal cone (minimum `0.988497`); replacement now uses that bounded
+    fallback and rechecks alignment. No checkpoint was written and the result
+    is recovery-backed up. Existing held-out seeds are diagnostic only after
+    informing this change.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

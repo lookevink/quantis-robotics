@@ -864,8 +864,13 @@ actions exposed the missing stationary branch. No checkpoint was written, and
 the negative result was recovery-backed up. The corrected axis-aware preflight
 classifies 960 active and 96 stationary first actions across the exact
 1,056-rollout corpus; every active action clears the cone with minimum cosine
-`0.988497`. The profile has a distinct checkpoint name and serialized mining
-contract.
+`0.988497`. A second fail-closed run found 24 active first actions at contexts
+36–37 whose demonstrated translation was `21.0–21.9 mm`, just outside the
+planner's `20 mm` bound. The canonical bounds projection brings those fallbacks
+to `20 mm` while preserving the cone (minimum remains `0.988497`); candidate
+replacement now uses that bounded fallback and rechecks alignment. That run
+also wrote no checkpoint and was recovery-backed up. The profile has a
+distinct checkpoint name and serialized mining contract.
 Training and evaluation remain offline; the two current held-out seeds have
 already informed this design, so a passing rerun is diagnostic and fresh whole
 held-out seeds are still required for readiness.

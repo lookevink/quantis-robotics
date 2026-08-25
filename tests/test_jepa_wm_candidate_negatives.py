@@ -215,18 +215,25 @@ class CandidateNegativesTest(unittest.TestCase):
                 goal_actions=goals,
             )
 
-    def test_goal_aligned_mining_rejects_out_of_bounds_recorded_fallback(self) -> None:
+    def test_goal_aligned_mining_bounds_recorded_fallback_before_replacement(self) -> None:
         recorded = torch.zeros((3, 1, 7))
         recorded[0, 0, 0] = 0.02000005
         goals = torch.tensor(((0.02000005, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),))
 
-        with self.assertRaisesRegex(ValueError, "planner bounds"):
-            sample_local_candidates(
-                recorded,
-                config=CandidateMiningConfig(minimum_goal_cosine=0.95),
-                generator=torch.Generator().manual_seed(7),
-                goal_actions=goals,
-            )
+        candidates = sample_local_candidates(
+            recorded,
+            config=CandidateMiningConfig(minimum_goal_cosine=0.95),
+            generator=torch.Generator().manual_seed(7),
+            goal_actions=goals,
+        )
+
+        self.assertTrue(
+            (torch.linalg.vector_norm(candidates[..., :3], dim=-1) <= 0.02).all()
+        )
+        cosines = torch.nn.functional.cosine_similarity(
+            candidates[0], goals[:, None, :], dim=-1
+        )
+        self.assertTrue((cosines >= 0.95 - 1e-6).all())
 
     def test_candidate_scoring_is_micro_batched_without_changing_selection(self) -> None:
         candidates = torch.zeros((1, 2, 4, 7))

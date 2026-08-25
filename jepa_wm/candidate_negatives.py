@@ -71,12 +71,13 @@ class CandidateMiningConfig:
 
 def _goal_align_first_actions(
     candidates: torch.Tensor,
-    recorded_actions: torch.Tensor,
+    recorded_first: torch.Tensor,
+    bounded_fallback_first: torch.Tensor,
     goal_actions: torch.Tensor | None,
     minimum_cosine: float,
     first_action_activity: DroidActionActivityThresholds,
 ) -> torch.Tensor:
-    batch = recorded_actions.shape[1]
+    batch = recorded_first.shape[0]
     if (
         goal_actions is None
         or goal_actions.shape != (batch, ACTION_DIMENSIONS)
@@ -84,17 +85,19 @@ def _goal_align_first_actions(
     ):
         raise ValueError("goal-aligned candidate mining requires finite [batch, 7] goals")
     goals = goal_actions[:, None, :]
-    recorded_first = recorded_actions[0]
     recorded_stationary = ~first_action_activity.active_tensor(recorded_first)
-    recorded_cosines = torch.nn.functional.cosine_similarity(
-        recorded_first,
+    bounded_fallback_cosines = torch.nn.functional.cosine_similarity(
+        bounded_fallback_first,
         goal_actions,
         dim=-1,
     )
     if torch.any(
-        ~recorded_stationary & (recorded_cosines < minimum_cosine - 1e-6)
+        ~recorded_stationary
+        & (bounded_fallback_cosines < minimum_cosine - 1e-6)
     ):
-        raise ValueError("recorded first action does not satisfy the goal alignment")
+        raise ValueError(
+            "bounded recorded first action does not satisfy the goal alignment"
+        )
     first_actions = candidates[0]
     candidate_cosines = torch.nn.functional.cosine_similarity(
         first_actions,
@@ -108,7 +111,7 @@ def _goal_align_first_actions(
     aligned_first = torch.where(
         keep_candidate.unsqueeze(-1),
         first_actions,
-        recorded_first[:, None, :],
+        bounded_fallback_first[:, None, :],
     )
     aligned = candidates.clone()
     aligned[0] = aligned_first
@@ -140,14 +143,12 @@ def sample_local_candidates(
     candidates = recorded_actions.unsqueeze(2) + noise * scales
     candidates = config.bounds.clip_tensor(candidates)
     if config.minimum_goal_cosine is not None:
-        if not torch.equal(
-            config.bounds.clip_tensor(recorded_actions[0]),
-            recorded_actions[0],
-        ):
-            raise ValueError("goal-aligned recorded fallback exceeds planner bounds")
+        recorded_first = recorded_actions[0]
+        bounded_fallback_first = config.bounds.clip_tensor(recorded_first)
         candidates = _goal_align_first_actions(
             candidates,
-            recorded_actions,
+            recorded_first,
+            bounded_fallback_first,
             goal_actions,
             config.minimum_goal_cosine,
             config.first_action_activity,
