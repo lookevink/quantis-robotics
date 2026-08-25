@@ -19,6 +19,7 @@ from jepa_wm.action import (
 )
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.domain_recording import DomainRecording
+from jepa_wm.direct_safety import ControlSafetySnapshot
 from jepa_wm.insertion_contract import (
     CONTACT_INSERTION_RECORDING,
     ContactInsertionSegment,
@@ -66,6 +67,28 @@ from sim.isaac_exploration import (
     apply_variant,
 )
 from sim.recording import RecordingLabel, RecordingMoment, validate_recording_id
+
+
+def capture_and_pause_control_state(
+    timeline: Any,
+    actuators: Any,
+    attachment: Any,
+    sensors: Any,
+) -> ControlSafetySnapshot:
+    """Capture the terminal warm-up state and then pause its physics timeline."""
+
+    collision_detected, contact_force = read_control_contact(sensors)
+    current = actuators.actual_command()
+    state = ControlSafetySnapshot(
+        joint_positions=tuple(float(value) for value in current.arm_positions),
+        gripper_width_m=current.gripper_width_m,
+        plug_position=tuple(float(value) for value in attachment.world_pose()[0]),
+        contact_force_newtons=contact_force,
+        collision_detected=collision_detected,
+        plug_attached=attachment.attached,
+    )
+    timeline.pause()
+    return state
 
 
 def validated_control_reference(
@@ -256,9 +279,9 @@ async def capture_control_observation(
                 ),
             )
             current = command
-        collision_detected, contact_force = read_control_contact(sensor)
-        actual_warmup = actuators.actual_command()
-        timeline.pause()
+        captured_state = capture_and_pause_control_state(
+            timeline, actuators, attachment, sensor
+        )
         completed = True
     except Exception:
         recorder.abort()
@@ -301,13 +324,13 @@ async def capture_control_observation(
         reference_recording=reference_recording,
         seed=seed,
         recording=recording_id,
-        current_joint_positions=tuple(actual_warmup.arm_positions),
-        collision_detected=collision_detected,
-        contact_force_newtons=contact_force,
+        current_joint_positions=captured_state.joint_positions,
+        collision_detected=captured_state.collision_detected,
+        contact_force_newtons=captured_state.contact_force_newtons,
         execution_policy=policy,
-        plug_position=tuple(float(value) for value in attachment.world_pose()[0]),
-        plug_attached=attachment.attached,
-        current_gripper_width_m=actual_warmup.gripper_width_m,
+        plug_position=captured_state.plug_position,
+        plug_attached=captured_state.plug_attached,
+        current_gripper_width_m=captured_state.gripper_width_m,
     )
     session.write_capture(observation, state)
     bind_live_runtime(session_id, stage, actuators, attachment, sensor)
@@ -315,6 +338,6 @@ async def capture_control_observation(
         session_id,
         observation,
         session.request_path,
-        contact_force,
-        collision_detected,
+        captured_state.contact_force_newtons,
+        captured_state.collision_detected,
     ).to_dict()

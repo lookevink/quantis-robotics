@@ -1,17 +1,49 @@
+from __future__ import annotations
+
 import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from jepa_wm.action import ACTION_RECORDING_CONTRACT, DROID_FPS
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
 from sim.control_identity import observation_id_for_session
-from sim.isaac_control_capture import validated_control_reference
+from sim.isaac_control_capture import (
+    capture_and_pause_control_state,
+    validated_control_reference,
+)
 
 
 class ControlCaptureContractTest(unittest.TestCase):
+    def test_reads_physics_backed_state_before_pausing_timeline(self) -> None:
+        timeline = Mock()
+        actuators = Mock()
+        actuators.actual_command.return_value = SimpleNamespace(
+            arm_positions=(0.0,) * 7,
+            gripper_width_m=0.018,
+        )
+        attachment = Mock(attached=True)
+
+        def world_pose():
+            if timeline.pause.called:
+                raise RuntimeError("physics tensor backend is unavailable after pause")
+            return ((0.1, 0.2, 0.3), (1.0, 0.0, 0.0, 0.0))
+
+        attachment.world_pose.side_effect = world_pose
+        with patch(
+            "sim.isaac_control_capture.read_control_contact",
+            return_value=(False, 0.0),
+        ):
+            state = capture_and_pause_control_state(
+                timeline, actuators, attachment, Mock()
+            )
+
+        self.assertEqual(state.plug_position, (0.1, 0.2, 0.3))
+        timeline.pause.assert_called_once_with()
+
     def _recording(
         self,
         root: Path,
@@ -109,7 +141,7 @@ class ControlCaptureContractTest(unittest.TestCase):
                 )
 
             validate.assert_called_once_with(
-                recording, expected_split="held_out"
+                recording.resolve(), expected_split="held_out"
             )
 
 
