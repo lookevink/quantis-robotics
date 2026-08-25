@@ -570,6 +570,14 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     evidence and the verified 12 GB recovery copy are preserved. This closes
     frozen offline planner readiness and opens only the live simulator
     shadow/safety milestone. Actuation, filming, and production remain closed.
+    The corrected dense command window is `43–106`; its committed frozen
+    policy passed untouched reserved seeds `52600–52601` across all 64
+    commands, so reconstructive offline readiness is now `2/2`. The full
+    provenance, metrics, off-by-one negative, and preserved-artifact record are
+    in the [dense insertion planner checkpoint](../README.md#dense-insertion-planner-checkpoint).
+    At roughly 32 seconds per command, the search remains outside the live
+    freshness budget. Live insertion, filming, and production authority remain
+    false; resident no-actuation latency/safety evidence is next.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

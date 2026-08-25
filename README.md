@@ -1030,6 +1030,49 @@ raw recordings, reports, typed rosters, readiness artifacts, and verified
 milestone and opens development of the live simulator shadow/safety gate. It
 does not yet authorize actuation, insertion filming, or production control.
 
+### Dense insertion planner checkpoint
+
+The first full-stroke diagnostic then exposed an indexing error rather than a
+model failure. The initial dense profile evaluated result frames `44–107` as
+if they were command contexts; context `107` is the last insertion result, not
+an observation that launches another insertion command, and its following
+settle frames make its three-frame goal zero. The strict run therefore failed
+closed there. The command contract now covers observations `43–106`, whose 64 first actions
+produce insertion-result frames `44–107`; the historical eight-context profile
+remains unchanged. Rerunning the corrected profile on the now-diagnostic
+`42600–42601` pair passed every command, but those recordings had informed the
+command-window correction and were not used for promotion.
+
+The corrected dense policy has now passed an untouched frozen-artifact pair.
+Contact-aware v9 recordings
+`contact-insertion-v9-2600-fresh-52600-held-00` and `...held-01` were captured
+at reserved seeds `52600–52601` after the correction was committed. Before
+planning, frozen adapter `396496bf...fadc` independently passed all 88
+post-attachment rollouts on each seed: `+1.40812e-5`/`84.0909%` and
+`+3.80305e-5`/`86.3636%` mean improvement/recorded-action wins. Aggregate
+evidence was `+2.60558e-5`/`85.2273%` over 176 rollouts.
+
+The exact 268-candidate dense planner then evaluated all 64 command contexts
+on both seeds with proposal `efdf848c...7596f`, adapter
+`396496bf...fadc`, base checkpoint `daa69198...f4aa`, and unchanged
+`4 × 64 / 8 elites`, seed-234 search. Seed `52600` selected `64/64`, passed
+every direction/goal gate, and beat zero/recorded actions `64/64`, with
+`+3.37709e-5`/`+1.59319e-5` mean selected improvements. Seed `52601`
+selected `64/64`, passed every gate, beat zero `64/64` and recorded actions
+`63/64`, and improved by `+4.97625e-5`/`+3.58768e-5`. Reconstructive dense
+readiness passed `2/2`; all raw recordings, adapter reports, planner reports,
+typed rosters, readiness artifacts, and the checksum-verified 12 GB recovery
+copy are preserved.
+
+This closes the frozen dense offline planner checkpoint, not the live one.
+Planning took `2064.849 s` and `2066.569 s` per 64-command recording
+(`4.687 GiB` peak), about 32 seconds per command—far beyond the current
+3.0-second observation and 2.5-second command-age limits. The next checkpoint
+is therefore a separately identified resident replay/shadow path that proves
+the frozen JEPA-encoded proposal, or a reduced search that independently
+retains the gate, can meet freshness before Isaac evaluates it without
+actuation. Live insertion, filming, and production authority remain false.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded
