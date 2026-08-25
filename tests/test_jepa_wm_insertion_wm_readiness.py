@@ -15,6 +15,7 @@ except ModuleNotFoundError:
 from jepa_wm.action import ACTION_RECORDING_CONTRACT, DroidAction
 from jepa_wm.contract import MODEL_ID
 from jepa_wm.training_artifact import (
+    ArtifactIdentity,
     TrainingArtifactMetadata,
     artifact_fingerprint,
     rollout_training_selection_fingerprint,
@@ -43,18 +44,22 @@ class InsertionWorldModelReadinessTest(unittest.TestCase):
     def _adapter(
         root: Path,
         *,
+        filename: str = "insertion-adapter.pth",
         minimum_goal_cosine: float | None = None,
         noise_policy: dict | None = None,
+        learning_rate: float | None = None,
+        initial_adapter: ArtifactIdentity | None = None,
+        training_steps: int = 500,
         legacy: bool = False,
     ):
-        adapter = root / "insertion-adapter.pth"
+        adapter = root / filename
         recordings = tuple(f"insertion-train-{index:02d}" for index in range(12))
         metadata = TrainingArtifactMetadata(
             "jepa_wm_droid",
             "revision",
             "wrist",
             recordings,
-            500,
+            training_steps,
         )
         model = SimpleNamespace(
             model=SimpleNamespace(
@@ -99,7 +104,19 @@ class InsertionWorldModelReadinessTest(unittest.TestCase):
             },
             **({"noise_policy": noise_policy} if noise_policy else {}),
         }
-        config = {"candidate_mining": candidate_mining}
+        config = {
+            "candidate_mining": candidate_mining,
+            **(
+                {"learning_rate": learning_rate}
+                if learning_rate is not None
+                else {}
+            ),
+            **(
+                {"initial_adapter": initial_adapter.to_dict()}
+                if initial_adapter is not None
+                else {}
+            ),
+        }
         config_fingerprint = training_configuration_fingerprint(config)
         if legacy:
             adapter.parent.mkdir(parents=True, exist_ok=True)
@@ -183,6 +200,7 @@ class InsertionWorldModelReadinessTest(unittest.TestCase):
             aligned_adapter = self._adapter(
                 root / "aligned",
                 minimum_goal_cosine=0.95,
+                learning_rate=1e-3,
             )
             evidence = validate_insertion_adapter(
                 aligned_adapter,
@@ -205,6 +223,7 @@ class InsertionWorldModelReadinessTest(unittest.TestCase):
                         "gripper": 0.005,
                     },
                 },
+                learning_rate=1e-3,
             )
             relative_evidence = validate_insertion_adapter(
                 relative_adapter,
@@ -223,6 +242,64 @@ class InsertionWorldModelReadinessTest(unittest.TestCase):
                 validate_insertion_adapter(
                     aligned_adapter,
                     expected_profile=InsertionAdapterProfile.GOAL_ALIGNED,
+                )
+
+    def test_binds_finetune_profile_to_generic_parent_and_learning_rate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            parent = self._adapter(
+                root,
+                filename="experiment_insertion_adapter_s1056.pth",
+                learning_rate=1e-3,
+                training_steps=1056,
+            )
+            parent_identity = ArtifactIdentity.from_artifact(parent)
+            child = self._adapter(
+                root,
+                filename=(
+                    "experiment_"
+                    "insertion_adapter_goal_aligned_relative_finetune_s1056.pth"
+                ),
+                minimum_goal_cosine=0.95,
+                noise_policy={
+                    "reference": "recorded_action",
+                    "floors": {
+                        "translation": 1e-5,
+                        "rotation": 1e-5,
+                        "gripper": 0.005,
+                    },
+                },
+                learning_rate=1e-4,
+                initial_adapter=parent_identity,
+                training_steps=1056,
+            )
+
+            evidence = validate_insertion_adapter(
+                child,
+                expected_profile=(
+                    InsertionAdapterProfile.GOAL_ALIGNED_RELATIVE_FINETUNE
+                ),
+            )
+            with self.assertRaisesRegex(ValueError, "disagree"):
+                validate_insertion_adapter(
+                    child,
+                    expected_profile=InsertionAdapterProfile.GOAL_ALIGNED_RELATIVE,
+                )
+
+            parent_evidence = validate_insertion_adapter(parent)
+            self.assertEqual(
+                evidence.contract.metadata.corpus_identity,
+                parent_evidence.contract.metadata.corpus_identity,
+            )
+            payload = json.loads(Path(f"{child}.json").read_text())
+            payload["config"]["learning_rate"] = 1e-3
+            Path(f"{child}.json").write_text(json.dumps(payload))
+            with self.assertRaisesRegex(ValueError, "disagree"):
+                validate_insertion_adapter(
+                    child,
+                    expected_profile=(
+                        InsertionAdapterProfile.GOAL_ALIGNED_RELATIVE_FINETUNE
+                    ),
                 )
 
     def test_reconstructs_actions_and_energy_aggregates_from_held_out_report(self) -> None:

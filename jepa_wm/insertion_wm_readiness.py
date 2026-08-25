@@ -17,7 +17,7 @@ from jepa_wm.action import (
 from jepa_wm.adapter import (
     LEGACY_ADAPTER_SCHEMA,
     ActionAdapterContract,
-    load_action_adapter_contract,
+    LoadedActionAdapter,
 )
 from jepa_wm.contract import MODEL_ID
 from jepa_wm.candidate_negatives import CandidateMiningConfig
@@ -72,8 +72,9 @@ def validate_insertion_adapter(
 ) -> InsertionAdapterEvidence:
     adapter = adapter.resolve()
     payload = load_training_report(adapter)
-    identity = ArtifactIdentity.from_artifact(adapter)
-    checkpoint = load_action_adapter_contract(adapter)
+    loaded_adapter = LoadedActionAdapter.load(adapter)
+    identity = loaded_adapter.identity
+    checkpoint = loaded_adapter.contract
     sidecar_metadata = TrainingArtifactMetadata.from_dict(payload.get("metadata"))
     selection = _training_selection(payload)
     selection_fingerprint = rollout_training_selection_fingerprint(selection)
@@ -103,6 +104,45 @@ def validate_insertion_adapter(
         and payload.get("training_config_fingerprint") == config_fingerprint
         and checkpoint.training_config_fingerprint == config_fingerprint
     )
+    profile_training_is_valid = True
+    if expected_profile is not None and not is_legacy:
+        expects_initial = expected_profile.descriptor.initial_profile is not None
+        profile_training_is_valid = (
+            config.get("learning_rate") == expected_profile.descriptor.learning_rate
+            and ("initial_adapter" in config) == expects_initial
+            and (
+                expected_profile.descriptor.required_training_steps is None
+                or checkpoint.metadata.training_steps
+                == expected_profile.descriptor.required_training_steps
+            )
+        )
+    if (
+        profile_training_is_valid
+        and expected_profile is not None
+        and expected_profile.descriptor.initial_profile is not None
+    ):
+        try:
+            initial_identity = ArtifactIdentity.from_dict(config["initial_adapter"])
+            initial_evidence = validate_insertion_adapter(
+                initial_identity.path,
+                expected_profile=expected_profile.descriptor.initial_profile,
+            )
+            profile_training_is_valid = (
+                initial_evidence.identity == initial_identity
+                and initial_identity.path
+                == expected_profile.descriptor.initial_adapter_path(
+                    identity.path,
+                    checkpoint.metadata.training_steps,
+                )
+                and initial_evidence.contract.metadata.corpus_identity
+                == checkpoint.metadata.corpus_identity
+                and initial_evidence.contract.metadata.training_steps
+                == expected_profile.descriptor.required_training_steps
+                and initial_evidence.contract.training_selection_fingerprint
+                == checkpoint.training_selection_fingerprint
+            )
+        except (KeyError, TypeError, ValueError):
+            profile_training_is_valid = False
     if (
         payload.get("adapter_fingerprint") != identity.fingerprint
         or checkpoint.metadata != sidecar_metadata
@@ -114,6 +154,7 @@ def validate_insertion_adapter(
         or payload.get("training_selection_fingerprint") != selection_fingerprint
         or checkpoint.training_selection_fingerprint != selection_fingerprint
         or not (legacy_config_is_valid or current_config_is_valid)
+        or not profile_training_is_valid
         or (
             expected_profile is not None
             and candidate_mining

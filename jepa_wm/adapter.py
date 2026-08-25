@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import torch
 
-from jepa_wm.training_artifact import TrainingArtifactMetadata
+from jepa_wm.training_artifact import ArtifactIdentity, TrainingArtifactMetadata
 from jepa_wm.training_artifact import validate_artifact_fingerprint
 from jepa_wm.contract import MODEL_ID
 
@@ -136,13 +138,57 @@ def _parse_action_adapter(
     return contract, state
 
 
+@dataclass(frozen=True)
+class LoadedActionAdapter:
+    """One immutable adapter read shared by identity checks and application."""
+
+    identity: ArtifactIdentity
+    contract: ActionAdapterContract
+    state: dict[str, Any]
+
+    @classmethod
+    def load(
+        cls,
+        path: Path,
+        *,
+        expected_identity: ArtifactIdentity | None = None,
+    ) -> LoadedActionAdapter:
+        resolved = path.resolve()
+        encoded = resolved.read_bytes()
+        identity = ArtifactIdentity(resolved, sha256(encoded).hexdigest())
+        if expected_identity is not None and identity != expected_identity:
+            raise ValueError("action adapter identity changed before loading")
+        contract, state = _parse_action_adapter(
+            torch.load(BytesIO(encoded), map_location="cpu", weights_only=True)
+        )
+        return cls(identity, contract, state)
+
+    def apply(
+        self,
+        model: Any,
+        *,
+        expected_base_model: str = MODEL_ID,
+        expected_source_revision: str | None = None,
+    ) -> TrainingArtifactMetadata:
+        metadata = self.contract.metadata
+        if metadata.base_model != expected_base_model:
+            raise ValueError(
+                f"adapter base model is {metadata.base_model}, "
+                f"expected {expected_base_model}"
+            )
+        if (
+            expected_source_revision is not None
+            and metadata.source_revision != expected_source_revision
+        ):
+            raise ValueError("adapter source revision does not match the installed model")
+        _action_encoder(model).load_state_dict(self.state, strict=True)
+        return metadata
+
+
 def load_action_adapter_contract(
     path: Path,
 ) -> ActionAdapterContract:
-    contract, _ = _parse_action_adapter(
-        torch.load(path, map_location="cpu", weights_only=True)
-    )
-    return contract
+    return LoadedActionAdapter.load(path).contract
 
 
 def apply_action_adapter(
@@ -152,17 +198,8 @@ def apply_action_adapter(
     expected_base_model: str = MODEL_ID,
     expected_source_revision: str | None = None,
 ) -> TrainingArtifactMetadata:
-    payload = torch.load(path, map_location="cpu", weights_only=True)
-    contract, state = _parse_action_adapter(payload)
-    metadata = contract.metadata
-    if metadata.base_model != expected_base_model:
-        raise ValueError(
-            f"adapter base model is {metadata.base_model}, expected {expected_base_model}"
-        )
-    if (
-        expected_source_revision is not None
-        and metadata.source_revision != expected_source_revision
-    ):
-        raise ValueError("adapter source revision does not match the installed model")
-    _action_encoder(model).load_state_dict(state, strict=True)
-    return metadata
+    return LoadedActionAdapter.load(path).apply(
+        model,
+        expected_base_model=expected_base_model,
+        expected_source_revision=expected_source_revision,
+    )

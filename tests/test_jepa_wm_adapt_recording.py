@@ -15,6 +15,7 @@ except ModuleNotFoundError:
 if torch is not None:
     from jepa_wm.action import DroidAction
     from jepa_wm.adapt_recording import (
+        AdaptationConfig,
         ContrastiveTermConfig,
         ShuffledEpochSampler,
         TRAINING_BOUNDS,
@@ -24,10 +25,18 @@ if torch is not None:
     from jepa_wm.control_protocol import TaskContextIndex
     from jepa_wm.rollout_training import RolloutTrainingSelection
     from jepa_wm.trajectory import RolloutWindow
+    from jepa_wm.training_artifact import ArtifactIdentity
 
 
 @unittest.skipIf(torch is None, "PyTorch is not installed in the local test runtime")
 class MismatchedNegativeCandidatesTest(unittest.TestCase):
+    def test_serializes_exact_initial_adapter_identity(self) -> None:
+        identity = ArtifactIdentity(Path("/tmp/generic.pth"), "a" * 64)
+
+        payload = AdaptationConfig(initial_adapter=identity).to_dict()
+
+        self.assertEqual(payload["initial_adapter"], identity.to_dict())
+
     def test_shuffled_epoch_sampler_covers_every_rollout_before_reuse(self) -> None:
         first = ShuffledEpochSampler(5, 1, 17)
         second = ShuffledEpochSampler(5, 1, 17)

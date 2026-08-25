@@ -16,6 +16,7 @@ import torch
 from jepa_wm.action import ActionSelectionBounds
 from jepa_wm.adapter import (
     ActionAdapterContract,
+    LoadedActionAdapter,
     action_adapter_parameters,
     save_action_adapter,
 )
@@ -37,6 +38,7 @@ from jepa_wm.rollout_scoring import (
 from jepa_wm.rollout_training import RolloutTrainingSelection
 from jepa_wm.trajectory import RecordedRollout, RolloutWindow
 from jepa_wm.training_artifact import (
+    ArtifactIdentity,
     TrainingArtifactMetadata,
     artifact_fingerprint,
     training_report_path,
@@ -75,6 +77,7 @@ class AdaptationConfig:
     candidate_mining: CandidateMiningConfig = CandidateMiningConfig()
     encoding_batch_size: int = 4
     seed: int = 234
+    initial_adapter: ArtifactIdentity | None = None
 
     def __post_init__(self) -> None:
         if self.steps <= 0 or self.batch_size <= 0 or self.encoding_batch_size <= 0:
@@ -83,7 +86,7 @@ class AdaptationConfig:
             raise ValueError("learning rate must be positive")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "steps": self.steps,
             "batch_size": self.batch_size,
             "learning_rate": self.learning_rate,
@@ -94,6 +97,9 @@ class AdaptationConfig:
             "encoding_batch_size": self.encoding_batch_size,
             "seed": self.seed,
         }
+        if self.initial_adapter is not None:
+            payload["initial_adapter"] = self.initial_adapter.to_dict()
+        return payload
 
 
 class ShuffledEpochSampler:
@@ -224,6 +230,28 @@ def adapt_recordings(
         raise ValueError("adaptation requires at least two bounded rollouts")
     load_started = monotonic()
     model = load_headless_model(source, checkpoint, device=device)
+    if config.initial_adapter is not None:
+        loaded_initial = LoadedActionAdapter.load(
+            config.initial_adapter.path,
+            expected_identity=config.initial_adapter,
+        )
+        initial_contract = loaded_initial.contract
+        expected_recordings = tuple(
+            recording.name for recording in training_recordings
+        )
+        if (
+            initial_contract.metadata.camera != camera
+            or initial_contract.metadata.training_recordings != expected_recordings
+            or initial_contract.metadata.source_revision
+            != os.environ.get("JEPA_WM_REVISION", "unknown")
+            or initial_contract.training_selection_fingerprint
+            != training_selection.fingerprint
+        ):
+            raise ValueError("initial adapter does not match the training corpus")
+        loaded_initial.apply(
+            model,
+            expected_source_revision=initial_contract.metadata.source_revision,
+        )
     load_seconds = monotonic() - load_started
     for parameter in model.parameters():
         parameter.requires_grad_(False)
@@ -377,11 +405,7 @@ def main() -> None:
     parser.add_argument("--stride", type=int)
     parser.add_argument("--steps", type=int, default=AdaptationConfig.steps)
     parser.add_argument("--batch-size", type=int, default=AdaptationConfig.batch_size)
-    parser.add_argument(
-        "--learning-rate",
-        type=float,
-        default=AdaptationConfig.learning_rate,
-    )
+    parser.add_argument("--learning-rate", type=float)
     parser.add_argument("--candidate-minimum-goal-cosine", type=float)
     parser.add_argument(
         "--candidate-profile",
@@ -398,13 +422,26 @@ def main() -> None:
         and args.candidate_minimum_goal_cosine is not None
     ):
         parser.error("candidate profile and explicit goal cosine are mutually exclusive")
-    candidate_mining = (
+    profile = (
         InsertionAdapterProfile(args.candidate_profile)
-        .descriptor.candidate_mining_config()
         if args.candidate_profile is not None
+        else None
+    )
+    if profile is not None and args.learning_rate is not None:
+        parser.error("candidate profile and explicit learning rate are mutually exclusive")
+    candidate_mining = (
+        profile.descriptor.candidate_mining_config()
+        if profile is not None
         else CandidateMiningConfig(
             minimum_goal_cosine=args.candidate_minimum_goal_cosine,
         )
+    )
+    initial_adapter = (
+        ArtifactIdentity.from_artifact(
+            profile.descriptor.initial_adapter_path(args.output, args.steps)
+        )
+        if profile is not None and profile.descriptor.initial_profile is not None
+        else None
     )
     print(
         json.dumps(
@@ -417,8 +454,17 @@ def main() -> None:
                 config=AdaptationConfig(
                     steps=args.steps,
                     batch_size=args.batch_size,
-                    learning_rate=args.learning_rate,
+                    learning_rate=(
+                        profile.descriptor.learning_rate
+                        if profile is not None
+                        else (
+                            args.learning_rate
+                            if args.learning_rate is not None
+                            else AdaptationConfig.learning_rate
+                        )
+                    ),
                     candidate_mining=candidate_mining,
+                    initial_adapter=initial_adapter,
                 ),
                 window=(
                     RolloutWindow(args.start_index, args.count, args.stride)

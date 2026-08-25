@@ -416,9 +416,9 @@ Commands:
   jepa-wm-eval RECORDING [camera] [start-index] [count] [stride]
   jepa-wm-adapt RECORDING [camera] [steps]
   jepa-wm-adapt-set RECORDING[,RECORDING...] [camera] [steps] [adapter-name]
-  jepa-wm-insertion-adapt RECORDING[,RECORDING...] STEPS ADAPTER [generic|goal_aligned]
+  jepa-wm-insertion-adapt RECORDING[,RECORDING...] STEPS ADAPTER [PROFILE]
   jepa-wm-insertion-wm-eval RECORDING ADAPTER
-  jepa-wm-insertion-wm-summarize RECORDING[,RECORDING...] ADAPTER EXPERIMENT BASE_SEED [generic|goal_aligned]
+  jepa-wm-insertion-wm-summarize RECORDING[,RECORDING...] ADAPTER EXPERIMENT BASE_SEED [PROFILE]
   jepa-wm-insertion-plan-benchmark RECORDING ADAPTER PROPOSAL
   jepa-wm-plan-benchmark RECORDING [camera] [start] [count] [stride] [iterations] [samples] [elites] [adapter] [proposal]
   jepa-wm-proposal-train RECORDING[,RECORDING...] [camera] [steps] [proposal]

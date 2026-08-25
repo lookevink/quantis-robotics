@@ -496,8 +496,18 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     reducing that tail to `0.109 mm` mean/`0.361 mm` p95 while retaining the
     same bounds and goal cone. Its separately serialized floors are `10 µm`
     translation, `10 µrad` rotation, and `0.005` normalized gripper delta.
-    Existing held-out seeds are diagnostic only
-    after informing these changes; fresh whole seeds remain required.
+    Fingerprint `93735353...97320` completed at
+    `+6.91447e-5`/`64.7727%` and `+7.02181e-5`/`84.0909%`; aggregate evidence
+    was `+6.96814e-5`/`74.4318%` (131/176 wins). This recovered five wins but
+    remains fail-closed because seed `12600` did not pass. Remaining losses
+    versus the generic adapter cluster at contexts 80–106. The next checkpoint
+    must fingerprint the generic adapter as a warm start and fine-tune the
+    aligned local margin at pinned `1e-4` rate, preserving late-tail
+    discrimination. The distinct profile is
+    `goal_aligned_relative_finetune`; it derives the exact generic parent and
+    rejects corpus, selection, source-revision, fingerprint, or rate drift.
+    Existing held-out seeds are diagnostic only after informing these changes;
+    fresh whole seeds remain required.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

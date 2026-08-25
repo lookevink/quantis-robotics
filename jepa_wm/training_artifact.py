@@ -96,6 +96,12 @@ class ArtifactIdentity:
         resolved = artifact.resolve()
         return cls(resolved, artifact_fingerprint(resolved))
 
+    @classmethod
+    def from_dict(cls, payload: Any) -> ArtifactIdentity:
+        if not isinstance(payload, dict) or set(payload) != {"path", "fingerprint"}:
+            raise ValueError("training artifact identity is invalid")
+        return cls(Path(payload["path"]), str(payload["fingerprint"]))
+
     def to_dict(self) -> dict[str, str]:
         return {"path": str(self.path), "fingerprint": self.fingerprint}
 

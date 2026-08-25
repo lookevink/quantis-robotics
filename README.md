@@ -896,6 +896,29 @@ not overwritten:
   1056 2600 contact-insertion-v9-2600 goal_aligned_relative
 ```
 
+That diagnostic completed as fingerprint `93735353...97320`. Seed `12600`
+improved to `+6.91447e-5`/`64.7727%`; seed `12601` passed at
+`+7.02181e-5`/`84.0909%`. Aggregate evidence rose to
+`+6.96814e-5`/`74.4318%`—131 wins in 176 rollouts, one aggregate win below the
+nominal `75%` threshold—but strict readiness remains false because every whole
+seed must pass. Relative scaling recovered five wins over the global-noise
+profile. Its remaining losses versus the generic adapter are concentrated at
+contexts 80–106, where the demonstrated insertion motion decays toward zero.
+The checkpoint, reports, and 12 GB recovery copy are preserved.
+
+The next adapter checkpoint must retain the generic adapter's already passing
+late-tail discrimination while learning the aligned local margin: use the
+fingerprinted generic adapter as an explicit warm start and a lower-rate
+fine-tune, with that parent identity serialized into the child checkpoint.
+The typed profile derives the generic `s1056` parent from the output identity,
+requires identical corpus/selection/source provenance, and pins learning rate
+to `1e-4`:
+
+```bash
+./ops/jepa_wm_insertion_wm_milestone.sh \
+  1056 2600 contact-insertion-v9-2600 goal_aligned_relative_finetune
+```
+
 Training and evaluation remain offline; both current held-out seeds have
 informed this design, so even a passing diagnostic rerun still requires fresh
 whole held-out seeds before readiness.

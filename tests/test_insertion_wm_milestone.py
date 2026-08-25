@@ -188,6 +188,32 @@ class InsertionWorldModelMilestoneTest(unittest.TestCase):
             )
         )
 
+    def test_finetune_profile_derives_the_generic_parent_path(self) -> None:
+        from jepa_wm.insertion_adapter_profile import InsertionAdapterProfile
+
+        output = Path(
+            "/tmp/contact-insertion-v9-2600_"
+            "insertion_adapter_goal_aligned_relative_finetune_s1056.pth"
+        )
+
+        initial = (
+            InsertionAdapterProfile.GOAL_ALIGNED_RELATIVE_FINETUNE
+            .descriptor.initial_adapter_path(output, 1056)
+        )
+
+        self.assertEqual(
+            initial,
+            Path(
+                "/tmp/contact-insertion-v9-2600_"
+                "insertion_adapter_s1056.pth"
+            ).resolve(),
+        )
+        with self.assertRaisesRegex(ValueError, "exact training epoch"):
+            (
+                InsertionAdapterProfile.GOAL_ALIGNED_RELATIVE_FINETUNE
+                .descriptor.initial_adapter_path(output, 500)
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

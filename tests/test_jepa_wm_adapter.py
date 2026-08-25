@@ -13,11 +13,12 @@ except ImportError:
 if torch is not None:
     from jepa_wm.adapter import (
         ActionAdapterContract,
+        LoadedActionAdapter,
         action_adapter_parameters,
         apply_action_adapter,
         save_action_adapter,
     )
-    from jepa_wm.training_artifact import TrainingArtifactMetadata
+    from jepa_wm.training_artifact import ArtifactIdentity, TrainingArtifactMetadata
     from jepa_wm.contract import MODEL_ID
 
 
@@ -75,6 +76,39 @@ class ActionAdapterTest(unittest.TestCase):
                 training_recordings=("trajectory-train",),
                 training_steps=10,
             )
+
+    def test_loaded_adapter_applies_the_exact_fingerprinted_bytes(self) -> None:
+        source_model = _model()
+        metadata = TrainingArtifactMetadata(
+            base_model=MODEL_ID,
+            source_revision="revision",
+            camera="wrist",
+            training_recordings=("trajectory-train",),
+            training_steps=10,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "adapter.pth"
+            save_action_adapter(
+                source_model,
+                path,
+                ActionAdapterContract.current(
+                    metadata,
+                    training_selection_fingerprint=None,
+                    training_config_fingerprint="a" * 64,
+                ),
+            )
+            identity = ArtifactIdentity.from_artifact(path)
+            loaded = LoadedActionAdapter.load(path, expected_identity=identity)
+            path.write_bytes(b"replaced after loading")
+            target_model = _model()
+
+            loaded.apply(target_model)
+
+        for source, target in zip(
+            action_adapter_parameters(source_model),
+            action_adapter_parameters(target_model),
+        ):
+            torch.testing.assert_close(source, target)
 
 
 if __name__ == "__main__":
