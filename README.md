@@ -1129,6 +1129,32 @@ same rule, so the earlier source evidence cannot authorize another trial under
 the stronger code. The next live checkpoint is fresh `2/2` no-actuation
 evidence for this target-progress policy, not another actuation attempt.
 
+That fresh reevaluation is still open because the persistent Isaac runtime
+exposed a separate paused-physics lifecycle blocker. The first seed-`52600`
+attempt, `insertion-safety-20260825T134911Z-52600-c43`, failed closed after a
+34-hour resident runtime pushed response-to-safety latency just outside the
+freshness limits. Restarting Isaac restored normal RPC latency, but four
+subsequent no-actuation attempts exposed invalid experimental physics handles
+after the capture boundary paused the timeline. The latest session,
+`insertion-safety-20260825T144319Z-52600-c43`, captured state and received the
+resident response, then failed before projection when the recreated
+articulation still had no valid physics tensor entity. It produced no safety
+approval, execution claim, result, or model-commanded post-capture motion.
+Commits `98760b5`, `35f7d9b`, and `52e3cf3` make terminal capture reads
+synchronous, centralize the play/read/pause lifecycle, and reconstruct paused
+physics wrappers, but the live negative proves wrapper construction is still
+occurring before Isaac has
+restored a usable simulation view. Every failed attempt ran the recovery
+backup; the checksum-verified state copy remains 12 GB.
+
+The next checkpoint is therefore an Isaac lifecycle checkpoint, not another
+model trial: safely reestablish and interlock the physics simulation view,
+reconstruct the articulation/attachment/contact handles against that live
+view, and prove full captured-state continuity without an unobserved physics
+update. Only after that passes may seeds `52600` and `52601` be rerun for fresh
+`2/2` no-actuation evidence under the target-progress gate. Multi-step
+insertion, filming, and production authority remain false.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded
