@@ -933,6 +933,19 @@ fresh-seed readiness: freeze this artifact and evaluate it without further
 tuning on new whole held-out recordings before opening any planner or live
 insertion gate.
 
+That frozen evaluation is now complete. Without further adaptation, child
+fingerprint `396496bf...fadc` passed two newly captured whole held-out seeds
+`22600` and `22601`, which are disjoint from the complete source corpus and the
+two diagnostic seeds. Seed `22600` scored `+4.78526e-5` mean improvement with
+`80.6818%` recorded-action wins (71/88); seed `22601` scored `+1.97309e-5`
+with `87.5%` wins (77/88). The aggregate was `+3.37918e-5` and `84.0909%`
+(148/176), so the strict fresh whole-seed offline energy gate passed 2/2. Both
+raw 112-frame contact-insertion recordings, their evaluation reports, the
+typed fresh roster, the readiness report, and the checksum-verified 12 GB
+recovery copy are preserved. This authorizes the frozen task-aware planner
+benchmark only; it does not authorize JEPA actuation, insertion filming, or
+production control.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

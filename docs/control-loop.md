@@ -514,6 +514,13 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     recovery-backed up. Existing held-out seeds are diagnostic only after
     informing these changes; freeze this artifact and evaluate it on fresh
     whole held-out recordings before planner or live insertion authority.
+    The frozen child subsequently passed fresh whole held-out seeds `22600`
+    and `22601` without adaptation: `+4.78526e-5`/`80.6818%` (71/88) and
+    `+1.97309e-5`/`87.5%` (77/88), respectively. Aggregate evidence was
+    `+3.37918e-5`/`84.0909%` (148/176), closing the strict 2/2 fresh offline
+    energy gate. The typed fresh roster, raw 112-frame recordings, reports,
+    and 12 GB recovery copy are preserved. This opens only the frozen
+    task-aware planner benchmark; JEPA actuation and filming remain closed.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one
