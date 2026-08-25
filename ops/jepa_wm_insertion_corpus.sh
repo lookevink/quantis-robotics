@@ -5,6 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=ops/shell_helpers.sh
 source "${repo_root}/ops/shell_helpers.sh"
 aws_workflow="${AWS_WORKFLOW:-${repo_root}/ops/aws.sh}"
+capture_workflow="${CONTACT_INSERTION_CAPTURE_WORKFLOW:-${repo_root}/ops/jepa_wm_contact_insertion_capture.sh}"
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -39,47 +40,9 @@ backup_on_exit() {
 }
 trap backup_on_exit EXIT
 
-capture_recording() {
-  local recording_id="$1"
-  local seed="$2"
-  local split="$3"
-  local status
-  status="$("${aws_workflow}" jepa-wm-contact-insertion-status \
-    "${recording_id}" "${split}" "${seed}")"
-  case "${status}" in
-    valid)
-      printf 'Reusing validated %s recording %s (seed %s)\n' \
-        "${split}" "${recording_id}" "${seed}"
-      return
-      ;;
-    running)
-      printf 'Reconnecting to active recording %s\n' "${recording_id}"
-      "${aws_workflow}" demo-wait-recording "${recording_id}"
-      "${aws_workflow}" jepa-wm-contact-insertion-validate \
-        "${recording_id}" "${split}" "${seed}"
-      return
-      ;;
-    missing)
-      ;;
-    partial)
-      printf 'Quarantining incomplete recording %s before retry\n' "${recording_id}"
-      "${aws_workflow}" demo-quarantine-partial-recording "${recording_id}"
-      ;;
-    invalid)
-      die "recording ${recording_id} exists but fails its exact split/seed/v9 contract"
-      ;;
-    *)
-      die "recording status returned an invalid state for ${recording_id}: ${status}"
-      ;;
-  esac
-  "${aws_workflow}" demo-record-contact-insertion \
-    "${recording_id}" "${seed}" "${split}"
-  "${aws_workflow}" jepa-wm-contact-insertion-validate \
-    "${recording_id}" "${split}" "${seed}"
-}
-
 while IFS=$'\t' read -r -u 3 recording_id seed split; do
-  capture_recording "${recording_id}" "${seed}" "${split}"
+  AWS_WORKFLOW="${aws_workflow}" \
+    "${capture_workflow}" "${recording_id}" "${seed}" "${split}"
 done 3< <(
   python3 -m jepa_wm.insertion_corpus show \
     --roster "${roster_path}" --format tsv

@@ -893,6 +893,7 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("--experiment 'insert-v9-2600' --base-seed '2600'", summary_calls)
 
     def test_jepa_wm_insertion_world_model_commands_bind_one_named_adapter(self):
+        frozen_fingerprint = "a" * 64
         trained, training_calls = self.run_command(
             "jepa-wm-insertion-adapt",
             arguments=(
@@ -923,6 +924,30 @@ class AwsLifecycleTests(unittest.TestCase):
                 "goal_aligned",
             ),
         )
+        from jepa_wm.insertion_corpus import (
+            FrozenInsertionAdapter,
+            InsertionCorpusRoster,
+            InsertionFreshEvaluationRoster,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fresh_roster = Path(temporary_directory) / "fresh.json"
+            InsertionFreshEvaluationRoster.create(
+                "insert-v9-2600-fresh-22600",
+                22600,
+                InsertionCorpusRoster.create("insert-v9-2600", 2600),
+                FrozenInsertionAdapter(
+                    "insertion-aligned-adapter",
+                    frozen_fingerprint,
+                ),
+            ).write(fresh_roster)
+            fresh, fresh_calls = self.run_command(
+                "jepa-wm-insertion-wm-fresh-summarize",
+                arguments=(
+                    str(fresh_roster),
+                    "goal_aligned_relative_finetune",
+                ),
+            )
 
         self.assertEqual(trained.returncode, 0, trained.stderr)
         self.assertIn("ops/jepa_wm.sh insertion-wm-adapt", training_calls)
@@ -946,6 +971,17 @@ class AwsLifecycleTests(unittest.TestCase):
             "--profile 'goal_aligned'",
             aligned_calls,
         )
+        self.assertEqual(fresh.returncode, 0, fresh.stderr)
+        self.assertIn("ops/jepa_wm.sh insertion-wm-summarize", fresh_calls)
+        self.assertIn(
+            "--adapter-profile 'goal_aligned_relative_finetune' "
+            "--fresh-roster-base64 '",
+            fresh_calls,
+        )
+        self.assertNotIn("--adapter 'insertion-aligned-adapter'", fresh_calls)
+        self.assertNotIn("--fresh-evaluation", fresh_calls)
+        self.assertNotIn("--fresh-base-seed", fresh_calls)
+        self.assertNotIn("--frozen-adapter-fingerprint", fresh_calls)
 
     def test_jepa_wm_control_replay_forwards_one_fresh_observation(self):
         result, calls = self.run_command(

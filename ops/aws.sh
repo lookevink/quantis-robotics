@@ -419,6 +419,7 @@ Commands:
   jepa-wm-insertion-adapt RECORDING[,RECORDING...] STEPS ADAPTER [PROFILE]
   jepa-wm-insertion-wm-eval RECORDING ADAPTER
   jepa-wm-insertion-wm-summarize RECORDING[,RECORDING...] ADAPTER EXPERIMENT BASE_SEED [PROFILE]
+  jepa-wm-insertion-wm-fresh-summarize FRESH_ROSTER [PROFILE]
   jepa-wm-insertion-plan-benchmark RECORDING ADAPTER PROPOSAL
   jepa-wm-plan-benchmark RECORDING [camera] [start] [count] [stride] [iterations] [samples] [elites] [adapter] [proposal]
   jepa-wm-proposal-train RECORDING[,RECORDING...] [camera] [steps] [proposal]
@@ -713,6 +714,18 @@ case "${command}" in
       "${adapter_profile}" artifact-stem >/dev/null)
     sync_repo
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-wm-summarize --recordings '${recording_names}' --adapter '${adapter_name}' --experiment '${experiment_id}' --base-seed '${base_seed}' --adapter-profile '${adapter_profile}'"
+    ;;
+  jepa-wm-insertion-wm-fresh-summarize)
+    fresh_roster="${2:-}"
+    adapter_profile="${3:-generic}"
+    [[ -f "${fresh_roster}" ]] || die "fresh evaluation roster does not exist"
+    (cd "${repo_root}" && python3 -m jepa_wm.insertion_adapter_profile \
+      "${adapter_profile}" artifact-stem >/dev/null)
+    (cd "${repo_root}" && python3 -m jepa_wm.insertion_corpus show-fresh \
+      --roster "${fresh_roster}" --format json >/dev/null)
+    fresh_roster_payload="$(base64 < "${fresh_roster}" | tr -d '\n')"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-wm-summarize --adapter-profile '${adapter_profile}' --fresh-roster-base64 '${fresh_roster_payload}'"
     ;;
   jepa-wm-plan-benchmark)
     recording_name="${2:-}"

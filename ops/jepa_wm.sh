@@ -352,27 +352,68 @@ evaluate_insertion_world_model() {
 summarize_insertion_world_model() {
   local -A options=()
   parse_named_options options \
-    "recordings adapter experiment base-seed adapter-profile" "$@"
+    "recordings adapter experiment base-seed adapter-profile fresh-roster-base64" "$@"
   local held_out_list="${options[recordings]:-}"
   local adapter_name="${options[adapter]:-}"
   local experiment_id="${options[experiment]:-}"
   local base_seed="${options[base-seed]:-}"
   local adapter_profile="${options[adapter-profile]:-generic}"
-  is_safe_identifier_list "${held_out_list}" || die "invalid held-out list"
-  is_safe_identifier "${adapter_name}" || die "invalid adapter name"
-  is_safe_identifier "${experiment_id}" || die "invalid experiment ID"
-  require_nonnegative_integer "base seed" "${base_seed}" || exit 1
+  local fresh_roster_payload="${options[fresh-roster-base64]:-}"
   (cd "${repo_dir}" && python3 -m jepa_wm.insertion_adapter_profile \
     "${adapter_profile}" artifact-stem >/dev/null)
   require_runtime
+  local experiment_root="${checkpoint_dir}/experiments"
+  mkdir -p "${experiment_root}"
+  cd "${repo_dir}"
+  local readiness_experiment
+  local -a roster_arguments
+  if [[ -n "${fresh_roster_payload}" ]]; then
+    local temporary_roster
+    temporary_roster="$(mktemp "${experiment_root}/.insertion-fresh.XXXXXX.json")"
+    if ! printf '%s' "${fresh_roster_payload}" \
+      | base64 --decode >"${temporary_roster}"; then
+      rm -f "${temporary_roster}"
+      die "fresh evaluation roster encoding is invalid"
+    fi
+    local roster_evaluation roster_adapter
+    if ! roster_evaluation="$("${venv_dir}/bin/python" \
+      -m jepa_wm.insertion_corpus show-fresh \
+      --roster "${temporary_roster}" --format evaluation-id)"; then
+      rm -f "${temporary_roster}"
+      die "fresh evaluation roster is invalid"
+    fi
+    if ! roster_adapter="$("${venv_dir}/bin/python" \
+      -m jepa_wm.insertion_corpus show-fresh \
+      --roster "${temporary_roster}" --format adapter-name)"; then
+      rm -f "${temporary_roster}"
+      die "fresh evaluation roster adapter is invalid"
+    fi
+    is_safe_identifier "${roster_evaluation}" \
+      || die "fresh evaluation roster identity is invalid"
+    is_safe_identifier "${roster_adapter}" \
+      || die "fresh evaluation roster adapter is invalid"
+    local fresh_roster="${experiment_root}/${roster_evaluation}_insertion_fresh_evaluation.json"
+    mv "${temporary_roster}" "${fresh_roster}"
+    readiness_experiment="${roster_evaluation}"
+    adapter_name="${roster_adapter}"
+    held_out_list="$("${venv_dir}/bin/python" -m jepa_wm.insertion_corpus \
+      show-fresh --roster "${fresh_roster}" --format held-out-csv)"
+    roster_arguments=(--fresh-evaluation-roster "${fresh_roster}")
+  else
+    is_safe_identifier_list "${held_out_list}" || die "invalid held-out list"
+    is_safe_identifier "${experiment_id}" || die "invalid experiment ID"
+    require_nonnegative_integer "base seed" "${base_seed}" || exit 1
+    local roster="${experiment_root}/${experiment_id}_insertion_corpus.json"
+    "${venv_dir}/bin/python" -m jepa_wm.insertion_corpus create \
+      --experiment-id "${experiment_id}" --base-seed "${base_seed}" \
+      --output "${roster}"
+    readiness_experiment="${experiment_id}"
+    roster_arguments=(--roster "${roster}")
+  fi
+  is_safe_identifier "${adapter_name}" || die "invalid adapter name"
   local adapter="${checkpoint_dir}/${adapter_name}.pth"
   [[ -s "${adapter}" ]] || die "action adapter does not exist: ${adapter_name}"
-  local roster="${checkpoint_dir}/experiments/${experiment_id}_insertion_corpus.json"
-  mkdir -p "$(dirname "${roster}")"
-  cd "${repo_dir}"
-  "${venv_dir}/bin/python" -m jepa_wm.insertion_corpus create \
-    --experiment-id "${experiment_id}" --base-seed "${base_seed}" \
-    --output "${roster}"
+  is_safe_identifier_list "${held_out_list}" || die "invalid held-out list"
   local -a held_out_names reports=()
   local recording_name report
   local window_start window_count window_stride
@@ -387,11 +428,14 @@ summarize_insertion_world_model() {
     reports+=(--evaluation-report "${report}")
   done
   local output="${checkpoint_dir}/experiments/${adapter_name}_insertion_wm_readiness.json"
+  if [[ -n "${fresh_roster_payload}" ]]; then
+    output="${checkpoint_dir}/experiments/${adapter_name}_${readiness_experiment}_insertion_wm_readiness.json"
+  fi
   "${venv_dir}/bin/python" -m jepa_wm.insertion_wm_readiness \
-    --experiment-id "${experiment_id}" \
+    --experiment-id "${readiness_experiment}" \
     --adapter "${adapter}" \
     "${reports[@]}" \
-    --roster "${roster}" \
+    "${roster_arguments[@]}" \
     --adapter-profile "${adapter_profile}" \
     --output "${output}"
 }

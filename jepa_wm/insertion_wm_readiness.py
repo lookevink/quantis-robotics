@@ -23,7 +23,12 @@ from jepa_wm.contract import MODEL_ID
 from jepa_wm.candidate_negatives import CandidateMiningConfig
 from jepa_wm.domain_recording import DomainRecording
 from jepa_wm.experiment import HeldOutEvaluation, build_experiment_from_evidence
-from jepa_wm.insertion_corpus import InsertionCorpusRoster
+from jepa_wm.insertion_corpus import (
+    FrozenInsertionAdapter,
+    InsertionCorpusRecording,
+    InsertionCorpusRoster,
+    InsertionFreshEvaluationRoster,
+)
 from jepa_wm.insertion_adapter_profile import InsertionAdapterProfile
 from jepa_wm.insertion_recording import ContactInsertionEvidence
 from jepa_wm.persistence import write_json_atomic
@@ -42,6 +47,9 @@ from sim.exploration import DatasetSplit
 
 
 INSERTION_WM_SCHEMA = "quantis.jepa_wm_insertion_world_model_readiness.v2"
+INSERTION_WM_FRESH_SCHEMA = (
+    "quantis.jepa_wm_insertion_world_model_fresh_readiness.v1"
+)
 INSERTION_WINDOW = INSERTION_PROPOSAL_WINDOW
 INSERTION_BOUNDS = ActionSelectionBounds(minimum_action_norm=0.0)
 
@@ -51,6 +59,69 @@ class InsertionAdapterEvidence:
     identity: ArtifactIdentity
     contract: ActionAdapterContract
     candidate_mining: CandidateMiningConfig
+
+
+@dataclass(frozen=True)
+class InsertionReadinessContext:
+    experiment_id: str
+    training_roster: InsertionCorpusRoster
+    held_out: tuple[InsertionCorpusRecording, ...]
+    schema: str
+    scope: str
+    fresh_roster: InsertionFreshEvaluationRoster | None = None
+
+    @classmethod
+    def diagnostic(
+        cls,
+        experiment_id: str,
+        roster: InsertionCorpusRoster,
+    ) -> InsertionReadinessContext:
+        if experiment_id != roster.experiment_id:
+            raise ValueError("insertion readiness experiment and corpus disagree")
+        return cls(
+            experiment_id,
+            roster,
+            roster.for_split("held_out"),
+            INSERTION_WM_SCHEMA,
+            "offline insertion world-model energy; no live insertion",
+        )
+
+    @classmethod
+    def fresh(
+        cls,
+        evaluation_id: str,
+        roster: InsertionFreshEvaluationRoster,
+    ) -> InsertionReadinessContext:
+        if evaluation_id != roster.evaluation_id:
+            raise ValueError("fresh insertion evaluation identity is inconsistent")
+        return cls(
+            evaluation_id,
+            roster.source_corpus,
+            roster.recordings,
+            INSERTION_WM_FRESH_SCHEMA,
+            (
+                "offline insertion world-model energy on fresh whole held-out "
+                "seeds; no live insertion"
+            ),
+            roster,
+        )
+
+    @property
+    def expected_adapter(self) -> FrozenInsertionAdapter | None:
+        return None if self.fresh_roster is None else self.fresh_roster.adapter
+
+    def evidence(self) -> dict[str, Any]:
+        evidence: dict[str, Any] = {
+            "corpus_roster": self.training_roster.to_dict(),
+        }
+        if self.fresh_roster is not None:
+            evidence.update(
+                {
+                    "fresh_evaluation_roster": self.fresh_roster.to_dict(),
+                    "fresh_whole_seeds": True,
+                }
+            )
+        return evidence
 
 
 def _training_selection(payload: dict[str, Any]) -> dict[str, Any]:
@@ -286,25 +357,27 @@ def validate_insertion_adapter_evaluation(
     return HeldOutEvaluation.from_payload(report.resolve(), payload)
 
 
-def summarize_insertion_world_model_readiness(
-    experiment_id: str,
+def _summarize_insertion_world_model_readiness(
     adapter_path: Path,
     evaluation_reports: Sequence[Path],
-    roster_path: Path,
+    context: InsertionReadinessContext,
     output: Path,
     *,
-    adapter_profile: InsertionAdapterProfile = InsertionAdapterProfile.GENERIC,
+    adapter_profile: InsertionAdapterProfile,
 ) -> dict[str, Any]:
-    roster = InsertionCorpusRoster.load(roster_path.resolve())
     adapter = validate_insertion_adapter(
         adapter_path,
         expected_profile=adapter_profile,
     )
-    training = roster.for_split("train")
-    held_out = roster.for_split("held_out")
+    if context.expected_adapter is not None and (
+        adapter.identity.path.stem != context.expected_adapter.name
+        or adapter.identity.fingerprint != context.expected_adapter.fingerprint
+    ):
+        raise ValueError("fresh insertion evaluation adapter is not frozen")
+    training = context.training_roster.for_split("train")
     if adapter.contract.metadata.training_recordings != tuple(
         recording.recording_id for recording in training
-    ) or len(evaluation_reports) != len(held_out):
+    ) or len(evaluation_reports) != len(context.held_out):
         raise ValueError("insertion adapter corpus does not match its roster")
     held_out_evidence = tuple(
         validate_insertion_adapter_evaluation(
@@ -313,7 +386,7 @@ def summarize_insertion_world_model_readiness(
             expected_recording=recording.recording_id,
             expected_seed=recording.seed,
         )
-        for report, recording in zip(evaluation_reports, held_out)
+        for report, recording in zip(evaluation_reports, context.held_out)
     )
     recording_root = held_out_evidence[0].recording.path.parent
     training_evidence = []
@@ -330,14 +403,14 @@ def summarize_insertion_world_model_readiness(
             )
         )
     summary = build_experiment_from_evidence(
-        experiment_id,
+        context.experiment_id,
         tuple(training_evidence),
         held_out_evidence,
     )
     summary.update(
         {
-            "schema": INSERTION_WM_SCHEMA,
-            "scope": "offline insertion world-model energy; no live insertion",
+            "schema": context.schema,
+            "scope": context.scope,
             "adapter_fingerprint": adapter.identity.fingerprint,
             "training_selection_fingerprint": (
                 adapter.contract.training_selection_fingerprint
@@ -347,11 +420,49 @@ def summarize_insertion_world_model_readiness(
             ),
             "adapter_profile": adapter_profile.value,
             "candidate_mining": adapter.candidate_mining.to_dict(),
-            "corpus_roster": roster.to_dict(),
+            **context.evidence(),
         }
     )
     write_json_atomic(output.resolve(), summary)
     return summary
+
+
+def summarize_insertion_world_model_readiness(
+    experiment_id: str,
+    adapter_path: Path,
+    evaluation_reports: Sequence[Path],
+    roster_path: Path,
+    output: Path,
+    *,
+    adapter_profile: InsertionAdapterProfile = InsertionAdapterProfile.GENERIC,
+) -> dict[str, Any]:
+    roster = InsertionCorpusRoster.load(roster_path.resolve())
+    return _summarize_insertion_world_model_readiness(
+        adapter_path,
+        evaluation_reports,
+        InsertionReadinessContext.diagnostic(experiment_id, roster),
+        output,
+        adapter_profile=adapter_profile,
+    )
+
+
+def summarize_fresh_insertion_world_model_readiness(
+    evaluation_id: str,
+    adapter_path: Path,
+    evaluation_reports: Sequence[Path],
+    roster_path: Path,
+    output: Path,
+    *,
+    adapter_profile: InsertionAdapterProfile = InsertionAdapterProfile.GENERIC,
+) -> dict[str, Any]:
+    roster = InsertionFreshEvaluationRoster.load(roster_path.resolve())
+    return _summarize_insertion_world_model_readiness(
+        adapter_path,
+        evaluation_reports,
+        InsertionReadinessContext.fresh(evaluation_id, roster),
+        output,
+        adapter_profile=adapter_profile,
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -359,7 +470,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--experiment-id", required=True)
     parser.add_argument("--adapter", type=Path, required=True)
     parser.add_argument("--evaluation-report", type=Path, action="append", required=True)
-    parser.add_argument("--roster", type=Path, required=True)
+    roster_group = parser.add_mutually_exclusive_group(required=True)
+    roster_group.add_argument("--roster", type=Path)
+    roster_group.add_argument("--fresh-evaluation-roster", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--adapter-profile",
@@ -367,14 +480,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=InsertionAdapterProfile.GENERIC.value,
     )
     args = parser.parse_args(argv)
-    summary = summarize_insertion_world_model_readiness(
-        args.experiment_id,
-        args.adapter,
-        args.evaluation_report,
-        args.roster,
-        args.output,
-        adapter_profile=InsertionAdapterProfile(args.adapter_profile),
-    )
+    profile = InsertionAdapterProfile(args.adapter_profile)
+    if args.fresh_evaluation_roster is not None:
+        summary = summarize_fresh_insertion_world_model_readiness(
+            args.experiment_id,
+            args.adapter,
+            args.evaluation_report,
+            args.fresh_evaluation_roster,
+            args.output,
+            adapter_profile=profile,
+        )
+    else:
+        summary = summarize_insertion_world_model_readiness(
+            args.experiment_id,
+            args.adapter,
+            args.evaluation_report,
+            args.roster,
+            args.output,
+            adapter_profile=profile,
+        )
     print(json.dumps(summary, indent=2))
     return 0 if summary["passed"] else 2
 

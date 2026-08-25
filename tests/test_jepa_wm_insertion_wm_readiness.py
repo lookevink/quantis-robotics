@@ -30,9 +30,15 @@ if torch is not None:
         save_action_adapter,
     )
     from jepa_wm.insertion_adapter_profile import InsertionAdapterProfile
+    from jepa_wm.insertion_corpus import (
+        FrozenInsertionAdapter,
+        InsertionCorpusRoster,
+        InsertionFreshEvaluationRoster,
+    )
     from jepa_wm.insertion_wm_readiness import (
         INSERTION_BOUNDS,
         INSERTION_WINDOW,
+        summarize_fresh_insertion_world_model_readiness,
         validate_insertion_adapter,
         validate_insertion_adapter_evaluation,
     )
@@ -424,6 +430,111 @@ class InsertionWorldModelReadinessTest(unittest.TestCase):
                         expected_seed=12600,
                     )
 
+    def test_fresh_summary_uses_disjoint_evaluation_roster_without_retraining(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = InsertionCorpusRoster.create("insertion-v9-2600", 2600)
+            fresh = InsertionFreshEvaluationRoster.create(
+                "insertion-v9-2600-fresh-22600",
+                22600,
+                source,
+                FrozenInsertionAdapter("adapter", "a" * 64),
+            )
+            roster_path = root / "fresh.json"
+            fresh.write(roster_path)
+            output = root / "summary.json"
+            adapter_path = root / "adapter.pth"
+            adapter_identity = ArtifactIdentity(
+                adapter_path.resolve(),
+                "a" * 64,
+            )
+            metadata = TrainingArtifactMetadata(
+                "jepa_wm_droid",
+                "revision",
+                "wrist",
+                tuple(
+                    recording.recording_id
+                    for recording in source.for_split("train")
+                ),
+                1056,
+            )
+            adapter = SimpleNamespace(
+                identity=adapter_identity,
+                contract=SimpleNamespace(
+                    metadata=metadata,
+                    training_selection_fingerprint="b" * 64,
+                    training_config_fingerprint="c" * 64,
+                ),
+                candidate_mining=SimpleNamespace(to_dict=lambda: {"profile": "fixed"}),
+            )
+            evaluation_paths = (root / "held-00.json", root / "held-01.json")
+            evaluation_evidence = tuple(
+                SimpleNamespace(
+                    recording=SimpleNamespace(
+                        path=root / recording.recording_id,
+                    )
+                )
+                for recording in fresh.recordings
+            )
+
+            with (
+                patch(
+                    "jepa_wm.insertion_wm_readiness.validate_insertion_adapter",
+                    return_value=adapter,
+                ),
+                patch(
+                    "jepa_wm.insertion_wm_readiness.validate_insertion_adapter_evaluation",
+                    side_effect=evaluation_evidence,
+                ) as validate_evaluation,
+                patch(
+                    "jepa_wm.insertion_wm_readiness.ContactInsertionEvidence.from_recording"
+                ),
+                patch(
+                    "jepa_wm.insertion_wm_readiness.DomainRecording.from_path",
+                    return_value=SimpleNamespace(),
+                ),
+                patch(
+                    "jepa_wm.insertion_wm_readiness.build_experiment_from_evidence",
+                    return_value={"passed": True},
+                ),
+            ):
+                summary = summarize_fresh_insertion_world_model_readiness(
+                    fresh.evaluation_id,
+                    adapter_path,
+                    evaluation_paths,
+                    roster_path,
+                    output,
+                    adapter_profile=(
+                        InsertionAdapterProfile.GOAL_ALIGNED_RELATIVE_FINETUNE
+                    ),
+                )
+                InsertionFreshEvaluationRoster.create(
+                    fresh.evaluation_id,
+                    fresh.base_seed,
+                    source,
+                    FrozenInsertionAdapter("adapter", "d" * 64),
+                ).write(roster_path)
+                with self.assertRaisesRegex(ValueError, "not frozen"):
+                    summarize_fresh_insertion_world_model_readiness(
+                        fresh.evaluation_id,
+                        adapter_path,
+                        evaluation_paths,
+                        roster_path,
+                        output,
+                        adapter_profile=(
+                            InsertionAdapterProfile.GOAL_ALIGNED_RELATIVE_FINETUNE
+                        ),
+                    )
+
+            self.assertTrue(summary["fresh_whole_seeds"])
+            self.assertEqual(summary["fresh_evaluation_roster"], fresh.to_dict())
+            self.assertEqual(
+                [
+                    call.kwargs["expected_seed"]
+                    for call in validate_evaluation.call_args_list
+                ],
+                [22600, 22601],
+            )
 
 if __name__ == "__main__":
     unittest.main()

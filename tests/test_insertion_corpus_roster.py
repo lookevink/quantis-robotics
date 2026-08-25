@@ -5,7 +5,11 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from jepa_wm.insertion_corpus import InsertionCorpusRoster
+from jepa_wm.insertion_corpus import (
+    FrozenInsertionAdapter,
+    InsertionCorpusRoster,
+    InsertionFreshEvaluationRoster,
+)
 
 
 class InsertionCorpusRosterTest(unittest.TestCase):
@@ -33,6 +37,42 @@ class InsertionCorpusRosterTest(unittest.TestCase):
             path.write_text(json.dumps(payload))
             with self.assertRaisesRegex(ValueError, "inconsistent"):
                 InsertionCorpusRoster.load(path)
+
+    def test_fresh_roster_is_exact_and_disjoint_from_the_source_corpus(self) -> None:
+        source = InsertionCorpusRoster.create("contact-insertion-v9-2600", 2600)
+        fresh = InsertionFreshEvaluationRoster.create(
+            "contact-insertion-v9-2600-fresh-22600",
+            22600,
+            source,
+            FrozenInsertionAdapter("adapter-s1056", "a" * 64),
+        )
+
+        self.assertEqual(
+            [recording.seed for recording in fresh.recordings],
+            [22600, 22601],
+        )
+        self.assertEqual(
+            fresh.recordings[0].recording_id,
+            "contact-insertion-v9-2600-fresh-22600-held-00",
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "fresh.json"
+            fresh.write(path)
+            self.assertEqual(InsertionFreshEvaluationRoster.load(path), fresh)
+
+            payload = fresh.to_dict()
+            payload["recordings"][0]["seed"] = 12600
+            path.write_text(json.dumps(payload))
+            with self.assertRaisesRegex(ValueError, "inconsistent"):
+                InsertionFreshEvaluationRoster.load(path)
+
+        with self.assertRaisesRegex(ValueError, "inconsistent"):
+            InsertionFreshEvaluationRoster.create(
+                source.experiment_id,
+                22600,
+                source,
+                FrozenInsertionAdapter("adapter-s1056", "a" * 64),
+            )
 
 
 if __name__ == "__main__":
