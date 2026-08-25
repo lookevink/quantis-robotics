@@ -97,7 +97,7 @@ class InsertionPlannerProfileTest(unittest.TestCase):
     def test_dense_profile_covers_every_insertion_command_context(self) -> None:
         self.assertEqual(
             INSERTION_DENSE_PLANNER_PROFILE.window.context_indices,
-            tuple(range(44, 108)),
+            tuple(range(43, 107)),
         )
         self.assertEqual(
             INSERTION_DENSE_PLANNER_PROFILE.task_policy,

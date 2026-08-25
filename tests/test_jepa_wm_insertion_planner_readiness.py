@@ -116,10 +116,6 @@ class InsertionPlannerReadinessTest(unittest.TestCase):
             self.assertIs(profile, INSERTION_DENSE_PLANNER_PROFILE)
             if report.name == "sampled.json":
                 raise ValueError("planner report has the wrong rollout roster")
-            self.assertEqual(
-                profile.window.context_indices,
-                tuple(range(44, 108)),
-            )
             return dense
 
         with patch.object(

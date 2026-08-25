@@ -63,17 +63,18 @@ class InsertionPlannerProfile:
         if self.scoring_batch_size <= 0:
             raise ValueError("insertion planner scoring batch size must be positive")
 
-_INSERTION_START = CONTACT_INSERTION_RECORDING.start_index(
+_INSERTION_RESULT_START = CONTACT_INSERTION_RECORDING.start_index(
     ContactInsertionSegment.INSERT
 )
+_INSERTION_FIRST_COMMAND_CONTEXT = _INSERTION_RESULT_START - 1
 INSERTION_SAMPLED_READINESS_PLANNER_PROFILE = InsertionPlannerProfile(
     InsertionPlannerProfileName.SAMPLED_READINESS,
-    RolloutWindow(_INSERTION_START, 8, 8),
+    RolloutWindow(_INSERTION_RESULT_START, 8, 8),
 )
 INSERTION_DENSE_PLANNER_PROFILE = InsertionPlannerProfile(
     InsertionPlannerProfileName.DENSE_EXECUTION,
     RolloutWindow(
-        _INSERTION_START,
+        _INSERTION_FIRST_COMMAND_CONTEXT,
         CONTACT_INSERTION_RECORDING.span(ContactInsertionSegment.INSERT).frames,
         1,
     ),
