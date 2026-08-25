@@ -465,10 +465,16 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     only `6/8`. The planner therefore accepts a refinement only when it both
     meets the goal gate and improves proposal latent energy by at least `1e-6`;
     otherwise it retains only a goal-aligned proposal and explicitly blocks
-    the context if both candidates fail. The first exact v3 seed-12600 report
-    accepted only `1/8` refinements and blocked the misaligned context-44
-    proposal. Goal-aligned train-only negative mining and fresh whole held-out
-    seeds remain required before any live insertion or filming checkpoint.
+    the context if both candidates fail. Exact v3 reports accepted `1/8` and
+    `3/8` refinements, selected `7/8` and `6/8` contexts after goal-aligned
+    proposal fallback, and blocked the rest. All selected actions passed goal
+    alignment, but seed `12600` beat the recorded action only `1/7` times.
+    Goal-aligned train-only negative mining and fresh whole held-out seeds
+    remain required before any live insertion or filming checkpoint. The
+    distinct `goal_aligned` adapter profile mines only bounded sequences whose
+    first action meets the same `0.95` observable-goal cone, while preserving
+    perturbed future actions as hard negatives. Existing held-out seeds are
+    diagnostic only after informing this change.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

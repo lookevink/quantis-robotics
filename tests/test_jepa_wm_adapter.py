@@ -12,6 +12,7 @@ except ImportError:
 
 if torch is not None:
     from jepa_wm.adapter import (
+        ActionAdapterContract,
         action_adapter_parameters,
         apply_action_adapter,
         save_action_adapter,
@@ -45,7 +46,15 @@ class ActionAdapterTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "adapter.pth"
-            save_action_adapter(source_model, path, metadata)
+            save_action_adapter(
+                source_model,
+                path,
+                ActionAdapterContract.current(
+                    metadata,
+                    training_selection_fingerprint=None,
+                    training_config_fingerprint="a" * 64,
+                ),
+            )
             target_model = _model()
 
             loaded = apply_action_adapter(target_model, path)

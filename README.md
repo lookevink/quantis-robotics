@@ -831,13 +831,35 @@ alignment gate and lowers JEPA latent energy relative to the proposal by at
 least `1e-6`; otherwise the offline report falls back to the proposal only when
 that proposal independently passes the observable goal-alignment gate. If both
 fail, the context is explicitly blocked and has no selected action. This
-Pareto gate is an evidence boundary, not live authority. Its first exact v3
-report accepted only `1/8` refinements on seed `12600` and blocked the
-misaligned context-44 proposal instead of silently retaining it. The following
-train-only adapter checkpoint must mine goal-aligned local candidates, rather
-than generic perturbations, so the energy model learns to distinguish
-plausible insertion refinements before the same fixed search is evaluated on
-fresh whole held-out seeds.
+Pareto gate is an evidence boundary, not live authority. The exact v3 reports
+accepted `1/8` refinements on seed `12600` and `3/8` on seed `12601`. Proposal
+fallbacks left `7/8` and `6/8` contexts selected and blocked the remaining
+misaligned contexts instead of silently retaining them. Every selected action
+passed goal alignment, with mean cosine `0.989333` and `0.973448`; selected
+actions improved over zero by `+1.13512e-5` and `+4.70251e-5`, but the first
+seed beat the recorded action only `1/7`. The following train-only adapter
+checkpoint must therefore mine goal-aligned local candidates, rather than
+generic perturbations, so the energy model learns to distinguish plausible
+insertion refinements before the same fixed search is evaluated on fresh whole
+held-out seeds.
+
+Run that train-only checkpoint as a distinct artifact:
+
+```bash
+./ops/jepa_wm_insertion_wm_milestone.sh \
+  1056 2600 contact-insertion-v9-2600 goal_aligned
+```
+
+Its candidate miner keeps all local sequences inside the persisted planner
+bounds, requires the demonstrated first action itself to meet the `0.95` goal
+cosine, and replaces a sampled off-direction first action with that recorded
+first action before asking JEPA-WM for the most deceptive negative. Later
+actions remain perturbed, so the adapter learns a margin against plausible
+wrong-future insertion sequences rather than receiving easy off-task
+negatives. The profile has a distinct checkpoint name and serialized mining
+contract. Training and evaluation remain offline; the two current held-out
+seeds have already informed this design, so a passing rerun is diagnostic and
+fresh whole held-out seeds are still required for readiness.
 
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a

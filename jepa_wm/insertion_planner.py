@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from jepa_wm.action_prior import ActionPriorConfig
+from jepa_wm.insertion_adapter_profile import InsertionAdapterProfile
 from jepa_wm.insertion_contract import (
     CONTACT_INSERTION_RECORDING,
     ContactInsertionSegment,
@@ -46,7 +47,9 @@ class InsertionPlannerProfile:
             minimum_active_cosine=0.9,
         ),
         goal_action_alignment=GoalActionAlignment(
-            minimum_cosine=0.95,
+            minimum_cosine=(
+                InsertionAdapterProfile.GOAL_ALIGNED.descriptor.minimum_goal_cosine
+            ),
             failure_penalty=0.01,
         ),
         refinement_acceptance=RefinementAcceptancePolicy(

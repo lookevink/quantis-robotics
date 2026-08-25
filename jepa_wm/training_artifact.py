@@ -225,6 +225,23 @@ def rollout_training_selection_fingerprint(payload: Any) -> str:
     return sha256(canonical).hexdigest()
 
 
+def training_configuration_fingerprint(payload: Any) -> str:
+    """Fingerprint the complete persisted training configuration."""
+
+    if not isinstance(payload, dict) or not payload:
+        raise ValueError("training configuration contract is invalid")
+    try:
+        canonical = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode()
+    except (TypeError, ValueError) as error:
+        raise ValueError("training configuration contract is invalid") from error
+    return sha256(canonical).hexdigest()
+
+
 def load_training_report(artifact: Path) -> dict[str, Any]:
     report = training_report_path(artifact)
     if not report.is_file():

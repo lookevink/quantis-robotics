@@ -15,6 +15,7 @@ die() {
 configure_artifact() {
   local kind="$1"
   train_extra=()
+  summary_profile=""
   stop_worker=false
   case "${kind}" in
     proposal)
@@ -30,8 +31,13 @@ configure_artifact() {
     world_model)
       default_steps="$(insertion_epoch_steps)"
       artifact_label="Adapter"
-      artifact_stem="insertion_adapter_s"
+      summary_profile="${INSERTION_WORLD_MODEL_PROFILE:-generic}"
+      artifact_stem="$(
+        python3 -m jepa_wm.insertion_adapter_profile \
+          "${summary_profile}" artifact-stem
+      )"
       training_command=jepa-wm-insertion-adapt
+      train_extra=("${summary_profile}")
       evaluation_command=jepa-wm-insertion-wm-eval
       summary_command=jepa-wm-insertion-wm-summarize
       include_seed=false
@@ -43,6 +49,7 @@ configure_artifact() {
 
 artifact_kind="${1:-}"
 shift || true
+cd "${repo_root}"
 configure_artifact "${artifact_kind}"
 
 training_steps="${1:-${default_steps}}"
@@ -67,7 +74,6 @@ trap backup_on_exit EXIT
 
 INSERTION_CORPUS_ROSTER="${roster_path}" \
   "${corpus_workflow}" 12 2 "${base_seed}" "${experiment_id}"
-cd "${repo_root}"
 training_list="$(
   python3 -m jepa_wm.insertion_corpus show \
     --roster "${roster_path}" --format train-csv
@@ -83,6 +89,8 @@ artifact_name="${experiment_id}_${artifact_stem}${training_steps}"
 train_arguments=("${training_list}" "${training_steps}" "${artifact_name}")
 if [[ "${include_seed}" == true ]]; then
   train_arguments+=("${train_extra[@]}" "${base_seed}")
+elif (( ${#train_extra[@]} )); then
+  train_arguments+=("${train_extra[@]}")
 fi
 "${aws_workflow}" "${training_command}" "${train_arguments[@]}"
 
@@ -90,8 +98,13 @@ for recording_id in "${held_out_recordings[@]}"; do
   "${aws_workflow}" "${evaluation_command}" "${recording_id}" "${artifact_name}"
 done
 set +e
-"${aws_workflow}" "${summary_command}" \
+summary_arguments=(
   "${held_out_list}" "${artifact_name}" "${experiment_id}" "${base_seed}"
+)
+if [[ -n "${summary_profile}" ]]; then
+  summary_arguments+=("${summary_profile}")
+fi
+"${aws_workflow}" "${summary_command}" "${summary_arguments[@]}"
 readiness_status=$?
 set -e
 printf 'Insertion %s experiment: %s\n%s: %s\n' \

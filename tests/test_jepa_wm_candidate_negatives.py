@@ -72,6 +72,8 @@ class CandidateNegativesTest(unittest.TestCase):
             CandidateMiningConfig(scoring_batch_size=0)
         with self.assertRaises(ValueError):
             CandidateMiningConfig(noise_scale=0.0)
+        with self.assertRaises(ValueError):
+            CandidateMiningConfig(minimum_goal_cosine=1.01)
 
     def test_tensor_clipping_matches_numpy_planner_bounds(self) -> None:
         import numpy as np
@@ -93,6 +95,7 @@ class CandidateNegativesTest(unittest.TestCase):
         config = CandidateMiningConfig(
             candidates_per_rollout=3,
             noise_scale=0.4,
+            minimum_goal_cosine=0.95,
             bounds=PlannerActionBounds(
                 maximum_translation_norm=0.01,
                 maximum_rotation_norm=0.04,
@@ -101,20 +104,75 @@ class CandidateNegativesTest(unittest.TestCase):
         )
         restored = CandidateMiningConfig.from_dict(config.to_dict())
         recorded = torch.zeros((3, 1, 7))
+        recorded[:, 0, 0] = 0.001
+        goals = torch.tensor(((0.003, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),))
 
         original = sample_local_candidates(
             recorded,
             config=config,
             generator=torch.Generator().manual_seed(19),
+            goal_actions=goals,
         )
         replay = sample_local_candidates(
             recorded,
             config=restored,
             generator=torch.Generator().manual_seed(19),
+            goal_actions=goals,
         )
 
         self.assertEqual(restored, config)
         torch.testing.assert_close(replay, original)
+
+    def test_goal_aligned_mining_replaces_only_misaligned_first_actions(self) -> None:
+        recorded = torch.zeros((3, 2, 7))
+        recorded[:, :, 0] = 0.001
+        goals = torch.zeros((2, 7))
+        goals[:, 0] = 0.003
+        candidates = sample_local_candidates(
+            recorded,
+            config=CandidateMiningConfig(
+                candidates_per_rollout=8,
+                noise_scale=2.0,
+                minimum_goal_cosine=0.95,
+            ),
+            generator=torch.Generator().manual_seed(7),
+            goal_actions=goals,
+        )
+
+        first = candidates[0]
+        cosines = torch.nn.functional.cosine_similarity(
+            first,
+            goals[:, None, :],
+            dim=-1,
+        )
+        self.assertTrue((cosines >= 0.95 - 1e-6).all())
+        self.assertTrue((candidates[1:] != recorded[1:, :, None, :]).any())
+
+    def test_goal_aligned_mining_requires_aligned_recorded_actions(self) -> None:
+        recorded = torch.zeros((3, 1, 7))
+        recorded[:, 0, 1] = 0.001
+        goals = torch.tensor(((0.003, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),))
+
+        with self.assertRaisesRegex(ValueError, "recorded first action"):
+            sample_local_candidates(
+                recorded,
+                config=CandidateMiningConfig(minimum_goal_cosine=0.95),
+                generator=torch.Generator().manual_seed(7),
+                goal_actions=goals,
+            )
+
+    def test_goal_aligned_mining_rejects_out_of_bounds_recorded_fallback(self) -> None:
+        recorded = torch.zeros((3, 1, 7))
+        recorded[0, 0, 0] = 0.02000005
+        goals = torch.tensor(((0.02000005, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),))
+
+        with self.assertRaisesRegex(ValueError, "planner bounds"):
+            sample_local_candidates(
+                recorded,
+                config=CandidateMiningConfig(minimum_goal_cosine=0.95),
+                generator=torch.Generator().manual_seed(7),
+                goal_actions=goals,
+            )
 
     def test_candidate_scoring_is_micro_batched_without_changing_selection(self) -> None:
         candidates = torch.zeros((1, 2, 4, 7))

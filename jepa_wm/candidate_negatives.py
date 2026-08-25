@@ -19,6 +19,7 @@ class CandidateMiningConfig:
     scoring_batch_size: int = 2
     noise_scale: float = 0.25
     bounds: PlannerActionBounds = PlannerActionBounds()
+    minimum_goal_cosine: float | None = None
 
     def __post_init__(self) -> None:
         if self.candidates_per_rollout < 2:
@@ -27,6 +28,11 @@ class CandidateMiningConfig:
             raise ValueError("candidate scoring batch size must be positive")
         if not isfinite(self.noise_scale) or self.noise_scale <= 0.0:
             raise ValueError("candidate mining noise scale must be positive")
+        if self.minimum_goal_cosine is not None and not (
+            isfinite(self.minimum_goal_cosine)
+            and 0.0 <= self.minimum_goal_cosine <= 1.0
+        ):
+            raise ValueError("candidate mining goal cosine must be between 0 and 1")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -34,6 +40,7 @@ class CandidateMiningConfig:
             "scoring_batch_size": self.scoring_batch_size,
             "noise_scale": self.noise_scale,
             "bounds": self.bounds.to_dict(),
+            "minimum_goal_cosine": self.minimum_goal_cosine,
         }
 
     @classmethod
@@ -43,7 +50,50 @@ class CandidateMiningConfig:
             scoring_batch_size=int(payload.get("scoring_batch_size", 2)),
             noise_scale=float(payload["noise_scale"]),
             bounds=PlannerActionBounds.from_dict(payload["bounds"]),
+            minimum_goal_cosine=(
+                float(payload["minimum_goal_cosine"])
+                if payload.get("minimum_goal_cosine") is not None
+                else None
+            ),
         )
+
+
+def _goal_align_first_actions(
+    candidates: torch.Tensor,
+    recorded_actions: torch.Tensor,
+    goal_actions: torch.Tensor | None,
+    minimum_cosine: float,
+) -> torch.Tensor:
+    batch = recorded_actions.shape[1]
+    if (
+        goal_actions is None
+        or goal_actions.shape != (batch, ACTION_DIMENSIONS)
+        or not torch.isfinite(goal_actions).all()
+    ):
+        raise ValueError("goal-aligned candidate mining requires finite [batch, 7] goals")
+    goals = goal_actions[:, None, :]
+    recorded_first = recorded_actions[0]
+    recorded_cosines = torch.nn.functional.cosine_similarity(
+        recorded_first,
+        goal_actions,
+        dim=-1,
+    )
+    if torch.any(recorded_cosines < minimum_cosine - 1e-6):
+        raise ValueError("recorded first action does not satisfy the goal alignment")
+    first_actions = candidates[0]
+    candidate_cosines = torch.nn.functional.cosine_similarity(
+        first_actions,
+        goals,
+        dim=-1,
+    )
+    aligned_first = torch.where(
+        (candidate_cosines >= minimum_cosine - 1e-6).unsqueeze(-1),
+        first_actions,
+        recorded_first[:, None, :],
+    )
+    aligned = candidates.clone()
+    aligned[0] = aligned_first
+    return aligned
 
 
 def sample_local_candidates(
@@ -51,6 +101,7 @@ def sample_local_candidates(
     *,
     config: CandidateMiningConfig,
     generator: torch.Generator,
+    goal_actions: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Sample bounded perturbations with shape [horizon, batch, candidates, 7]."""
 
@@ -68,7 +119,20 @@ def sample_local_candidates(
         generator=generator,
     )
     candidates = recorded_actions.unsqueeze(2) + noise * scales
-    return config.bounds.clip_tensor(candidates)
+    candidates = config.bounds.clip_tensor(candidates)
+    if config.minimum_goal_cosine is not None:
+        if not torch.equal(
+            config.bounds.clip_tensor(recorded_actions[0]),
+            recorded_actions[0],
+        ):
+            raise ValueError("goal-aligned recorded fallback exceeds planner bounds")
+        candidates = _goal_align_first_actions(
+            candidates,
+            recorded_actions,
+            goal_actions,
+            config.minimum_goal_cosine,
+        )
+    return candidates
 
 
 def mine_lowest_energy_candidates(

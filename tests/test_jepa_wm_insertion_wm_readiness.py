@@ -18,11 +18,17 @@ from jepa_wm.training_artifact import (
     TrainingArtifactMetadata,
     artifact_fingerprint,
     rollout_training_selection_fingerprint,
+    training_configuration_fingerprint,
 )
 from jepa_wm.trajectory import DROID_ROLLOUT_PROTOCOL
 
 if torch is not None:
-    from jepa_wm.adapter import save_action_adapter
+    from jepa_wm.adapter import (
+        LEGACY_ADAPTER_SCHEMA,
+        ActionAdapterContract,
+        save_action_adapter,
+    )
+    from jepa_wm.insertion_adapter_profile import InsertionAdapterProfile
     from jepa_wm.insertion_wm_readiness import (
         INSERTION_BOUNDS,
         INSERTION_WINDOW,
@@ -34,7 +40,12 @@ if torch is not None:
 @unittest.skipIf(torch is None, "PyTorch is required for adapter binding")
 class InsertionWorldModelReadinessTest(unittest.TestCase):
     @staticmethod
-    def _adapter(root: Path):
+    def _adapter(
+        root: Path,
+        *,
+        minimum_goal_cosine: float | None = None,
+        legacy: bool = False,
+    ):
         adapter = root / "insertion-adapter.pth"
         recordings = tuple(f"insertion-train-{index:02d}" for index in range(12))
         metadata = TrainingArtifactMetadata(
@@ -64,23 +75,73 @@ class InsertionWorldModelReadinessTest(unittest.TestCase):
             "rollouts": 12 * INSERTION_WINDOW.count,
         }
         selection_fingerprint = rollout_training_selection_fingerprint(selection)
-        save_action_adapter(
-            model,
-            adapter,
-            metadata,
-            training_selection_fingerprint=selection_fingerprint,
-        )
+        candidate_mining = {
+            "candidates_per_rollout": 4,
+            "scoring_batch_size": 2,
+            "noise_scale": 0.25,
+            "bounds": {
+                "maximum_translation_norm": 0.02,
+                "maximum_rotation_norm": 0.08,
+                "maximum_gripper_delta": 0.25,
+            },
+            "minimum_goal_cosine": minimum_goal_cosine,
+        }
+        config = {"candidate_mining": candidate_mining}
+        config_fingerprint = training_configuration_fingerprint(config)
+        if legacy:
+            adapter.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                {
+                    "schema": LEGACY_ADAPTER_SCHEMA,
+                    "metadata": metadata.to_dict(),
+                    "training_selection_fingerprint": selection_fingerprint,
+                    "action_encoder": model.model.predictor.action_encoder.state_dict(),
+                },
+                adapter,
+            )
+        else:
+            save_action_adapter(
+                model,
+                adapter,
+                ActionAdapterContract.current(
+                    metadata,
+                    training_selection_fingerprint=selection_fingerprint,
+                    training_config_fingerprint=config_fingerprint,
+                ),
+            )
         Path(f"{adapter}.json").write_text(
             json.dumps(
                 {
                     "adapter_fingerprint": artifact_fingerprint(adapter),
                     "metadata": metadata.to_dict(),
+                    "config": config,
+                    **(
+                        {}
+                        if legacy
+                        else {"training_config_fingerprint": config_fingerprint}
+                    ),
                     **selection,
                     "training_selection_fingerprint": selection_fingerprint,
                 }
             )
         )
         return adapter
+
+    def test_accepts_legacy_adapter_only_for_generic_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            adapter = self._adapter(Path(temporary_directory), legacy=True)
+
+            evidence = validate_insertion_adapter(
+                adapter,
+                expected_profile=InsertionAdapterProfile.GENERIC,
+            )
+
+            self.assertEqual(evidence.contract.schema, LEGACY_ADAPTER_SCHEMA)
+            with self.assertRaisesRegex(ValueError, "disagree"):
+                validate_insertion_adapter(
+                    adapter,
+                    expected_profile=InsertionAdapterProfile.GOAL_ALIGNED,
+                )
 
     def test_binds_exact_window_selection_to_adapter_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -94,6 +155,37 @@ class InsertionWorldModelReadinessTest(unittest.TestCase):
             Path(f"{adapter}.json").write_text(json.dumps(payload))
             with self.assertRaisesRegex(ValueError, "disagree"):
                 validate_insertion_adapter(adapter)
+
+    def test_binds_goal_aligned_profile_to_training_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            adapter = self._adapter(root)
+
+            with self.assertRaisesRegex(ValueError, "disagree"):
+                validate_insertion_adapter(
+                    adapter,
+                    expected_profile=InsertionAdapterProfile.GOAL_ALIGNED,
+                )
+
+            aligned_adapter = self._adapter(
+                root / "aligned",
+                minimum_goal_cosine=0.95,
+            )
+            evidence = validate_insertion_adapter(
+                aligned_adapter,
+                expected_profile=InsertionAdapterProfile.GOAL_ALIGNED,
+            )
+            self.assertEqual(evidence.candidate_mining.minimum_goal_cosine, 0.95)
+
+            report_path = Path(f"{aligned_adapter}.json")
+            payload = json.loads(report_path.read_text())
+            payload["config"]["candidate_mining"]["noise_scale"] = 0.5
+            report_path.write_text(json.dumps(payload))
+            with self.assertRaisesRegex(ValueError, "disagree"):
+                validate_insertion_adapter(
+                    aligned_adapter,
+                    expected_profile=InsertionAdapterProfile.GOAL_ALIGNED,
+                )
 
     def test_reconstructs_actions_and_energy_aggregates_from_held_out_report(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -118,7 +210,7 @@ class InsertionWorldModelReadinessTest(unittest.TestCase):
                 json.dumps(
                     {
                         "model": MODEL_ID,
-                        "source_revision": adapter.metadata.source_revision,
+                        "source_revision": adapter.contract.metadata.source_revision,
                         "recording": str(recording),
                         "camera": "wrist",
                         "adapter": str(adapter.identity.path),

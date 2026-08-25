@@ -14,11 +14,17 @@ from jepa_wm.action import (
     ActionSelectionBounds,
     DroidAction,
 )
-from jepa_wm.adapter import load_action_adapter_contract
+from jepa_wm.adapter import (
+    LEGACY_ADAPTER_SCHEMA,
+    ActionAdapterContract,
+    load_action_adapter_contract,
+)
 from jepa_wm.contract import MODEL_ID
+from jepa_wm.candidate_negatives import CandidateMiningConfig
 from jepa_wm.domain_recording import DomainRecording
 from jepa_wm.experiment import HeldOutEvaluation, build_experiment_from_evidence
 from jepa_wm.insertion_corpus import InsertionCorpusRoster
+from jepa_wm.insertion_adapter_profile import InsertionAdapterProfile
 from jepa_wm.insertion_recording import ContactInsertionEvidence
 from jepa_wm.persistence import write_json_atomic
 from jepa_wm.readiness import ActionControlGate
@@ -29,12 +35,13 @@ from jepa_wm.training_artifact import (
     artifact_fingerprint,
     load_training_report,
     rollout_training_selection_fingerprint,
+    training_configuration_fingerprint,
 )
 from jepa_wm.trajectory import DROID_ROLLOUT_PROTOCOL, load_rollout_at
 from sim.exploration import DatasetSplit
 
 
-INSERTION_WM_SCHEMA = "quantis.jepa_wm_insertion_world_model_readiness.v1"
+INSERTION_WM_SCHEMA = "quantis.jepa_wm_insertion_world_model_readiness.v2"
 INSERTION_WINDOW = INSERTION_PROPOSAL_WINDOW
 INSERTION_BOUNDS = ActionSelectionBounds(minimum_action_norm=0.0)
 
@@ -42,8 +49,8 @@ INSERTION_BOUNDS = ActionSelectionBounds(minimum_action_norm=0.0)
 @dataclass(frozen=True)
 class InsertionAdapterEvidence:
     identity: ArtifactIdentity
-    metadata: TrainingArtifactMetadata
-    training_selection_fingerprint: str
+    contract: ActionAdapterContract
+    candidate_mining: CandidateMiningConfig
 
 
 def _training_selection(payload: dict[str, Any]) -> dict[str, Any]:
@@ -58,35 +65,66 @@ def _training_selection(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def validate_insertion_adapter(adapter: Path) -> InsertionAdapterEvidence:
+def validate_insertion_adapter(
+    adapter: Path,
+    *,
+    expected_profile: InsertionAdapterProfile | None = None,
+) -> InsertionAdapterEvidence:
     adapter = adapter.resolve()
     payload = load_training_report(adapter)
     identity = ArtifactIdentity.from_artifact(adapter)
-    checkpoint_metadata, checkpoint_selection = load_action_adapter_contract(adapter)
+    checkpoint = load_action_adapter_contract(adapter)
     sidecar_metadata = TrainingArtifactMetadata.from_dict(payload.get("metadata"))
     selection = _training_selection(payload)
     selection_fingerprint = rollout_training_selection_fingerprint(selection)
+    config = payload.get("config")
+    config_fingerprint = training_configuration_fingerprint(config)
+    try:
+        candidate_mining = CandidateMiningConfig.from_dict(
+            payload["config"]["candidate_mining"]
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("insertion adapter mining evidence is invalid") from error
     expected_indices = list(INSERTION_WINDOW.context_indices)
     expected_selections = [
         {"recording": recording, "context_indices": expected_indices}
         for recording in sidecar_metadata.training_recordings
     ]
+    is_legacy = checkpoint.schema == LEGACY_ADAPTER_SCHEMA
+    legacy_config_is_valid = (
+        is_legacy
+        and payload.get("training_config_fingerprint") is None
+        and candidate_mining
+        == InsertionAdapterProfile.GENERIC.descriptor.candidate_mining_config()
+        and expected_profile in (None, InsertionAdapterProfile.GENERIC)
+    )
+    current_config_is_valid = (
+        not is_legacy
+        and payload.get("training_config_fingerprint") == config_fingerprint
+        and checkpoint.training_config_fingerprint == config_fingerprint
+    )
     if (
         payload.get("adapter_fingerprint") != identity.fingerprint
-        or checkpoint_metadata != sidecar_metadata
+        or checkpoint.metadata != sidecar_metadata
         or payload.get("window") != INSERTION_WINDOW.to_dict()
         or payload.get("selection_bounds") != INSERTION_BOUNDS.to_dict()
         or payload.get("recording_selections") != expected_selections
         or payload.get("rollouts")
         != len(sidecar_metadata.training_recordings) * INSERTION_WINDOW.count
         or payload.get("training_selection_fingerprint") != selection_fingerprint
-        or checkpoint_selection != selection_fingerprint
+        or checkpoint.training_selection_fingerprint != selection_fingerprint
+        or not (legacy_config_is_valid or current_config_is_valid)
+        or (
+            expected_profile is not None
+            and candidate_mining
+            != expected_profile.descriptor.candidate_mining_config()
+        )
     ):
         raise ValueError("insertion adapter checkpoint and training evidence disagree")
     return InsertionAdapterEvidence(
         identity,
-        sidecar_metadata,
-        selection_fingerprint,
+        checkpoint,
+        candidate_mining,
     )
 
 
@@ -164,7 +202,7 @@ def validate_insertion_adapter_evaluation(
         or payload.get("action_selection") != INSERTION_BOUNDS.to_dict()
         or payload.get("rollouts") != INSERTION_WINDOW.count
         or payload.get("model") != MODEL_ID
-        or payload.get("source_revision") != adapter.metadata.source_revision
+        or payload.get("source_revision") != adapter.contract.metadata.source_revision
         or payload.get("rollout_protocol") != DROID_ROLLOUT_PROTOCOL.to_dict()
         or payload.get("action_format") != ACTION_RECORDING_CONTRACT.format
         or payload.get("objective") != "terminal_latent_l2"
@@ -213,12 +251,17 @@ def summarize_insertion_world_model_readiness(
     evaluation_reports: Sequence[Path],
     roster_path: Path,
     output: Path,
+    *,
+    adapter_profile: InsertionAdapterProfile = InsertionAdapterProfile.GENERIC,
 ) -> dict[str, Any]:
     roster = InsertionCorpusRoster.load(roster_path.resolve())
-    adapter = validate_insertion_adapter(adapter_path)
+    adapter = validate_insertion_adapter(
+        adapter_path,
+        expected_profile=adapter_profile,
+    )
     training = roster.for_split("train")
     held_out = roster.for_split("held_out")
-    if adapter.metadata.training_recordings != tuple(
+    if adapter.contract.metadata.training_recordings != tuple(
         recording.recording_id for recording in training
     ) or len(evaluation_reports) != len(held_out):
         raise ValueError("insertion adapter corpus does not match its roster")
@@ -256,8 +299,13 @@ def summarize_insertion_world_model_readiness(
             "scope": "offline insertion world-model energy; no live insertion",
             "adapter_fingerprint": adapter.identity.fingerprint,
             "training_selection_fingerprint": (
-                adapter.training_selection_fingerprint
+                adapter.contract.training_selection_fingerprint
             ),
+            "training_config_fingerprint": (
+                adapter.contract.training_config_fingerprint
+            ),
+            "adapter_profile": adapter_profile.value,
+            "candidate_mining": adapter.candidate_mining.to_dict(),
             "corpus_roster": roster.to_dict(),
         }
     )
@@ -272,6 +320,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--evaluation-report", type=Path, action="append", required=True)
     parser.add_argument("--roster", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--adapter-profile",
+        choices=tuple(profile.value for profile in InsertionAdapterProfile),
+        default=InsertionAdapterProfile.GENERIC.value,
+    )
     args = parser.parse_args(argv)
     summary = summarize_insertion_world_model_readiness(
         args.experiment_id,
@@ -279,6 +332,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.evaluation_report,
         args.roster,
         args.output,
+        adapter_profile=InsertionAdapterProfile(args.adapter_profile),
     )
     print(json.dumps(summary, indent=2))
     return 0 if summary["passed"] else 2

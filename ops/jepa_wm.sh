@@ -271,12 +271,14 @@ adapt_recording_set() {
   local rollout_count="${6:-}"
   local rollout_stride="${7:-}"
   local training_batch_size="${8:-2}"
+  local candidate_profile="${9:-}"
   is_safe_identifier_list "${recording_list}" || die "invalid recording list"
   is_safe_identifier "${camera_name}" || die "invalid camera name"
   is_safe_identifier "${adapter_name}" || die "invalid adapter name"
   require_positive_integer "training steps" "${training_steps}" || exit 1
   require_positive_integer "training batch size" "${training_batch_size}" || exit 1
   local -a window_arguments=()
+  local -a candidate_profile_arguments=()
   if [[ -n "${start_index}${rollout_count}${rollout_stride}" ]]; then
     require_nonnegative_integer "start index" "${start_index}" || exit 1
     require_positive_integer "rollout count" "${rollout_count}" || exit 1
@@ -286,6 +288,9 @@ adapt_recording_set() {
       --count "${rollout_count}"
       --stride "${rollout_stride}"
     )
+  fi
+  if [[ -n "${candidate_profile}" ]]; then
+    candidate_profile_arguments=(--candidate-profile "${candidate_profile}")
   fi
   local -a recording_names
   local -a recording_arguments
@@ -313,12 +318,14 @@ adapt_recording_set() {
     --camera "${camera_name}" \
     --steps "${training_steps}" \
     --batch-size "${training_batch_size}" \
+    "${candidate_profile_arguments[@]}" \
     "${window_arguments[@]}"
 }
 
 adapt_insertion_world_model() {
   local -A options=()
-  parse_named_options options "recordings steps adapter" "$@"
+  parse_named_options options "recordings steps adapter profile" "$@"
+  local candidate_profile="${options[profile]:-generic}"
   local window_start window_count window_stride
   read -r window_start window_count window_stride \
     <<<"$(task_proposal_window insertion)"
@@ -326,7 +333,8 @@ adapt_insertion_world_model() {
     "${options[recordings]:-}" wrist \
     "${options[steps]:-$(insertion_epoch_steps)}" \
     "${options[adapter]:-}" \
-    "${window_start}" "${window_count}" "${window_stride}" 1
+    "${window_start}" "${window_count}" "${window_stride}" 1 \
+    "${candidate_profile}"
 }
 
 evaluate_insertion_world_model() {
@@ -344,15 +352,18 @@ evaluate_insertion_world_model() {
 summarize_insertion_world_model() {
   local -A options=()
   parse_named_options options \
-    "recordings adapter experiment base-seed" "$@"
+    "recordings adapter experiment base-seed adapter-profile" "$@"
   local held_out_list="${options[recordings]:-}"
   local adapter_name="${options[adapter]:-}"
   local experiment_id="${options[experiment]:-}"
   local base_seed="${options[base-seed]:-}"
+  local adapter_profile="${options[adapter-profile]:-generic}"
   is_safe_identifier_list "${held_out_list}" || die "invalid held-out list"
   is_safe_identifier "${adapter_name}" || die "invalid adapter name"
   is_safe_identifier "${experiment_id}" || die "invalid experiment ID"
   require_nonnegative_integer "base seed" "${base_seed}" || exit 1
+  (cd "${repo_dir}" && python3 -m jepa_wm.insertion_adapter_profile \
+    "${adapter_profile}" artifact-stem >/dev/null)
   require_runtime
   local adapter="${checkpoint_dir}/${adapter_name}.pth"
   [[ -s "${adapter}" ]] || die "action adapter does not exist: ${adapter_name}"
@@ -381,6 +392,7 @@ summarize_insertion_world_model() {
     --adapter "${adapter}" \
     "${reports[@]}" \
     --roster "${roster}" \
+    --adapter-profile "${adapter_profile}" \
     --output "${output}"
 }
 

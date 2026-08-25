@@ -1,5 +1,4 @@
 from pathlib import Path
-from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -31,9 +30,12 @@ from jepa_wm.task_proposal_readiness import TaskProposalArtifactEvidence
 from jepa_wm.training_artifact import ArtifactIdentity, TrainingArtifactMetadata
 
 if torch is not None:
+    from jepa_wm.adapter import ActionAdapterContract
+    from jepa_wm.candidate_negatives import CandidateMiningConfig
     from jepa_wm.insertion_planner_benchmark import (
         validate_insertion_benchmark_inputs,
     )
+    from jepa_wm.insertion_wm_readiness import InsertionAdapterEvidence
 
 
 class InsertionPlannerProfileTest(unittest.TestCase):
@@ -53,6 +55,24 @@ class InsertionPlannerProfileTest(unittest.TestCase):
             camera=camera,
             training_recordings=("insertion-train-00",),
             training_steps=1,
+        )
+
+    @classmethod
+    def _adapter_evidence(
+        cls,
+        *,
+        revision: str = "revision",
+        camera: str = "wrist",
+    ):
+        metadata = cls._metadata(revision=revision, camera=camera)
+        return InsertionAdapterEvidence(
+            ArtifactIdentity(Path("/adapter.pth"), "b" * 64),
+            ActionAdapterContract.current(
+                metadata,
+                training_selection_fingerprint=None,
+                training_config_fingerprint="c" * 64,
+            ),
+            CandidateMiningConfig(),
         )
 
     def test_samples_the_insertion_stroke_with_a_pinned_search_identity(self) -> None:
@@ -253,7 +273,7 @@ class InsertionPlannerProfileTest(unittest.TestCase):
             ),
             patch(
                 "jepa_wm.insertion_planner_benchmark.validate_insertion_adapter",
-                return_value=SimpleNamespace(metadata=self._metadata()),
+                return_value=self._adapter_evidence(),
             ),
             patch(
                 "jepa_wm.insertion_planner_benchmark.validate_insertion_proposal",
@@ -277,7 +297,7 @@ class InsertionPlannerProfileTest(unittest.TestCase):
             ),
             patch(
                 "jepa_wm.insertion_planner_benchmark.validate_insertion_adapter",
-                return_value=SimpleNamespace(metadata=metadata),
+                return_value=self._adapter_evidence(camera="presentation"),
             ),
             patch(
                 "jepa_wm.insertion_planner_benchmark.validate_insertion_proposal",
@@ -290,6 +310,28 @@ class InsertionPlannerProfileTest(unittest.TestCase):
                 validate_insertion_benchmark_inputs(
                     Path("held-out"), Path("adapter.pth"), Path("proposal.pth")
                 )
+
+    @unittest.skipIf(torch is None, "PyTorch is not installed locally")
+    def test_accepts_matching_typed_adapter_and_proposal_evidence(self) -> None:
+        metadata = self._metadata()
+        with (
+            patch(
+                "jepa_wm.insertion_planner_benchmark.ContactInsertionEvidence.from_recording"
+            ),
+            patch(
+                "jepa_wm.insertion_planner_benchmark.validate_insertion_adapter",
+                return_value=self._adapter_evidence(),
+            ),
+            patch(
+                "jepa_wm.insertion_planner_benchmark.validate_insertion_proposal",
+                return_value=TaskProposalArtifactEvidence(
+                    ArtifactIdentity(Path("/proposal.pth"), "a" * 64), metadata
+                ),
+            ),
+        ):
+            validate_insertion_benchmark_inputs(
+                Path("held-out"), Path("adapter.pth"), Path("proposal.pth")
+            )
 
 
 if __name__ == "__main__":

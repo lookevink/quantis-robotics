@@ -914,6 +914,15 @@ class AwsLifecycleTests(unittest.TestCase):
                 "2600",
             ),
         )
+        aligned, aligned_calls = self.run_command(
+            "jepa-wm-insertion-adapt",
+            arguments=(
+                "insert-train-00,insert-train-01",
+                "1056",
+                "insertion-aligned-adapter",
+                "goal_aligned",
+            ),
+        )
 
         self.assertEqual(trained.returncode, 0, trained.stderr)
         self.assertIn("ops/jepa_wm.sh insertion-wm-adapt", training_calls)
@@ -922,7 +931,21 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/jepa_wm.sh insertion-wm-eval", evaluation_calls)
         self.assertEqual(summarized.returncode, 0, summarized.stderr)
         self.assertIn("ops/jepa_wm.sh insertion-wm-summarize", summary_calls)
-        self.assertIn("--experiment 'insert-v9-2600' --base-seed '2600'", summary_calls)
+        self.assertIn(
+            "--experiment 'insert-v9-2600' --base-seed '2600' "
+            "--adapter-profile 'generic'",
+            summary_calls,
+        )
+        self.assertEqual(aligned.returncode, 0, aligned.stderr)
+        self.assertIn(
+            "ops/jepa_wm.sh insertion-wm-adapt",
+            aligned_calls,
+        )
+        self.assertIn(
+            "--steps '1056' --adapter 'insertion-aligned-adapter' "
+            "--profile 'goal_aligned'",
+            aligned_calls,
+        )
 
     def test_jepa_wm_control_replay_forwards_one_fresh_observation(self):
         result, calls = self.run_command(

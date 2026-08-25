@@ -416,9 +416,9 @@ Commands:
   jepa-wm-eval RECORDING [camera] [start-index] [count] [stride]
   jepa-wm-adapt RECORDING [camera] [steps]
   jepa-wm-adapt-set RECORDING[,RECORDING...] [camera] [steps] [adapter-name]
-  jepa-wm-insertion-adapt RECORDING[,RECORDING...] STEPS ADAPTER
+  jepa-wm-insertion-adapt RECORDING[,RECORDING...] STEPS ADAPTER [generic|goal_aligned]
   jepa-wm-insertion-wm-eval RECORDING ADAPTER
-  jepa-wm-insertion-wm-summarize RECORDING[,RECORDING...] ADAPTER EXPERIMENT BASE_SEED
+  jepa-wm-insertion-wm-summarize RECORDING[,RECORDING...] ADAPTER EXPERIMENT BASE_SEED [generic|goal_aligned]
   jepa-wm-insertion-plan-benchmark RECORDING ADAPTER PROPOSAL
   jepa-wm-plan-benchmark RECORDING [camera] [start] [count] [stride] [iterations] [samples] [elites] [adapter] [proposal]
   jepa-wm-proposal-train RECORDING[,RECORDING...] [camera] [steps] [proposal]
@@ -679,12 +679,16 @@ case "${command}" in
     recording_names="${2:-}"
     training_steps="${3:-$(insertion_epoch_steps)}"
     adapter_name="${4:-}"
+    adapter_profile="${5:-generic}"
     is_safe_identifier_list "${recording_names}" \
       || die "invalid training recording list"
     require_positive_integer "training steps" "${training_steps}" || exit 1
     is_safe_identifier "${adapter_name}" || die "invalid adapter name"
+    is_safe_identifier "${adapter_profile}" || die "invalid adapter profile"
+    (cd "${repo_root}" && python3 -m jepa_wm.insertion_adapter_profile \
+      "${adapter_profile}" artifact-stem >/dev/null)
     sync_repo
-    remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-wm-adapt --recordings '${recording_names}' --steps '${training_steps}' --adapter '${adapter_name}'"
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-wm-adapt --recordings '${recording_names}' --steps '${training_steps}' --adapter '${adapter_name}' --profile '${adapter_profile}'"
     ;;
   jepa-wm-insertion-wm-eval)
     recording_name="${2:-}"
@@ -699,13 +703,16 @@ case "${command}" in
     adapter_name="${3:-}"
     experiment_id="${4:-}"
     base_seed="${5:-}"
+    adapter_profile="${6:-generic}"
     is_safe_identifier_list "${recording_names}" \
       || die "invalid held-out recording list"
     is_safe_identifier "${adapter_name}" || die "invalid adapter name"
     is_safe_identifier "${experiment_id}" || die "invalid experiment ID"
     require_nonnegative_integer "base seed" "${base_seed}" || exit 1
+    (cd "${repo_root}" && python3 -m jepa_wm.insertion_adapter_profile \
+      "${adapter_profile}" artifact-stem >/dev/null)
     sync_repo
-    remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-wm-summarize --recordings '${recording_names}' --adapter '${adapter_name}' --experiment '${experiment_id}' --base-seed '${base_seed}'"
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-wm-summarize --recordings '${recording_names}' --adapter '${adapter_name}' --experiment '${experiment_id}' --base-seed '${base_seed}' --adapter-profile '${adapter_profile}'"
     ;;
   jepa-wm-plan-benchmark)
     recording_name="${2:-}"

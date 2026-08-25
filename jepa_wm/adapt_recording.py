@@ -15,6 +15,7 @@ import torch
 
 from jepa_wm.action import ActionSelectionBounds
 from jepa_wm.adapter import (
+    ActionAdapterContract,
     action_adapter_parameters,
     save_action_adapter,
 )
@@ -25,6 +26,7 @@ from jepa_wm.candidate_negatives import (
     sample_local_candidates,
 )
 from jepa_wm.frames import encode_clips
+from jepa_wm.insertion_adapter_profile import InsertionAdapterProfile
 from jepa_wm.domain_recording import DomainRecording
 from jepa_wm.model import load_headless_model
 from jepa_wm.rollout_scoring import (
@@ -38,6 +40,7 @@ from jepa_wm.training_artifact import (
     TrainingArtifactMetadata,
     artifact_fingerprint,
     training_report_path,
+    training_configuration_fingerprint,
 )
 from sim.exploration import DatasetSplit
 
@@ -241,6 +244,10 @@ def adapt_recordings(
     )
     encoding_seconds = monotonic() - encoding_started
     actions = rollout_action_tensor(rollouts)
+    goal_actions = torch.tensor(
+        [rollout.goal_action.values for rollout in rollouts],
+        dtype=actions.dtype,
+    )
     negative_candidates = mismatched_negative_candidates(rollouts)
 
     optimizer = torch.optim.AdamW(adapter_parameters, lr=config.learning_rate)
@@ -269,6 +276,7 @@ def adapt_recordings(
             action_batch,
             config=config.candidate_mining,
             generator=candidate_generator,
+            goal_actions=goal_actions[indices].to(device),
         )
         candidate_negative_actions = mine_lowest_energy_candidates(
             model,
@@ -316,18 +324,24 @@ def adapt_recordings(
     )
     selection_payload = training_selection.to_dict()
     selection_fingerprint = training_selection.fingerprint
+    config_payload = config.to_dict()
+    config_fingerprint = training_configuration_fingerprint(config_payload)
     save_action_adapter(
         model,
         output,
-        metadata,
-        training_selection_fingerprint=selection_fingerprint,
+        ActionAdapterContract.current(
+            metadata,
+            training_selection_fingerprint=selection_fingerprint,
+            training_config_fingerprint=config_fingerprint,
+        ),
     )
     report = {
         "status": "adapted",
         "adapter": str(output.resolve()),
         "adapter_fingerprint": artifact_fingerprint(output),
         "metadata": metadata.to_dict(),
-        "config": config.to_dict(),
+        "config": config_payload,
+        "training_config_fingerprint": config_fingerprint,
         "sampling": sampler.to_dict(),
         **selection_payload,
         "training_selection_fingerprint": selection_fingerprint,
@@ -368,12 +382,30 @@ def main() -> None:
         type=float,
         default=AdaptationConfig.learning_rate,
     )
+    parser.add_argument("--candidate-minimum-goal-cosine", type=float)
+    parser.add_argument(
+        "--candidate-profile",
+        choices=tuple(profile.value for profile in InsertionAdapterProfile),
+    )
     args = parser.parse_args()
     window_values = (args.start_index, args.count, args.stride)
     if any(value is not None for value in window_values) and not all(
         value is not None for value in window_values
     ):
         parser.error("start-index, count, and stride must be supplied together")
+    if (
+        args.candidate_profile is not None
+        and args.candidate_minimum_goal_cosine is not None
+    ):
+        parser.error("candidate profile and explicit goal cosine are mutually exclusive")
+    candidate_mining = (
+        InsertionAdapterProfile(args.candidate_profile)
+        .descriptor.candidate_mining_config()
+        if args.candidate_profile is not None
+        else CandidateMiningConfig(
+            minimum_goal_cosine=args.candidate_minimum_goal_cosine,
+        )
+    )
     print(
         json.dumps(
             adapt_recordings(
@@ -386,6 +418,7 @@ def main() -> None:
                     steps=args.steps,
                     batch_size=args.batch_size,
                     learning_rate=args.learning_rate,
+                    candidate_mining=candidate_mining,
                 ),
                 window=(
                     RolloutWindow(args.start_index, args.count, args.stride)

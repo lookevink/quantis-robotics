@@ -32,9 +32,9 @@ def validate_insertion_benchmark_inputs(
     adapter = validate_insertion_adapter(adapter_path)
     proposal = validate_insertion_proposal(proposal_path)
     if (
-        adapter.metadata.camera != "wrist"
+        adapter.contract.metadata.camera != "wrist"
         or proposal.metadata.camera != "wrist"
-        or adapter.metadata.corpus_identity
+        or adapter.contract.metadata.corpus_identity
         != proposal.metadata.corpus_identity
     ):
         raise ValueError(
