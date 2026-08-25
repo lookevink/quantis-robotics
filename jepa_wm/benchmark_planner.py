@@ -45,7 +45,7 @@ from jepa_wm.planner_report import (
 )
 from jepa_wm.planner_policy import PlannerTaskPolicy
 from jepa_wm.proposal import ProposalInputs, load_action_proposal
-from jepa_wm.trajectory import RolloutWindow, load_rollouts
+from jepa_wm.trajectory import RecordedRollout, RolloutWindow, load_rollouts
 from jepa_wm.training_artifact import (
     ArtifactIdentity,
     TrainingArtifactMetadata,
@@ -55,6 +55,35 @@ from sim.exploration import DatasetSplit
 
 
 PROPOSAL_REFINEMENT_PRIOR = ActionPriorConfig(penalty_weight=1e-2)
+
+
+def context_matched_candidates(
+    training_rollouts: tuple[RecordedRollout, ...],
+    context_index: int,
+    bounds: ProposalCenteredBounds,
+    *,
+    expected_count: int,
+) -> np.ndarray:
+    """Project exact-context TRAIN sequences through the proposal trust region."""
+
+    matching = tuple(
+        rollout
+        for rollout in training_rollouts
+        if rollout.context[0].index == context_index
+    )
+    if len(matching) != expected_count:
+        raise ValueError(
+            "context-matched planner candidates do not cover the training corpus"
+        )
+    return bounds.clip(
+        np.asarray(
+            [
+                [action.values for action in rollout.actions]
+                for rollout in matching
+            ],
+            dtype=np.float64,
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -420,6 +449,23 @@ def benchmark_recording(
             planning_objective,
             initial_distribution=prior.distribution,
         )
+        searched_actions = result.actions
+        contextual_policy = task_policy.context_matched_candidates
+        if contextual_policy is not None:
+            if not isinstance(candidate_bounds, ProposalCenteredBounds):
+                raise ValueError(
+                    "context-matched search requires proposal-centered bounds"
+                )
+            contextual_actions = context_matched_candidates(
+                training_rollouts,
+                rollout.context[0].index,
+                candidate_bounds,
+                expected_count=contextual_policy.candidates_per_context,
+            )
+            contextual_objective = evaluate_objective(contextual_actions)
+            contextual_index = int(np.argmin(contextual_objective.total))
+            if contextual_objective.total[contextual_index] < result.energy:
+                searched_actions = contextual_actions[contextual_index]
         recorded_actions = np.asarray(
             [action.values for action in rollout.actions], dtype=np.float64
         )
@@ -437,7 +483,7 @@ def benchmark_recording(
         comparison_actions = [
             recorded_actions,
             np.zeros_like(recorded_actions),
-            result.actions,
+            searched_actions,
         ]
         if proposed_actions is not None:
             comparison_actions.append(proposed_actions)
@@ -473,7 +519,7 @@ def benchmark_recording(
                 initialization=rollout_initialization,
                 initial_candidate=initial_candidate,
                 searched_candidate=CandidateEvaluation(
-                    result.actions,
+                    searched_actions,
                     comparison_components.candidate(2),
                 ),
                 goal_action=rollout.goal_action,

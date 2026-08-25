@@ -13,6 +13,7 @@ from jepa_wm.insertion_contract import (
 from jepa_wm.planner import CandidateTrustRegion, CEMConfig
 from jepa_wm.planner_readiness import FirstActionThresholds
 from jepa_wm.planner_policy import (
+    ContextMatchedCandidatePolicy,
     GoalActionAlignment,
     PlannerTaskPolicy,
     RefinementAcceptancePolicy,
@@ -55,6 +56,9 @@ class InsertionPlannerProfile:
         ),
         refinement_acceptance=RefinementAcceptancePolicy(
             minimum_latent_improvement=1e-6,
+        ),
+        context_matched_candidates=ContextMatchedCandidatePolicy(
+            candidates_per_context=12,
         ),
     )
 

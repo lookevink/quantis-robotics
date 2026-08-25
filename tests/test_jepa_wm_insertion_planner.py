@@ -12,6 +12,7 @@ except ModuleNotFoundError:
 from jepa_wm.action import DroidAction
 from jepa_wm.action_prior import ActionPriorConfig, EmpiricalActionPrior
 from jepa_wm.insertion_planner import INSERTION_PLANNER_PROFILE
+from jepa_wm.planner import PlannerActionBounds, ProposalCenteredBounds
 from jepa_wm.planner_readiness import FirstActionGate, FirstActionReason
 from jepa_wm.planner_policy import (
     GoalActionAlignment,
@@ -83,6 +84,52 @@ class InsertionPlannerProfileTest(unittest.TestCase):
         self.assertEqual(profile.planner.samples, 64)
         self.assertEqual(profile.planner.elites, 8)
         self.assertEqual(profile.prior.penalty_weight, 1e-5)
+        self.assertEqual(
+            profile.task_policy.context_matched_candidates.candidates_per_context,
+            12,
+        )
+
+    @unittest.skipIf(torch is None, "PyTorch is not installed in the local test runtime")
+    def test_context_candidates_are_exact_context_and_proposal_bounded(self) -> None:
+        from types import SimpleNamespace
+
+        from jepa_wm.benchmark_planner import context_matched_candidates
+
+        center = np.zeros((3, 7), dtype=np.float64)
+        bounds = ProposalCenteredBounds(
+            center,
+            PlannerActionBounds(),
+            INSERTION_PLANNER_PROFILE.task_policy.proposal_trust_region,
+        )
+        matching = SimpleNamespace(
+            context=(SimpleNamespace(index=44),),
+            actions=(
+                DroidAction((0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+                DroidAction((0.0,) * 7),
+                DroidAction((0.0,) * 7),
+            ),
+        )
+        other = SimpleNamespace(
+            context=(SimpleNamespace(index=52),),
+            actions=(DroidAction((0.0,) * 7),) * 3,
+        )
+
+        candidates = context_matched_candidates(
+            (matching, other),
+            44,
+            bounds,
+            expected_count=1,
+        )
+
+        self.assertEqual(candidates.shape, (1, 3, 7))
+        self.assertAlmostEqual(np.linalg.norm(candidates[0, 0, :3]), 0.001)
+        with self.assertRaisesRegex(ValueError, "cover the training corpus"):
+            context_matched_candidates(
+                (matching, other),
+                44,
+                bounds,
+                expected_count=2,
+            )
 
     def test_treats_submillimeter_insertion_as_active_motion(self) -> None:
         gate = FirstActionGate(

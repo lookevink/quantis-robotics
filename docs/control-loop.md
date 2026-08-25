@@ -546,6 +546,18 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     Context `44` is selected on both with goal cosine above `0.998`. Freeze
     these exact bytes and evaluate the unchanged planner on a new disjoint
     two-seed recording pair; diagnostic success grants no live authority.
+    Fresh seeds `32600–32601` then localized a separate late-tail search issue:
+    the 256-candidate search passed all direction gates but seed `32601` beat
+    zero only `6/8` and recorded actions `5/8`, so readiness remained `1/2`.
+    A lower-weight initializer regressed the diagnostic planner and was not
+    promoted. The bounded planner now also scores 12 exact-context TRAIN
+    sequences, each projected into the existing proposal trust region, for
+    268 total candidates. It beat zero and recorded actions `8/8` on both
+    diagnostic seeds `12600–12601` and reconstructed `2/2` on the now-observed
+    `32600–32601` pair, with all selection/direction gates passing. Typed
+    readiness distinguishes the exact current policy from preserved historical
+    reports. Since `32600–32601` informed the change, this remains diagnostic;
+    a new disjoint two-seed pair is still required before live authority.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

@@ -482,22 +482,6 @@ summarize_insertion_planner() {
   local proposal="${checkpoint_dir}/${proposal_name}.pth"
   [[ -s "${adapter}" ]] || die "planner adapter does not exist: ${adapter_name}"
   [[ -s "${proposal}" ]] || die "planner proposal does not exist: ${proposal_name}"
-  local window_start window_count window_stride
-  read -r window_start window_count window_stride \
-    <<<"$("${venv_dir}/bin/python" -c \
-      'from jepa_wm.insertion_planner import INSERTION_PLANNER_PROFILE as p; print(p.window.start_index, p.window.count, p.window.stride)')"
-  local -a recording_names report_arguments=()
-  local recording_name report_root
-  IFS=',' read -r -a recording_names <<<"${held_out_list}"
-  for recording_name in "${recording_names[@]}"; do
-    report_root="${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}/jepa_wm"
-    local -a matches=(
-      "${report_root}/wrist_cem_benchmark_$(printf '%06d' "${window_start}")_$(printf '%03d' "${window_count}")_held_out_proposal_prior_"*.json
-    )
-    (( ${#matches[@]} == 1 )) && [[ -f "${matches[0]}" ]] \
-      || die "expected exactly one insertion planner report for ${recording_name}"
-    report_arguments+=(--evaluation-report "${matches[0]}")
-  done
   local output="${experiment_root}/${evaluation_id}_insertion_planner_readiness.json"
   "${venv_dir}/bin/python" -m jepa_wm.insertion_planner_readiness \
     --fresh-roster "${fresh_roster}" \
@@ -505,7 +489,6 @@ summarize_insertion_planner() {
     --adapter "${adapter}" \
     --proposal "${proposal}" \
     --base-checkpoint "${jepa_checkpoint}" \
-    "${report_arguments[@]}" \
     --output "${output}"
 }
 

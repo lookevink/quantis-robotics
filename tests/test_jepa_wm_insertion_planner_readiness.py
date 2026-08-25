@@ -1,10 +1,12 @@
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from jepa_wm.insertion_planner import INSERTION_PLANNER_PROFILE
 from jepa_wm.insertion_planner_readiness import (
     InsertionPlannerSeedEvidence,
     _assert_same,
+    _select_current_policy_evidence,
 )
 from jepa_wm.training_artifact import ArtifactIdentity
 
@@ -59,6 +61,46 @@ class InsertionPlannerReadinessTest(unittest.TestCase):
 
     def test_profile_owns_the_bounded_memory_policy(self) -> None:
         self.assertEqual(INSERTION_PLANNER_PROFILE.scoring_batch_size, 64)
+
+    def test_report_selection_ignores_historical_policy_evidence(self) -> None:
+        current = self._evidence(report=Path("/current.json"))
+
+        with patch.object(
+            InsertionPlannerSeedEvidence,
+            "from_report",
+            side_effect=[ValueError("historical policy"), current],
+        ):
+            selected = _select_current_policy_evidence(
+                (Path("/historical.json"), Path("/current.json")),
+                Path("/recording"),
+                current.recording,
+                current.seed,
+                object(),
+                object(),
+                current.base_checkpoint,
+                current.training_action_library,
+            )
+
+        self.assertIs(selected, current)
+
+    def test_report_selection_rejects_two_current_policy_reports(self) -> None:
+        current = self._evidence(report=Path("/current.json"))
+
+        with patch.object(
+            InsertionPlannerSeedEvidence,
+            "from_report",
+            return_value=current,
+        ), self.assertRaisesRegex(ValueError, "found 2"):
+            _select_current_policy_evidence(
+                (Path("/one.json"), Path("/two.json")),
+                Path("/recording"),
+                current.recording,
+                current.seed,
+                object(),
+                object(),
+                current.base_checkpoint,
+                current.training_action_library,
+            )
 
 
 if __name__ == "__main__":

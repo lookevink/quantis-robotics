@@ -428,9 +428,17 @@ class PlannerRunSummary:
             raise ValueError("planner prior penalty must be finite and positive")
 
     def to_dict(self) -> dict[str, Any]:
+        contextual_candidates = self.task_policy.context_matched_candidates
         return {
             **self.config.to_dict(),
-            "candidates_per_rollout": self.config.iterations * self.config.samples,
+            "candidates_per_rollout": (
+                self.config.iterations * self.config.samples
+                + (
+                    contextual_candidates.candidates_per_context
+                    if contextual_candidates is not None
+                    else 0
+                )
+            ),
             "training_action_library": self.training_action_library,
             "prior_penalty_weight": self.prior_penalty_weight,
             "initialization": self.initialization.value,

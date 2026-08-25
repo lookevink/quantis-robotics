@@ -389,13 +389,46 @@ class InsertionPlannerSeedEvidence:
         }
 
 
+def _select_current_policy_evidence(
+    candidate_reports: Sequence[Path],
+    recording: Path,
+    expected_recording_id: str,
+    expected_seed: int,
+    adapter: InsertionAdapterEvidence,
+    proposal: TaskProposalArtifactEvidence,
+    base_checkpoint: ArtifactIdentity,
+    expected_training_action_library: int,
+) -> InsertionPlannerSeedEvidence:
+    matching_evidence = []
+    for candidate_report in candidate_reports:
+        try:
+            item = InsertionPlannerSeedEvidence.from_report(
+                candidate_report,
+                recording,
+                adapter,
+                proposal,
+                base_checkpoint,
+                expected_training_action_library,
+            )
+        except (KeyError, OSError, TypeError, ValueError):
+            continue
+        if item.recording == expected_recording_id and item.seed == expected_seed:
+            matching_evidence.append(item)
+    if len(matching_evidence) != 1:
+        raise ValueError(
+            "expected exactly one current-policy insertion planner report "
+            f"for {expected_recording_id}; found {len(matching_evidence)}"
+        )
+    return matching_evidence[0]
+
+
 def summarize_insertion_planner_readiness(
     roster_path: Path,
     recording_root: Path,
     adapter_path: Path,
     proposal_path: Path,
     base_checkpoint_path: Path,
-    reports: Sequence[Path],
+    reports: Sequence[Path] | None,
     output: Path,
 ) -> dict[str, Any]:
     from jepa_wm.insertion_proposal_readiness import validate_insertion_proposal
@@ -410,8 +443,6 @@ def summarize_insertion_planner_readiness(
         or adapter.identity.fingerprint != roster.adapter.fingerprint
     ):
         raise ValueError("planner adapter does not match the frozen fresh roster")
-    if len(reports) != len(roster.recordings):
-        raise ValueError("planner readiness requires every fresh whole seed")
     expected_training_action_library = sum(
         len(
             load_rollouts(
@@ -422,17 +453,33 @@ def summarize_insertion_planner_readiness(
         )
         for training_name in adapter.contract.metadata.training_recordings
     )
-    evidence = tuple(
-        InsertionPlannerSeedEvidence.from_report(
-            report,
-            recording_root.resolve() / expected.recording_id,
-            adapter,
-            proposal,
-            base_checkpoint,
-            expected_training_action_library,
+    supplied_reports = tuple(path.resolve() for path in reports or ())
+    evidence_items = []
+    for expected in roster.recordings:
+        recording = recording_root.resolve() / expected.recording_id
+        candidate_reports = supplied_reports or tuple(
+            sorted(
+                (recording / "jepa_wm").glob(
+                    "wrist_cem_benchmark_"
+                    f"{INSERTION_PLANNER_PROFILE.window.start_index:06d}_"
+                    f"{INSERTION_PLANNER_PROFILE.window.count:03d}_"
+                    "held_out_proposal_prior_*.json"
+                )
+            )
         )
-        for report, expected in zip(reports, roster.recordings)
-    )
+        evidence_items.append(
+            _select_current_policy_evidence(
+                candidate_reports,
+                recording,
+                expected.recording_id,
+                expected.seed,
+                adapter,
+                proposal,
+                base_checkpoint,
+                expected_training_action_library,
+            )
+        )
+    evidence = tuple(evidence_items)
     if any(
         item.recording != expected.recording_id or item.seed != expected.seed
         for item, expected in zip(evidence, roster.recordings)
@@ -484,7 +531,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--evaluation-report",
         type=Path,
         action="append",
-        required=True,
     )
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args(argv)

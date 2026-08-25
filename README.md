@@ -987,6 +987,33 @@ Seed `12601` beat zero `8/8` and recorded `6/8`, with `+5.04660e-5` and
 not reopen live insertion: the next gate is the identical planner on a new
 two-seed recording pair disjoint from every seed used above.
 
+That first frozen-proposal fresh pair, seeds `32600–32601`, exposed a distinct
+late-tail search failure rather than another direction failure. The unchanged
+256-candidate CEM selected all contexts with `100%` direction/goal passes, but
+seed `32601` beat zero on only `6/8` contexts and recorded actions on `5/8`;
+seed `32600` beat them `8/8` and `7/8`. The strict result was therefore `1/2`.
+The misses at contexts `84`, `92`, and `100` occurred even though each exact
+same-context TRAIN sequence lay inside the existing proposal trust region.
+A lower goal-direction-weight proposal (`2f704c2a...e392`) improved tail action
+MSE but regressed the diagnostic planner to `5/8` recorded-action wins on seed
+`12600`, so it was preserved as a negative and not promoted.
+
+The planner now supplements its unchanged `4 × 64 / 8` CEM search with the 12
+same-context TRAIN sequences, one per training recording. Each sequence is
+projected through the existing proposal-centered trust region before scoring;
+no unbounded or held-out action is replayed. This produces 268 bounded
+candidates per rollout and selects a context-matched candidate only when its
+complete latent/prior/task objective is lower than CEM's. On diagnostic seeds
+`12600–12601`, the revised policy beat zero and recorded actions `8/8` on both.
+On the now-observed `32600–32601` pair it also reconstructed a strict `2/2`:
+seed `32600` improved over zero/recorded by `+5.34571e-5`/`+3.82265e-5`, and
+seed `32601` by `+2.61852e-5`/`+2.11138e-5`, with `8/8` wins and all gates
+passing on each seed. Historical 256-candidate reports remain preserved; typed
+readiness selects exactly one report matching the current complete policy
+instead of guessing by filename. Because these seeds informed this revision,
+the result is diagnostic only. The identical frozen policy must pass a new
+disjoint two-seed pair before any live insertion gate can open.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

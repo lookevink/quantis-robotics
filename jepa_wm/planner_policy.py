@@ -162,11 +162,29 @@ class RefinementAcceptancePolicy:
 
 
 @dataclass(frozen=True)
+class ContextMatchedCandidatePolicy:
+    """Score one bounded TRAIN candidate per recording at the current context."""
+
+    candidates_per_context: int
+
+    def __post_init__(self) -> None:
+        if self.candidates_per_context <= 0:
+            raise ValueError("context-matched candidate count must be positive")
+
+    def to_dict(self) -> dict[str, int | str]:
+        return {
+            "candidates_per_context": self.candidates_per_context,
+            "projection": "proposal_trust_region",
+        }
+
+
+@dataclass(frozen=True)
 class PlannerTaskPolicy:
     proposal_trust_region: CandidateTrustRegion | None = None
     first_action_thresholds: FirstActionThresholds = FirstActionThresholds()
     goal_action_alignment: GoalActionAlignment | None = None
     refinement_acceptance: RefinementAcceptancePolicy | None = None
+    context_matched_candidates: ContextMatchedCandidatePolicy | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -174,9 +192,16 @@ class PlannerTaskPolicy:
             and self.goal_action_alignment is None
         ):
             raise ValueError("refinement acceptance requires goal alignment")
+        if (
+            self.context_matched_candidates is not None
+            and self.proposal_trust_region is None
+        ):
+            raise ValueError(
+                "context-matched candidates require a proposal trust region"
+            )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "proposal_trust_region": (
                 self.proposal_trust_region.to_dict()
                 if self.proposal_trust_region is not None
@@ -194,3 +219,8 @@ class PlannerTaskPolicy:
                 else None
             ),
         }
+        if self.context_matched_candidates is not None:
+            payload["context_matched_candidates"] = (
+                self.context_matched_candidates.to_dict()
+            )
+        return payload
