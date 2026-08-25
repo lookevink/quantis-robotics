@@ -89,7 +89,7 @@ load_control_policy_descriptor() {
   local policy="$1"
   local direct_proposal="${2:-direct-proposal}"
   case "${policy}" in
-    direct|calibration_collection)
+    direct|calibration_collection|insertion_safety_evaluation)
       CONTROL_POLICY_PROPOSAL="${direct_proposal}"
       CONTROL_POLICY_REQUIRES_CHECKPOINT=true
       CONTROL_POLICY_RESPONDER=direct
@@ -163,6 +163,36 @@ respond_to_control_session() {
         --session "${session_id}" --source-session "${source_session_id}"
       ;;
   esac
+}
+
+capture_and_respond_control_session() {
+  local repository="$1"
+  local session_id="$2"
+  local reference_name="$3"
+  local exploration_seed="$4"
+  local control_identity="$5"
+  local policy="$6"
+  local context_index="$7"
+  local checkpoint_root="$8"
+  local python_bin="$9"
+  local proposal_name
+  for identifier in "${session_id}" "${reference_name}" "${control_identity}"; do
+    is_safe_identifier "${identifier}" || {
+      printf 'error: invalid control capture identifier\n' >&2
+      return 1
+    }
+  done
+  require_nonnegative_integer "exploration seed" "${exploration_seed}" || return 1
+  require_positive_integer "context index" "${context_index}" || return 1
+  validate_control_policy "${policy}" || return 1
+  cd "${repository}"
+  proposal_name="$(control_proposal_from_identity \
+    "${policy}" "${control_identity}" "${checkpoint_root}" "${python_bin}")" \
+    || return 1
+  isaac_server_call \
+    "await demo.capture_control_observation('${session_id}','${reference_name}',${exploration_seed},'${proposal_name}','${policy}',${context_index})" \
+    900 true
+  respond_to_control_session "${repository}" "${session_id}" "${policy}"
 }
 
 isaac_demo_code() {

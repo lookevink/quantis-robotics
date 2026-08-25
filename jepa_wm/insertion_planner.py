@@ -66,18 +66,13 @@ class InsertionPlannerProfile:
 _INSERTION_RESULT_START = CONTACT_INSERTION_RECORDING.start_index(
     ContactInsertionSegment.INSERT
 )
-_INSERTION_FIRST_COMMAND_CONTEXT = _INSERTION_RESULT_START - 1
 INSERTION_SAMPLED_READINESS_PLANNER_PROFILE = InsertionPlannerProfile(
     InsertionPlannerProfileName.SAMPLED_READINESS,
     RolloutWindow(_INSERTION_RESULT_START, 8, 8),
 )
 INSERTION_DENSE_PLANNER_PROFILE = InsertionPlannerProfile(
     InsertionPlannerProfileName.DENSE_EXECUTION,
-    RolloutWindow(
-        _INSERTION_FIRST_COMMAND_CONTEXT,
-        CONTACT_INSERTION_RECORDING.span(ContactInsertionSegment.INSERT).frames,
-        1,
-    ),
+    CONTACT_INSERTION_RECORDING.insertion_command_window,
 )
 _INSERTION_PLANNER_PROFILES = {
     profile.name: profile

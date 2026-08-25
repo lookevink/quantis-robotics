@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Mapping
 
+from jepa_wm.trajectory import RolloutWindow
+
 INSERTION_TASK_ID = "reach_and_insert"
 INSERTION_AXIS = (-1.0, 0.0, 0.0)
 REARWARD_GRASP_OFFSET_METERS = 0.04
@@ -68,6 +70,14 @@ class ContactInsertionRecordingContract:
     @property
     def insertion_steps(self) -> int:
         return self.span(ContactInsertionSegment.INSERT).frames
+
+    @property
+    def insertion_command_window(self) -> RolloutWindow:
+        return RolloutWindow(
+            self.start_index(ContactInsertionSegment.INSERT) - 1,
+            self.insertion_steps,
+            1,
+        )
 
     @property
     def frame_count(self) -> int:

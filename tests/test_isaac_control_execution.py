@@ -123,7 +123,7 @@ class IsaacControlExecutionTest(unittest.TestCase):
         with (
             patch("sim.isaac_control_execution.capture_camera_frame", capture),
             patch(
-                "sim.isaac_control_execution.read_contact",
+                "sim.isaac_control_execution.read_control_contact",
                 return_value=(False, 0.5),
             ),
             patch(

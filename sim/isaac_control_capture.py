@@ -19,6 +19,13 @@ from jepa_wm.action import (
 )
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.domain_recording import DomainRecording
+from jepa_wm.insertion_contract import (
+    CONTACT_INSERTION_RECORDING,
+    ContactInsertionSegment,
+    INSERTION_TASK_ID,
+)
+from jepa_wm.insertion_recording import ContactInsertionEvidence
+from jepa_wm.insertion_task import InsertionTaskLimits
 from jepa_wm.trajectory import load_rollout_at
 from sim.control_session import (
     CONTROL_ROOT,
@@ -29,25 +36,35 @@ from sim.control_session import (
     ControlSession,
     ControlSessionState,
 )
-from sim.control_context import load_control_context
+from sim.control_context import load_control_context, recording_task
 from sim.control_identity import control_proposal_path, observation_id_for_session
 from sim.demo_sequence import Phase
 from sim.exploration import (
     DatasetSplit,
     build_exploration_plan,
 )
-from sim.isaac_control_runtime import bind_live_runtime, contact_sensor, read_contact
+from sim.isaac_control_runtime import (
+    bind_live_runtime,
+    control_contact_sensors,
+    read_control_contact,
+)
 from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, DemoRecorder
 from sim.isaac_demo_runtime import (
+    ContactReading,
     JointCommand,
+    advance_physics_updates,
     create_actuators,
     move_joint_command,
     prepare_plug,
     recording_snapshot,
     reset_stage,
 )
-from sim.isaac_demo_scene import ROBOT_PATH, world_pose
-from sim.isaac_exploration import apply_variant
+from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH, world_pose
+from sim.isaac_exploration import (
+    ExplorationRecordingMode,
+    ExplorationRecordingProfile,
+    apply_variant,
+)
 from sim.recording import RecordingLabel, RecordingMoment, validate_recording_id
 
 
@@ -78,6 +95,11 @@ def validated_control_reference(
     cameras = manifest.get("cameras")
     if not isinstance(cameras, list) or "wrist" not in cameras:
         raise ValueError("control reference does not contain a wrist camera")
+    if recording_task(reference.path) == INSERTION_TASK_ID:
+        ContactInsertionEvidence.from_recording(
+            reference.path,
+            expected_split=expected_split.value,
+        )
     return reference
 
 
@@ -94,7 +116,7 @@ async def capture_control_observation(
     import omni.kit.app
     import omni.timeline
     import omni.usd
-    from isaacsim.core.experimental.prims import Articulation
+    from isaacsim.core.experimental.prims import Articulation, RigidPrim
     from isaacsim.core.rendering_manager import RenderingManager
     from isaacsim.core.simulation_manager import SimulationManager
 
@@ -104,7 +126,17 @@ async def capture_control_observation(
     if session.path.exists():
         raise ValueError(f"control session already exists: {session_id}")
     reference = validated_control_reference(reference_recording, seed, policy)
+    insertion_control = recording_task(reference.path) == INSERTION_TASK_ID
+    insertion_profile = (
+        ExplorationRecordingProfile.for_mode(
+            ExplorationRecordingMode.CONTACT_INSERTION
+        )
+        if insertion_control
+        else None
+    )
     plan = build_exploration_plan(seed, reference.split)
+    if insertion_profile is not None:
+        plan = insertion_profile.apply_to_plan(plan)
     context_steps = load_control_context(reference.path, context_index, plan)
     reference_rollout = load_rollout_at(
         reference.path,
@@ -116,6 +148,11 @@ async def capture_control_observation(
     stage = omni.usd.get_context().get_stage()
     stage.SetEditTarget(stage.GetSessionLayer())
     apply_variant(stage, plan)
+    attachment_preparation = (
+        insertion_profile.prepare_attachment(stage)
+        if insertion_profile is not None
+        else prepare_plug(stage)
+    )
     recording_id = f"control-{session_id}"
     recorder = DemoRecorder(
         recording_id,
@@ -134,11 +171,32 @@ async def capture_control_observation(
     try:
         await recorder.initialize()
         RenderingManager.set_dt(plan.sample_period_seconds)
-        attachment = prepare_plug(stage)
-        sensor = contact_sensor(stage, create=True)
+        sensor = control_contact_sensors(
+            stage,
+            create=True,
+            include_connector=insertion_control,
+        )
+
+        def observe_safety() -> ContactReading:
+            collision, force = read_control_contact(sensor)
+            if collision or force > InsertionTaskLimits().maximum_contact_force_newtons:
+                raise RuntimeError(
+                    "insertion control warm-up exceeded its live safety limit: "
+                    f"collision={collision}, force={force:.3f} N"
+                )
+            return ContactReading(collision, force)
+
         await omni.kit.app.get_app().next_update_async()
         if SimulationManager.get_physics_sim_view() is None:
             SimulationManager.initialize_physics()
+        attachment = (
+            insertion_profile.bind_attachment(
+                attachment_preparation,
+                RigidPrim(PLUG_PATH),
+            )
+            if insertion_profile is not None
+            else attachment_preparation
+        )
         actuators = create_actuators(stage, Articulation(ROBOT_PATH))
         origin = JointCommand(
             np.asarray(context_steps[0].arm_positions),
@@ -146,8 +204,11 @@ async def capture_control_observation(
         )
         timeline.play()
         actuators.apply(origin)
-        for _ in range(16):
-            await omni.kit.app.get_app().next_update_async()
+        if insertion_control:
+            await advance_physics_updates(16, observe_safety)
+        else:
+            for _ in range(16):
+                await omni.kit.app.get_app().next_update_async()
         initial = recording_snapshot(
             RecordingLabel(RecordingMoment.INITIAL),
             ObservationStage.APPROACHING_CABLE,
@@ -156,7 +217,14 @@ async def capture_control_observation(
         )
         await recorder.capture(initial, advance=False)
         current = origin
+        collision_enabled = False
+        collision_start = CONTACT_INSERTION_RECORDING.start_index(
+            ContactInsertionSegment.ALIGN
+        )
         for step in context_steps[1:]:
+            if insertion_control and not collision_enabled and step.index >= collision_start:
+                attachment.set_collisions(True)
+                collision_enabled = True
             if step.plug_attached and not attachment.attached:
                 attachment.attach(world_pose(attachment.hand_prim)[0])
             elif not step.plug_attached and attachment.attached:
@@ -186,9 +254,10 @@ async def capture_control_observation(
                 ),
                 recorder=recorder,
                 sample_period_seconds=plan.sample_period_seconds,
+                observe_safety=observe_safety if insertion_control else None,
             )
             current = command
-        collision_detected, contact_force = read_contact(sensor)
+        collision_detected, contact_force = read_control_contact(sensor)
         actual_warmup = actuators.actual_command()
         timeline.pause()
         completed = True
@@ -237,8 +306,9 @@ async def capture_control_observation(
         collision_detected=collision_detected,
         contact_force_newtons=contact_force,
         execution_policy=policy,
-        plug_position=tuple(float(value) for value in world_pose(attachment.prim)[0]),
+        plug_position=tuple(float(value) for value in attachment.world_pose()[0]),
         plug_attached=attachment.attached,
+        current_gripper_width_m=actual_warmup.gripper_width_m,
     )
     session.write_capture(observation, state)
     bind_live_runtime(session_id, stage, actuators, attachment, sensor)

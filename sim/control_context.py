@@ -8,6 +8,10 @@ from math import isfinite
 from pathlib import Path
 
 from jepa_wm.grasp_contract import GRASP_TASK_ID
+from jepa_wm.insertion_contract import (
+    CONTACT_INSERTION_RECORDING,
+    INSERTION_TASK_ID,
+)
 from sim.exploration import ExplorationPlan, exploration_prefix
 
 
@@ -63,7 +67,12 @@ def load_control_context(
     """Load an exact prefix and admit task interiors only for grasp recordings."""
 
     task = recording_task(recording)
-    if task == GRASP_TASK_ID:
+    if task == INSERTION_TASK_ID:
+        if context_index not in (
+            CONTACT_INSERTION_RECORDING.insertion_command_window.context_indices
+        ):
+            raise ValueError("control context is outside the insertion command window")
+    elif task == GRASP_TASK_ID:
         if not (
             context_index in EXPLORATION_CONTEXT_BOUNDARIES
             or GRASP_TASK_CONTEXT_START <= context_index <= GRASP_TASK_CONTEXT_END

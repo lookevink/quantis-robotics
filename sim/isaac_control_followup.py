@@ -13,6 +13,7 @@ from jepa_wm.action import DroidPose, action_between
 from jepa_wm.action import ActionSelectionBounds
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.grasp_contract import GRASP_TASK_ID
+from jepa_wm.insertion_contract import INSERTION_TASK_ID
 from jepa_wm.trajectory import load_rollout_at
 from sim.control_context import recording_task
 from jepa_wm.control_safety import SimulatorSafetyLimits
@@ -32,7 +33,7 @@ from sim.isaac_control_runtime import (
     bind_live_runtime,
     contact_sensor,
     live_runtime_for,
-    read_contact,
+    read_control_contact,
 )
 from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, capture_camera_frame
 from sim.isaac_demo_runtime import (
@@ -119,7 +120,8 @@ async def capture_followup_observation(
     next_context_index = previous_observation.warmup_frames + 1
     target = previous_observation.target
     reference_path = QUANTIS_DATA_ROOT / "recordings" / previous_state.reference_recording
-    if recording_task(reference_path) == GRASP_TASK_ID:
+    reference_task = recording_task(reference_path)
+    if reference_task in (GRASP_TASK_ID, INSERTION_TASK_ID):
         reference_rollout = load_rollout_at(
             reference_path,
             camera="wrist",
@@ -139,6 +141,10 @@ async def capture_followup_observation(
     timeline.play()
     try:
         if runtime is None:
+            if reference_task == INSERTION_TASK_ID:
+                raise RuntimeError(
+                    "live insertion runtime was lost before follow-up capture"
+                )
             if SimulationManager.get_physics_sim_view() is None:
                 SimulationManager.initialize_physics()
             actuators = create_actuators(stage, Articulation(ROBOT_PATH))
@@ -154,7 +160,7 @@ async def capture_followup_observation(
             actuators = create_actuators(stage, Articulation(ROBOT_PATH))
         await capture_camera_frame(JEPA_WM_CAMERA_SPECS[0], context_path)
         current = actuators.actual_command()
-        collision_detected, contact_force = read_contact(sensor)
+        collision_detected, contact_force = read_control_contact(sensor)
         snapshot = recording_snapshot(
             RecordingLabel(RecordingMoment.MOTION, Phase.READY),
             ObservationStage.APPROACHING_CABLE,
@@ -198,6 +204,7 @@ async def capture_followup_observation(
         execution_policy=previous_state.execution_policy,
         plug_position=tuple(float(value) for value in snapshot.plug_position),
         plug_attached=snapshot.plug_attached,
+        current_gripper_width_m=current.gripper_width_m,
     )
     session.write_capture(observation, state)
     bind_live_runtime(session_id, stage, actuators, attachment, sensor)

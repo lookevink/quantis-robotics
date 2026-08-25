@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from jepa_wm.grasp_contract import GRASP_TASK_ID
+from jepa_wm.insertion_contract import INSERTION_TASK_ID
 from sim.control_context import load_control_context
 from sim.exploration import DatasetSplit, build_exploration_plan
 
@@ -60,6 +61,31 @@ class RecordedControlContextTest(unittest.TestCase):
                     88,
                     build_exploration_plan(11401, DatasetSplit.HELD_OUT),
                 )
+
+    def test_allows_exact_contact_insertion_command_contexts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recording = self._recording(
+                Path(temp_dir), task=INSERTION_TASK_ID, frames=112
+            )
+            plan = build_exploration_plan(52600, DatasetSplit.HELD_OUT)
+
+            first = load_control_context(recording, 43, plan)
+            last = load_control_context(recording, 106, plan)
+
+            self.assertEqual(first[-1].index, 43)
+            self.assertEqual(last[-1].index, 106)
+
+    def test_rejects_contact_insertion_contexts_outside_command_window(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recording = self._recording(
+                Path(temp_dir), task=INSERTION_TASK_ID, frames=112
+            )
+            plan = build_exploration_plan(52600, DatasetSplit.HELD_OUT)
+
+            for context_index in (42, 107):
+                with self.subTest(context_index=context_index):
+                    with self.assertRaisesRegex(ValueError, "insertion command window"):
+                        load_control_context(recording, context_index, plan)
 
 
 if __name__ == "__main__":

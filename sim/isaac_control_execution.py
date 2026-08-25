@@ -22,6 +22,7 @@ from jepa_wm.control_safety import (
     SafetyProjectionAttempt,
 )
 from jepa_wm.control_tracking import evaluate_action_tracking, tracking_limits_for_policy
+from jepa_wm.insertion_contract import INSERTION_TASK_ID
 from sim.control_session import (
     ControlResult,
     ControlResultStatus,
@@ -30,11 +31,12 @@ from sim.control_session import (
     PostActionEvidence,
 )
 from sim.demo_sequence import Phase
+from sim.control_context import recording_task
 from sim.isaac_control_runtime import (
     bind_live_runtime,
     contact_sensor,
     live_runtime_for,
-    read_contact,
+    read_control_contact,
 )
 from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, capture_camera_frame
 from sim.grasp_task import evaluate_grasp_acquisition
@@ -109,7 +111,7 @@ async def capture_synchronized_post_action(
 
     frame = await capture_camera_frame(JEPA_WM_CAMERA_SPECS[0], destination)
     command = actuators.actual_command()
-    collision_detected, contact_force_newtons = read_contact(sensor)
+    collision_detected, contact_force_newtons = read_control_contact(sensor)
     snapshot = recording_snapshot(
         RecordingLabel(RecordingMoment.MOTION, Phase.READY),
         ObservationStage.APPROACHING_CABLE,
@@ -231,6 +233,10 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
     timeline = omni.timeline.get_timeline_interface()
     runtime = live_runtime_for(session_id, stage)
     if runtime is None:
+        if recording_task(
+            CONTROL_ROOT.parent / "recordings" / persisted_state.reference_recording
+        ) == INSERTION_TASK_ID:
+            raise RuntimeError("live insertion runtime was lost before execution")
         actuators = create_actuators(stage, Articulation(ROBOT_PATH))
         attachment = prepare_plug(stage)
         sensor = contact_sensor(stage, create=False)
@@ -251,7 +257,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         # Follow-up capture leaves the stage synchronized and paused. Read the
         # live articulation/contact state without spending a render tick from
         # the command freshness budget; start time only after the final gate.
-        collision_detected, contact_force = read_contact(sensor)
+        collision_detected, contact_force = read_control_contact(sensor)
         limits = SimulatorSafetyLimits()
         safety = ExecutionSafetyContext(
             observation,

@@ -19,6 +19,10 @@ from jepa_wm.control_safety import (
     SimulatorSafetyState,
 )
 from jepa_wm.control_tracking import ActionTrackingDecision
+from jepa_wm.direct_safety import (
+    ControlSafetySnapshot,
+    DirectInsertionSafetyEvidence,
+)
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.experimental_candidate import (
     CandidateExecutionEvidence,
@@ -63,6 +67,7 @@ class ControlSessionState:
     execution_policy: ControlExecutionPolicy = ControlExecutionPolicy.DIRECT
     plug_position: tuple[float, ...] | None = None
     plug_attached: bool = False
+    current_gripper_width_m: float | None = None
 
     @classmethod
     def from_dict(cls, payload: Any) -> ControlSessionState:
@@ -93,6 +98,11 @@ class ControlSessionState:
                     else None
                 ),
                 plug_attached=payload.get("plug_attached", False),
+                current_gripper_width_m=(
+                    float(payload["current_gripper_width_m"])
+                    if payload.get("current_gripper_width_m") is not None
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("control session state is incomplete") from error
@@ -116,6 +126,13 @@ class ControlSessionState:
                 )
             )
             or not isinstance(state.plug_attached, bool)
+            or (
+                state.current_gripper_width_m is not None
+                and (
+                    not isfinite(state.current_gripper_width_m)
+                    or not 0.0 <= state.current_gripper_width_m <= 0.08
+                )
+            )
         ):
             raise ValueError("control session state is invalid")
         return state
@@ -135,7 +152,20 @@ class ControlSessionState:
                 list(self.plug_position) if self.plug_position is not None else None
             ),
             "plug_attached": self.plug_attached,
+            "current_gripper_width_m": self.current_gripper_width_m,
         }
+
+    def require_safety_snapshot(self) -> ControlSafetySnapshot:
+        if self.current_gripper_width_m is None or self.plug_position is None:
+            raise ValueError("control session has incomplete safety state")
+        return ControlSafetySnapshot(
+            joint_positions=self.current_joint_positions,
+            gripper_width_m=self.current_gripper_width_m,
+            plug_position=self.plug_position,
+            contact_force_newtons=self.contact_force_newtons,
+            collision_detected=self.collision_detected,
+            plug_attached=self.plug_attached,
+        )
 
 
 @dataclass(frozen=True)
@@ -433,6 +463,10 @@ class ControlSession:
         return self.path / "shadow_safety.json"
 
     @property
+    def direct_safety_path(self) -> Path:
+        return self.path / "direct_insertion_safety.json"
+
+    @property
     def execution_path(self) -> Path:
         return self.path / "execution_started.json"
 
@@ -675,25 +709,58 @@ class ControlSession:
             )
         ):
             raise ValueError("shadow safety evidence is not bound to its search")
-        current_joints = state.current_joint_positions
-        for attempt in evidence.attempts:
-            scaled_action = attempt.scale.apply(shadow.planned.actions[0])
+        self._validate_projection_attempts(
+            observation,
+            state,
+            response,
+            evidence.attempts,
+            evidence.counterfactual_as_of_unix_seconds,
+            shadow.planned.actions,
+        )
+
+    @staticmethod
+    def _validate_projection_attempts(
+        observation: ControlObservation,
+        state: ControlSessionState,
+        response: ProposedControl,
+        attempts: tuple[SafetyProjectionAttempt, ...],
+        as_of_unix_seconds: float,
+        actions: tuple[DroidAction, ...],
+        live_state: ControlSafetySnapshot | None = None,
+    ) -> None:
+        current_joints = (
+            live_state.joint_positions
+            if live_state is not None
+            else state.current_joint_positions
+        )
+        contact_force = (
+            live_state.contact_force_newtons
+            if live_state is not None
+            else state.contact_force_newtons
+        )
+        collision_detected = (
+            live_state.collision_detected
+            if live_state is not None
+            else state.collision_detected
+        )
+        for attempt in attempts:
+            scaled_action = attempt.scale.apply(actions[0])
             candidate = response.with_actions(
-                (scaled_action, *shadow.planned.actions[1:])
+                (scaled_action, *actions[1:])
             )
             safety_state = SimulatorSafetyState(
-                observed_joint_positions=current_joints,
+                observed_joint_positions=state.current_joint_positions,
                 current_joint_positions=current_joints,
                 proposed_joint_positions=attempt.proposed_joint_positions,
                 control_period_seconds=1.0 / DROID_FPS,
-                contact_force_newtons=state.contact_force_newtons,
-                collision_detected=state.collision_detected,
+                contact_force_newtons=contact_force,
+                collision_detected=collision_detected,
             )
             expected_gate = SimulatorControlGate().evaluate(
                 observation,
                 candidate,
                 safety_state,
-                now_unix_seconds=evidence.counterfactual_as_of_unix_seconds,
+                now_unix_seconds=as_of_unix_seconds,
             )
             expected_delta = max(
                 abs(proposed - current)
@@ -716,7 +783,7 @@ class ControlSession:
                 if not expected_gate.passed or attempt.gate.next_pose != expected_pose:
                     raise ValueError("shadow IK failure evidence is inconsistent")
             elif attempt.gate != expected_gate:
-                raise ValueError("shadow safety gate evidence is inconsistent")
+                raise ValueError("control safety gate evidence is inconsistent")
 
     def write_shadow_safety(self, evidence: ShadowSafetyEvidence) -> None:
         if self.shadow_safety_path.exists():
@@ -724,7 +791,72 @@ class ControlSession:
         self._validate_shadow_safety_binding(evidence)
         write_json_atomic(self.shadow_safety_path, evidence.to_dict())
 
+    def _validate_direct_safety_binding(
+        self, evidence: DirectInsertionSafetyEvidence
+    ) -> None:
+        observation, state = self.load_capture()
+        response = self.load_response()
+        if (
+            state.execution_policy
+            is not ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION
+            or response.proposal_fingerprint is None
+            or evidence.observation_id != observation.observation_id
+            or evidence.proposed_actions != response.actions
+            or evidence.proposal.path != response.proposal
+            or evidence.proposal.fingerprint != response.proposal_fingerprint
+            or evidence.evaluated_at_unix_seconds < response.created_at_unix_seconds
+        ):
+            raise ValueError("direct insertion safety is not bound to its session")
+        try:
+            evidence.live_state.validate_continuity(state.require_safety_snapshot())
+        except ValueError as error:
+            raise ValueError(
+                "direct insertion safety is not bound to its session"
+            ) from error
+        self._validate_projection_attempts(
+            observation,
+            state,
+            response,
+            evidence.attempts,
+            evidence.evaluated_at_unix_seconds,
+            response.actions,
+            evidence.live_state,
+        )
+
+    def load_direct_safety(self) -> DirectInsertionSafetyEvidence:
+        if self.execution_path.exists() or self.result_path.exists():
+            raise ValueError("direct insertion safety session was consumed")
+        try:
+            evidence = DirectInsertionSafetyEvidence.from_dict(
+                json.loads(self.direct_safety_path.read_text())
+            )
+        except (FileNotFoundError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError(
+                f"control session has no valid direct insertion safety: {self.session_id}"
+            ) from error
+        self._validate_direct_safety_binding(evidence)
+        return evidence
+
+    def write_direct_safety(self, evidence: DirectInsertionSafetyEvidence) -> None:
+        if self.execution_path.exists() or self.result_path.exists():
+            raise ValueError("cannot evaluate an executed control session without actuation")
+        if self.direct_safety_path.exists():
+            raise ValueError(
+                f"direct insertion safety was already evaluated: {self.session_id}"
+            )
+        self._validate_direct_safety_binding(evidence)
+        write_json_atomic(self.direct_safety_path, evidence.to_dict())
+
     def claim_execution(self) -> None:
+        _, state = self.load_capture()
+        if (
+            state.execution_policy
+            is ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION
+            or self.direct_safety_path.exists()
+        ):
+            raise ValueError(
+                "no-actuation insertion safety sessions cannot be executed"
+            )
         try:
             with self.execution_path.open("x", encoding="utf-8") as output:
                 json.dump({"session": self.session_id}, output)

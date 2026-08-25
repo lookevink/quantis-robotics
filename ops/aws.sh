@@ -437,6 +437,7 @@ Commands:
   jepa-wm-control-worker-configure NAME PROPOSAL ADAPTER [CALIBRATION] [translation-margin rotation-margin gripper-margin] [planner-seed iterations samples elites]
   jepa-wm-control-worker-start [artifacts] | jepa-wm-control-worker-status | jepa-wm-control-worker-stop
   jepa-wm-control-step REFERENCE_RECORDING SEED [artifacts] [context-index]
+  jepa-wm-insertion-safety REFERENCE_RECORDING SEED [artifacts] [context-index]
   jepa-wm-control-rollout REFERENCE_RECORDING SEED STEPS [artifacts] [context-index]
   jepa-wm-control-baseline REFERENCE_RECORDING SEED STEPS zero|scripted [context-index]
   jepa-wm-control-baselines EXPERIMENT DIRECT ZERO SCRIPTED REFERENCE SEED STEPS [direct-proposal] [direct-sessions]
@@ -985,6 +986,35 @@ case "${command}" in
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --artifacts '${artifacts_name}'"
     remote "bash ~/quantis-robotics/ops/run_control_step.sh '${session_id}' '${reference_name}' '${exploration_seed}' '${artifacts_name}' immediate direct '${context_index}'"
     printf 'Control session: %s\n' "${session_id}"
+    ;;
+  jepa-wm-insertion-safety)
+    reference_name="${2:-}"
+    exploration_seed="${3:-}"
+    artifacts_name="${4:-quantis_wrist_control}"
+    context_index="${5:-43}"
+    is_safe_identifier "${reference_name}" || die "invalid reference recording"
+    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+    is_safe_identifier "${artifacts_name}" || die "invalid worker artifact name"
+    require_positive_integer "context index" "${context_index}" || exit 1
+    session_id="insertion-safety-$(date -u +%Y%m%dT%H%M%SZ)-${exploration_seed}-c${context_index}"
+    command_status=0
+    sync_repo || command_status=$?
+    if (( command_status == 0 )); then
+      remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --artifacts '${artifacts_name}'" \
+        || command_status=$?
+    fi
+    if (( command_status == 0 )); then
+      remote "bash ~/quantis-robotics/ops/run_insertion_safety_check.sh '${session_id}' '${reference_name}' '${exploration_seed}' '${artifacts_name}' '${context_index}'" \
+        || command_status=$?
+    fi
+    backup_status=0
+    remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' \
+      || backup_status=$?
+    if (( command_status == 0 && backup_status != 0 )); then
+      command_status=${backup_status}
+    fi
+    printf 'Insertion safety session: %s\n' "${session_id}"
+    exit "${command_status}"
     ;;
   jepa-wm-control-rollout)
     reference_name="${2:-}"

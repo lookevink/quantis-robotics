@@ -36,6 +36,14 @@ CONNECTOR_CONTACT_SENSOR = ContactSensorSpec(
 
 
 @dataclass(frozen=True)
+class ControlContactSensors:
+    """One control interlock reading across the hand and optional connector."""
+
+    hand: Any
+    connector: Any | None = None
+
+
+@dataclass(frozen=True)
 class LiveControlRuntime:
     """Session-bound Isaac objects whose tensor handles survive server calls."""
 
@@ -100,6 +108,20 @@ def connector_contact_sensor(stage: Any, *, create: bool) -> Any:
     return _contact_sensor(stage, CONNECTOR_CONTACT_SENSOR, create=create)
 
 
+def control_contact_sensors(
+    stage: Any,
+    *,
+    create: bool,
+    include_connector: bool = False,
+) -> ControlContactSensors:
+    return ControlContactSensors(
+        contact_sensor(stage, create=create),
+        connector_contact_sensor(stage, create=create)
+        if include_connector
+        else None,
+    )
+
+
 def read_contact(sensor: Any) -> tuple[bool, float]:
     reading = sensor.get_sensor_reading()
     if not reading.is_valid:
@@ -108,3 +130,13 @@ def read_contact(sensor: Any) -> tuple[bool, float]:
     if not isfinite(force) or force < 0.0:
         raise RuntimeError("control contact sensor returned an invalid force")
     return bool(reading.in_contact), force
+
+
+def read_control_contact(sensors: ControlContactSensors | Any) -> tuple[bool, float]:
+    if not isinstance(sensors, ControlContactSensors):
+        return read_contact(sensors)
+    hand_collision, hand_force = read_contact(sensors.hand)
+    if sensors.connector is None:
+        return hand_collision, hand_force
+    _, connector_force = read_contact(sensors.connector)
+    return hand_collision, max(hand_force, connector_force)

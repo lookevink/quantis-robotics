@@ -9,6 +9,7 @@ from sim.isaac_candidate_binding import (
 )
 from sim.isaac_baseline_response import persist_baseline_response
 from sim.isaac_shadow_safety import evaluate_shadow_candidate
+from sim.isaac_insertion_safety import evaluate_direct_insertion_candidate
 
 
 __all__ = (
@@ -16,6 +17,7 @@ __all__ = (
     "capture_control_observation",
     "capture_followup_observation",
     "evaluate_shadow_candidate",
+    "evaluate_direct_insertion_candidate",
     "persist_experimental_candidate_response",
     "prepare_experimental_candidate_source",
     "persist_baseline_response",

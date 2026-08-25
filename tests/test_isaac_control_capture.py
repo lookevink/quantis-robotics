@@ -6,12 +6,20 @@ from unittest.mock import patch
 
 from jepa_wm.action import ACTION_RECORDING_CONTRACT, DROID_FPS
 from jepa_wm.control_policy import ControlExecutionPolicy
+from jepa_wm.insertion_contract import INSERTION_TASK_ID
 from sim.control_identity import observation_id_for_session
 from sim.isaac_control_capture import validated_control_reference
 
 
 class ControlCaptureContractTest(unittest.TestCase):
-    def _recording(self, root: Path, *, seed: int, split: str = "held_out") -> Path:
+    def _recording(
+        self,
+        root: Path,
+        *,
+        seed: int,
+        split: str = "held_out",
+        task: str | None = None,
+    ) -> Path:
         recording = root / "held-reference"
         recording.mkdir()
         (recording / "manifest.json").write_text(
@@ -25,6 +33,7 @@ class ControlCaptureContractTest(unittest.TestCase):
                         "dataset": "jepa_wm_domain_v1",
                         "split": split,
                         "seed": seed,
+                        **({"task": task} if task is not None else {}),
                     },
                 }
             )
@@ -80,6 +89,28 @@ class ControlCaptureContractTest(unittest.TestCase):
                         1400,
                         ControlExecutionPolicy.DIRECT,
                     )
+
+    def test_contact_insertion_reference_requires_strict_raw_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            recording = self._recording(
+                root, seed=52600, task=INSERTION_TASK_ID
+            )
+            with (
+                patch("sim.isaac_control_capture.RECORDING_ROOT", root),
+                patch(
+                    "sim.isaac_control_capture.ContactInsertionEvidence.from_recording"
+                ) as validate,
+            ):
+                validated_control_reference(
+                    recording.name,
+                    52600,
+                    ControlExecutionPolicy.DIRECT,
+                )
+
+            validate.assert_called_once_with(
+                recording, expected_split="held_out"
+            )
 
 
 if __name__ == "__main__":

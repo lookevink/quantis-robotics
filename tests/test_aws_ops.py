@@ -99,6 +99,11 @@ class AwsLifecycleTests(unittest.TestCase):
                     'if [[ "$(basename "$0")" == ssh && -n "${FAKE_SSH_RESPONSE:-}" ]]; then\n'
                     "  printf '%s\\n' \"${FAKE_SSH_RESPONSE}\"\n"
                     "fi\n"
+                    'if [[ "$(basename "$0")" == ssh '
+                    '&& -n "${FAKE_SSH_FAIL_MATCH:-}" '
+                    '&& "$*" == *"${FAKE_SSH_FAIL_MATCH}"* ]]; then\n'
+                    "  exit 7\n"
+                    "fi\n"
                 )
                 fake_command.chmod(0o755)
             fake_curl = temp_path / "curl"
@@ -1160,6 +1165,39 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/jepa_wm.sh control-worker-start", calls)
         self.assertIn("ops/run_control_step.sh", calls)
         self.assertIn("quantis_calibrated_control", calls)
+
+    def test_insertion_safety_runs_no_actuation_workflow_and_always_backs_up(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-safety",
+            arguments=(
+                "insertion-fresh-held-00",
+                "52600",
+                "contact-insertion-v9-2600-dense-control",
+                "43",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/run_insertion_safety_check.sh", calls)
+        self.assertIn("contact-insertion-v9-2600-dense-control", calls)
+        self.assertIn("'43'", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+
+    def test_insertion_safety_backs_up_a_failed_live_evaluation(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-safety",
+            arguments=(
+                "insertion-fresh-held-00",
+                "52600",
+                "contact-insertion-v9-2600-dense-control",
+                "43",
+            ),
+            extra_env={"FAKE_SSH_FAIL_MATCH": "run_insertion_safety_check.sh"},
+        )
+
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertIn("ops/run_insertion_safety_check.sh", calls)
+        self.assertIn("ops/backup_state.sh", calls)
 
     def test_jepa_wm_control_rollout_forwards_a_bounded_step_count(self):
         result, calls = self.run_command(
