@@ -921,7 +921,17 @@ to `1e-4`:
 
 Training and evaluation remain offline; both current held-out seeds have
 informed this design, so even a passing diagnostic rerun still requires fresh
-whole held-out seeds before readiness.
+whole held-out seeds before readiness. That exact warm-start diagnostic
+completed as child fingerprint `396496bf...fadc`, bound to generic parent
+fingerprint `47969a0a...af9` and training-config fingerprint
+`f66e1d46...f485`. It visited all 1,056 TRAIN rollouts once at the pinned
+`1e-4` rate. Seed `12600` passed at `+7.05642e-5`/`87.5%`; seed `12601`
+passed at `+7.06248e-5`/`87.5%`; aggregate evidence was
+`+7.05945e-5`/`87.5%` (154/176 wins). The exact checkpoint, reports, and
+12 GB recovery copy are preserved. This closes the two diagnostic seeds, not
+fresh-seed readiness: freeze this artifact and evaluate it without further
+tuning on new whole held-out recordings before opening any planner or live
+insertion gate.
 
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a

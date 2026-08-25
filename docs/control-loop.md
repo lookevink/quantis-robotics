@@ -506,8 +506,14 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     discrimination. The distinct profile is
     `goal_aligned_relative_finetune`; it derives the exact generic parent and
     rejects corpus, selection, source-revision, fingerprint, or rate drift.
-    Existing held-out seeds are diagnostic only after informing these changes;
-    fresh whole seeds remain required.
+    Child fingerprint `396496bf...fadc`, bound to generic parent
+    `47969a0a...af9` and config `f66e1d46...f485`, visited all 1,056 TRAIN
+    rollouts once at the pinned `1e-4` rate and passed both diagnostic seeds:
+    `+7.05642e-5`/`87.5%` and `+7.06248e-5`/`87.5%`. Aggregate evidence was
+    `+7.05945e-5`/`87.5%` (154/176 wins), and the exact artifacts are
+    recovery-backed up. Existing held-out seeds are diagnostic only after
+    informing these changes; freeze this artifact and evaluate it on fresh
+    whole held-out recordings before planner or live insertion authority.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one
