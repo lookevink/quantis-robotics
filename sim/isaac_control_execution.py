@@ -41,6 +41,7 @@ from sim.isaac_control_runtime import (
     contact_sensor,
     live_runtime_for,
     read_control_contact,
+    synchronized_insertion_safety_snapshot,
 )
 from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, capture_camera_frame
 from sim.grasp_task import evaluate_grasp_acquisition
@@ -281,9 +282,10 @@ async def synchronized_actual_command(
     """Refresh a stale paused physics tensor before reading articulation state."""
 
     if not actuators.articulation.is_physics_tensor_entity_valid():
-        timeline.play()
         try:
+            timeline.play()
             await advance()
+            return actuators.actual_command()
         finally:
             timeline.pause()
     return actuators.actual_command()
@@ -319,20 +321,42 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         actuators = runtime.actuators
         attachment = runtime.attachment
         sensor = runtime.sensor
-    current = await synchronized_actual_command(
-        actuators,
-        timeline,
-        omni.kit.app.get_app().next_update_async,
+    limits = SimulatorSafetyLimits()
+    insertion_reset_trial = (
+        persisted_state.execution_policy
+        is ControlExecutionPolicy.INSERTION_RESET_TRIAL
     )
+    if insertion_reset_trial:
+        if runtime is None:
+            raise RuntimeError("live insertion runtime was lost before execution")
+        live_state = await synchronized_insertion_safety_snapshot(
+            runtime,
+            timeline,
+            omni.kit.app.get_app().next_update_async,
+            persisted_state.require_safety_snapshot(),
+            limits,
+            operation="insertion reset trial synchronization",
+        )
+        current = JointCommand(
+            np.asarray(live_state.joint_positions),
+            live_state.gripper_width_m,
+        )
+        collision_detected = live_state.collision_detected
+        contact_force = live_state.contact_force_newtons
+    else:
+        current = await synchronized_actual_command(
+            actuators,
+            timeline,
+            omni.kit.app.get_app().next_update_async,
+        )
+        collision_detected, contact_force = read_control_contact(sensor)
     expected_current = np.asarray(
         persisted_state.current_joint_positions, dtype=np.float64
     )
     try:
-        # Follow-up capture leaves the stage synchronized and paused. Read the
-        # live articulation/contact state without spending a render tick from
-        # the command freshness budget; start time only after the final gate.
-        collision_detected, contact_force = read_control_contact(sensor)
-        limits = SimulatorSafetyLimits()
+        # Capture leaves the stage paused. Insertion reset trials resume one
+        # fully interlocked update and rebind the complete live state before
+        # projection; other policies retain their historical command refresh.
         safety = ExecutionSafetyContext(
             observation,
             current,
@@ -343,10 +367,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         )
         action_scales = ACTION_SCALES
         target_progress = None
-        if (
-            persisted_state.execution_policy
-            is ControlExecutionPolicy.INSERTION_RESET_TRIAL
-        ):
+        if insertion_reset_trial:
             binding = session.load_insertion_trial_binding(proposal)
             action_scales = binding.allowed_projection_scales
             target_progress = INSERTION_TARGET_PROGRESS
@@ -386,10 +407,6 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         execution_error = None
         execution_interlock = None
         if decision.passed and candidate is not None:
-            insertion_reset_trial = (
-                persisted_state.execution_policy
-                is ControlExecutionPolicy.INSERTION_RESET_TRIAL
-            )
             try:
                 live_interlock = LiveContactInterlock(
                     sensor,

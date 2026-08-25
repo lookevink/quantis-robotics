@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import replace
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -174,14 +174,17 @@ class ControlProjectionTest(unittest.TestCase):
 
 
 class FakeTimeline:
-    def __init__(self) -> None:
+    def __init__(self, articulation: FakeArticulation | None = None) -> None:
         self.events: list[str] = []
+        self.articulation = articulation
 
     def play(self) -> None:
         self.events.append("play")
 
     def pause(self) -> None:
         self.events.append("pause")
+        if self.articulation is not None:
+            self.articulation.valid = False
 
 
 class FakeArticulation:
@@ -256,7 +259,7 @@ class IsaacControlExecutionTest(unittest.TestCase):
 
     def test_refreshes_a_stale_paused_physics_tensor_before_reading(self) -> None:
         actuators = FakeActuators(valid=False)
-        timeline = FakeTimeline()
+        timeline = FakeTimeline(actuators.articulation)
 
         async def advance() -> None:
             actuators.articulation.valid = True
@@ -267,6 +270,21 @@ class IsaacControlExecutionTest(unittest.TestCase):
 
         self.assertIs(command, actuators.command)
         self.assertEqual(timeline.events, ["play", "pause"])
+
+    def test_pauses_when_command_tensor_resume_fails(self) -> None:
+        actuators = FakeActuators(valid=False)
+        timeline = FakeTimeline()
+        timeline.play = Mock(side_effect=RuntimeError("resume failed"))
+
+        async def advance() -> None:
+            raise AssertionError("failed resume must not advance")
+
+        with self.assertRaisesRegex(RuntimeError, "resume failed"):
+            asyncio.run(
+                synchronized_actual_command(actuators, timeline, advance)
+            )
+
+        self.assertEqual(timeline.events, ["pause"])
 
     def test_does_not_advance_an_already_valid_tensor(self) -> None:
         actuators = FakeActuators(valid=True)

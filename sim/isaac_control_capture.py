@@ -19,7 +19,6 @@ from jepa_wm.action import (
 )
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.domain_recording import DomainRecording
-from jepa_wm.direct_safety import ControlSafetySnapshot
 from jepa_wm.insertion_contract import (
     CONTACT_INSERTION_RECORDING,
     ContactInsertionSegment,
@@ -48,7 +47,7 @@ from sim.isaac_control_runtime import (
     LiveContactInterlock,
     bind_live_runtime,
     control_contact_sensors,
-    read_control_contact,
+    synchronized_control_safety_snapshot,
 )
 from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, DemoRecorder
 from sim.isaac_demo_runtime import (
@@ -67,28 +66,6 @@ from sim.isaac_exploration import (
     apply_variant,
 )
 from sim.recording import RecordingLabel, RecordingMoment, validate_recording_id
-
-
-def capture_and_pause_control_state(
-    timeline: Any,
-    actuators: Any,
-    attachment: Any,
-    sensors: Any,
-) -> ControlSafetySnapshot:
-    """Capture the terminal warm-up state and then pause its physics timeline."""
-
-    collision_detected, contact_force = read_control_contact(sensors)
-    current = actuators.actual_command()
-    state = ControlSafetySnapshot(
-        joint_positions=tuple(float(value) for value in current.arm_positions),
-        gripper_width_m=current.gripper_width_m,
-        plug_position=tuple(float(value) for value in attachment.world_pose()[0]),
-        contact_force_newtons=contact_force,
-        collision_detected=collision_detected,
-        plug_attached=attachment.attached,
-    )
-    timeline.pause()
-    return state
 
 
 def validated_control_reference(
@@ -279,8 +256,12 @@ async def capture_control_observation(
                 ),
             )
             current = command
-        captured_state = capture_and_pause_control_state(
-            timeline, actuators, attachment, sensor
+        captured_state = await synchronized_control_safety_snapshot(
+            timeline,
+            actuators,
+            attachment,
+            sensor,
+            omni.kit.app.get_app().next_update_async,
         )
         completed = True
     except Exception:

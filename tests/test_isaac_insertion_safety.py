@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import numpy as np
 
@@ -86,12 +86,29 @@ class DirectInsertionSafetyRuntimeTest(unittest.TestCase):
             sensor=object(),
         )
         omni = ModuleType("omni")
+        kit = ModuleType("omni.kit")
+        app = ModuleType("omni.kit.app")
+        app.get_app = lambda: SimpleNamespace(next_update_async=Mock())
+        kit.app = app
+        timeline = ModuleType("omni.timeline")
+        timeline.get_timeline_interface = lambda: object()
         usd = ModuleType("omni.usd")
         usd.get_context = lambda: SimpleNamespace(get_stage=lambda: stage)
+        omni.kit = kit
+        omni.timeline = timeline
         omni.usd = usd
 
         with (
-            patch.dict(sys.modules, {"omni": omni, "omni.usd": usd}),
+            patch.dict(
+                sys.modules,
+                {
+                    "omni": omni,
+                    "omni.kit": kit,
+                    "omni.kit.app": app,
+                    "omni.timeline": timeline,
+                    "omni.usd": usd,
+                },
+            ),
             patch("sim.isaac_insertion_safety.ControlSession.at", return_value=session),
             patch(
                 "sim.isaac_insertion_safety.recording_task",
@@ -102,8 +119,9 @@ class DirectInsertionSafetyRuntimeTest(unittest.TestCase):
                 return_value=runtime,
             ),
             patch(
-                "sim.isaac_insertion_safety.read_control_contact",
-                return_value=(False, 0.25),
+                "sim.isaac_insertion_safety.synchronized_insertion_safety_snapshot",
+                new_callable=AsyncMock,
+                return_value=state.require_safety_snapshot(),
             ),
             patch(
                 "sim.isaac_insertion_safety.select_safe_projection",

@@ -6,7 +6,8 @@ from dataclasses import dataclass, field
 from math import isfinite
 from typing import Any
 
-from jepa_wm.control_safety import ControlInterlockEvidence
+from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimits
+from jepa_wm.direct_safety import ControlSafetySnapshot
 from sim.isaac_demo_runtime import Actuators, PlugAttachment
 from sim.isaac_demo_runtime import ContactReading
 from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH
@@ -92,6 +93,71 @@ class LiveControlRuntime:
     actuators: Actuators
     attachment: PlugAttachment
     sensor: Any
+
+
+async def synchronized_control_safety_snapshot(
+    timeline: Any,
+    actuators: Actuators,
+    attachment: PlugAttachment,
+    sensors: ControlContactSensors | Any,
+    advance: Any,
+    *,
+    observe_safety: Any | None = None,
+) -> ControlSafetySnapshot:
+    """Read every physics-backed control value while live, then pause."""
+
+    resume = not timeline.is_playing()
+    try:
+        if resume:
+            timeline.play()
+            await advance()
+            if observe_safety is not None:
+                observe_safety()
+        collision_detected, contact_force = read_control_contact(sensors)
+        current = actuators.actual_command()
+        return ControlSafetySnapshot(
+            joint_positions=tuple(float(value) for value in current.arm_positions),
+            gripper_width_m=current.gripper_width_m,
+            plug_position=tuple(
+                float(value) for value in attachment.world_pose()[0]
+            ),
+            contact_force_newtons=contact_force,
+            collision_detected=collision_detected,
+            plug_attached=attachment.attached,
+        )
+    finally:
+        timeline.pause()
+
+
+async def synchronized_insertion_safety_snapshot(
+    runtime: LiveControlRuntime,
+    timeline: Any,
+    advance: Any,
+    captured: ControlSafetySnapshot,
+    limits: SimulatorSafetyLimits,
+    *,
+    operation: str,
+) -> ControlSafetySnapshot:
+    """Refresh, interlock, and rebind one paused insertion runtime."""
+
+    interlock = LiveContactInterlock(
+        runtime.sensor,
+        limits.maximum_contact_force_newtons,
+        operation,
+    )
+    live = await synchronized_control_safety_snapshot(
+        timeline,
+        runtime.actuators,
+        runtime.attachment,
+        runtime.sensor,
+        advance,
+        observe_safety=interlock.observe,
+    )
+    try:
+        live.validate_continuity(captured, limits)
+    except ValueError as error:
+        raise RuntimeError("live insertion state changed after capture") from error
+    return live
 
 
 _live_runtime: LiveControlRuntime | None = None

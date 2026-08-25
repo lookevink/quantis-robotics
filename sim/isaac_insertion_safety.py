@@ -13,7 +13,6 @@ from jepa_wm.control_safety import (
 )
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.direct_safety import (
-    ControlSafetySnapshot,
     DirectInsertionSafetyEvidence,
 )
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
@@ -21,13 +20,18 @@ from jepa_wm.training_artifact import ArtifactIdentity
 from sim.control_context import recording_task
 from sim.control_session import CONTROL_ROOT, RECORDING_ROOT, ControlSession
 from sim.isaac_control_execution import ExecutionSafetyContext, select_safe_projection
-from sim.isaac_control_runtime import live_runtime_for, read_control_contact
+from sim.isaac_control_runtime import (
+    live_runtime_for,
+    synchronized_insertion_safety_snapshot,
+)
 from sim.isaac_demo_runtime import JointCommand
 
 
 async def evaluate_direct_insertion_candidate(session_id: str) -> dict[str, Any]:
     """Evaluate a fresh direct proposal against live insertion state without motion."""
 
+    import omni.kit.app
+    import omni.timeline
     import omni.usd
 
     session = ControlSession.at(CONTROL_ROOT, session_id)
@@ -52,23 +56,14 @@ async def evaluate_direct_insertion_candidate(session_id: str) -> dict[str, Any]
         raise RuntimeError("live insertion runtime was lost before safety evaluation")
 
     limits = SimulatorSafetyLimits()
-    current = runtime.actuators.actual_command()
-    live_plug_position = np.asarray(
-        runtime.attachment.world_pose()[0], dtype=np.float64
+    live_state = await synchronized_insertion_safety_snapshot(
+        runtime,
+        omni.timeline.get_timeline_interface(),
+        omni.kit.app.get_app().next_update_async,
+        captured_state,
+        limits,
+        operation="insertion safety synchronization",
     )
-    collision_detected, contact_force = read_control_contact(runtime.sensor)
-    live_state = ControlSafetySnapshot(
-        joint_positions=tuple(float(value) for value in current.arm_positions),
-        gripper_width_m=current.gripper_width_m,
-        plug_position=tuple(float(value) for value in live_plug_position),
-        contact_force_newtons=contact_force,
-        collision_detected=collision_detected,
-        plug_attached=runtime.attachment.attached,
-    )
-    try:
-        live_state.validate_continuity(captured_state, limits)
-    except ValueError as error:
-        raise RuntimeError("live insertion state changed after capture") from error
 
     evaluated_at = time()
     safety = ExecutionSafetyContext(
