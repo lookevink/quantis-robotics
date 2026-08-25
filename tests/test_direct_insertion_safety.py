@@ -10,6 +10,7 @@ from jepa_wm.control_protocol import ControlObservation, ControlTarget, Proposed
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_safety import (
     ACTION_SCALES,
+    ControlInterlockEvidence,
     ControlGateDecision,
     ControlGateReason,
     SafetyProjectionAttempt,
@@ -58,6 +59,20 @@ def _evidence(*, passed: bool = True) -> DirectInsertionSafetyEvidence:
 
 
 class DirectInsertionSafetyEvidenceTest(unittest.TestCase):
+    def test_capture_snapshot_rejects_resumed_contact_changes(self) -> None:
+        captured = _evidence().live_state
+
+        captured.validate_contact_continuity(ControlInterlockEvidence(0.25, False))
+        for collision, force in (
+            (True, 0.25),
+            (False, 0.251),
+        ):
+            with self.subTest(collision=collision, force=force):
+                with self.assertRaisesRegex(ValueError, "contact state changed"):
+                    captured.validate_contact_continuity(
+                        ControlInterlockEvidence(force, collision)
+                    )
+
     def test_round_trips_no_actuation_evidence(self) -> None:
         evidence = _evidence()
 

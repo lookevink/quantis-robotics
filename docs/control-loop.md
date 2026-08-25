@@ -585,15 +585,15 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     attachment, but regressed its three-frame translation target, so no
     multi-step authority opened. The controller now fails closed unless a
     projected insertion action reduces that target error by at least `25%`;
-    fresh `2/2` no-actuation evidence under this stronger rule is next.
-    The first reevaluation series failed closed on a separate persistent-Isaac
-    lifecycle boundary: after capture pauses the timeline, recreated
-    experimental articulation handles still lack a valid physics tensor view.
-    The latest seed-`52600` session received a resident response but stopped
-    before projection, safety approval, execution claim, or model-commanded
-    post-capture motion. Recovery copies are preserved. The immediate
-    checkpoint is an interlocked, continuity-validated physics-view/handle
-    refresh, followed by fresh seed-`52600`/`52601` no-actuation checks.
+    fresh `2/2` no-actuation evidence under this stronger rule was initially
+    blocked because wrapper reconstruction preceded Isaac's resumed
+    physics-ready update. The corrected play, update, pre-refresh interlock,
+    reconstruct, second interlock, read, continuity-check, and pause lifecycle
+    now passes both seeds. Each
+    independently rejects the overshooting full/half projections and accepts
+    the quarter-scale projection with fresh timing, retained attachment, zero
+    contact, no collision, and no execution result. This opens only the
+    predeclared bounded one-action trial; multi-step authority remains closed.
     Insertion filming and production authority remain false. Exact evidence is
     in the linked README checkpoint.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze

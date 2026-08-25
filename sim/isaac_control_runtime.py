@@ -132,6 +132,7 @@ async def _synchronized_live_read(
     read: Any,
     *,
     refresh: Any | None = None,
+    observe_after_advance: Any | None = None,
     observe_safety: Any | None = None,
 ) -> tuple[Any, Any]:
     """Own the pause-sensitive resume, refresh, observe, read, pause lifecycle."""
@@ -140,9 +141,11 @@ async def _synchronized_live_read(
     try:
         if resume:
             timeline.play()
+            await advance()
+            if observe_after_advance is not None:
+                observe_after_advance(state)
             if refresh is not None:
                 state = refresh(state)
-            await advance()
         if observe_safety is not None:
             observe_safety(state)
         return state, read(state)
@@ -189,6 +192,16 @@ async def synchronized_insertion_safety_snapshot(
 ) -> SynchronizedInsertionRuntime:
     """Refresh, interlock, and rebind one paused insertion runtime."""
 
+    resumed_interlock = LiveContactInterlock(
+        runtime.sensor,
+        limits.maximum_contact_force_newtons,
+        operation,
+    )
+
+    def observe_resumed_state(_: LiveControlRuntime) -> None:
+        resumed_interlock.observe()
+        captured.validate_contact_continuity(resumed_interlock.evidence)
+
     def observe_safety(value: LiveControlRuntime) -> None:
         interlock = LiveContactInterlock(
             value.sensor,
@@ -205,6 +218,7 @@ async def synchronized_insertion_safety_snapshot(
             value.actuators, value.attachment, value.sensor
         ),
         refresh=refresh_live_control_runtime,
+        observe_after_advance=observe_resumed_state,
         observe_safety=observe_safety,
     )
     try:

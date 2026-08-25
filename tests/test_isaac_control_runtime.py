@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimits
 from sim.isaac_control_runtime import (
     ControlContactSensors,
     LiveControlRuntime,
@@ -15,6 +16,7 @@ from sim.isaac_control_runtime import (
     read_control_contact,
     refresh_live_control_runtime,
     synchronized_control_safety_snapshot,
+    synchronized_insertion_safety_snapshot,
 )
 
 
@@ -167,6 +169,92 @@ class ContactReadingTest(unittest.TestCase):
             )
 
         self.assertEqual(state.plug_position, (0.1, 0.2, 0.3))
+        self.assertEqual(timeline.events, ["play", "pause"])
+
+    def test_insertion_rebuilds_wrappers_after_physics_ready_update(self) -> None:
+        timeline = _Timeline(playing=False)
+        old_runtime = LiveControlRuntime(
+            "session", object(), Mock(), Mock(), Mock()
+        )
+        refreshed_runtime = LiveControlRuntime(
+            "session", old_runtime.stage, Mock(), Mock(), Mock()
+        )
+        captured = Mock()
+        live = Mock()
+        physics_ready = False
+        events: list[str] = []
+
+        async def advance() -> None:
+            nonlocal physics_ready
+            events.append("advance")
+            physics_ready = True
+
+        def refresh(runtime: LiveControlRuntime) -> LiveControlRuntime:
+            if not physics_ready:
+                raise RuntimeError("physics tensor view is not ready")
+            events.append("refresh")
+            self.assertIs(runtime, old_runtime)
+            return refreshed_runtime
+
+        def read(actuators, attachment, sensor):
+            events.append("read")
+            self.assertIs(actuators, refreshed_runtime.actuators)
+            self.assertIs(attachment, refreshed_runtime.attachment)
+            self.assertIs(sensor, refreshed_runtime.sensor)
+            return live
+
+        def observe():
+            events.append(
+                "observe resumed" if "refresh" not in events else "observe refreshed"
+            )
+            return SimpleNamespace(
+                collision_detected=False,
+                force_newtons=0.0,
+            )
+
+        with (
+            patch(
+                "sim.isaac_control_runtime.refresh_live_control_runtime",
+                side_effect=refresh,
+            ),
+            patch(
+                "sim.isaac_control_runtime._control_safety_snapshot",
+                side_effect=read,
+            ),
+            patch(
+                "sim.isaac_control_runtime.LiveContactInterlock.observe",
+                side_effect=observe,
+            ),
+        ):
+            synchronized = asyncio.run(
+                synchronized_insertion_safety_snapshot(
+                    old_runtime,
+                    timeline,
+                    advance,
+                    captured,
+                    SimulatorSafetyLimits(),
+                    operation="test insertion refresh",
+                )
+            )
+
+        self.assertEqual(
+            events,
+            [
+                "advance",
+                "observe resumed",
+                "refresh",
+                "observe refreshed",
+                "read",
+            ],
+        )
+        self.assertIs(synchronized.runtime, refreshed_runtime)
+        self.assertIs(synchronized.safety, live)
+        live.validate_continuity.assert_called_once_with(
+            captured, SimulatorSafetyLimits()
+        )
+        captured.validate_contact_continuity.assert_called_once_with(
+            ControlInterlockEvidence(0.0, False)
+        )
         self.assertEqual(timeline.events, ["play", "pause"])
 
     def test_live_interlock_retains_the_peak_that_triggers_abort(self) -> None:

@@ -10,6 +10,7 @@ from typing import Any
 
 from jepa_wm.action import DroidAction, DroidActionScale
 from jepa_wm.control_safety import (
+    ControlInterlockEvidence,
     SafetyProjectionAttempt,
     SimulatorSafetyLimits,
     projection_policy_for_attempts,
@@ -82,6 +83,12 @@ class ControlSafetySnapshot:
         captured: ControlSafetySnapshot,
         limits: SimulatorSafetyLimits = SimulatorSafetyLimits(),
     ) -> None:
+        captured.validate_contact_continuity(
+            ControlInterlockEvidence(
+                self.contact_force_newtons,
+                self.collision_detected,
+            )
+        )
         if (
             max(
                 abs(live - expected)
@@ -98,16 +105,24 @@ class ControlSafetySnapshot:
             )
             or dist(self.plug_position, captured.plug_position)
             > limits.maximum_observation_plug_drift_meters
-            or not isclose(
-                self.contact_force_newtons,
-                captured.contact_force_newtons,
-                rel_tol=0.0,
-                abs_tol=MAXIMUM_CAPTURED_CONTACT_DRIFT_NEWTONS,
-            )
-            or self.collision_detected is not captured.collision_detected
             or self.plug_attached is not captured.plug_attached
         ):
             raise ValueError("live control safety state changed after capture")
+
+    def validate_contact_continuity(
+        self,
+        evidence: ControlInterlockEvidence,
+    ) -> None:
+        if (
+            evidence.collision_detected is not self.collision_detected
+            or not isclose(
+                evidence.maximum_contact_force_newtons,
+                self.contact_force_newtons,
+                rel_tol=0.0,
+                abs_tol=MAXIMUM_CAPTURED_CONTACT_DRIFT_NEWTONS,
+            )
+        ):
+            raise ValueError("live control contact state changed after capture")
 
     def to_dict(self) -> dict[str, Any]:
         return {

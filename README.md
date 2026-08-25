@@ -1129,31 +1129,36 @@ same rule, so the earlier source evidence cannot authorize another trial under
 the stronger code. The next live checkpoint is fresh `2/2` no-actuation
 evidence for this target-progress policy, not another actuation attempt.
 
-That fresh reevaluation is still open because the persistent Isaac runtime
-exposed a separate paused-physics lifecycle blocker. The first seed-`52600`
-attempt, `insertion-safety-20260825T134911Z-52600-c43`, failed closed after a
-34-hour resident runtime pushed response-to-safety latency just outside the
-freshness limits. Restarting Isaac restored normal RPC latency, but four
-subsequent no-actuation attempts exposed invalid experimental physics handles
-after the capture boundary paused the timeline. The latest session,
-`insertion-safety-20260825T144319Z-52600-c43`, captured state and received the
-resident response, then failed before projection when the recreated
-articulation still had no valid physics tensor entity. It produced no safety
-approval, execution claim, result, or model-commanded post-capture motion.
-Commits `98760b5`, `35f7d9b`, and `52e3cf3` make terminal capture reads
-synchronous, centralize the play/read/pause lifecycle, and reconstruct paused
-physics wrappers, but the live negative proves wrapper construction is still
-occurring before Isaac has
-restored a usable simulation view. Every failed attempt ran the recovery
-backup; the checksum-verified state copy remains 12 GB.
+That fresh reevaluation initially exposed a separate paused-physics lifecycle
+blocker. The first seed-`52600` attempt,
+`insertion-safety-20260825T134911Z-52600-c43`, failed closed after a 34-hour
+resident runtime pushed response-to-safety latency just outside the freshness
+limits. Restarting Isaac restored normal RPC latency, but four subsequent
+no-actuation attempts showed that the runtime reconstructed experimental
+physics wrappers before the first resumed application update had restored a
+usable PhysX tensor view. The latest negative,
+`insertion-safety-20260825T144319Z-52600-c43`, received the resident response
+but stopped before projection, safety approval, execution claim, result, or
+model-commanded post-capture motion. Every failure ran the recovery backup.
 
-The next checkpoint is therefore an Isaac lifecycle checkpoint, not another
-model trial: safely reestablish and interlock the physics simulation view,
-reconstruct the articulation/attachment/contact handles against that live
-view, and prove full captured-state continuity without an unobserved physics
-update. Only after that passes may seeds `52600` and `52601` be rerun for fresh
-`2/2` no-actuation evidence under the target-progress gate. Multi-step
-insertion, filming, and production authority remain false.
+The lifecycle fix now orders the boundary as play, one application/physics
+update, pre-refresh contact/interlock continuity, wrapper reconstruction, a
+second contact interlock, full safety-state read, captured-state continuity
+validation, and pause in `finally`. A regression fails if reconstruction
+precedes the physics-ready update. With the same frozen
+proposal fingerprint `efdf848c...7596f`, exact-code session
+`insertion-safety-20260825T154207Z-52600-c43` received its response in `0.437 s`
+and recorded the live safety timestamp at `1.447 s`; session
+`insertion-safety-20260825T154741Z-52601-c43` recorded `0.507 s` and `1.110 s`.
+Both rejected the full and half translation projections as
+`target_progress_insufficient`, accepted the quarter translation/rotation/
+gripper projection, retained attachment, and measured `0 N` contact with no
+collision. Their maximum predicted joint changes were `0.000508 rad` and
+`0.000569 rad`. Each artifact passes with `authority: no_actuation` and contains
+no execution claim or result. The fresh target-progress checkpoint is `2/2`,
+and the checksum-verified recovery copy remains 12 GB. This authorizes only the
+predeclared bounded one-action trial; multi-step insertion, filming, and
+production authority remain false.
 
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
