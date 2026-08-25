@@ -69,7 +69,7 @@ from sim.isaac_control_resolution import (
     resolution_failure_evidence,
 )
 from sim.isaac_control_resolution import resolution_probe_observation
-from sim.isaac_control_resolution import resolution_joint_target
+from sim.isaac_control_resolution import resolution_settlement_target
 from sim.isaac_control_capture import stabilize_resolution_capture
 from sim.isaac_demo_runtime import JointCommand
 from sim.control_session import ControlSession, ControlSessionState
@@ -92,8 +92,8 @@ def _baseline(
     state = reset or _reset()
     return ControlResolutionBaselineEvidence(
         ControlResolutionBaselineTrace(
-            (state, state, state),
-            (0.25, 0.25),
+            (state,) * 9,
+            (0.25,) * 8,
             ControlInterlockEvidence(0.0, False),
             ControlResolutionDriveTarget(state.joint_positions, 0.04),
         )
@@ -230,10 +230,15 @@ class ControlResolutionReportTest(unittest.TestCase):
             )
 
     def test_baseline_requires_two_stable_observation_intervals(self) -> None:
-        policy = ControlResolutionBaselinePolicy()
+        policy = ControlResolutionBaselinePolicy(required_consecutive_intervals=2)
         self.assertEqual(
-            policy.maximum_intervals * policy.observation_period_seconds,
+            ControlResolutionBaselinePolicy().maximum_intervals
+            * ControlResolutionBaselinePolicy().observation_period_seconds,
             10.0,
+        )
+        self.assertEqual(
+            ControlResolutionBaselinePolicy().required_consecutive_intervals,
+            8,
         )
         reference = _reset()
         drifted = replace(
@@ -300,6 +305,33 @@ class ControlResolutionReportTest(unittest.TestCase):
                 ControlResolutionLoad.ATTACHED,
             )
 
+    def test_baseline_rejects_cumulative_drift_across_stability_window(self) -> None:
+        policy = ControlResolutionBaselinePolicy(
+            required_consecutive_intervals=2,
+        )
+        reference = _reset()
+        states = tuple(
+            replace(
+                reference,
+                pose=reference.pose.applied(
+                    DroidAction(
+                        (index * 1e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+                    )
+                ),
+            )
+            for index in range(3)
+        )
+        evidence = ControlResolutionBaselineEvidence(
+            ControlResolutionBaselineTrace(
+                states,
+                (0.25, 0.25),
+                ControlInterlockEvidence(0.0, False),
+            )
+        )
+
+        with self.assertRaisesRegex(ValueError, "stable"):
+            evidence.validate(policy, ControlResolutionLoad.ATTACHED)
+
     def test_legacy_fixed_settling_report_remains_reconstructible(self) -> None:
         protocol = ControlResolutionProtocol(
             translation_magnitudes_meters=(0.0, 3e-5, 1e-4, 2e-4),
@@ -340,6 +372,21 @@ class ControlResolutionReportTest(unittest.TestCase):
 
         self.assertEqual(policy.maximum_tracking_error(0.001), 5e-4)
         self.assertEqual(policy.maximum_tracking_error(0.004), 0.001)
+
+    def test_hold_probe_binds_no_command_to_its_live_start(self) -> None:
+        sample = _sample(0, 0.0)
+        execution = ControlResolutionProbeExecution(
+            CONTROL_RESOLUTION_PROTOCOL.probe_plan(0),
+            DroidPose((0.401, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
+            sample.start_reset,
+            sample.commanded_action,
+            sample.target_pose,
+            sample.projection,
+        )
+        execution.validate(
+            CONTROL_RESOLUTION_PROTOCOL,
+            123,
+        )
 
     def test_probe_retreat_direction_flips_after_crossing_recorded_target(self) -> None:
         recorded_target = DroidPose(
@@ -913,7 +960,7 @@ class ControlResolutionReportTest(unittest.TestCase):
         self.assertEqual(endpoint.safety.contact_force_newtons, 0.25)
         self.assertTrue(endpoint.safety.plug_attached)
 
-    def test_zero_probe_preserves_the_existing_drive_target(self) -> None:
+    def test_zero_probe_uses_the_live_start_as_its_measurement_target(self) -> None:
         baseline = JointCommand(
             np.asarray((0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5)), 0.04
         )
@@ -921,14 +968,16 @@ class ControlResolutionReportTest(unittest.TestCase):
             baseline.arm_positions + 9e-5, baseline.gripper_width_m
         )
 
-        target = resolution_joint_target(
+        target = resolution_settlement_target(
             CONTROL_RESOLUTION_PROTOCOL.probe_plan(0),
             None,
-            baseline,
+            drifted_start,
         )
 
-        np.testing.assert_array_equal(target.arm_positions, baseline.arm_positions)
-        self.assertEqual(target.gripper_width_m, baseline.gripper_width_m)
+        np.testing.assert_array_equal(
+            target.arm_positions, drifted_start.arm_positions
+        )
+        self.assertEqual(target.gripper_width_m, drifted_start.gripper_width_m)
 
     def test_drive_target_rejects_controller_target_drift(self) -> None:
         target = _baseline().drive_target
@@ -1101,8 +1150,8 @@ class ControlResolutionReportTest(unittest.TestCase):
         )
         baseline = ControlResolutionBaselineEvidence(
             ControlResolutionBaselineTrace(
-                (captured, reference, reference, reference),
-                (0.25, 0.25, 0.25),
+                (captured, *(reference,) * 9),
+                (0.25,) * 9,
                 ControlInterlockEvidence(0.0, False),
             )
         )
@@ -1356,7 +1405,7 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
         command, evidence = await stabilize_resolution_baseline(
             runtime,
             interlock,
-            ControlResolutionBaselinePolicy(),
+            ControlResolutionBaselinePolicy(required_consecutive_intervals=2),
             Mock(side_effect=(0.0, 0.25, 0.5, 0.75)),
         )
 
@@ -1554,6 +1603,13 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
         actuators = SimpleNamespace(
             current_command=Mock(return_value=drive_target),
         )
+        reference_reset = replace(
+            _reset(),
+            joint_positions=(
+                _reset().joint_positions[0] - 1e-3,
+                *_reset().joint_positions[1:],
+            ),
+        )
         with (
             patch(
                 "sim.isaac_control_resolution.move_joint_command",
@@ -1564,7 +1620,7 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(
                     side_effect=UnsettledControlResolutionTarget(attempt)
                 ),
-            ),
+            ) as settle,
         ):
             outcome = await recover_resolution_drive_target(
                 SimpleNamespace(actuators=actuators, attachment=object()),
@@ -1574,7 +1630,7 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
                     CONTROL_RESOLUTION_PROTOCOL,
                     CONTROL_RESOLUTION_PROTOCOL.probe_plan(0),
                     baseline_target,
-                    _reset(),
+                    reference_reset,
                 ),
             )
 
@@ -1585,6 +1641,10 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
             CONTROL_RESOLUTION_PROTOCOL.probe_plan(0).drive_command(None),
         )
         move.assert_not_awaited()
+        np.testing.assert_array_equal(
+            settle.await_args.args[2].arm_positions,
+            np.asarray(reference_reset.joint_positions),
+        )
         actuators.current_command.assert_called()
 
     async def test_fixed_settlement_dispatches_exact_update_count(self) -> None:

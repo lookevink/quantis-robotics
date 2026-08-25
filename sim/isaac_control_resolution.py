@@ -233,6 +233,8 @@ async def stabilize_resolution_baseline(
     interlock: ResolutionControlInterlock,
     policy: ControlResolutionBaselinePolicy,
     simulation_time_seconds: Callable[[], float],
+    load: ControlResolutionLoad = ControlResolutionLoad.ATTACHED,
+    safety_limits: SimulatorSafetyLimits = SimulatorSafetyLimits(),
 ) -> tuple[JointCommand, ControlResolutionBaselineEvidence]:
     """Require consecutive stable no-command intervals before the first probe."""
 
@@ -245,7 +247,6 @@ async def stabilize_resolution_baseline(
     command, initial = _capture_reset_state(runtime)
     states = [initial]
     intervals = []
-    consecutive = 0
     previous_time = simulation_time_seconds()
     for _ in range(policy.maximum_intervals):
         await advance_simulation_period(
@@ -257,20 +258,19 @@ async def stabilize_resolution_baseline(
         previous_time = current_time
         command, current = _capture_reset_state(runtime)
         states.append(current)
-        if ResetEquivalenceMeasurement.between(
-            states[-2], states[-1]
-        ).passes(policy.tolerances):
-            consecutive += 1
-        else:
-            consecutive = 0
-        if consecutive >= policy.required_consecutive_intervals:
+        trace = ControlResolutionBaselineTrace(
+            tuple(states),
+            tuple(intervals),
+            interlock.contact.evidence,
+            drive_target,
+        )
+        if trace.first_qualifying_end(
+            policy,
+            load,
+            safety_limits,
+        ) is not None:
             evidence = ControlResolutionBaselineEvidence(
-                ControlResolutionBaselineTrace(
-                    tuple(states),
-                    tuple(intervals),
-                    interlock.contact.evidence,
-                    drive_target,
-                )
+                trace
             )
             return command, evidence
     attempt = ControlResolutionBaselineAttempt(
@@ -394,6 +394,19 @@ class ResolutionDriveTargetRecovery:
             self.drive_target.gripper_width_m,
         )
 
+    @property
+    def settlement_target(self) -> JointCommand:
+        return JointCommand(
+            np.asarray(
+                self.probe.rollback_joint_target(
+                    self.drive_target,
+                    self.reference_reset,
+                ),
+                dtype=np.float64,
+            ),
+            self.drive_target.gripper_width_m,
+        )
+
     def drive_command(self, start: JointCommand) -> ControlResolutionDriveCommand:
         return self.probe.drive_command(
             self.protocol.safe_joint_motion_period(
@@ -418,6 +431,7 @@ async def recover_resolution_drive_target(
 
     start_positions = tuple(float(value) for value in start.arm_positions)
     drive_target = context.command
+    settlement_target = context.settlement_target
     drive_command_evidence = context.drive_command(start)
     try:
         if isinstance(drive_command_evidence, DriveCommandApplied):
@@ -438,7 +452,7 @@ async def recover_resolution_drive_target(
         settlement_evidence = await settle_resolution_motion(
             runtime,
             start,
-            drive_target,
+            settlement_target,
             interlock,
             context.protocol.settlement,
         )
@@ -513,23 +527,20 @@ def _capture_endpoint(
     )
 
 
-def resolution_joint_target(
+def resolution_settlement_target(
     probe: ControlResolutionProbePlan,
     selected: Any | None,
-    drive_target: JointCommand,
+    live_start: JointCommand,
 ) -> JointCommand:
-    """Resolve one typed probe plan to its exact controller target."""
+    """Resolve the joint reference used to evaluate probe settlement."""
 
     selected_positions = (
         tuple(float(value) for value in selected.solved_pose.arm_positions)
         if selected is not None
         else None
     )
-    positions = probe.joint_target(
-        ControlResolutionDriveTarget(
-            tuple(float(value) for value in drive_target.arm_positions),
-            drive_target.gripper_width_m,
-        ),
+    positions = probe.settlement_joint_target(
+        tuple(float(value) for value in live_start.arm_positions),
         selected_positions,
     )
     return JointCommand(
@@ -537,7 +548,7 @@ def resolution_joint_target(
         (
             selected.solved_pose.gripper_width_m
             if selected is not None
-            else drive_target.gripper_width_m
+            else live_start.gripper_width_m
         ),
     )
 
@@ -646,6 +657,8 @@ async def measure_insertion_control_resolution(
             baseline_interlock,
             protocol.baseline_policy,
             timeline.get_current_time,
+            load,
+            limits,
         )
         baseline.validate(protocol.baseline_policy, load, limits)
         if baseline.drive_target is None:
@@ -708,7 +721,7 @@ async def measure_insertion_control_resolution(
             )
             if probe.kind is ControlResolutionProbeKind.HOLD:
                 zero_joint_positions = tuple(
-                    float(value) for value in baseline_command.arm_positions
+                    float(value) for value in start_command.arm_positions
                 )
                 gate = safety.evaluate(
                     proposal,
@@ -743,10 +756,10 @@ async def measure_insertion_control_resolution(
                     "insertion control resolution probe failed safety projection: "
                     + ",".join(reason.value for reason in projection.gate.reasons)
                 )
-            target = resolution_joint_target(
+            target = resolution_settlement_target(
                 probe,
                 selected,
-                baseline_command,
+                start_command,
             )
             execution = ControlResolutionProbeExecution(
                 probe=probe,
@@ -759,7 +772,6 @@ async def measure_insertion_control_resolution(
             execution.validate(
                 protocol,
                 observation.observation_id,
-                baseline.drive_target,
             )
 
             sample_interlock = ResolutionControlInterlock(
@@ -862,6 +874,16 @@ async def measure_insertion_control_resolution(
                 runtime,
                 load.plug_attached,
             )
+            rollback_target = JointCommand(
+                np.asarray(
+                    probe.rollback_joint_target(
+                        baseline.drive_target,
+                        reference_reset,
+                    ),
+                    dtype=np.float64,
+                ),
+                baseline.drive_target.gripper_width_m,
+            )
             rollback_drive_command = probe.drive_command(
                 protocol.safe_joint_motion_period(
                     tuple(float(value) for value in actual.arm_positions),
@@ -889,7 +911,7 @@ async def measure_insertion_control_resolution(
                 rollback_settlement = await settle_resolution_motion(
                     runtime,
                     actual,
-                    baseline_command,
+                    rollback_target,
                     rollback_interlock,
                     protocol.settlement,
                 )
@@ -904,7 +926,7 @@ async def measure_insertion_control_resolution(
                             ),
                             target_joint_positions=tuple(
                                 float(value)
-                                for value in baseline_command.arm_positions
+                                for value in rollback_target.arm_positions
                             ),
                             attempt=error.attempt,
                             interlock=rollback_interlock.contact.evidence,

@@ -87,7 +87,7 @@ class ControlResolutionDriveTarget:
 class ControlResolutionBaselinePolicy:
     observation_period_seconds: float = 0.25
     maximum_interval_overrun_seconds: float = 0.05
-    required_consecutive_intervals: int = 2
+    required_consecutive_intervals: int = 8
     maximum_intervals: int = 40
     tolerances: ResetEquivalenceTolerances = (
         CONTROL_RESOLUTION_BASELINE_TOLERANCES
@@ -254,13 +254,25 @@ class ControlResolutionBaselineTrace:
                     policy.required_consecutive_intervals - 1,
                     len(interval_passes),
                 )
-                if all(
-                    interval_passes[
-                        end - policy.required_consecutive_intervals + 1 : end + 1
-                    ]
-                )
+                if self._window_passes(policy, interval_passes, end)
             ),
             None,
+        )
+
+    def _window_passes(
+        self,
+        policy: ControlResolutionBaselinePolicy,
+        interval_passes: tuple[bool, ...],
+        end: int,
+    ) -> bool:
+        start = end - policy.required_consecutive_intervals + 1
+        window = self.states[start : end + 2]
+        return all(interval_passes[start : end + 1]) and all(
+            ResetEquivalenceMeasurement.between(left, right).passes(
+                policy.tolerances
+            )
+            for left_index, left in enumerate(window)
+            for right in window[left_index + 1 :]
         )
 
 

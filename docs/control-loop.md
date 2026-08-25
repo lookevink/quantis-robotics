@@ -611,6 +611,11 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     collision, attachment, joint, and velocity limits; the longer `1.0 mm`
     period does not weaken the velocity gate. No further JEPA action is allowed
     until this benchmark establishes the deadband and orientation-hold bound.
+    Its first full-roster attempt failed closed on cumulative zero-command
+    drift before any nonzero probe; the follow-up requires an eight-interval
+    globally stable baseline and distinguishes HOLD drift from active-target
+    tracking error. Exact negative evidence is retained in the linked README
+    checkpoint.
     Multi-step, filming, and production authority remain false; exact metrics
     and evidence are in the
     [insertion control-resolution checkpoint](../README.md#insertion-control-resolution-checkpoint).

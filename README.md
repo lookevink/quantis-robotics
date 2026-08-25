@@ -1198,6 +1198,23 @@ with and without the attached plug/load. Until those results establish a
 defensible command deadband and orientation-hold tolerance, no further JEPA
 insertion action is authorized.
 
+The first drive-target-faithful full-roster attempt failed closed on its first
+attached context before any nonzero probe. Session
+`insertion-resolution-attached-20260825T231836Z-52600-c43` preserved a current
+schema-v4 failure with zero completed samples. The HOLD probe issued no drive
+command, began `0.825 mrad` from the unchanged active target, and exhausted its
+32-update window as target-relative error rose from `0.820 mrad` to
+`0.977 mrad`; command-free recovery also timed out at `1.003 mrad`. Peak
+contact remained `0 N`, collision stayed false, attachment was retained, and
+both backup layers verified the 12 GB recovery copy. The failure showed that
+two locally small `0.25 s` baseline intervals could hide cumulative drift and
+that zero-command drift had been checked against a controller target it never
+wrote. The corrected baseline now requires all states in an eight-interval
+window to be mutually within the unchanged tolerances. HOLD settlement is
+measured from its exact live start while its separately reported steady-state
+tracking error remains bound to the unchanged active drive target. This is a
+preserved diagnostic negative, not control authority.
+
 The next diagnostic measured the simulator/controller noise floor before
 authorizing another insertion action. The first exact-code run stopped before
 any probe because the provisional `20 um`/`0.1 mrad` repeat contract was
