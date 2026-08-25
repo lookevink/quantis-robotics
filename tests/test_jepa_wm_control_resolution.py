@@ -16,16 +16,26 @@ from jepa_wm.control_resolution import (
     ControlResolutionEndpoint,
     ControlResolutionFailureEvidence,
     ControlResolutionProtocol,
+    ControlResolutionProbeExecution,
+    ControlResolutionProbePlan,
     ControlResolutionReport,
     ControlResolutionResetPhase,
     ControlResolutionSample,
     ControlResolutionSettlementEvidence,
+    ControlResolutionSettlementAttempt,
+    ControlResolutionSettlementTimeoutTrace,
+    ControlResolutionMotionTimeout,
+    ControlResolutionRollbackTimeout,
+    ControlResolutionRollbackSuccess,
+    ControlResolutionRollbackFailure,
+    ControlResolutionForwardEvidence,
     FixedUpdateSettlement,
     ControlResolutionBaselineEvidence,
     ControlResolutionBaselineAttempt,
     ControlResolutionBaselinePolicy,
     ControlResolutionBaselineTrace,
     ControlResolutionCaptureIdentity,
+    ControlResolutionDriveTarget,
     ControlResolutionLoad,
     ControlResolutionMotionTiming,
     RejectedControlResolutionReset,
@@ -50,8 +60,12 @@ from sim.isaac_control_resolution import (
     _capture_reset_state,
     _require_resolution_reset,
     settle_resolution_motion,
+    execute_resolution_probe_motion,
     stabilize_resolution_baseline,
     UnstableControlResolutionBaseline,
+    UnsettledControlResolutionTarget,
+    recover_resolution_drive_target,
+    ResolutionDriveTargetRecovery,
     resolution_failure_evidence,
 )
 from sim.isaac_control_resolution import resolution_probe_observation
@@ -81,6 +95,7 @@ def _baseline(
             (state, state, state),
             (0.25, 0.25),
             ControlInterlockEvidence(0.0, False),
+            ControlResolutionDriveTarget(state.joint_positions, 0.04),
         )
     )
 
@@ -142,6 +157,13 @@ def _sample(index: int, magnitude: float) -> ControlResolutionSample:
                 passing_tracking_errors_radians=(1e-4, 0.0),
             ),
             rollback_interlock=ControlInterlockEvidence(0.0, False),
+            rollback_drive_command=ControlResolutionProbePlan.for_request(
+                index, magnitude
+            ).drive_command(
+                None
+                if magnitude == 0.0
+                else (0.5 if magnitude == 1e-3 else 0.25)
+            ),
         ),
         motion_timing=ControlResolutionMotionTiming(
             1.0,
@@ -719,6 +741,148 @@ class ControlResolutionReportTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "failure evidence is incomplete"):
             ControlResolutionFailureEvidence.from_dict(missing_baseline)
 
+    def test_settlement_timeout_round_trip_retains_the_complete_tracking_trace(self) -> None:
+        baseline = _baseline()
+        final_positions = (
+            baseline.drive_target.joint_positions[0] + 1e-3,
+            *baseline.drive_target.joint_positions[1:],
+        )
+        probe = CONTROL_RESOLUTION_PROTOCOL.probe_plan(0)
+        sample = _sample(0, 0.0)
+        execution = ControlResolutionProbeExecution(
+            probe,
+            DroidPose((0.401, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
+            sample.start_reset,
+            sample.commanded_action,
+            sample.target_pose,
+            sample.projection,
+        )
+        settlement_failure = ControlResolutionMotionTimeout(
+            trace=ControlResolutionSettlementTimeoutTrace(
+                execution=execution,
+                start_joint_positions=baseline.drive_target.joint_positions,
+                target_joint_positions=baseline.drive_target.joint_positions,
+                attempt=ControlResolutionSettlementAttempt(
+                    requested_joint_motion_radians=0.0,
+                    required_tracking_error_radians=5e-4,
+                    tracking_errors_radians=(1e-3,) * 32,
+                    final_joint_positions=final_positions,
+                ),
+                interlock=ControlInterlockEvidence(0.0, False),
+                drive_command=probe.drive_command(None),
+                timing=ControlResolutionMotionTiming(1.0, 2.0),
+            ),
+            rollback_outcome=ControlResolutionRollbackSuccess(
+                start_joint_positions=final_positions,
+                drive_command=probe.drive_command(None),
+                settlement=ControlResolutionSettlementEvidence(
+                    requested_joint_motion_radians=1e-3,
+                    required_tracking_error_radians=5e-4,
+                    updates_used=2,
+                    passing_tracking_errors_radians=(4e-4, 0.0),
+                ),
+                interlock=ControlInterlockEvidence(0.0, False),
+                reset=baseline.reference_reset,
+            ),
+        )
+        failure = ControlResolutionFailureEvidence(
+            session_id="resolution-52600-c43",
+            failed_at_unix_seconds=123.0,
+            reference_reset=baseline.reference_reset,
+            completed_samples=(),
+            error="ControlResolutionSettlementTimeout: bounded timeout",
+            baseline=baseline,
+            capture_identity=_capture_identity(),
+            settlement_failure=settlement_failure,
+        )
+
+        restored = ControlResolutionFailureEvidence.from_dict(failure.to_dict())
+
+        self.assertEqual(restored, failure)
+        tampered = failure.to_dict()
+        tampered["settlement_failure"]["target_joint_positions"][0] += 1e-3
+        with self.assertRaisesRegex(ValueError, "failure evidence is incomplete"):
+            ControlResolutionFailureEvidence.from_dict(tampered)
+
+        settled_with_failure_fields = failure.to_dict()
+        settled_with_failure_fields["settlement_failure"]["rollback_outcome"][
+            "attempt"
+        ] = None
+        with self.assertRaisesRegex(ValueError, "failure evidence is incomplete"):
+            ControlResolutionFailureEvidence.from_dict(
+                settled_with_failure_fields
+            )
+
+        failed_with_settled_fields = failure.to_dict()
+        contradictory_outcome = failed_with_settled_fields["settlement_failure"][
+            "rollback_outcome"
+        ]
+        contradictory_outcome.update(
+            status="failed",
+            attempt=None,
+            error="bounded recovery failure",
+        )
+        with self.assertRaisesRegex(ValueError, "failure evidence is incomplete"):
+            ControlResolutionFailureEvidence.from_dict(failed_with_settled_fields)
+
+    def test_rollback_timeout_retains_the_completed_forward_probe(self) -> None:
+        baseline = _baseline()
+        sample = _sample(0, 0.0)
+        execution = ControlResolutionProbeExecution(
+            CONTROL_RESOLUTION_PROTOCOL.probe_plan(0),
+            DroidPose((0.401, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
+            sample.start_reset,
+            sample.commanded_action,
+            sample.target_pose,
+            sample.projection,
+        )
+        forward = ControlResolutionForwardEvidence(
+            sample.endpoint,
+            sample.tracked_settlement.motion,
+            sample.interlock,
+            sample.motion_timing,
+        )
+        timeout = ControlResolutionRollbackTimeout(
+            trace=ControlResolutionSettlementTimeoutTrace(
+                execution=execution,
+                start_joint_positions=sample.endpoint.safety.joint_positions,
+                target_joint_positions=baseline.drive_target.joint_positions,
+                attempt=ControlResolutionSettlementAttempt(
+                    requested_joint_motion_radians=2e-4,
+                    required_tracking_error_radians=5e-4,
+                    tracking_errors_radians=(1e-3,) * 32,
+                    final_joint_positions=(
+                        1e-3,
+                        *baseline.drive_target.joint_positions[1:],
+                    ),
+                ),
+                interlock=ControlInterlockEvidence(0.0, False),
+                drive_command=CONTROL_RESOLUTION_PROTOCOL.probe_plan(
+                    0
+                ).drive_command(None),
+                timing=ControlResolutionMotionTiming(2.0, 3.0),
+            ),
+            forward=forward,
+        )
+        failure = ControlResolutionFailureEvidence(
+            session_id="resolution-52600-c43",
+            failed_at_unix_seconds=123.0,
+            reference_reset=baseline.reference_reset,
+            completed_samples=(),
+            error="ControlResolutionSettlementTimeout: rollback timeout",
+            baseline=baseline,
+            capture_identity=_capture_identity(),
+            settlement_failure=timeout,
+        )
+
+        restored = ControlResolutionFailureEvidence.from_dict(failure.to_dict())
+
+        self.assertEqual(restored.settlement_failure.forward, forward)
+        self.assertEqual(
+            restored.settlement_failure.execution.projection,
+            sample.projection,
+        )
+
     def test_capture_endpoint_returns_raw_pose_and_live_safety_state(self) -> None:
         command = JointCommand(np.zeros(7), 0.04)
         pose = _reset().pose
@@ -749,7 +913,7 @@ class ControlResolutionReportTest(unittest.TestCase):
         self.assertEqual(endpoint.safety.contact_force_newtons, 0.25)
         self.assertTrue(endpoint.safety.plug_attached)
 
-    def test_zero_probe_holds_its_exact_live_start_command(self) -> None:
+    def test_zero_probe_preserves_the_existing_drive_target(self) -> None:
         baseline = JointCommand(
             np.asarray((0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5)), 0.04
         )
@@ -757,9 +921,24 @@ class ControlResolutionReportTest(unittest.TestCase):
             baseline.arm_positions + 9e-5, baseline.gripper_width_m
         )
 
-        target = resolution_joint_target(0.0, drifted_start, None)
+        target = resolution_joint_target(
+            CONTROL_RESOLUTION_PROTOCOL.probe_plan(0),
+            None,
+            baseline,
+        )
 
-        self.assertIs(target, drifted_start)
+        np.testing.assert_array_equal(target.arm_positions, baseline.arm_positions)
+        self.assertEqual(target.gripper_width_m, baseline.gripper_width_m)
+
+    def test_drive_target_rejects_controller_target_drift(self) -> None:
+        target = _baseline().drive_target
+
+        target.validate_active(target.joint_positions, target.gripper_width_m)
+        with self.assertRaisesRegex(ValueError, "active drive target changed"):
+            target.validate_active(
+                (target.joint_positions[0] + 1e-6, *target.joint_positions[1:]),
+                target.gripper_width_m,
+            )
 
     def test_live_interlock_aborts_immediately_on_attachment_loss(self) -> None:
         contact = Mock()
@@ -813,6 +992,18 @@ class ControlResolutionReportTest(unittest.TestCase):
         restored = ControlResolutionReport.from_dict(report.to_dict())
 
         self.assertEqual(restored, report)
+        missing_drive_command = report.to_dict()
+        del missing_drive_command["samples"][0]["tracked_settlement"][
+            "rollback_drive_command"
+        ]
+        with self.assertRaisesRegex(ValueError, "report is incomplete"):
+            ControlResolutionReport.from_dict(missing_drive_command)
+        contradictory_drive_command = report.to_dict()
+        contradictory_drive_command["samples"][0]["tracked_settlement"][
+            "rollback_command_period_seconds"
+        ] = 0.25
+        with self.assertRaisesRegex(ValueError, "report is incomplete"):
+            ControlResolutionReport.from_dict(contradictory_drive_command)
         summary = restored.summary
         self.assertAlmostEqual(summary.zero_translation_drift_meters, 2e-5)
         self.assertAlmostEqual(summary.zero_orientation_drift_radians, 1e-5)
@@ -1157,8 +1348,13 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+        runtime = SimpleNamespace(
+            actuators=SimpleNamespace(
+                current_command=Mock(return_value=commands[0])
+            )
+        )
         command, evidence = await stabilize_resolution_baseline(
-            SimpleNamespace(),
+            runtime,
             interlock,
             ControlResolutionBaselinePolicy(),
             Mock(side_effect=(0.0, 0.25, 0.5, 0.75)),
@@ -1199,8 +1395,13 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
         )
 
         with self.assertRaises(UnstableControlResolutionBaseline) as raised:
+            runtime = SimpleNamespace(
+                actuators=SimpleNamespace(
+                    current_command=Mock(return_value=commands[0])
+                )
+            )
             await stabilize_resolution_baseline(
-                SimpleNamespace(),
+                runtime,
                 interlock,
                 ControlResolutionBaselinePolicy(maximum_intervals=8),
                 Mock(side_effect=tuple(index * 0.25 for index in range(9))),
@@ -1271,7 +1472,7 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
             "sim.isaac_control_resolution.advance_physics_updates",
             new=AsyncMock(),
         ) as advance:
-            with self.assertRaisesRegex(RuntimeError, "bounded timeout"):
+            with self.assertRaises(UnsettledControlResolutionTarget) as raised:
                 await settle_resolution_motion(
                     runtime,
                     target,
@@ -1281,6 +1482,110 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(advance.await_count, 3)
+        self.assertEqual(
+            raised.exception.attempt,
+            ControlResolutionSettlementAttempt(
+                requested_joint_motion_radians=0.0,
+                required_tracking_error_radians=5e-4,
+                tracking_errors_radians=(1e-3, 1e-3, 1e-3),
+                final_joint_positions=(1e-3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            ),
+        )
+
+    async def test_zero_probe_advances_without_replacing_the_drive_target(self) -> None:
+        runtime = SimpleNamespace(
+            actuators=SimpleNamespace(apply_drive_command=Mock()),
+            attachment=object(),
+        )
+        command = JointCommand(np.zeros(7), 0.04)
+        interlock = SimpleNamespace(observe=Mock())
+
+        with (
+            patch(
+                "sim.isaac_control_resolution.advance_simulation_period",
+                new=AsyncMock(),
+            ) as advance,
+            patch(
+                "sim.isaac_control_resolution.move_joint_command",
+                new=AsyncMock(),
+            ) as move,
+        ):
+            await execute_resolution_probe_motion(
+                runtime,
+                command,
+                command,
+                CONTROL_RESOLUTION_PROTOCOL.probe_plan(0),
+                0.25,
+                interlock,
+            )
+
+        advance.assert_awaited_once_with(0.25, interlock.observe)
+        move.assert_not_awaited()
+        runtime.actuators.apply_drive_command.assert_not_called()
+
+    async def test_interrupted_probe_attempts_interlocked_drive_target_recovery(self) -> None:
+        baseline_target = _baseline().drive_target
+        start = JointCommand(
+            np.asarray(
+                (
+                    baseline_target.joint_positions[0] + 1e-3,
+                    *baseline_target.joint_positions[1:],
+                )
+            ),
+            0.04,
+        )
+        drive_target = JointCommand(
+            np.asarray(baseline_target.joint_positions),
+            baseline_target.gripper_width_m,
+        )
+        attempt = ControlResolutionSettlementAttempt(
+            requested_joint_motion_radians=1e-3,
+            required_tracking_error_radians=5e-4,
+            tracking_errors_radians=(1e-3,) * 32,
+            final_joint_positions=tuple(start.arm_positions),
+        )
+        interlock = SimpleNamespace(
+            observe=Mock(),
+            contact=SimpleNamespace(
+                evidence=ControlInterlockEvidence(0.0, False)
+            ),
+        )
+
+        actuators = SimpleNamespace(
+            current_command=Mock(return_value=drive_target),
+        )
+        with (
+            patch(
+                "sim.isaac_control_resolution.move_joint_command",
+                new=AsyncMock(),
+            ) as move,
+            patch(
+                "sim.isaac_control_resolution.settle_resolution_motion",
+                new=AsyncMock(
+                    side_effect=UnsettledControlResolutionTarget(attempt)
+                ),
+            ),
+        ):
+            outcome = await recover_resolution_drive_target(
+                SimpleNamespace(actuators=actuators, attachment=object()),
+                start,
+                interlock,
+                ResolutionDriveTargetRecovery(
+                    CONTROL_RESOLUTION_PROTOCOL,
+                    CONTROL_RESOLUTION_PROTOCOL.probe_plan(0),
+                    baseline_target,
+                    _reset(),
+                ),
+            )
+
+        self.assertIsInstance(outcome, ControlResolutionRollbackFailure)
+        self.assertEqual(outcome.attempt, attempt)
+        self.assertEqual(
+            outcome.drive_command,
+            CONTROL_RESOLUTION_PROTOCOL.probe_plan(0).drive_command(None),
+        )
+        move.assert_not_awaited()
+        actuators.current_command.assert_called()
 
     async def test_fixed_settlement_dispatches_exact_update_count(self) -> None:
         runtime = SimpleNamespace()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isfinite
+from math import isclose, isfinite
 from typing import Any, Mapping
 
 from jepa_wm.control_resolution_profile import ControlResolutionLoad
@@ -23,6 +23,64 @@ CONTROL_RESOLUTION_BASELINE_TOLERANCES = ResetEquivalenceTolerances(
     maximum_reset_contact_force_newtons=0.01,
     maximum_plug_position_difference_meters=1.25e-4,
 )
+
+
+@dataclass(frozen=True)
+class ControlResolutionDriveTarget:
+    joint_positions: tuple[float, ...]
+    gripper_width_m: float
+
+    def __post_init__(self) -> None:
+        if (
+            len(self.joint_positions) != 7
+            or not all(isfinite(value) for value in self.joint_positions)
+            or not isfinite(self.gripper_width_m)
+            or not 0.0 <= self.gripper_width_m <= 0.08
+        ):
+            raise ValueError("control resolution drive target is invalid")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "joint_positions": list(self.joint_positions),
+            "gripper_width_m": self.gripper_width_m,
+        }
+
+    def validate_active(
+        self,
+        joint_positions: tuple[float, ...],
+        gripper_width_m: float,
+    ) -> None:
+        if (
+            len(joint_positions) != 7
+            or not all(
+                isclose(actual, expected, rel_tol=0.0, abs_tol=1e-12)
+                for actual, expected in zip(
+                    joint_positions,
+                    self.joint_positions,
+                )
+            )
+            or not isclose(
+                gripper_width_m,
+                self.gripper_width_m,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+        ):
+            raise ValueError("control resolution active drive target changed")
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ControlResolutionDriveTarget:
+        if not isinstance(payload, Mapping):
+            raise ValueError("control resolution drive target must be an object")
+        try:
+            return cls(
+                tuple(float(value) for value in payload["joint_positions"]),
+                float(payload["gripper_width_m"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "control resolution drive target is incomplete"
+            ) from error
 
 
 @dataclass(frozen=True)
@@ -91,6 +149,7 @@ class ControlResolutionBaselineTrace:
     states: tuple[TrialResetState, ...]
     interval_seconds: tuple[float, ...]
     interlock: ControlInterlockEvidence
+    drive_target: ControlResolutionDriveTarget | None = None
 
     @property
     def initial_reset(self) -> TrialResetState:
@@ -126,6 +185,17 @@ class ControlResolutionBaselineTrace:
                 > safety_limits.maximum_contact_force_newtons
                 for state in self.states
             )
+            or (
+                self.drive_target is not None
+                and any(
+                    value < lower or value > upper
+                    for value, lower, upper in zip(
+                        self.drive_target.joint_positions,
+                        safety_limits.lower_joint_limits,
+                        safety_limits.upper_joint_limits,
+                    )
+                )
+            )
         ):
             raise ValueError("control resolution baseline trace is invalid")
         return tuple(
@@ -136,11 +206,14 @@ class ControlResolutionBaselineTrace:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "states": [state.to_dict() for state in self.states],
             "interval_seconds": list(self.interval_seconds),
             "interlock": self.interlock.to_dict(),
         }
+        if self.drive_target is not None:
+            payload["drive_target"] = self.drive_target.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, payload: Any) -> ControlResolutionBaselineTrace:
@@ -154,6 +227,13 @@ class ControlResolutionBaselineTrace:
                 ),
                 tuple(float(value) for value in payload["interval_seconds"]),
                 ControlInterlockEvidence.from_dict(payload["interlock"]),
+                (
+                    ControlResolutionDriveTarget.from_dict(
+                        payload["drive_target"]
+                    )
+                    if "drive_target" in payload
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(
@@ -192,6 +272,10 @@ class ControlResolutionBaselineAttempt:
     def initial_reset(self) -> TrialResetState:
         return self.trace.initial_reset
 
+    @property
+    def drive_target(self) -> ControlResolutionDriveTarget | None:
+        return self.trace.drive_target
+
     def validate(
         self,
         policy: ControlResolutionBaselinePolicy,
@@ -224,6 +308,10 @@ class ControlResolutionBaselineEvidence:
     @property
     def initial_reset(self) -> TrialResetState:
         return self.trace.initial_reset
+
+    @property
+    def drive_target(self) -> ControlResolutionDriveTarget | None:
+        return self.trace.drive_target
 
     @property
     def reference_reset(self) -> TrialResetState:
