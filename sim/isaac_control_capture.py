@@ -27,7 +27,7 @@ from jepa_wm.insertion_contract import (
     insertion_control_target_policy,
 )
 from jepa_wm.insertion_recording import ContactInsertionEvidence
-from jepa_wm.control_safety import SimulatorSafetyLimits
+from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimits
 from jepa_wm.trajectory import load_rollout_at
 from sim.control_session import (
     CONTROL_ROOT,
@@ -46,13 +46,13 @@ from sim.exploration import (
 )
 from sim.isaac_control_runtime import (
     LiveContactInterlock,
-    LiveControlRuntime,
     bind_live_runtime,
     control_contact_sensors,
     synchronized_control_safety_snapshot,
 )
 from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, DemoRecorder
 from sim.isaac_demo_runtime import (
+    Actuators,
     ContactReading,
     JointCommand,
     advance_physics_updates,
@@ -112,53 +112,20 @@ def validated_control_reference(
     return reference
 
 
-async def stabilize_resolution_capture(
-    runtime: LiveControlRuntime,
-    timeline: Any,
+def resolution_capture_safety(
+    actuators: Actuators,
     command: JointCommand,
+    interlock: ControlInterlockEvidence,
 ) -> RecordingSafetyTelemetry:
-    """Hold the drive-only reset until the captured state is demonstrably stable."""
+    """Bind strict-current RGB telemetry to the final replay update."""
 
-    from jepa_wm.control_resolution import (
-        CONTROL_RESOLUTION_PROTOCOL,
-        ControlResolutionLoad,
-    )
-    from sim.isaac_control_resolution import (
-        ResolutionControlInterlock,
-        stabilize_resolution_baseline,
-    )
-
-    baseline_policy = CONTROL_RESOLUTION_PROTOCOL.baseline_policy
-    if baseline_policy is None:
-        raise RuntimeError("control resolution capture has no baseline policy")
-    interlock = ResolutionControlInterlock(
-        LiveContactInterlock(
-            runtime.sensor,
-            CONTROL_RESOLUTION_PROTOCOL.safety_limits.maximum_contact_force_newtons,
-            "insertion control resolution capture stabilization",
-        ),
-        runtime,
-        expected_attachment=True,
-    )
-    _, baseline = await stabilize_resolution_baseline(
-        runtime,
-        interlock,
-        baseline_policy,
-        timeline.get_current_time,
-    )
-    baseline.validate(
-        baseline_policy,
-        ControlResolutionLoad.ATTACHED,
-        CONTROL_RESOLUTION_PROTOCOL.safety_limits,
-    )
-    actual = runtime.actuators.actual_command()
-    evidence = interlock.contact.evidence
+    actual = actuators.actual_command()
     return recording_safety_telemetry(
         command,
         actual,
         ContactReading(
-            evidence.collision_detected,
-            evidence.maximum_contact_force_newtons,
+            interlock.collision_detected,
+            interlock.maximum_contact_force_newtons,
         ),
     )
 
@@ -311,7 +278,7 @@ async def capture_control_observation(
                 if step.plug_attached
                 else ObservationStage.APPROACHING_CABLE
             )
-            stabilize_before_capture = (
+            strict_current_capture = (
                 policy
                 is ControlExecutionPolicy.INSERTION_RESOLUTION_MEASUREMENT
                 and step.index == context_index
@@ -324,24 +291,17 @@ async def capture_control_observation(
                 frame_count=1,
                 phase=recording_phase,
                 stage=recording_stage,
-                recorder=None if stabilize_before_capture else recorder,
+                recorder=None if strict_current_capture else recorder,
                 sample_period_seconds=plan.sample_period_seconds,
                 observe_safety=(
                     warmup_interlock.observe if insertion_control else None
                 ),
             )
-            if stabilize_before_capture:
-                capture_runtime = LiveControlRuntime(
-                    session_id,
-                    stage,
+            if strict_current_capture:
+                capture_safety = resolution_capture_safety(
                     actuators,
-                    attachment,
-                    sensor,
-                )
-                capture_safety = await stabilize_resolution_capture(
-                    capture_runtime,
-                    timeline,
                     command,
+                    warmup_interlock.evidence,
                 )
                 await recorder.capture_current(
                     recording_snapshot(
