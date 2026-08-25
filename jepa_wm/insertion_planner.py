@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-
 from jepa_wm.action_prior import ActionPriorConfig
 from jepa_wm.insertion_adapter_profile import InsertionAdapterProfile
+from jepa_wm.insertion_planner_profile import InsertionPlannerProfileName
 from jepa_wm.insertion_contract import (
     CONTACT_INSERTION_RECORDING,
     ContactInsertionSegment,
@@ -25,11 +25,8 @@ from jepa_wm.trajectory import RolloutWindow
 class InsertionPlannerProfile:
     """Pinned search and task semantics for one auditable insertion slice."""
 
-    window: RolloutWindow = RolloutWindow(
-        CONTACT_INSERTION_RECORDING.start_index(ContactInsertionSegment.INSERT),
-        8,
-        8,
-    )
+    name: InsertionPlannerProfileName
+    window: RolloutWindow
     planner: CEMConfig = CEMConfig(iterations=4, samples=64, elites=8, seed=234)
     scoring_batch_size: int = 64
     prior: ActionPriorConfig = ActionPriorConfig(penalty_weight=1e-5)
@@ -66,5 +63,29 @@ class InsertionPlannerProfile:
         if self.scoring_batch_size <= 0:
             raise ValueError("insertion planner scoring batch size must be positive")
 
+_INSERTION_START = CONTACT_INSERTION_RECORDING.start_index(
+    ContactInsertionSegment.INSERT
+)
+INSERTION_SAMPLED_READINESS_PLANNER_PROFILE = InsertionPlannerProfile(
+    InsertionPlannerProfileName.SAMPLED_READINESS,
+    RolloutWindow(_INSERTION_START, 8, 8),
+)
+INSERTION_DENSE_PLANNER_PROFILE = InsertionPlannerProfile(
+    InsertionPlannerProfileName.DENSE_EXECUTION,
+    RolloutWindow(
+        _INSERTION_START,
+        CONTACT_INSERTION_RECORDING.span(ContactInsertionSegment.INSERT).frames,
+        1,
+    ),
+)
+_INSERTION_PLANNER_PROFILES = {
+    profile.name: profile
+    for profile in (
+        INSERTION_SAMPLED_READINESS_PLANNER_PROFILE,
+        INSERTION_DENSE_PLANNER_PROFILE,
+    )
+}
 
-INSERTION_PLANNER_PROFILE = InsertionPlannerProfile()
+
+def insertion_planner_profile(name: str) -> InsertionPlannerProfile:
+    return _INSERTION_PLANNER_PROFILES[InsertionPlannerProfileName(name)]

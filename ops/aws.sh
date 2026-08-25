@@ -759,21 +759,29 @@ case "${command}" in
     recording_name="${2:-}"
     adapter_name="${3:-}"
     proposal_name="${4:-}"
+    planner_profile="${5:-}"
     is_safe_identifier "${recording_name}" || die "invalid recording name"
     is_safe_identifier "${adapter_name}" || die "invalid adapter name"
     is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    planner_profile="$(insertion_planner_profile_field \
+      "${repo_root}" python3 "${planner_profile}" name)" \
+      || die "invalid insertion planner profile"
     sync_repo
-    remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-plan-benchmark --recording '${recording_name}' --adapter '${adapter_name}' --proposal '${proposal_name}'"
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-plan-benchmark --recording '${recording_name}' --adapter '${adapter_name}' --proposal '${proposal_name}' --profile '${planner_profile}'"
     ;;
   jepa-wm-insertion-plan-summarize)
     fresh_roster="${2:-}"
     proposal_name="${3:-}"
+    planner_profile="${4:-}"
     [[ -f "${fresh_roster}" ]] || die "fresh planner roster does not exist"
     is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    planner_profile="$(insertion_planner_profile_field \
+      "${repo_root}" python3 "${planner_profile}" name)" \
+      || die "invalid insertion planner profile"
     fresh_roster_payload="$(base64 <"${fresh_roster}" | tr -d '\n')"
     [[ -n "${fresh_roster_payload}" ]] || die "fresh planner roster is empty"
     sync_repo
-    remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-plan-summarize --fresh-roster-base64 '${fresh_roster_payload}' --proposal '${proposal_name}'"
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-plan-summarize --fresh-roster-base64 '${fresh_roster_payload}' --proposal '${proposal_name}' --profile '${planner_profile}'"
     ;;
   jepa-wm-insertion-proposal-training-diagnostic)
     proposal_name="${2:-}"

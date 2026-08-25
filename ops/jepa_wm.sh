@@ -444,12 +444,16 @@ summarize_insertion_world_model() {
 
 summarize_insertion_planner() {
   local -A options=()
-  parse_named_options options "fresh-roster-base64 proposal" "$@"
+  parse_named_options options "fresh-roster-base64 proposal profile" "$@"
   local fresh_roster_payload="${options[fresh-roster-base64]:-}"
   local proposal_name="${options[proposal]:-}"
+  local profile="${options[profile]:-}"
   [[ -n "${fresh_roster_payload}" ]] || die "fresh planner roster is required"
   is_safe_identifier "${proposal_name}" || die "invalid proposal name"
   require_runtime
+  profile="$(insertion_planner_profile_field \
+    "${repo_dir}" "${venv_dir}/bin/python" "${profile}" name)" \
+    || die "invalid insertion planner profile"
   local experiment_root="${checkpoint_dir}/experiments"
   mkdir -p "${experiment_root}"
   local temporary_roster
@@ -482,13 +486,17 @@ summarize_insertion_planner() {
   local proposal="${checkpoint_dir}/${proposal_name}.pth"
   [[ -s "${adapter}" ]] || die "planner adapter does not exist: ${adapter_name}"
   [[ -s "${proposal}" ]] || die "planner proposal does not exist: ${proposal_name}"
-  local output="${experiment_root}/${evaluation_id}_insertion_planner_readiness.json"
+  local output_suffix
+  output_suffix="$(insertion_planner_profile_field \
+    "${repo_dir}" "${venv_dir}/bin/python" "${profile}" report-suffix)"
+  local output="${experiment_root}/${evaluation_id}_${output_suffix}.json"
   "${venv_dir}/bin/python" -m jepa_wm.insertion_planner_readiness \
     --fresh-roster "${fresh_roster}" \
     --recording-root "${HOME}/docker/isaac-sim/data/quantis/recordings" \
     --adapter "${adapter}" \
     --proposal "${proposal}" \
     --base-checkpoint "${jepa_checkpoint}" \
+    --profile "${profile}" \
     --output "${output}"
 }
 
@@ -573,13 +581,18 @@ benchmark_planner() {
 
 benchmark_insertion_planner() {
   local -A options=()
-  parse_named_options options "recording adapter proposal" "$@"
+  parse_named_options options "recording adapter proposal profile" "$@"
   local recording_name="${options[recording]:-}"
   local adapter_name="${options[adapter]:-}"
   local proposal_name="${options[proposal]:-}"
+  local profile="${options[profile]:-}"
   is_safe_identifier "${recording_name}" || die "invalid recording name"
   is_safe_identifier "${adapter_name}" || die "invalid adapter name"
   is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+  require_runtime
+  profile="$(insertion_planner_profile_field \
+    "${repo_dir}" "${venv_dir}/bin/python" "${profile}" name)" \
+    || die "invalid insertion planner profile"
   local recording="${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}"
   local adapter="${checkpoint_dir}/${adapter_name}.pth"
   local proposal="${checkpoint_dir}/${proposal_name}.pth"
@@ -587,7 +600,6 @@ benchmark_insertion_planner() {
     || die "recording does not exist: ${recording_name}"
   [[ -s "${adapter}" ]] || die "insertion adapter does not exist: ${adapter_name}"
   [[ -s "${proposal}" ]] || die "insertion proposal does not exist: ${proposal_name}"
-  require_runtime
   sudo chown -R "${USER}:${USER}" "${recording}"
   cd "${repo_dir}"
   "${venv_dir}/bin/python" -m jepa_wm.insertion_planner_benchmark \
@@ -595,7 +607,8 @@ benchmark_insertion_planner() {
     --checkpoint "${jepa_checkpoint}" \
     --recording "${recording}" \
     --adapter "${adapter}" \
-    --proposal "${proposal}"
+    --proposal "${proposal}" \
+    --profile "${profile}"
 }
 
 train_action_proposal() {

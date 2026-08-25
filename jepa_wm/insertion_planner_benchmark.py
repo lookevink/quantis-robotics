@@ -12,7 +12,11 @@ from jepa_wm.insertion_proposal_readiness import (
     validate_insertion_proposal,
 )
 from jepa_wm.insertion_recording import ContactInsertionEvidence
-from jepa_wm.insertion_planner import INSERTION_PLANNER_PROFILE
+from jepa_wm.insertion_planner import (
+    INSERTION_SAMPLED_READINESS_PLANNER_PROFILE,
+    insertion_planner_profile,
+)
+from jepa_wm.insertion_planner_profile import InsertionPlannerProfileName
 from jepa_wm.insertion_wm_readiness import validate_insertion_adapter
 from jepa_wm.planner import PlannerActionBounds
 from sim.exploration import DatasetSplit
@@ -51,14 +55,19 @@ def main() -> None:
     parser.add_argument("--proposal", type=Path, required=True)
     parser.add_argument("--camera", default="wrist")
     parser.add_argument(
+        "--profile",
+        choices=tuple(profile.value for profile in InsertionPlannerProfileName),
+        default=InsertionPlannerProfileName.SAMPLED_READINESS.value,
+    )
+    parser.add_argument(
         "--scoring-batch-size",
         type=int,
-        default=INSERTION_PLANNER_PROFILE.scoring_batch_size,
+        default=INSERTION_SAMPLED_READINESS_PLANNER_PROFILE.scoring_batch_size,
     )
     arguments = parser.parse_args()
     if arguments.camera != "wrist":
         parser.error("insertion planner benchmark requires the wrist camera")
-    profile = INSERTION_PLANNER_PROFILE
+    profile = insertion_planner_profile(arguments.profile)
     validate_insertion_benchmark_inputs(
         arguments.recording,
         arguments.adapter,

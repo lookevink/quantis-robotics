@@ -19,6 +19,8 @@ trap backup_on_exit EXIT
 
 fresh_roster="${1:-/tmp/contact-insertion-v9-2600-fresh-22600_insertion_fresh_evaluation.json}"
 proposal_name="${2:-contact-insertion-v9-2600_insertion_proposal_h256_s3000}"
+planner_profile="${3:-}"
+cd "${repo_root}"
 [[ -f "${fresh_roster}" ]] || {
   printf 'error: fresh insertion roster does not exist: %s\n' "${fresh_roster}" >&2
   exit 1
@@ -27,7 +29,11 @@ is_safe_identifier "${proposal_name}" || {
   printf 'error: proposal name must be safe\n' >&2
   exit 1
 }
-cd "${repo_root}"
+planner_profile="$(insertion_planner_profile_field \
+  "${repo_root}" python3 "${planner_profile}" name)" || {
+    printf 'error: insertion planner profile is invalid\n' >&2
+    exit 1
+  }
 adapter_name="$(python3 -m jepa_wm.insertion_corpus show-fresh \
   --roster "${fresh_roster}" --format adapter-name)"
 is_safe_identifier "${adapter_name}" || {
@@ -40,10 +46,10 @@ while IFS=$'\t' read -r -u 3 recording_id _seed split; do
     exit 1
   }
   "${aws_workflow}" jepa-wm-insertion-plan-benchmark \
-    "${recording_id}" "${adapter_name}" "${proposal_name}"
+    "${recording_id}" "${adapter_name}" "${proposal_name}" "${planner_profile}"
 done 3< <(
   python3 -m jepa_wm.insertion_corpus show-fresh \
     --roster "${fresh_roster}" --format tsv
 )
 "${aws_workflow}" jepa-wm-insertion-plan-summarize \
-  "${fresh_roster}" "${proposal_name}"
+  "${fresh_roster}" "${proposal_name}" "${planner_profile}"

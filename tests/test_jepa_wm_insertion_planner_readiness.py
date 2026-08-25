@@ -2,7 +2,10 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from jepa_wm.insertion_planner import INSERTION_PLANNER_PROFILE
+from jepa_wm.insertion_planner import (
+    INSERTION_DENSE_PLANNER_PROFILE,
+    INSERTION_SAMPLED_READINESS_PLANNER_PROFILE,
+)
 from jepa_wm.insertion_planner_readiness import (
     InsertionPlannerSeedEvidence,
     _assert_same,
@@ -60,7 +63,10 @@ class InsertionPlannerReadinessTest(unittest.TestCase):
             )
 
     def test_profile_owns_the_bounded_memory_policy(self) -> None:
-        self.assertEqual(INSERTION_PLANNER_PROFILE.scoring_batch_size, 64)
+        self.assertEqual(
+            INSERTION_SAMPLED_READINESS_PLANNER_PROFILE.scoring_batch_size,
+            64,
+        )
 
     def test_report_selection_ignores_historical_policy_evidence(self) -> None:
         current = self._evidence(report=Path("/current.json"))
@@ -101,6 +107,39 @@ class InsertionPlannerReadinessTest(unittest.TestCase):
                 current.base_checkpoint,
                 current.training_action_library,
             )
+
+    def test_dense_report_selection_rejects_sampled_policy_evidence(self) -> None:
+        dense = self._evidence(report=Path("/dense.json"))
+
+        def reconstruct(report, *args):
+            profile = args[-1]
+            self.assertIs(profile, INSERTION_DENSE_PLANNER_PROFILE)
+            if report.name == "sampled.json":
+                raise ValueError("planner report has the wrong rollout roster")
+            self.assertEqual(
+                profile.window.context_indices,
+                tuple(range(44, 108)),
+            )
+            return dense
+
+        with patch.object(
+            InsertionPlannerSeedEvidence,
+            "from_report",
+            side_effect=reconstruct,
+        ):
+            selected = _select_current_policy_evidence(
+                (Path("/sampled.json"), Path("/dense.json")),
+                Path("/recording"),
+                dense.recording,
+                dense.seed,
+                object(),
+                object(),
+                dense.base_checkpoint,
+                dense.training_action_library,
+                INSERTION_DENSE_PLANNER_PROFILE,
+            )
+
+        self.assertIs(selected, dense)
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ import torch
 
 from jepa_wm.action import ActionSelectionBounds, DroidAction
 from jepa_wm.frames import encode_clips
-from jepa_wm.insertion_planner import INSERTION_PLANNER_PROFILE
+from jepa_wm.insertion_planner import INSERTION_SAMPLED_READINESS_PLANNER_PROFILE
 from jepa_wm.insertion_proposal_readiness import validate_insertion_proposal
 from jepa_wm.insertion_recording import ContactInsertionEvidence
 from jepa_wm.model import load_headless_model
@@ -125,11 +125,13 @@ def diagnose_insertion_proposal_training(
             inputs,
         ).cpu().numpy()
     predicted = PlannerActionBounds().clip(predicted)
-    goal_policy = INSERTION_PLANNER_PROFILE.task_policy.goal_action_alignment
+    goal_policy = (
+        INSERTION_SAMPLED_READINESS_PLANNER_PROFILE.task_policy.goal_action_alignment
+    )
     if goal_policy is None:
         raise ValueError("insertion proposal diagnosis requires goal alignment")
     first_action_gate = FirstActionGate(
-        INSERTION_PLANNER_PROFILE.task_policy.first_action_thresholds
+        INSERTION_SAMPLED_READINESS_PLANNER_PROFILE.task_policy.first_action_thresholds
     )
     raw = []
     for rollout, proposed in zip(rollouts, predicted):

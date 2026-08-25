@@ -764,9 +764,24 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn(
             "ops/jepa_wm.sh insertion-plan-benchmark "
             "--recording 'contact-insertion-held-00' "
-            "--adapter 'insertion-adapter' --proposal 'insertion-proposal'",
+            "--adapter 'insertion-adapter' --proposal 'insertion-proposal' "
+            "--profile 'sampled_readiness'",
             calls,
         )
+
+    def test_jepa_wm_insertion_plan_benchmark_forwards_dense_profile(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-plan-benchmark",
+            arguments=(
+                "contact-insertion-held-00",
+                "insertion-adapter",
+                "insertion-proposal",
+                "dense_execution",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--profile 'dense_execution'", calls)
 
     def test_jepa_wm_insertion_plan_summary_forwards_only_roster_and_proposal(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -785,6 +800,7 @@ class AwsLifecycleTests(unittest.TestCase):
             calls,
         )
         self.assertIn("--proposal 'insertion-proposal'", calls)
+        self.assertIn("--profile 'sampled_readiness'", calls)
         self.assertNotIn("--adapter", calls)
 
     def test_jepa_wm_insertion_proposal_training_diagnostic_is_named(self):

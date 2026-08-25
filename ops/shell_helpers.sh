@@ -48,6 +48,19 @@ insertion_epoch_steps() {
   printf '1056\n'
 }
 
+insertion_planner_profile_field() {
+  local repository="$1"
+  local python_bin="$2"
+  local profile="$3"
+  local field="$4"
+  (
+    cd "${repository}"
+    local -a arguments=(-m jepa_wm.insertion_planner_profile "${field}")
+    [[ -z "${profile}" ]] || arguments+=(--profile "${profile}")
+    "${python_bin}" "${arguments[@]}"
+  )
+}
+
 cem_settings_requested() {
   [[ -n "$1$2$3$4" ]]
 }

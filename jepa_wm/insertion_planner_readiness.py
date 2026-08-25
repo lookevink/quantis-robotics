@@ -15,7 +15,12 @@ from jepa_wm.action import ActionSelectionBounds, DroidAction
 from jepa_wm.contract import MODEL_ID
 from jepa_wm.domain_recording import DomainRecording
 from jepa_wm.insertion_corpus import InsertionFreshEvaluationRoster
-from jepa_wm.insertion_planner import INSERTION_PLANNER_PROFILE
+from jepa_wm.insertion_planner import (
+    INSERTION_SAMPLED_READINESS_PLANNER_PROFILE,
+    InsertionPlannerProfile,
+    insertion_planner_profile,
+)
+from jepa_wm.insertion_planner_profile import InsertionPlannerProfileName
 from jepa_wm.insertion_recording import ContactInsertionEvidence
 from jepa_wm.persistence import write_json_atomic
 from jepa_wm.planner import PlannerActionBounds
@@ -191,6 +196,7 @@ class InsertionPlannerSeedEvidence:
         proposal: TaskProposalArtifactEvidence,
         expected_base_checkpoint: ArtifactIdentity,
         expected_training_action_library: int,
+        profile: InsertionPlannerProfile = INSERTION_SAMPLED_READINESS_PLANNER_PROFILE,
     ) -> InsertionPlannerSeedEvidence:
         report = report.resolve()
         recording = recording.resolve()
@@ -227,7 +233,7 @@ class InsertionPlannerSeedEvidence:
             proposal.identity.fingerprint,
             proposal.metadata,
         )
-        selected_rollouts = INSERTION_PLANNER_PROFILE.window.select(
+        selected_rollouts = profile.window.select(
             load_rollouts(
                 recording,
                 camera="wrist",
@@ -286,7 +292,7 @@ class InsertionPlannerSeedEvidence:
                 raise ValueError("planner report contains out-of-bounds actions")
             _assert_same(
                 raw,
-                evaluation.to_dict(INSERTION_PLANNER_PROFILE.task_policy),
+                evaluation.to_dict(profile.task_policy),
                 f"result[{evaluation.context_index}]",
             )
             evaluations.append(evaluation)
@@ -309,16 +315,16 @@ class InsertionPlannerSeedEvidence:
                 base_checkpoint=base_checkpoint,
                 recording=domain_recording,
                 camera="wrist",
-                window=INSERTION_PLANNER_PROFILE.window,
+                window=profile.window,
                 selection_bounds=INSERTION_PLANNER_SELECTION_BOUNDS,
-                scoring_batch_size=INSERTION_PLANNER_PROFILE.scoring_batch_size,
+                scoring_batch_size=profile.scoring_batch_size,
             ),
             planner=PlannerRunSummary(
-                config=INSERTION_PLANNER_PROFILE.planner,
+                config=profile.planner,
                 training_action_library=training_action_library,
-                prior_penalty_weight=INSERTION_PLANNER_PROFILE.prior.penalty_weight,
+                prior_penalty_weight=profile.prior.penalty_weight,
                 initialization=PlannerInitialization.PROPOSAL,
-                task_policy=INSERTION_PLANNER_PROFILE.task_policy,
+                task_policy=profile.task_policy,
             ),
             bounds=bounds,
             timings=PlannerTimings(
@@ -398,6 +404,7 @@ def _select_current_policy_evidence(
     proposal: TaskProposalArtifactEvidence,
     base_checkpoint: ArtifactIdentity,
     expected_training_action_library: int,
+    profile: InsertionPlannerProfile = INSERTION_SAMPLED_READINESS_PLANNER_PROFILE,
 ) -> InsertionPlannerSeedEvidence:
     matching_evidence = []
     for candidate_report in candidate_reports:
@@ -409,6 +416,7 @@ def _select_current_policy_evidence(
                 proposal,
                 base_checkpoint,
                 expected_training_action_library,
+                profile,
             )
         except (KeyError, OSError, TypeError, ValueError):
             continue
@@ -430,6 +438,7 @@ def summarize_insertion_planner_readiness(
     base_checkpoint_path: Path,
     reports: Sequence[Path] | None,
     output: Path,
+    profile: InsertionPlannerProfile = INSERTION_SAMPLED_READINESS_PLANNER_PROFILE,
 ) -> dict[str, Any]:
     from jepa_wm.insertion_proposal_readiness import validate_insertion_proposal
     from jepa_wm.insertion_wm_readiness import validate_insertion_adapter
@@ -461,8 +470,8 @@ def summarize_insertion_planner_readiness(
             sorted(
                 (recording / "jepa_wm").glob(
                     "wrist_cem_benchmark_"
-                    f"{INSERTION_PLANNER_PROFILE.window.start_index:06d}_"
-                    f"{INSERTION_PLANNER_PROFILE.window.count:03d}_"
+                    f"{profile.window.start_index:06d}_"
+                    f"{profile.window.count:03d}_"
                     "held_out_proposal_prior_*.json"
                 )
             )
@@ -477,6 +486,7 @@ def summarize_insertion_planner_readiness(
                 proposal,
                 base_checkpoint,
                 expected_training_action_library,
+                profile,
             )
         )
     evidence = tuple(evidence_items)
@@ -493,19 +503,20 @@ def summarize_insertion_planner_readiness(
     passed = all(item.passed for item in evidence)
     payload = {
         "schema": INSERTION_PLANNER_READINESS_SCHEMA,
-        "scope": "offline frozen insertion planner; no live insertion",
+        "scope": profile.name.descriptor.readiness_scope,
+        "planner_profile": profile.name.value,
         "fresh_evaluation_roster": roster.to_dict(),
         "adapter": adapter.identity.to_dict(),
         "proposal": proposal.identity.to_dict(),
         "base_checkpoint": evidence[0].base_checkpoint.to_dict(),
         "planner": {
-            **INSERTION_PLANNER_PROFILE.planner.to_dict(),
-            "scoring_batch_size": INSERTION_PLANNER_PROFILE.scoring_batch_size,
+            **profile.planner.to_dict(),
+            "scoring_batch_size": profile.scoring_batch_size,
             "training_action_library": evidence[0].training_action_library,
-            "prior_penalty_weight": INSERTION_PLANNER_PROFILE.prior.penalty_weight,
-            "task_policy": INSERTION_PLANNER_PROFILE.task_policy.to_dict(),
+            "prior_penalty_weight": profile.prior.penalty_weight,
+            "task_policy": profile.task_policy.to_dict(),
         },
-        "window": INSERTION_PLANNER_PROFILE.window.to_dict(),
+        "window": profile.window.to_dict(),
         "selection_bounds": INSERTION_PLANNER_SELECTION_BOUNDS.to_dict(),
         "planner_bounds": PlannerActionBounds().to_dict(),
         "minimum_selected_win_rate": MINIMUM_SELECTED_WIN_RATE,
@@ -528,6 +539,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--proposal", type=Path, required=True)
     parser.add_argument("--base-checkpoint", type=Path, required=True)
     parser.add_argument(
+        "--profile",
+        choices=tuple(profile.value for profile in InsertionPlannerProfileName),
+        default=InsertionPlannerProfileName.SAMPLED_READINESS.value,
+    )
+    parser.add_argument(
         "--evaluation-report",
         type=Path,
         action="append",
@@ -542,6 +558,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         arguments.base_checkpoint,
         arguments.evaluation_report,
         arguments.output,
+        insertion_planner_profile(arguments.profile),
     )
     print(json.dumps(summary, indent=2))
     return 0 if summary["passed"] else 2

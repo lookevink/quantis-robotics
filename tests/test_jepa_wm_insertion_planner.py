@@ -11,7 +11,12 @@ except ModuleNotFoundError:
 
 from jepa_wm.action import DroidAction
 from jepa_wm.action_prior import ActionPriorConfig, EmpiricalActionPrior
-from jepa_wm.insertion_planner import INSERTION_PLANNER_PROFILE
+from jepa_wm.insertion_planner import (
+    INSERTION_DENSE_PLANNER_PROFILE,
+    INSERTION_SAMPLED_READINESS_PLANNER_PROFILE,
+    insertion_planner_profile,
+)
+from jepa_wm.insertion_planner_profile import InsertionPlannerProfileName
 from jepa_wm.planner import PlannerActionBounds, ProposalCenteredBounds
 from jepa_wm.planner_readiness import FirstActionGate, FirstActionReason
 from jepa_wm.planner_policy import (
@@ -77,7 +82,7 @@ class InsertionPlannerProfileTest(unittest.TestCase):
         )
 
     def test_samples_the_insertion_stroke_with_a_pinned_search_identity(self) -> None:
-        profile = INSERTION_PLANNER_PROFILE
+        profile = INSERTION_SAMPLED_READINESS_PLANNER_PROFILE
 
         self.assertEqual(profile.window.context_indices, tuple(range(44, 108, 8)))
         self.assertEqual(profile.planner.iterations, 4)
@@ -87,6 +92,30 @@ class InsertionPlannerProfileTest(unittest.TestCase):
         self.assertEqual(
             profile.task_policy.context_matched_candidates.candidates_per_context,
             12,
+        )
+
+    def test_dense_profile_covers_every_insertion_command_context(self) -> None:
+        self.assertEqual(
+            INSERTION_DENSE_PLANNER_PROFILE.window.context_indices,
+            tuple(range(44, 108)),
+        )
+        self.assertEqual(
+            INSERTION_DENSE_PLANNER_PROFILE.task_policy,
+            INSERTION_SAMPLED_READINESS_PLANNER_PROFILE.task_policy,
+        )
+        self.assertEqual(
+            INSERTION_DENSE_PLANNER_PROFILE.planner,
+            INSERTION_SAMPLED_READINESS_PLANNER_PROFILE.planner,
+        )
+        self.assertEqual(
+            INSERTION_DENSE_PLANNER_PROFILE.name.descriptor.report_suffix,
+            "insertion_dense_planner_readiness",
+        )
+        self.assertIs(
+            insertion_planner_profile(
+                InsertionPlannerProfileName.DENSE_EXECUTION.value
+            ),
+            INSERTION_DENSE_PLANNER_PROFILE,
         )
 
     @unittest.skipIf(torch is None, "PyTorch is not installed in the local test runtime")
@@ -99,7 +128,7 @@ class InsertionPlannerProfileTest(unittest.TestCase):
         bounds = ProposalCenteredBounds(
             center,
             PlannerActionBounds(),
-            INSERTION_PLANNER_PROFILE.task_policy.proposal_trust_region,
+            INSERTION_SAMPLED_READINESS_PLANNER_PROFILE.task_policy.proposal_trust_region,
         )
         matching = SimpleNamespace(
             context=(SimpleNamespace(index=44),),
@@ -133,7 +162,7 @@ class InsertionPlannerProfileTest(unittest.TestCase):
 
     def test_treats_submillimeter_insertion_as_active_motion(self) -> None:
         gate = FirstActionGate(
-            INSERTION_PLANNER_PROFILE.task_policy.first_action_thresholds
+            INSERTION_SAMPLED_READINESS_PLANNER_PROFILE.task_policy.first_action_thresholds
         )
         recorded = DroidAction((6.3e-5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
 
@@ -202,7 +231,9 @@ class InsertionPlannerProfileTest(unittest.TestCase):
             goal_action=DroidAction(tuple(recorded[0])),
         )
 
-        payload = evaluation.to_dict(INSERTION_PLANNER_PROFILE.task_policy)
+        payload = evaluation.to_dict(
+            INSERTION_SAMPLED_READINESS_PLANNER_PROFILE.task_policy
+        )
 
         self.assertFalse(payload["searched_first_action_gate"]["passed"])
         self.assertEqual(
@@ -227,7 +258,9 @@ class InsertionPlannerProfileTest(unittest.TestCase):
             goal_action=goal,
         )
 
-        payload = evaluation.to_dict(INSERTION_PLANNER_PROFILE.task_policy)
+        payload = evaluation.to_dict(
+            INSERTION_SAMPLED_READINESS_PLANNER_PROFILE.task_policy
+        )
 
         self.assertEqual(payload["goal_action"], list(goal.values))
         self.assertEqual(
@@ -236,7 +269,7 @@ class InsertionPlannerProfileTest(unittest.TestCase):
         )
 
     def test_refinement_requires_goal_alignment_and_latent_improvement(self) -> None:
-        policy = INSERTION_PLANNER_PROFILE.task_policy
+        policy = INSERTION_SAMPLED_READINESS_PLANNER_PROFILE.task_policy
         acceptance = policy.refinement_acceptance
         self.assertIsNotNone(acceptance)
         self.assertEqual(acceptance.to_dict()["unaligned_initial"], "blocked")
@@ -278,7 +311,9 @@ class InsertionPlannerProfileTest(unittest.TestCase):
             goal_action=goal,
         )
 
-        payload = evaluation.to_dict(INSERTION_PLANNER_PROFILE.task_policy)
+        payload = evaluation.to_dict(
+            INSERTION_SAMPLED_READINESS_PLANNER_PROFILE.task_policy
+        )
 
         self.assertFalse(payload["refinement_acceptance"]["accepted"])
         self.assertEqual(
@@ -304,7 +339,9 @@ class InsertionPlannerProfileTest(unittest.TestCase):
             goal_action=DroidAction((0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
         )
 
-        payload = evaluation.to_dict(INSERTION_PLANNER_PROFILE.task_policy)
+        payload = evaluation.to_dict(
+            INSERTION_SAMPLED_READINESS_PLANNER_PROFILE.task_policy
+        )
 
         self.assertEqual(payload["selection_status"], "blocked")
         self.assertIsNone(payload["selected_source"])
