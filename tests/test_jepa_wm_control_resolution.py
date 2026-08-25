@@ -15,7 +15,9 @@ from jepa_wm.control_resolution import (
     ControlResolutionEndpoint,
     ControlResolutionFailureEvidence,
     ControlResolutionReport,
+    ControlResolutionResetPhase,
     ControlResolutionSample,
+    RejectedControlResolutionReset,
     retreat_direction,
 )
 from jepa_wm.control_safety import ControlInterlockEvidence
@@ -24,8 +26,17 @@ from jepa_wm.action import DroidActionScale
 from jepa_wm.direct_safety import ControlSafetySnapshot
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
-from jepa_wm.trial_equivalence import TrialResetState
-from sim.isaac_control_resolution import AttachedControlInterlock, _capture_endpoint
+from jepa_wm.trial_equivalence import (
+    ResetEquivalenceMeasurement,
+    TrialResetState,
+)
+from sim.isaac_control_resolution import (
+    AttachedControlInterlock,
+    ControlResolutionResetMismatch,
+    _capture_endpoint,
+    _capture_reset_state,
+    _require_resolution_reset,
+)
 from sim.isaac_control_resolution import resolution_probe_observation
 from sim.isaac_control_resolution import resolution_joint_target
 from sim.isaac_demo_runtime import JointCommand
@@ -81,6 +92,86 @@ def _sample(index: int, magnitude: float) -> ControlResolutionSample:
 
 
 class ControlResolutionReportTest(unittest.TestCase):
+    def test_rejected_reset_persists_exact_resolution_scale_drift(self) -> None:
+        reference = _reset()
+        candidate = replace(
+            reference,
+            joint_positions=(
+                reference.joint_positions[0] + 2e-4,
+                *reference.joint_positions[1:],
+            ),
+        )
+        rejected = RejectedControlResolutionReset(
+            phase=ControlResolutionResetPhase.ROLLBACK,
+            sample_index=0,
+            reference=reference,
+            candidate=candidate,
+            tolerances=CONTROL_RESOLUTION_PROTOCOL.reset_tolerances,
+        )
+        failure = ControlResolutionFailureEvidence(
+            session_id="resolution-52600-c43",
+            failed_at_unix_seconds=123.0,
+            reference_reset=reference,
+            completed_samples=(),
+            error="ValueError: reset mismatch",
+            rejected_reset=rejected,
+        )
+
+        restored = ControlResolutionFailureEvidence.from_dict(failure.to_dict())
+
+        self.assertEqual(restored, failure)
+        self.assertAlmostEqual(
+            restored.rejected_reset.measurement.maximum_joint_difference_radians,
+            2e-4,
+        )
+        self.assertFalse(
+            restored.rejected_reset.measurement.passes(
+                CONTROL_RESOLUTION_PROTOCOL.reset_tolerances
+            )
+        )
+        malformed = failure.to_dict()
+        malformed["rejected_reset"]["sample_index"] = 0.5
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            ControlResolutionFailureEvidence.from_dict(malformed)
+        malformed["rejected_reset"]["sample_index"] = True
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            ControlResolutionFailureEvidence.from_dict(malformed)
+
+    def test_unsafe_reset_is_captured_before_typed_rejection(self) -> None:
+        command = JointCommand(np.zeros(7), 0.04)
+        runtime = SimpleNamespace(
+            sensor=object(),
+            actuators=SimpleNamespace(actual_command=Mock(return_value=command)),
+            attachment=SimpleNamespace(
+                attached=True,
+                world_pose=Mock(return_value=((0.1, 0.0, 0.2), None)),
+            ),
+        )
+        snapshot = SimpleNamespace(end_effector_pose=_reset().pose)
+        with (
+            patch(
+                "sim.isaac_control_resolution.read_control_contact",
+                return_value=(True, 3.0),
+            ),
+            patch(
+                "sim.isaac_control_resolution.recording_snapshot",
+                return_value=snapshot,
+            ),
+        ):
+            _, unsafe = _capture_reset_state(runtime)
+
+        self.assertTrue(unsafe.collision_detected)
+        self.assertEqual(unsafe.contact_force_newtons, 3.0)
+        with self.assertRaises(ControlResolutionResetMismatch) as raised:
+            _require_resolution_reset(
+                _reset(),
+                unsafe,
+                CONTROL_RESOLUTION_PROTOCOL.reset_tolerances,
+                ControlResolutionResetPhase.ROLLBACK,
+                0,
+            )
+        self.assertEqual(raised.exception.evidence.candidate, unsafe)
+
     def test_probe_observation_uses_live_pose_and_probe_timestamp(self) -> None:
         observation = ControlObservation(
             observation_id=123,

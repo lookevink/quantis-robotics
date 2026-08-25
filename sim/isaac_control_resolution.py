@@ -12,11 +12,13 @@ from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.control_resolution import (
     CONTROL_RESOLUTION_PROTOCOL,
+    ControlResolutionResetPhase,
     ControlResolutionFailureEvidence,
     ControlResolutionProtocol,
     ControlResolutionReport,
     ControlResolutionSample,
     ControlResolutionEndpoint,
+    RejectedControlResolutionReset,
     retreat_direction,
 )
 from jepa_wm.control_safety import SimulatorSafetyLimits
@@ -41,6 +43,7 @@ from sim.isaac_control_runtime import (
 )
 from sim.isaac_control_execution import ExecutionSafetyContext, project_control_candidate
 from sim.isaac_demo_runtime import (
+    ContactReading,
     JointCommand,
     advance_physics_updates,
     move_joint_command,
@@ -53,15 +56,14 @@ def _reset_state(
     pose: Any,
     command: JointCommand,
     runtime: LiveControlRuntime,
-    interlock: LiveContactInterlock,
+    contact: ContactReading,
 ) -> TrialResetState:
     plug_position, _ = runtime.attachment.world_pose()
-    evidence = interlock.evidence
     return TrialResetState(
         pose=pose,
         joint_positions=tuple(float(value) for value in command.arm_positions),
-        collision_detected=evidence.collision_detected,
-        contact_force_newtons=evidence.maximum_contact_force_newtons,
+        collision_detected=contact.collision_detected,
+        contact_force_newtons=contact.force_newtons,
         plug_position=tuple(float(value) for value in plug_position),
         plug_attached=runtime.attachment.attached,
     )
@@ -69,20 +71,10 @@ def _reset_state(
 
 def _capture_reset_state(
     runtime: LiveControlRuntime,
-    maximum_contact_force_newtons: float,
-    operation: str,
-    *,
-    reference: TrialResetState | None = None,
-    tolerances: ResetEquivalenceTolerances | None = None,
 ) -> tuple[JointCommand, TrialResetState]:
-    """Read and optionally verify one live reset through its interlock."""
+    """Capture one raw live reset before applying equivalence policy."""
 
-    interlock = LiveContactInterlock(
-        runtime.sensor,
-        maximum_contact_force_newtons,
-        operation,
-    )
-    interlock.observe()
+    contact = ContactReading(*read_control_contact(runtime.sensor))
     command = runtime.actuators.actual_command()
     snapshot = recording_snapshot(
         RecordingLabel(RecordingMoment.INITIAL),
@@ -94,15 +86,41 @@ def _capture_reset_state(
         snapshot.end_effector_pose,
         command,
         runtime,
-        interlock,
+        contact,
     )
-    if reference is not None:
-        validate_reset_equivalence(
-            reference,
-            reset,
-            **({"tolerances": tolerances} if tolerances is not None else {}),
-        )
     return command, reset
+
+
+class ControlResolutionResetMismatch(ValueError):
+    def __init__(
+        self,
+        message: str,
+        evidence: RejectedControlResolutionReset,
+    ) -> None:
+        super().__init__(message)
+        self.evidence = evidence
+
+
+def _require_resolution_reset(
+    reference: TrialResetState,
+    candidate: TrialResetState,
+    tolerances: ResetEquivalenceTolerances,
+    phase: ControlResolutionResetPhase,
+    sample_index: int | None = None,
+) -> None:
+    try:
+        validate_reset_equivalence(reference, candidate, tolerances=tolerances)
+    except ValueError as error:
+        raise ControlResolutionResetMismatch(
+            str(error),
+            RejectedControlResolutionReset(
+                phase=phase,
+                sample_index=sample_index,
+                reference=reference,
+                candidate=candidate,
+                tolerances=tolerances,
+            ),
+        ) from error
 
 
 @dataclass
@@ -232,22 +250,24 @@ async def measure_insertion_control_resolution(
         timeline.play()
         baseline_command, reference_reset = _capture_reset_state(
             runtime,
-            limits.maximum_contact_force_newtons,
-            "insertion control resolution baseline",
         )
-        validate_reset_equivalence(
+        _require_resolution_reset(
             ControlSession.trial_context(observation, state).reset,
             reference_reset,
-            tolerances=protocol.capture_tolerances,
+            protocol.capture_tolerances,
+            ControlResolutionResetPhase.CAPTURE_TO_BASELINE,
         )
 
         for index, magnitude in enumerate(protocol.requested_translations):
             start_command, start_reset = _capture_reset_state(
                 runtime,
-                limits.maximum_contact_force_newtons,
-                f"insertion control resolution sample {index}",
-                reference=reference_reset,
-                tolerances=protocol.reset_tolerances,
+            )
+            _require_resolution_reset(
+                reference_reset,
+                start_reset,
+                protocol.reset_tolerances,
+                ControlResolutionResetPhase.SAMPLE_START,
+                index,
             )
             commanded = DroidAction(
                 (
@@ -365,10 +385,13 @@ async def measure_insertion_control_resolution(
             )
             _, rollback_reset = _capture_reset_state(
                 runtime,
-                limits.maximum_contact_force_newtons,
-                f"insertion control resolution reset verification {index}",
-                reference=reference_reset,
-                tolerances=protocol.reset_tolerances,
+            )
+            _require_resolution_reset(
+                reference_reset,
+                rollback_reset,
+                protocol.reset_tolerances,
+                ControlResolutionResetPhase.ROLLBACK,
+                index,
             )
             samples.append(
                 ControlResolutionSample(
@@ -406,6 +429,11 @@ async def measure_insertion_control_resolution(
             reference_reset=reference_reset,
             completed_samples=tuple(samples),
             error=f"{type(error).__name__}: {error}",
+            rejected_reset=(
+                error.evidence
+                if isinstance(error, ControlResolutionResetMismatch)
+                else None
+            ),
         )
         write_json_atomic(failure_path, failure.to_dict())
         raise

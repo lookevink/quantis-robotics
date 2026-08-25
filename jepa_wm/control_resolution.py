@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from enum import Enum
 import json
 from math import isclose, isfinite
 from pathlib import Path
@@ -28,6 +29,7 @@ from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_protocol import ControlObservation
 from jepa_wm.direct_safety import ControlSafetySnapshot
 from jepa_wm.trial_equivalence import (
+    ResetEquivalenceMeasurement,
     ResetEquivalenceTolerances,
     TrialResetState,
     validate_reset_equivalence,
@@ -184,6 +186,74 @@ class ControlResolutionProtocol:
 CONTROL_RESOLUTION_PROTOCOL = ControlResolutionProtocol()
 
 
+class ControlResolutionResetPhase(str, Enum):
+    CAPTURE_TO_BASELINE = "capture_to_baseline"
+    SAMPLE_START = "sample_start"
+    ROLLBACK = "rollback"
+
+
+@dataclass(frozen=True)
+class RejectedControlResolutionReset:
+    phase: ControlResolutionResetPhase
+    sample_index: int | None
+    reference: TrialResetState
+    candidate: TrialResetState
+    tolerances: ResetEquivalenceTolerances
+
+    def __post_init__(self) -> None:
+        requires_index = self.phase in (
+            ControlResolutionResetPhase.SAMPLE_START,
+            ControlResolutionResetPhase.ROLLBACK,
+        )
+        if (
+            (requires_index and (self.sample_index is None or self.sample_index < 0))
+            or (not requires_index and self.sample_index is not None)
+            or self.measurement.passes(self.tolerances)
+        ):
+            raise ValueError("rejected control resolution reset is invalid")
+
+    @property
+    def measurement(self) -> ResetEquivalenceMeasurement:
+        return ResetEquivalenceMeasurement.between(self.reference, self.candidate)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "phase": self.phase.value,
+            "sample_index": self.sample_index,
+            "reference": self.reference.to_dict(),
+            "candidate": self.candidate.to_dict(),
+            "tolerances": self.tolerances.to_dict(),
+            "measurement": self.measurement.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> RejectedControlResolutionReset:
+        if not isinstance(payload, dict):
+            raise ValueError("rejected control resolution reset must be an object")
+        sample_index = payload.get("sample_index")
+        if sample_index is not None and (
+            isinstance(sample_index, bool) or not isinstance(sample_index, int)
+        ):
+            raise ValueError("rejected reset sample index must be an integer")
+        try:
+            rejected = cls(
+                phase=ControlResolutionResetPhase(payload["phase"]),
+                sample_index=sample_index,
+                reference=TrialResetState.from_dict(payload["reference"]),
+                candidate=TrialResetState.from_dict(payload["candidate"]),
+                tolerances=ResetEquivalenceTolerances.from_dict(
+                    payload["tolerances"]
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "rejected control resolution reset is incomplete"
+            ) from error
+        if payload.get("measurement") != rejected.measurement.to_dict():
+            raise ValueError("rejected reset measurement is inconsistent")
+        return rejected
+
+
 @dataclass(frozen=True)
 class ControlResolutionEndpoint:
     pose: DroidPose
@@ -306,6 +376,7 @@ class ControlResolutionFailureEvidence:
     reference_reset: TrialResetState | None
     completed_samples: tuple[ControlResolutionSample, ...]
     error: str
+    rejected_reset: RejectedControlResolutionReset | None = None
     protocol: ControlResolutionProtocol = CONTROL_RESOLUTION_PROTOCOL
 
     def __post_init__(self) -> None:
@@ -321,12 +392,46 @@ class ControlResolutionFailureEvidence:
         ):
             raise ValueError("control resolution failure evidence is invalid")
         if self.reference_reset is None:
+            if self.rejected_reset is not None:
+                raise ValueError(
+                    "rejected resolution reset requires an acquired reference reset"
+                )
             return
         self.protocol.validate_samples(
             self.reference_reset,
             self.completed_samples,
             require_complete=False,
         )
+        if self.rejected_reset is None:
+            return
+        capture_failure = (
+            self.rejected_reset.phase
+            is ControlResolutionResetPhase.CAPTURE_TO_BASELINE
+        )
+        expected_tolerances = (
+            self.protocol.capture_tolerances
+            if capture_failure
+            else self.protocol.reset_tolerances
+        )
+        if (
+            self.rejected_reset.tolerances != expected_tolerances
+            or (
+                capture_failure
+                and (
+                    self.completed_samples
+                    or self.rejected_reset.candidate != self.reference_reset
+                )
+            )
+            or (
+                not capture_failure
+                and (
+                    self.rejected_reset.reference != self.reference_reset
+                    or self.rejected_reset.sample_index
+                    != len(self.completed_samples)
+                )
+            )
+        ):
+            raise ValueError("rejected reset is not bound to the failed protocol step")
 
     @property
     def diagnostic_only(self) -> bool:
@@ -355,6 +460,11 @@ class ControlResolutionFailureEvidence:
                 sample.to_dict() for sample in self.completed_samples
             ],
             "error": self.error,
+            "rejected_reset": (
+                self.rejected_reset.to_dict()
+                if self.rejected_reset is not None
+                else None
+            ),
             "diagnostic_only": self.diagnostic_only,
             "multi_step_authority_granted": self.multi_step_authority_granted,
             "production_authority_granted": self.production_authority_granted,
@@ -382,6 +492,13 @@ class ControlResolutionFailureEvidence:
                     for sample in payload["completed_samples"]
                 ),
                 error=str(payload["error"]),
+                rejected_reset=(
+                    RejectedControlResolutionReset.from_dict(
+                        payload["rejected_reset"]
+                    )
+                    if payload.get("rejected_reset") is not None
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(
