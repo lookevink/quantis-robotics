@@ -235,7 +235,7 @@ def _settlement_from_protocol_dict(
 
 @dataclass(frozen=True)
 class ControlResolutionProtocol:
-    translation_magnitudes_meters: tuple[float, ...] = (0.0, 5e-4, 1e-3)
+    translation_magnitudes_meters: tuple[float, ...] = (0.0, 5e-4)
     repeats_per_magnitude: int = 3
     motion_period_seconds: float = 0.25
     settlement: ControlResolutionSettlement = TrackedErrorSettlement()

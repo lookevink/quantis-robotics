@@ -505,7 +505,7 @@ class ControlResolutionReportTest(unittest.TestCase):
         self.assertAlmostEqual(summary.zero_orientation_drift_radians, 1e-5)
         self.assertEqual(
             tuple(result.requested_translation_meters for result in summary.responses),
-            (5e-4, 1e-3),
+            (5e-4,),
         )
         self.assertTrue(summary.diagnostic_only)
         self.assertFalse(summary.multi_step_authority_granted)
