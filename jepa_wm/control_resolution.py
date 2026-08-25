@@ -36,6 +36,7 @@ from sim.recording import validate_recording_id
 
 
 CONTROL_RESOLUTION_SCHEMA = "quantis.jepa_wm_control_resolution.v1"
+CONTROL_RESOLUTION_FAILURE_SCHEMA = "quantis.jepa_wm_control_resolution_failure.v1"
 CONTROL_RESOLUTION_RESET_TOLERANCES = ResetEquivalenceTolerances(
     maximum_translation_difference_meters=2e-5,
     maximum_rotation_difference_radians=1e-4,
@@ -68,6 +69,7 @@ class ControlResolutionProtocol:
     motion_period_seconds: float = 0.25
     settling_updates: int = 8
     safety_limits: SimulatorSafetyLimits = SimulatorSafetyLimits()
+    capture_tolerances: ResetEquivalenceTolerances = ResetEquivalenceTolerances()
     reset_tolerances: ResetEquivalenceTolerances = (
         CONTROL_RESOLUTION_RESET_TOLERANCES
     )
@@ -97,6 +99,37 @@ class ControlResolutionProtocol:
             for _ in range(self.repeats_per_magnitude)
         )
 
+    def validate_samples(
+        self,
+        reference_reset: TrialResetState,
+        samples: tuple[ControlResolutionSample, ...],
+        *,
+        require_complete: bool,
+    ) -> None:
+        expected_translations = (
+            self.requested_translations
+            if require_complete
+            else self.requested_translations[: len(samples)]
+        )
+        if (
+            tuple(sample.index for sample in samples)
+            != tuple(range(len(samples)))
+            or tuple(sample.requested_translation_meters for sample in samples)
+            != expected_translations
+        ):
+            raise ValueError("control resolution sample roster is invalid")
+        for sample in samples:
+            validate_reset_equivalence(
+                reference_reset,
+                sample.start_reset,
+                tolerances=self.reset_tolerances,
+            )
+            validate_reset_equivalence(
+                reference_reset,
+                sample.rollback_reset,
+                tolerances=self.reset_tolerances,
+            )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "translation_magnitudes_meters": list(
@@ -106,6 +139,7 @@ class ControlResolutionProtocol:
             "motion_period_seconds": self.motion_period_seconds,
             "settling_updates": self.settling_updates,
             "safety_limits": self.safety_limits.to_dict(),
+            "capture_tolerances": self.capture_tolerances.to_dict(),
             "reset_tolerances": self.reset_tolerances.to_dict(),
             "translation_policy": "retreat_from_recorded_target",
             "rotation_policy": "hold_current_orientation",
@@ -127,6 +161,9 @@ class ControlResolutionProtocol:
                 settling_updates=int(payload["settling_updates"]),
                 safety_limits=SimulatorSafetyLimits.from_dict(
                     payload["safety_limits"]
+                ),
+                capture_tolerances=ResetEquivalenceTolerances.from_dict(
+                    payload["capture_tolerances"]
                 ),
                 reset_tolerances=ResetEquivalenceTolerances.from_dict(
                     payload["reset_tolerances"]
@@ -263,6 +300,105 @@ class ControlResolutionSample:
 
 
 @dataclass(frozen=True)
+class ControlResolutionFailureEvidence:
+    session_id: str
+    failed_at_unix_seconds: float
+    reference_reset: TrialResetState | None
+    completed_samples: tuple[ControlResolutionSample, ...]
+    error: str
+    protocol: ControlResolutionProtocol = CONTROL_RESOLUTION_PROTOCOL
+
+    def __post_init__(self) -> None:
+        validate_recording_id(self.session_id)
+        if self.completed_samples and self.reference_reset is None:
+            raise ValueError(
+                "completed control resolution samples require a reference reset"
+            )
+        if (
+            not isfinite(self.failed_at_unix_seconds)
+            or self.failed_at_unix_seconds <= 0.0
+            or not self.error
+        ):
+            raise ValueError("control resolution failure evidence is invalid")
+        if self.reference_reset is None:
+            return
+        self.protocol.validate_samples(
+            self.reference_reset,
+            self.completed_samples,
+            require_complete=False,
+        )
+
+    @property
+    def diagnostic_only(self) -> bool:
+        return True
+
+    @property
+    def multi_step_authority_granted(self) -> bool:
+        return False
+
+    @property
+    def production_authority_granted(self) -> bool:
+        return False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema": CONTROL_RESOLUTION_FAILURE_SCHEMA,
+            "session_id": self.session_id,
+            "failed_at_unix_seconds": self.failed_at_unix_seconds,
+            "protocol": self.protocol.to_dict(),
+            "reference_reset": (
+                self.reference_reset.to_dict()
+                if self.reference_reset is not None
+                else None
+            ),
+            "completed_samples": [
+                sample.to_dict() for sample in self.completed_samples
+            ],
+            "error": self.error,
+            "diagnostic_only": self.diagnostic_only,
+            "multi_step_authority_granted": self.multi_step_authority_granted,
+            "production_authority_granted": self.production_authority_granted,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ControlResolutionFailureEvidence:
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema") != CONTROL_RESOLUTION_FAILURE_SCHEMA
+        ):
+            raise ValueError("control resolution failure schema is invalid")
+        try:
+            evidence = cls(
+                session_id=str(payload["session_id"]),
+                failed_at_unix_seconds=float(payload["failed_at_unix_seconds"]),
+                protocol=ControlResolutionProtocol.from_dict(payload["protocol"]),
+                reference_reset=(
+                    TrialResetState.from_dict(payload["reference_reset"])
+                    if payload.get("reference_reset") is not None
+                    else None
+                ),
+                completed_samples=tuple(
+                    ControlResolutionSample.from_dict(sample)
+                    for sample in payload["completed_samples"]
+                ),
+                error=str(payload["error"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "control resolution failure evidence is incomplete"
+            ) from error
+        if (
+            payload.get("diagnostic_only") is not evidence.diagnostic_only
+            or payload.get("multi_step_authority_granted")
+            is not evidence.multi_step_authority_granted
+            or payload.get("production_authority_granted")
+            is not evidence.production_authority_granted
+        ):
+            raise ValueError("control resolution failure claims are inconsistent")
+        return evidence
+
+
+@dataclass(frozen=True)
 class ControlResolutionResponse:
     requested_translation_meters: float
     mean_realized_along_axis_meters: float
@@ -337,23 +473,14 @@ class ControlResolutionReport:
             self.seed < 0
             or self.context_index <= 0
             or self.observation_id <= 0
-            or tuple(sample.index for sample in self.samples)
-            != tuple(range(len(self.samples)))
-            or tuple(sample.requested_translation_meters for sample in self.samples)
-            != self.protocol.requested_translations
         ):
             raise ValueError("control resolution sample roster is invalid")
+        self.protocol.validate_samples(
+            self.reference_reset,
+            self.samples,
+            require_complete=True,
+        )
         for sample in self.samples:
-            validate_reset_equivalence(
-                self.reference_reset,
-                sample.start_reset,
-                tolerances=self.protocol.reset_tolerances,
-            )
-            validate_reset_equivalence(
-                self.reference_reset,
-                sample.rollback_reset,
-                tolerances=self.protocol.reset_tolerances,
-            )
             commanded = np.asarray(sample.commanded_action.values, dtype=np.float64)
             expected = direction * sample.requested_translation_meters
             expected_target = sample.start_reset.pose.applied(sample.commanded_action)
@@ -511,7 +638,7 @@ class ControlResolutionReport:
         validate_reset_equivalence(
             captured_reset,
             self.reference_reset,
-            tolerances=self.protocol.reset_tolerances,
+            tolerances=self.protocol.capture_tolerances,
         )
 
     @classmethod

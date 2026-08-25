@@ -13,6 +13,7 @@ from jepa_wm.action import DroidAction, DroidPose
 from jepa_wm.control_resolution import (
     CONTROL_RESOLUTION_PROTOCOL,
     ControlResolutionEndpoint,
+    ControlResolutionFailureEvidence,
     ControlResolutionReport,
     ControlResolutionSample,
     retreat_direction,
@@ -79,6 +80,21 @@ def _sample(index: int, magnitude: float) -> ControlResolutionSample:
 
 
 class ControlResolutionReportTest(unittest.TestCase):
+    def test_failure_evidence_round_trip_requires_reset_for_samples(self) -> None:
+        failure = ControlResolutionFailureEvidence(
+            session_id="resolution-52600-c43",
+            failed_at_unix_seconds=123.0,
+            reference_reset=_reset(),
+            completed_samples=(_sample(0, 0.0),),
+            error="RuntimeError: stopped",
+        )
+
+        self.assertEqual(
+            ControlResolutionFailureEvidence.from_dict(failure.to_dict()), failure
+        )
+        with self.assertRaisesRegex(ValueError, "reference reset"):
+            replace(failure, reference_reset=None)
+
     def test_capture_endpoint_returns_raw_pose_and_live_safety_state(self) -> None:
         command = JointCommand(np.zeros(7), 0.04)
         pose = _reset().pose
@@ -208,6 +224,12 @@ class ControlResolutionReportTest(unittest.TestCase):
             "current_gripper_width_m": 0.04,
         }
         restored.validate_capture(observation.to_dict(), state)
+        lifecycle_drift = dict(state)
+        lifecycle_drift["current_joint_positions"] = [
+            state["current_joint_positions"][0] + 5e-4,
+            *state["current_joint_positions"][1:],
+        ]
+        restored.validate_capture(observation.to_dict(), lifecycle_drift)
         with self.assertRaisesRegex(ValueError, "bound to its capture"):
             restored.validate_capture(
                 replace(

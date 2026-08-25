@@ -12,6 +12,7 @@ from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_protocol import ProposedControl
 from jepa_wm.control_resolution import (
     CONTROL_RESOLUTION_PROTOCOL,
+    ControlResolutionFailureEvidence,
     ControlResolutionProtocol,
     ControlResolutionReport,
     ControlResolutionSample,
@@ -212,6 +213,7 @@ async def measure_insertion_control_resolution(
     runtime = synchronized.runtime
     direction = retreat_direction(observation.pose, observation.target_pose)
     samples: list[ControlResolutionSample] = []
+    reference_reset: TrialResetState | None = None
     try:
         timeline.play()
         baseline_command, reference_reset = _capture_reset_state(
@@ -222,7 +224,7 @@ async def measure_insertion_control_resolution(
         validate_reset_equivalence(
             ControlSession.trial_context(observation, state).reset,
             reference_reset,
-            tolerances=protocol.reset_tolerances,
+            tolerances=protocol.capture_tolerances,
         )
 
         for index, magnitude in enumerate(protocol.requested_translations):
@@ -383,18 +385,15 @@ async def measure_insertion_control_resolution(
         write_json_atomic(report_path, report.to_dict())
         return report.to_dict()
     except Exception as error:
-        write_json_atomic(
-            failure_path,
-            {
-                "session_id": session_id,
-                "failed_at_unix_seconds": time(),
-                "completed_samples": [sample.to_dict() for sample in samples],
-                "error": f"{type(error).__name__}: {error}",
-                "diagnostic_only": True,
-                "multi_step_authority_granted": False,
-                "production_authority_granted": False,
-            },
+        failure = ControlResolutionFailureEvidence(
+            session_id=session_id,
+            failed_at_unix_seconds=time(),
+            protocol=protocol,
+            reference_reset=reference_reset,
+            completed_samples=tuple(samples),
+            error=f"{type(error).__name__}: {error}",
         )
+        write_json_atomic(failure_path, failure.to_dict())
         raise
     finally:
         timeline.pause()
