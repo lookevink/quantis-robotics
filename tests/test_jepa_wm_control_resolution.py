@@ -4,7 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 import tempfile
 
 import numpy as np
@@ -14,10 +14,15 @@ from jepa_wm.control_resolution import (
     CONTROL_RESOLUTION_PROTOCOL,
     ControlResolutionEndpoint,
     ControlResolutionFailureEvidence,
+    ControlResolutionProtocol,
     ControlResolutionReport,
     ControlResolutionResetPhase,
     ControlResolutionSample,
+    ControlResolutionSettlementEvidence,
+    FixedUpdateSettlement,
     RejectedControlResolutionReset,
+    TrackedErrorSettlement,
+    TrackedSettlementEvidence,
     retreat_direction,
 )
 from jepa_wm.control_safety import ControlInterlockEvidence
@@ -36,6 +41,7 @@ from sim.isaac_control_resolution import (
     _capture_endpoint,
     _capture_reset_state,
     _require_resolution_reset,
+    settle_resolution_motion,
 )
 from sim.isaac_control_resolution import resolution_probe_observation
 from sim.isaac_control_resolution import resolution_joint_target
@@ -88,10 +94,63 @@ def _sample(index: int, magnitude: float) -> ControlResolutionSample:
         ),
         interlock=ControlInterlockEvidence(0.0, False),
         rollback_reset=start,
+        tracked_settlement=TrackedSettlementEvidence(
+            motion=ControlResolutionSettlementEvidence(
+                requested_joint_motion_radians=0.0,
+                required_tracking_error_radians=5e-4,
+                updates_used=2,
+                passing_tracking_errors_radians=(3e-4, 2e-4),
+            ),
+            rollback=ControlResolutionSettlementEvidence(
+                requested_joint_motion_radians=2e-4,
+                required_tracking_error_radians=5e-4,
+                updates_used=2,
+                passing_tracking_errors_radians=(1e-4, 0.0),
+            ),
+            rollback_interlock=ControlInterlockEvidence(0.0, False),
+        ),
     )
 
 
 class ControlResolutionReportTest(unittest.TestCase):
+    def test_legacy_fixed_settling_report_remains_reconstructible(self) -> None:
+        protocol = ControlResolutionProtocol(
+            translation_magnitudes_meters=(0.0, 3e-5, 1e-4, 2e-4),
+            settlement=FixedUpdateSettlement(8),
+        )
+        samples = tuple(
+            replace(
+                _sample(index, magnitude),
+                tracked_settlement=None,
+            )
+            for index, magnitude in enumerate(protocol.requested_translations)
+        )
+        report = ControlResolutionReport(
+            session_id="resolution-legacy-52600-c43",
+            reference_recording="contact-insertion-held-00",
+            seed=52600,
+            context_index=43,
+            observation_id=123,
+            captured_pose=_reset().pose,
+            recorded_target_pose=DroidPose(
+                (0.401, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)
+            ),
+            reference_reset=_reset(),
+            samples=samples,
+            protocol=protocol,
+        )
+
+        restored = ControlResolutionReport.from_dict(report.to_dict())
+
+        self.assertEqual(restored, report)
+        self.assertEqual(restored.protocol.settlement, FixedUpdateSettlement(8))
+
+    def test_settlement_threshold_is_noise_floor_or_command_fraction(self) -> None:
+        policy = TrackedErrorSettlement()
+
+        self.assertEqual(policy.maximum_tracking_error(0.001), 5e-4)
+        self.assertEqual(policy.maximum_tracking_error(0.004), 0.001)
+
     def test_probe_retreat_direction_flips_after_crossing_recorded_target(self) -> None:
         recorded_target = DroidPose(
             (0.400189, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)
@@ -168,7 +227,20 @@ class ControlResolutionReportTest(unittest.TestCase):
                 *reference.plug_position[1:],
             ),
         )
-        samples = (replace(samples[0], rollback_reset=noisy_rollback), *samples[1:])
+        samples = (
+            replace(
+                samples[0],
+                rollback_reset=noisy_rollback,
+                tracked_settlement=replace(
+                    samples[0].tracked_settlement,
+                    rollback=replace(
+                        samples[0].tracked_settlement.rollback,
+                        passing_tracking_errors_radians=(4e-4, 3.96e-4),
+                    ),
+                ),
+            ),
+            *samples[1:],
+        )
 
         report = ControlResolutionReport(
             session_id="resolution-52600-c43",
@@ -306,6 +378,33 @@ class ControlResolutionReportTest(unittest.TestCase):
         self.assertEqual(
             ControlResolutionFailureEvidence.from_dict(failure.to_dict()), failure
         )
+        missing_settlement = failure.to_dict()
+        del missing_settlement["completed_samples"][0]["tracked_settlement"]
+        with self.assertRaisesRegex(ValueError, "failure evidence is incomplete"):
+            ControlResolutionFailureEvidence.from_dict(missing_settlement)
+
+        missing_rollback_interlock = failure.to_dict()
+        del missing_rollback_interlock["completed_samples"][0][
+            "tracked_settlement"
+        ]["rollback_interlock"]
+        with self.assertRaisesRegex(ValueError, "failure evidence is incomplete"):
+            ControlResolutionFailureEvidence.from_dict(
+                missing_rollback_interlock
+            )
+
+        unsafe_rollback = failure.to_dict()
+        unsafe_rollback["completed_samples"][0]["tracked_settlement"][
+            "rollback_interlock"
+        ]["maximum_contact_force_newtons"] = 3.0
+        with self.assertRaisesRegex(ValueError, "failure evidence is incomplete"):
+            ControlResolutionFailureEvidence.from_dict(unsafe_rollback)
+
+        unsafe_endpoint = failure.to_dict()
+        unsafe_endpoint["completed_samples"][0]["endpoint"]["safety"][
+            "plug_attached"
+        ] = False
+        with self.assertRaisesRegex(ValueError, "failure evidence is incomplete"):
+            ControlResolutionFailureEvidence.from_dict(unsafe_endpoint)
         with self.assertRaisesRegex(ValueError, "reference reset"):
             replace(failure, reference_reset=None)
 
@@ -406,7 +505,7 @@ class ControlResolutionReportTest(unittest.TestCase):
         self.assertAlmostEqual(summary.zero_orientation_drift_radians, 1e-5)
         self.assertEqual(
             tuple(result.requested_translation_meters for result in summary.responses),
-            (3e-5, 1e-4, 2e-4),
+            (5e-4, 1e-3),
         )
         self.assertTrue(summary.diagnostic_only)
         self.assertFalse(summary.multi_step_authority_granted)
@@ -551,6 +650,97 @@ class ControlResolutionReportTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "safety"):
             ControlResolutionReport(samples=(detached, *samples[1:]), **arguments)
+
+
+class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_settlement_requires_two_consecutive_tracked_updates(self) -> None:
+        target = JointCommand(np.zeros(7), 0.04)
+        actual_commands = (
+            JointCommand(np.asarray((4e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)), 0.04),
+            JointCommand(np.asarray((1e-3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)), 0.04),
+            JointCommand(np.asarray((4e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)), 0.04),
+            JointCommand(np.asarray((3e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)), 0.04),
+        )
+        runtime = SimpleNamespace(
+            actuators=SimpleNamespace(
+                actual_command=Mock(side_effect=actual_commands)
+            )
+        )
+        interlock = SimpleNamespace(observe=Mock())
+
+        with patch(
+            "sim.isaac_control_resolution.advance_physics_updates",
+            new=AsyncMock(),
+        ) as advance:
+            evidence = await settle_resolution_motion(
+                runtime,
+                target,
+                target,
+                interlock,
+                TrackedErrorSettlement(),
+            )
+
+        self.assertEqual(evidence.updates_used, 4)
+        self.assertEqual(evidence.passing_tracking_errors_radians, (4e-4, 3e-4))
+        self.assertEqual(evidence.final_tracking_error_radians, 3e-4)
+        self.assertEqual(advance.await_count, 4)
+        self.assertEqual(
+            advance.await_args_list,
+            [call(1, interlock.observe) for _ in range(4)],
+        )
+
+    async def test_settlement_fails_after_bounded_update_timeout(self) -> None:
+        target = JointCommand(np.zeros(7), 0.04)
+        runtime = SimpleNamespace(
+            actuators=SimpleNamespace(
+                actual_command=Mock(
+                    side_effect=(
+                        JointCommand(
+                            np.asarray((1e-3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+                            0.04,
+                        )
+                        for _ in range(3)
+                    )
+                )
+            )
+        )
+        interlock = SimpleNamespace(observe=Mock())
+        policy = TrackedErrorSettlement(maximum_updates=3)
+
+        with patch(
+            "sim.isaac_control_resolution.advance_physics_updates",
+            new=AsyncMock(),
+        ) as advance:
+            with self.assertRaisesRegex(RuntimeError, "bounded timeout"):
+                await settle_resolution_motion(
+                    runtime,
+                    target,
+                    target,
+                    interlock,
+                    policy,
+                )
+
+        self.assertEqual(advance.await_count, 3)
+
+    async def test_fixed_settlement_dispatches_exact_update_count(self) -> None:
+        runtime = SimpleNamespace()
+        command = JointCommand(np.zeros(7), 0.04)
+        interlock = SimpleNamespace(observe=Mock())
+
+        with patch(
+            "sim.isaac_control_resolution.advance_physics_updates",
+            new=AsyncMock(),
+        ) as advance:
+            evidence = await settle_resolution_motion(
+                runtime,
+                command,
+                command,
+                interlock,
+                FixedUpdateSettlement(8),
+            )
+
+        self.assertIsNone(evidence)
+        advance.assert_awaited_once_with(8, interlock.observe)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,9 @@ from jepa_wm.control_resolution import (
     ControlResolutionProtocol,
     ControlResolutionReport,
     ControlResolutionSample,
+    ControlResolutionSettlement,
+    ControlResolutionSettlementEvidence,
+    TrackedErrorSettlement,
     ControlResolutionEndpoint,
     RejectedControlResolutionReset,
 )
@@ -134,6 +137,69 @@ class AttachedControlInterlock:
         if not self.runtime.attachment.attached:
             raise RuntimeError("insertion control resolution lost plug attachment")
         return reading
+
+
+def _maximum_joint_error(actual: JointCommand, target: JointCommand) -> float:
+    return max(
+        abs(float(actual_value) - float(target_value))
+        for actual_value, target_value in zip(
+            actual.arm_positions,
+            target.arm_positions,
+        )
+    )
+
+
+async def settle_resolution_target(
+    runtime: LiveControlRuntime,
+    start: JointCommand,
+    target: JointCommand,
+    interlock: AttachedControlInterlock,
+    policy: TrackedErrorSettlement,
+) -> ControlResolutionSettlementEvidence:
+    """Wait for consecutive command-relative tracking passes within a bound."""
+
+    requested_motion = _maximum_joint_error(start, target)
+    required_error = policy.maximum_tracking_error(requested_motion)
+    passing_errors: list[float] = []
+    for update_count in range(1, policy.maximum_updates + 1):
+        await advance_physics_updates(1, interlock.observe)
+        tracking_error = _maximum_joint_error(
+            runtime.actuators.actual_command(),
+            target,
+        )
+        if tracking_error <= required_error:
+            passing_errors.append(tracking_error)
+        else:
+            passing_errors.clear()
+        if len(passing_errors) >= policy.required_consecutive_updates:
+            return ControlResolutionSettlementEvidence(
+                requested_joint_motion_radians=requested_motion,
+                required_tracking_error_radians=required_error,
+                updates_used=update_count,
+                passing_tracking_errors_radians=tuple(passing_errors),
+            )
+    raise RuntimeError(
+        "insertion control resolution did not settle within its bounded timeout"
+    )
+
+
+async def settle_resolution_motion(
+    runtime: LiveControlRuntime,
+    start: JointCommand,
+    target: JointCommand,
+    interlock: AttachedControlInterlock,
+    settlement: ControlResolutionSettlement,
+) -> ControlResolutionSettlementEvidence | None:
+    if isinstance(settlement, TrackedErrorSettlement):
+        return await settle_resolution_target(
+            runtime,
+            start,
+            target,
+            interlock,
+            settlement,
+        )
+    await advance_physics_updates(settlement.updates, interlock.observe)
+    return None
 
 
 def _capture_endpoint(
@@ -344,9 +410,12 @@ async def measure_insertion_control_resolution(
                 sample_period_seconds=protocol.motion_period_seconds,
                 observe_safety=sample_interlock.observe,
             )
-            await advance_physics_updates(
-                protocol.settling_updates,
-                sample_interlock.observe,
+            motion_settlement = await settle_resolution_motion(
+                runtime,
+                start_command,
+                target,
+                sample_interlock,
+                protocol.settlement,
             )
             actual, endpoint = _capture_endpoint(runtime)
             sample_interlock.observe()
@@ -371,9 +440,12 @@ async def measure_insertion_control_resolution(
                 sample_period_seconds=protocol.motion_period_seconds,
                 observe_safety=rollback_interlock.observe,
             )
-            await advance_physics_updates(
-                protocol.settling_updates,
-                rollback_interlock.observe,
+            rollback_settlement = await settle_resolution_motion(
+                runtime,
+                actual,
+                baseline_command,
+                rollback_interlock,
+                protocol.settlement,
             )
             _, rollback_reset = _capture_reset_state(
                 runtime,
@@ -396,6 +468,11 @@ async def measure_insertion_control_resolution(
                     endpoint=endpoint,
                     interlock=sample_interlock.contact.evidence,
                     rollback_reset=rollback_reset,
+                    tracked_settlement=protocol.settlement.complete_evidence(
+                        motion_settlement,
+                        rollback_settlement,
+                        rollback_interlock.contact.evidence,
+                    ),
                 )
             )
 

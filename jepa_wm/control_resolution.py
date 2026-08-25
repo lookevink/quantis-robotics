@@ -8,7 +8,7 @@ from enum import Enum
 import json
 from math import isclose, isfinite
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Union
 
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -65,11 +65,180 @@ def retreat_direction(
 
 
 @dataclass(frozen=True)
+class TrackedErrorSettlement:
+    absolute_tracking_floor_radians: float = 5e-4
+    tracking_error_fraction_of_requested_motion: float = 0.25
+    required_consecutive_updates: int = 2
+    maximum_updates: int = 32
+
+    def __post_init__(self) -> None:
+        if (
+            not isfinite(self.absolute_tracking_floor_radians)
+            or self.absolute_tracking_floor_radians <= 0.0
+            or not isfinite(self.tracking_error_fraction_of_requested_motion)
+            or not 0.0 < self.tracking_error_fraction_of_requested_motion < 1.0
+            or isinstance(self.required_consecutive_updates, bool)
+            or not isinstance(self.required_consecutive_updates, int)
+            or self.required_consecutive_updates <= 0
+            or isinstance(self.maximum_updates, bool)
+            or not isinstance(self.maximum_updates, int)
+            or self.maximum_updates < self.required_consecutive_updates
+        ):
+            raise ValueError("control resolution settlement policy is invalid")
+
+    def maximum_tracking_error(self, requested_joint_motion_radians: float) -> float:
+        if (
+            not isfinite(requested_joint_motion_radians)
+            or requested_joint_motion_radians < 0.0
+        ):
+            raise ValueError("requested joint motion is invalid")
+        return max(
+            self.absolute_tracking_floor_radians,
+            requested_joint_motion_radians
+            * self.tracking_error_fraction_of_requested_motion,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "absolute_tracking_floor_radians": (
+                self.absolute_tracking_floor_radians
+            ),
+            "tracking_error_fraction_of_requested_motion": (
+                self.tracking_error_fraction_of_requested_motion
+            ),
+            "required_consecutive_updates": self.required_consecutive_updates,
+            "maximum_updates": self.maximum_updates,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> TrackedErrorSettlement:
+        if not isinstance(payload, dict):
+            raise ValueError("control resolution settlement policy must be an object")
+        required_updates = payload.get("required_consecutive_updates")
+        maximum_updates = payload.get("maximum_updates")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int)
+            for value in (required_updates, maximum_updates)
+        ):
+            raise ValueError("settlement update counts must be integers")
+        try:
+            return cls(
+                absolute_tracking_floor_radians=float(
+                    payload["absolute_tracking_floor_radians"]
+                ),
+                tracking_error_fraction_of_requested_motion=float(
+                    payload["tracking_error_fraction_of_requested_motion"]
+                ),
+                required_consecutive_updates=required_updates,
+                maximum_updates=maximum_updates,
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "control resolution settlement policy is incomplete"
+            ) from error
+
+    def protocol_fields(self) -> dict[str, Any]:
+        return {"tracked_error_settlement": self.to_dict()}
+
+    def validate_evidence(
+        self,
+        evidence: TrackedSettlementEvidence | None,
+        motion_requested_joint_motion_radians: float,
+        motion_final_tracking_error_radians: float,
+        rollback_requested_joint_motion_radians: float,
+        rollback_final_tracking_error_radians: float,
+    ) -> None:
+        if evidence is None:
+            raise ValueError("control resolution settlement is missing")
+        evidence.validate(
+            self,
+            motion_requested_joint_motion_radians,
+            motion_final_tracking_error_radians,
+            rollback_requested_joint_motion_radians,
+            rollback_final_tracking_error_radians,
+        )
+
+    def complete_evidence(
+        self,
+        motion: ControlResolutionSettlementEvidence | None,
+        rollback: ControlResolutionSettlementEvidence | None,
+        rollback_interlock: ControlInterlockEvidence,
+    ) -> TrackedSettlementEvidence:
+        if motion is None or rollback is None:
+            raise ValueError("tracked settlement evidence is incomplete")
+        return TrackedSettlementEvidence(motion, rollback, rollback_interlock)
+
+
+@dataclass(frozen=True)
+class FixedUpdateSettlement:
+    updates: int
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.updates, bool)
+            or not isinstance(self.updates, int)
+            or self.updates <= 0
+        ):
+            raise ValueError("fixed settlement update count is invalid")
+
+    def protocol_fields(self) -> dict[str, Any]:
+        return {"settling_updates": self.updates}
+
+    def validate_evidence(
+        self,
+        evidence: TrackedSettlementEvidence | None,
+        motion_requested_joint_motion_radians: float,
+        motion_final_tracking_error_radians: float,
+        rollback_requested_joint_motion_radians: float,
+        rollback_final_tracking_error_radians: float,
+    ) -> None:
+        del (
+            motion_requested_joint_motion_radians,
+            motion_final_tracking_error_radians,
+            rollback_requested_joint_motion_radians,
+            rollback_final_tracking_error_radians,
+        )
+        if evidence is not None:
+            raise ValueError("fixed-update control resolution sample has settlement")
+
+    def complete_evidence(
+        self,
+        motion: ControlResolutionSettlementEvidence | None,
+        rollback: ControlResolutionSettlementEvidence | None,
+        rollback_interlock: ControlInterlockEvidence,
+    ) -> None:
+        del rollback_interlock
+        if motion is not None or rollback is not None:
+            raise ValueError("fixed-update settlement produced tracked evidence")
+        return None
+
+
+ControlResolutionSettlement = Union[
+    FixedUpdateSettlement,
+    TrackedErrorSettlement,
+]
+
+
+def _settlement_from_protocol_dict(
+    payload: Mapping[str, Any],
+) -> ControlResolutionSettlement:
+    has_tracked = "tracked_error_settlement" in payload
+    has_fixed = "settling_updates" in payload
+    if has_tracked == has_fixed:
+        raise ValueError("control resolution settlement variant is invalid")
+    if has_tracked:
+        return TrackedErrorSettlement.from_dict(
+            payload["tracked_error_settlement"]
+        )
+    return FixedUpdateSettlement(payload["settling_updates"])
+
+
+@dataclass(frozen=True)
 class ControlResolutionProtocol:
-    translation_magnitudes_meters: tuple[float, ...] = (0.0, 3e-5, 1e-4, 2e-4)
+    translation_magnitudes_meters: tuple[float, ...] = (0.0, 5e-4, 1e-3)
     repeats_per_magnitude: int = 3
     motion_period_seconds: float = 0.25
-    settling_updates: int = 8
+    settlement: ControlResolutionSettlement = TrackedErrorSettlement()
     safety_limits: SimulatorSafetyLimits = SimulatorSafetyLimits()
     capture_tolerances: ResetEquivalenceTolerances = ResetEquivalenceTolerances()
     reset_tolerances: ResetEquivalenceTolerances = (
@@ -89,7 +258,10 @@ class ControlResolutionProtocol:
             or self.repeats_per_magnitude < 2
             or not isfinite(self.motion_period_seconds)
             or self.motion_period_seconds != 1.0 / DROID_FPS
-            or self.settling_updates <= 0
+            or not isinstance(
+                self.settlement,
+                (FixedUpdateSettlement, TrackedErrorSettlement),
+            )
         ):
             raise ValueError("control resolution protocol is invalid")
 
@@ -155,14 +327,68 @@ class ControlResolutionProtocol:
                 tolerances=self.reset_tolerances,
             )
 
+    def validate_sample_execution(
+        self,
+        reference_reset: TrialResetState,
+        sample: ControlResolutionSample,
+    ) -> None:
+        expected_joint_delta = max(
+            abs(proposed - current)
+            for proposed, current in zip(
+                sample.projection.proposed_joint_positions,
+                sample.start_reset.joint_positions,
+            )
+        )
+        rollback_requested_joint_motion = max(
+            abs(actual - target)
+            for actual, target in zip(
+                sample.endpoint.safety.joint_positions,
+                reference_reset.joint_positions,
+            )
+        )
+        rollback_final_tracking_error = max(
+            abs(actual - target)
+            for actual, target in zip(
+                sample.rollback_reset.joint_positions,
+                reference_reset.joint_positions,
+            )
+        )
+        self.settlement.validate_evidence(
+            sample.tracked_settlement,
+            expected_joint_delta,
+            sample.settled_joint_tracking_error_radians,
+            rollback_requested_joint_motion,
+            rollback_final_tracking_error,
+        )
+        rollback_interlock = (
+            sample.tracked_settlement.rollback_interlock
+            if sample.tracked_settlement is not None
+            else None
+        )
+        interlocks = (sample.interlock, rollback_interlock)
+        if any(
+            evidence is not None
+            and (
+                evidence.collision_detected
+                or evidence.maximum_contact_force_newtons
+                > self.safety_limits.maximum_contact_force_newtons
+            )
+            for evidence in interlocks
+        ) or (
+            sample.endpoint.safety.collision_detected
+            or sample.endpoint.safety.contact_force_newtons
+            > self.safety_limits.maximum_contact_force_newtons
+            or not sample.endpoint.safety.plug_attached
+        ):
+            raise ValueError("control resolution sample failed safety")
+
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "translation_magnitudes_meters": list(
                 self.translation_magnitudes_meters
             ),
             "repeats_per_magnitude": self.repeats_per_magnitude,
             "motion_period_seconds": self.motion_period_seconds,
-            "settling_updates": self.settling_updates,
             "safety_limits": self.safety_limits.to_dict(),
             "capture_tolerances": self.capture_tolerances.to_dict(),
             "reset_tolerances": self.reset_tolerances.to_dict(),
@@ -170,6 +396,8 @@ class ControlResolutionProtocol:
             "rotation_policy": "hold_current_orientation",
             "gripper_policy": "hold_current_width",
         }
+        payload.update(self.settlement.protocol_fields())
+        return payload
 
     @classmethod
     def from_dict(cls, payload: Any) -> ControlResolutionProtocol:
@@ -183,7 +411,7 @@ class ControlResolutionProtocol:
                 ),
                 repeats_per_magnitude=int(payload["repeats_per_magnitude"]),
                 motion_period_seconds=float(payload["motion_period_seconds"]),
-                settling_updates=int(payload["settling_updates"]),
+                settlement=_settlement_from_protocol_dict(payload),
                 safety_limits=SimulatorSafetyLimits.from_dict(
                     payload["safety_limits"]
                 ),
@@ -207,6 +435,171 @@ class ControlResolutionProtocol:
 
 
 CONTROL_RESOLUTION_PROTOCOL = ControlResolutionProtocol()
+
+
+@dataclass(frozen=True)
+class ControlResolutionSettlementEvidence:
+    requested_joint_motion_radians: float
+    required_tracking_error_radians: float
+    updates_used: int
+    passing_tracking_errors_radians: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        scalars = (
+            self.requested_joint_motion_radians,
+            self.required_tracking_error_radians,
+            *self.passing_tracking_errors_radians,
+        )
+        if (
+            not all(isfinite(value) and value >= 0.0 for value in scalars)
+            or self.required_tracking_error_radians <= 0.0
+            or not self.passing_tracking_errors_radians
+            or isinstance(self.updates_used, bool)
+            or not isinstance(self.updates_used, int)
+            or self.updates_used <= 0
+            or any(
+                error > self.required_tracking_error_radians
+                for error in self.passing_tracking_errors_radians
+            )
+        ):
+            raise ValueError("control resolution settlement evidence is invalid")
+
+    @property
+    def final_tracking_error_radians(self) -> float:
+        return self.passing_tracking_errors_radians[-1]
+
+    def validate(self, policy: TrackedErrorSettlement) -> None:
+        if (
+            not isclose(
+                self.required_tracking_error_radians,
+                policy.maximum_tracking_error(
+                    self.requested_joint_motion_radians
+                ),
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+            or len(self.passing_tracking_errors_radians)
+            != policy.required_consecutive_updates
+            or not policy.required_consecutive_updates
+            <= self.updates_used
+            <= policy.maximum_updates
+        ):
+            raise ValueError(
+                "control resolution settlement does not match its policy"
+            )
+
+    def to_dict(self) -> dict[str, float | int]:
+        return {
+            "requested_joint_motion_radians": (
+                self.requested_joint_motion_radians
+            ),
+            "required_tracking_error_radians": (
+                self.required_tracking_error_radians
+            ),
+            "updates_used": self.updates_used,
+            "passing_tracking_errors_radians": list(
+                self.passing_tracking_errors_radians
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ControlResolutionSettlementEvidence:
+        if not isinstance(payload, dict):
+            raise ValueError("control resolution settlement must be an object")
+        updates_used = payload.get("updates_used")
+        if isinstance(updates_used, bool) or not isinstance(updates_used, int):
+            raise ValueError("control resolution settlement updates must be an integer")
+        try:
+            return cls(
+                requested_joint_motion_radians=float(
+                    payload["requested_joint_motion_radians"]
+                ),
+                required_tracking_error_radians=float(
+                    payload["required_tracking_error_radians"]
+                ),
+                updates_used=updates_used,
+                passing_tracking_errors_radians=tuple(
+                    float(value)
+                    for value in payload["passing_tracking_errors_radians"]
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "control resolution settlement is incomplete"
+            ) from error
+
+
+@dataclass(frozen=True)
+class TrackedSettlementEvidence:
+    motion: ControlResolutionSettlementEvidence
+    rollback: ControlResolutionSettlementEvidence
+    rollback_interlock: ControlInterlockEvidence
+
+    def validate(
+        self,
+        policy: TrackedErrorSettlement,
+        motion_requested_joint_motion_radians: float,
+        motion_final_tracking_error_radians: float,
+        rollback_requested_joint_motion_radians: float,
+        rollback_final_tracking_error_radians: float,
+    ) -> None:
+        comparisons = (
+            (
+                self.motion,
+                motion_requested_joint_motion_radians,
+                motion_final_tracking_error_radians,
+            ),
+            (
+                self.rollback,
+                rollback_requested_joint_motion_radians,
+                rollback_final_tracking_error_radians,
+            ),
+        )
+        for evidence, requested_motion, final_error in comparisons:
+            evidence.validate(policy)
+            if (
+                not isclose(
+                    evidence.requested_joint_motion_radians,
+                    requested_motion,
+                    rel_tol=0.0,
+                    abs_tol=1e-12,
+                )
+                or not isclose(
+                    evidence.final_tracking_error_radians,
+                    final_error,
+                    rel_tol=0.0,
+                    abs_tol=1e-12,
+                )
+            ):
+                raise ValueError(
+                    "control resolution settlement claims are inconsistent"
+                )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "motion": self.motion.to_dict(),
+            "rollback": self.rollback.to_dict(),
+            "rollback_interlock": self.rollback_interlock.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> TrackedSettlementEvidence:
+        if not isinstance(payload, dict):
+            raise ValueError("tracked settlement evidence must be an object")
+        try:
+            return cls(
+                motion=ControlResolutionSettlementEvidence.from_dict(
+                    payload["motion"]
+                ),
+                rollback=ControlResolutionSettlementEvidence.from_dict(
+                    payload["rollback"]
+                ),
+                rollback_interlock=ControlInterlockEvidence.from_dict(
+                    payload["rollback_interlock"]
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("tracked settlement evidence is incomplete") from error
 
 
 class ControlResolutionResetPhase(str, Enum):
@@ -309,6 +702,7 @@ class ControlResolutionSample:
     endpoint: ControlResolutionEndpoint
     interlock: ControlInterlockEvidence
     rollback_reset: TrialResetState
+    tracked_settlement: TrackedSettlementEvidence | None = None
 
     def __post_init__(self) -> None:
         scalars = (
@@ -347,7 +741,7 @@ class ControlResolutionSample:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "index": self.index,
             "requested_translation_meters": self.requested_translation_meters,
             "start_reset": self.start_reset.to_dict(),
@@ -362,6 +756,9 @@ class ControlResolutionSample:
             "interlock": self.interlock.to_dict(),
             "rollback_reset": self.rollback_reset.to_dict(),
         }
+        if self.tracked_settlement is not None:
+            payload["tracked_settlement"] = self.tracked_settlement.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, payload: Any) -> ControlResolutionSample:
@@ -380,6 +777,13 @@ class ControlResolutionSample:
                 endpoint=ControlResolutionEndpoint.from_dict(payload["endpoint"]),
                 interlock=ControlInterlockEvidence.from_dict(payload["interlock"]),
                 rollback_reset=TrialResetState.from_dict(payload["rollback_reset"]),
+                tracked_settlement=(
+                    TrackedSettlementEvidence.from_dict(
+                        payload["tracked_settlement"]
+                    )
+                    if payload.get("tracked_settlement") is not None
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("control resolution sample is incomplete") from error
@@ -425,6 +829,8 @@ class ControlResolutionFailureEvidence:
             self.completed_samples,
             require_complete=False,
         )
+        for sample in self.completed_samples:
+            self.protocol.validate_sample_execution(self.reference_reset, sample)
         if self.rejected_reset is None:
             return
         capture_failure = (
@@ -694,16 +1100,7 @@ class ControlResolutionReport:
                 * self.protocol.motion_period_seconds
             ):
                 raise ValueError("control resolution command does not match its protocol")
-            if (
-                sample.interlock.collision_detected
-                or sample.interlock.maximum_contact_force_newtons
-                > safety_limits.maximum_contact_force_newtons
-                or sample.endpoint.safety.collision_detected
-                or sample.endpoint.safety.contact_force_newtons
-                > safety_limits.maximum_contact_force_newtons
-                or not sample.endpoint.safety.plug_attached
-            ):
-                raise ValueError("control resolution sample failed safety")
+            self.protocol.validate_sample_execution(self.reference_reset, sample)
 
     @property
     def summary(self) -> ControlResolutionSummary:
