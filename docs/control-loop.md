@@ -576,16 +576,13 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     provenance, metrics, off-by-one negative, and preserved-artifact record are
     in the [dense insertion planner checkpoint](../README.md#dense-insertion-planner-checkpoint).
     At roughly 32 seconds per command, the search remains outside the live
-    freshness budget. The resident proposal path has now passed its first
-    no-actuation checkpoint on seed `52600`, context `43`: the response arrived
-    at `0.423 s` and the live safety snapshot was timestamped at `0.803 s`
-    after capture; the `0.746 mm` insertion
-    action passed live IK at `0.00250 rad` maximum joint change with `0 N`
-    contact, no collision, and retained attachment. The policy rejects an
-    execution claim and the session has no result. Seed `52601` repeatability
-    and a separately authorized bounded live trial remain open; insertion
-    filming and production authority remain false. Full evidence is in the
-    linked README checkpoint.
+    freshness budget. The resident proposal path has now passed no-actuation
+    context-43 checks on both untouched seeds with fresh responses, passing
+    live IK/contact/attachment evidence, and no result. The no-actuation policy
+    rejects execution for both sessions. This closes `2/2` resident
+    first-action freshness/no-actuation safety only. A separately authorized
+    bounded live trial remains open; insertion filming and production authority
+    remain false. Exact per-seed evidence is in the linked README checkpoint.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

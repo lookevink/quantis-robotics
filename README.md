@@ -1073,8 +1073,8 @@ the frozen JEPA-encoded proposal, or a reduced search that independently
 retains the gate, can meet freshness before Isaac evaluates it without
 actuation. Live insertion, filming, and production authority remain false.
 
-The first resident no-actuation checkpoint now passes for seed `52600` at
-command context `43`. Session
+The resident no-actuation checkpoint now passes `2/2` untouched seeds at
+command context `43`. Seed-`52600` session
 `insertion-safety-20260825T124011Z-52600-c43` used the exact proposal
 fingerprint `efdf848c...7596f`; the resident response arrived `0.423 s` after
 capture and the independent live safety snapshot was timestamped at `0.803 s`,
@@ -1085,16 +1085,23 @@ change, and measured `0 N` contact, no collision, and retained attachment.
 The typed artifact passed with `authority: no_actuation`. The session contains
 only request, response, state, and direct-safety evidence; it has no execution
 claim or result, and a direct `claim_execution()` check is rejected by policy.
-The exact session and checksum-verified 12 GB recovery copy are preserved.
+Seed-`52601` session `insertion-safety-20260825T125150Z-52601-c43` reproduced
+the result with the same proposal and projection scale. Its `0.862 mm` first
+translation received a response at `0.444 s` and a live-safety timestamp at
+`1.081 s`; IK required `0.00289 rad` maximum joint change with `0 N` contact,
+no collision, and retained attachment. Its typed evidence also passes with
+`authority: no_actuation`, contains no execution/result files, and rejects an
+execution claim. Both exact sessions and the checksum-verified 12 GB recovery
+copy are preserved.
 
 Two preceding attempts failed before capture because the persistent Isaac
 process retained stale bytecode and then a stale recording-identity import;
 both failed closed, ran backup, and produced no model action. Commits
 `464e975` and `b3ac4db` make project reloads source-exact and dependency
-ordered, with clean-process and generation-identity regressions. This first
-passing seed closes neither repeatability nor actuation: seed `52601` and a
-predeclared bounded live action trial remain required. Insertion filming and
-production authority remain false.
+ordered, with clean-process and generation-identity regressions. The `2/2`
+result closes resident first-action freshness and no-actuation safety only. A
+predeclared bounded live action trial remains required before any multi-step
+insertion attempt. Insertion filming and production authority remain false.
 
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
