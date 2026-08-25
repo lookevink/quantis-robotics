@@ -1174,6 +1174,54 @@ must fail closed on realized post-action target progress before opening another
 step, then address the sub-millimeter tracking/noise floor; multi-step
 insertion, filming, and production authority remain false.
 
+### Insertion control-resolution checkpoint
+
+The next diagnostic measured the simulator/controller noise floor before
+authorizing another insertion action. The first exact-code run stopped before
+any probe because the provisional `20 um`/`0.1 mrad` repeat contract was
+tighter than the resumed baseline. A second pre-actuation run exposed a missing
+probe-observation import. After both fixes, strict session
+`insertion-resolution-20260825T184027Z-52600-c43` executed one zero-action
+probe and rejected its rollback with reconstructible raw evidence: `0.218 mm`
+end-effector translation drift, `0.501 mrad` rotation drift, `0.396 mrad`
+maximum joint drift, and `0.242 mm` plug-axis drift, with `0 N` contact, no
+collision, and retained attachment. That negative established that the
+original repeat threshold was measuring simulator settling, not useful control
+resolution.
+
+The diagnostic-only protocol therefore admits a bounded `0.5 mm` reset
+envelope while recording the exact start and rollback repeatability of every
+sample. This change does not alter insertion execution safety or grant control
+authority. Each probe recomputes a translation-only retreat direction from its
+exact live start, and reconstruction requires every nonzero target to increase
+distance from the recorded insertion target before IK. The completed run is:
+
+```bash
+./ops/aws.sh jepa-wm-insertion-resolution \
+  contact-insertion-v9-2600-fresh-52600-held-00 52600 43
+```
+
+Session `insertion-resolution-20260825T185437Z-52600-c43` completed all 12
+probes (three each at `0`, `30`, `100`, and `200 um`) and independently
+reconstructed the raw report. Maximum zero-action drift was `0.219 mm`
+translation, `0.501 mrad` orientation, and `0.396 mrad` joint tracking.
+Maximum start/rollback repeatability drift was `0.218 mm` translation,
+`0.501 mrad` rotation, `0.396 mrad` joints, and `0.242 mm` plug-axis position.
+The `30 um` and `100 um` requests both realized the same `0.187 mm` mean
+along-axis motion, with maximum translation errors of `0.194 mm` and
+`0.143 mm`; they are below effective control resolution. The `200 um` request
+realized `0.387 mm` mean along-axis motion, but still had `0.219 mm` maximum
+translation error and `0.915 mrad` maximum orientation drift. Every sample
+retained attachment and recorded `0 N` contact with no collision. The typed
+report, preceding negatives, and checksum-verified 12 GB recovery copy are
+preserved.
+
+This closes the noise-floor measurement only. The next checkpoint must test
+bounded `0.5 mm` and `1.0 mm` translation-only probes with settling/tracking
+limits scaled to the requested joint motion, then derive a hold/deadband from
+measured resolution. No second receding-horizon action, insertion filming, or
+production authority is granted.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded
