@@ -57,9 +57,15 @@ class RuntimeLoaderTest(unittest.TestCase):
     def test_reloads_action_safety_and_shadow_contract_as_one_generation(self) -> None:
         source = """
 from sim.runtime_loader import reload_demo_runtime
+from jepa_wm import control_resolution_baseline, control_resolution_profile
+del control_resolution_baseline.ControlResolutionBaselineAttempt
+del control_resolution_profile.ControlResolutionLoad
 reload_demo_runtime()
-from jepa_wm import action, control_safety, direct_safety, experimental_candidate, insertion_contract, insertion_recording, insertion_trial, objective_calibration, shadow_planning, shadow_safety
+from jepa_wm import action, control_resolution, control_resolution_baseline, control_resolution_profile, control_safety, direct_safety, experimental_candidate, insertion_contract, insertion_recording, insertion_trial, objective_calibration, shadow_planning, shadow_safety
 from sim import control_identity, control_session, demo_sequence, isaac_demo_kinematics, isaac_exploration, isaac_insertion_trial, recording, trial_source_cache
+assert control_resolution_baseline.ControlResolutionLoad is control_resolution_profile.ControlResolutionLoad
+assert control_resolution.ControlResolutionLoad is control_resolution_profile.ControlResolutionLoad
+assert control_resolution.ControlResolutionBaselineAttempt is control_resolution_baseline.ControlResolutionBaselineAttempt
 assert control_safety.DroidActionScale is action.DroidActionScale
 assert control_safety.DroidPose is action.DroidPose
 assert direct_safety.SafetyProjectionAttempt is control_safety.SafetyProjectionAttempt

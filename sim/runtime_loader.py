@@ -76,6 +76,8 @@ def reload_demo_runtime() -> ModuleType:
         "jepa_wm.shadow_planning",
         "jepa_wm.shadow_safety",
         "jepa_wm.trial_equivalence",
+        "jepa_wm.control_resolution_profile",
+        "jepa_wm.control_resolution_baseline",
         "sim.demo_sequence",
         "sim.recording",
         "sim.control_identity",
