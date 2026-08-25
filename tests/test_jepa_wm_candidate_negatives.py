@@ -10,6 +10,7 @@ except ModuleNotFoundError:
 
 if torch is not None:
     from jepa_wm.action_activity import DroidActionActivityThresholds
+    from jepa_wm.candidate_policy import CandidateNoisePolicy
     from jepa_wm.candidate_negatives import (
         CandidateMiningConfig,
         mine_lowest_energy_candidates,
@@ -145,6 +146,44 @@ class CandidateNegativesTest(unittest.TestCase):
 
         self.assertEqual(restored, config)
         torch.testing.assert_close(replay, original)
+
+    def test_default_noise_policy_preserves_legacy_serialization(self) -> None:
+        payload = CandidateMiningConfig().to_dict()
+
+        self.assertNotIn("noise_policy", payload)
+        self.assertEqual(
+            CandidateMiningConfig.from_dict(payload),
+            CandidateMiningConfig(),
+        )
+
+    def test_recorded_action_noise_is_relative_and_capped(self) -> None:
+        recorded = torch.zeros((1, 2, 7))
+        recorded[0, 0, 0] = 0.0002
+        recorded[0, 1, 0] = 0.02
+        config = CandidateMiningConfig(
+            candidates_per_rollout=64,
+            noise_scale=0.25,
+            noise_policy=CandidateNoisePolicy.recorded_action(
+                translation_floor=1e-5,
+                rotation_floor=1e-5,
+                gripper_floor=0.005,
+            ),
+        )
+
+        candidates = sample_local_candidates(
+            recorded,
+            config=config,
+            generator=torch.Generator().manual_seed(17),
+        )
+        small_noise = (candidates[0, 0, :, 0] - recorded[0, 0, 0]).std()
+        large_noise = (candidates[0, 1, :, 0] - recorded[0, 1, 0]).std()
+
+        self.assertGreater(large_noise, small_noise * 50)
+        self.assertLess(small_noise, 0.0001)
+        self.assertEqual(
+            CandidateMiningConfig.from_dict(config.to_dict()),
+            config,
+        )
 
     def test_goal_aligned_mining_replaces_only_misaligned_first_actions(self) -> None:
         recorded = torch.zeros((3, 2, 7))

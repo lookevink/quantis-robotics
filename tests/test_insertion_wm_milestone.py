@@ -117,6 +117,24 @@ class InsertionWorldModelMilestoneTest(unittest.TestCase):
                 text=True,
                 capture_output=True,
             )
+            relative_result = subprocess.run(
+                [
+                    str(MILESTONE),
+                    "1056",
+                    "2600",
+                    "contact-insertion-v9-2600",
+                    "goal_aligned_relative",
+                ],
+                cwd=REPO_ROOT,
+                env={
+                    **os.environ,
+                    "AWS_WORKFLOW": str(fake_aws),
+                    "CORPUS_WORKFLOW": str(fake_corpus),
+                    "CALLS": str(calls),
+                },
+                text=True,
+                capture_output=True,
+            )
             invoked = calls.read_text().splitlines()
 
         adapter = (
@@ -124,12 +142,34 @@ class InsertionWorldModelMilestoneTest(unittest.TestCase):
             "insertion_adapter_goal_aligned_s1056"
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(relative_result.returncode, 0, relative_result.stderr)
         self.assertTrue(
             any(
                 call.startswith("aws jepa-wm-insertion-adapt ")
                 and call.endswith(f" 1056 {adapter} goal_aligned")
                 for call in invoked
             )
+        )
+        relative_adapter = (
+            "contact-insertion-v9-2600_"
+            "insertion_adapter_goal_aligned_relative_s1056"
+        )
+        self.assertTrue(
+            any(
+                call.startswith("aws jepa-wm-insertion-adapt ")
+                and call.endswith(
+                    f" 1056 {relative_adapter} goal_aligned_relative"
+                )
+                for call in invoked
+            )
+        )
+        self.assertIn(
+            "aws jepa-wm-insertion-wm-summarize "
+            "contact-insertion-v9-2600-held-00,"
+            "contact-insertion-v9-2600-held-01 "
+            f"{relative_adapter} contact-insertion-v9-2600 2600 "
+            "goal_aligned_relative",
+            invoked,
         )
         self.assertIn(
             "aws jepa-wm-insertion-wm-summarize "

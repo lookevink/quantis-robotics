@@ -8,6 +8,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Sequence
 
 from jepa_wm.action_activity import DroidActionActivityThresholds
+from jepa_wm.candidate_policy import CandidateNoisePolicy
 
 if TYPE_CHECKING:
     from jepa_wm.candidate_negatives import CandidateMiningConfig
@@ -20,6 +21,7 @@ class InsertionAdapterProfileDescriptor:
     first_action_activity: DroidActionActivityThresholds = (
         DroidActionActivityThresholds()
     )
+    noise_policy: CandidateNoisePolicy = CandidateNoisePolicy()
 
     def candidate_mining_config(self) -> CandidateMiningConfig:
         from jepa_wm.candidate_negatives import CandidateMiningConfig
@@ -27,16 +29,31 @@ class InsertionAdapterProfileDescriptor:
         return CandidateMiningConfig(
             minimum_goal_cosine=self.minimum_goal_cosine,
             first_action_activity=self.first_action_activity,
+            noise_policy=self.noise_policy,
         )
 
 
 class InsertionAdapterProfile(str, Enum):
     GENERIC = "generic"
     GOAL_ALIGNED = "goal_aligned"
+    GOAL_ALIGNED_RELATIVE = "goal_aligned_relative"
 
     @property
     def descriptor(self) -> InsertionAdapterProfileDescriptor:
         return INSERTION_ADAPTER_PROFILES[self]
+
+
+GOAL_ALIGNED_MINIMUM_COSINE = 0.95
+GOAL_ALIGNED_ACTIVITY = DroidActionActivityThresholds(
+    translation_norm=1e-5,
+    rotation_norm=1e-5,
+    gripper_delta=0.005,
+)
+GOAL_ALIGNED_RELATIVE_NOISE = CandidateNoisePolicy.recorded_action(
+    translation_floor=1e-5,
+    rotation_floor=1e-5,
+    gripper_floor=0.005,
+)
 
 
 INSERTION_ADAPTER_PROFILES = {
@@ -46,12 +63,14 @@ INSERTION_ADAPTER_PROFILES = {
     ),
     InsertionAdapterProfile.GOAL_ALIGNED: InsertionAdapterProfileDescriptor(
         artifact_stem="insertion_adapter_goal_aligned_s",
-        minimum_goal_cosine=0.95,
-        first_action_activity=DroidActionActivityThresholds(
-            translation_norm=1e-5,
-            rotation_norm=1e-5,
-            gripper_delta=0.005,
-        ),
+        minimum_goal_cosine=GOAL_ALIGNED_MINIMUM_COSINE,
+        first_action_activity=GOAL_ALIGNED_ACTIVITY,
+    ),
+    InsertionAdapterProfile.GOAL_ALIGNED_RELATIVE: InsertionAdapterProfileDescriptor(
+        artifact_stem="insertion_adapter_goal_aligned_relative_s",
+        minimum_goal_cosine=GOAL_ALIGNED_MINIMUM_COSINE,
+        first_action_activity=GOAL_ALIGNED_ACTIVITY,
+        noise_policy=GOAL_ALIGNED_RELATIVE_NOISE,
     ),
 }
 

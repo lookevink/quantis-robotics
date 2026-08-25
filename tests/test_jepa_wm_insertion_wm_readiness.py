@@ -44,6 +44,7 @@ class InsertionWorldModelReadinessTest(unittest.TestCase):
         root: Path,
         *,
         minimum_goal_cosine: float | None = None,
+        noise_policy: dict | None = None,
         legacy: bool = False,
     ):
         adapter = root / "insertion-adapter.pth"
@@ -96,6 +97,7 @@ class InsertionWorldModelReadinessTest(unittest.TestCase):
                     0.005 if minimum_goal_cosine is not None else 0.02
                 ),
             },
+            **({"noise_policy": noise_policy} if noise_policy else {}),
         }
         config = {"candidate_mining": candidate_mining}
         config_fingerprint = training_configuration_fingerprint(config)
@@ -187,6 +189,31 @@ class InsertionWorldModelReadinessTest(unittest.TestCase):
                 expected_profile=InsertionAdapterProfile.GOAL_ALIGNED,
             )
             self.assertEqual(evidence.candidate_mining.minimum_goal_cosine, 0.95)
+            self.assertEqual(
+                evidence.candidate_mining.noise_policy.reference.value,
+                "planner_bounds",
+            )
+
+            relative_adapter = self._adapter(
+                root / "relative",
+                minimum_goal_cosine=0.95,
+                noise_policy={
+                    "reference": "recorded_action",
+                    "floors": {
+                        "translation": 1e-5,
+                        "rotation": 1e-5,
+                        "gripper": 0.005,
+                    },
+                },
+            )
+            relative_evidence = validate_insertion_adapter(
+                relative_adapter,
+                expected_profile=InsertionAdapterProfile.GOAL_ALIGNED_RELATIVE,
+            )
+            self.assertEqual(
+                relative_evidence.candidate_mining.noise_policy.reference.value,
+                "recorded_action",
+            )
 
             report_path = Path(f"{aligned_adapter}.json")
             payload = json.loads(report_path.read_text())

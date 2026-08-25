@@ -871,9 +871,34 @@ to `20 mm` while preserving the cone (minimum remains `0.988497`); candidate
 replacement now uses that bounded fallback and rechecks alignment. That run
 also wrote no checkpoint and was recovery-backed up. The profile has a
 distinct checkpoint name and serialized mining contract.
-Training and evaluation remain offline; the two current held-out seeds have
-already informed this design, so a passing rerun is diagnostic and fresh whole
-held-out seeds are still required for readiness.
+That bounded run completed as adapter fingerprint `236514a7...d9dd1`, but the
+strict diagnostic gate remained closed. Seed `12600` retained positive mean
+improvement (`+6.11294e-5`) while falling to `60.2273%` recorded-action wins;
+seed `12601` passed at `+6.30901e-5`/`82.9545%`. The 176-rollout aggregate was
+`+6.21097e-5`/`71.5909%`, below the pinned `75%` win-rate threshold. The
+failure is concentrated in the sub-millimetric insertion tail: the global
+planner-bound perturbation averaged `5.34 mm` there (95th percentile
+`13.22 mm`), even though the demonstrated first actions had decayed to
+`0.02–0.70 mm`. The result and its 12 GB recovery copy are preserved.
+
+The next distinct `goal_aligned_relative` profile keeps the same bounds,
+stationary rule, and `0.95` cone, but scales candidate noise from each
+demonstrated action and caps it at the planner bounds. On the exact corpus this
+reduces late-tail perturbations to `0.109 mm` mean and `0.361 mm` at the 95th
+percentile without changing early large-motion bounds. Its explicit noise
+floors are `10 µm` translation, `10 µrad` rotation, and `0.005` normalized
+gripper delta; they are serialized independently from the stationary
+classifier. Run it as a new artifact so the failed global-noise checkpoint is
+not overwritten:
+
+```bash
+./ops/jepa_wm_insertion_wm_milestone.sh \
+  1056 2600 contact-insertion-v9-2600 goal_aligned_relative
+```
+
+Training and evaluation remain offline; both current held-out seeds have
+informed this design, so even a passing diagnostic rerun still requires fresh
+whole held-out seeds before readiness.
 
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a

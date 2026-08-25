@@ -485,8 +485,19 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     bound. Projecting those fallbacks through the canonical bounds preserves
     the goal cone (minimum `0.988497`); replacement now uses that bounded
     fallback and rechecks alignment. No checkpoint was written and the result
-    is recovery-backed up. Existing held-out seeds are diagnostic only after
-    informing this change.
+    is recovery-backed up. The completed bounded adapter, fingerprint
+    `236514a7...d9dd1`, then remained fail-closed: seed `12600` scored
+    `+6.11294e-5`/`60.2273%`, seed `12601` scored
+    `+6.30901e-5`/`82.9545%`, and the aggregate was
+    `+6.21097e-5`/`71.5909%`, below the `75%` win-rate gate. Losses cluster in
+    the sub-millimetric insertion tail, where planner-bound noise averaged
+    `5.34 mm` (95th percentile `13.22 mm`). The next separately named
+    `goal_aligned_relative` profile scales noise from the demonstrated action,
+    reducing that tail to `0.109 mm` mean/`0.361 mm` p95 while retaining the
+    same bounds and goal cone. Its separately serialized floors are `10 µm`
+    translation, `10 µrad` rotation, and `0.005` normalized gripper delta.
+    Existing held-out seeds are diagnostic only
+    after informing these changes; fresh whole seeds remain required.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

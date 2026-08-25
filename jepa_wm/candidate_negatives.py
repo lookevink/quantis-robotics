@@ -10,6 +10,7 @@ import torch
 
 from jepa_wm.action import ACTION_DIMENSIONS
 from jepa_wm.action_activity import DroidActionActivityThresholds
+from jepa_wm.candidate_policy import CandidateNoisePolicy, CandidateNoiseReference
 from jepa_wm.planner import PlannerActionBounds
 from jepa_wm.rollout_scoring import score_actions
 
@@ -24,6 +25,7 @@ class CandidateMiningConfig:
     first_action_activity: DroidActionActivityThresholds = (
         DroidActionActivityThresholds()
     )
+    noise_policy: CandidateNoisePolicy = CandidateNoisePolicy()
 
     def __post_init__(self) -> None:
         if self.candidates_per_rollout < 2:
@@ -39,7 +41,7 @@ class CandidateMiningConfig:
             raise ValueError("candidate mining goal cosine must be between 0 and 1")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "candidates_per_rollout": self.candidates_per_rollout,
             "scoring_batch_size": self.scoring_batch_size,
             "noise_scale": self.noise_scale,
@@ -47,6 +49,9 @@ class CandidateMiningConfig:
             "minimum_goal_cosine": self.minimum_goal_cosine,
             "first_action_activity": self.first_action_activity.to_dict(),
         }
+        if self.noise_policy.reference is not CandidateNoiseReference.PLANNER_BOUNDS:
+            payload["noise_policy"] = self.noise_policy.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> CandidateMiningConfig:
@@ -66,7 +71,50 @@ class CandidateMiningConfig:
                     DroidActionActivityThresholds().to_dict(),
                 )
             ),
+            noise_policy=(
+                CandidateNoisePolicy.from_dict(payload["noise_policy"])
+                if "noise_policy" in payload
+                else CandidateNoisePolicy()
+            ),
         )
+
+
+def _candidate_noise_standard_deviation(
+    recorded_actions: torch.Tensor,
+    config: CandidateMiningConfig,
+) -> torch.Tensor:
+    planner_scale = torch.tensor(
+        config.bounds.initial_standard_deviation * config.noise_scale,
+        dtype=recorded_actions.dtype,
+        device=recorded_actions.device,
+    )
+    if config.noise_policy.reference is CandidateNoiseReference.PLANNER_BOUNDS:
+        return planner_scale
+
+    translation = torch.linalg.vector_norm(
+        recorded_actions[..., :3], dim=-1, keepdim=True
+    ).clamp(
+        min=config.noise_policy.translation_floor,
+        max=config.bounds.maximum_translation_norm,
+    )
+    rotation = torch.linalg.vector_norm(
+        recorded_actions[..., 3:6], dim=-1, keepdim=True
+    ).clamp(
+        min=config.noise_policy.rotation_floor,
+        max=config.bounds.maximum_rotation_norm,
+    )
+    gripper = recorded_actions[..., 6:].abs().clamp(
+        min=config.noise_policy.gripper_floor,
+        max=config.bounds.maximum_gripper_delta,
+    )
+    return torch.cat(
+        (
+            translation.expand(*translation.shape[:-1], 3),
+            rotation.expand(*rotation.shape[:-1], 3),
+            gripper,
+        ),
+        dim=-1,
+    ) * config.noise_scale
 
 
 def _goal_align_first_actions(
@@ -129,18 +177,16 @@ def sample_local_candidates(
 
     if recorded_actions.ndim != 3 or recorded_actions.shape[-1] != ACTION_DIMENSIONS:
         raise ValueError("recorded actions must have shape [horizon, batch, 7]")
-    scales = torch.tensor(
-        config.bounds.initial_standard_deviation * config.noise_scale,
-        dtype=recorded_actions.dtype,
-        device=recorded_actions.device,
-    )
+    scales = _candidate_noise_standard_deviation(recorded_actions, config)
     noise = torch.randn(
         (*recorded_actions.shape[:2], config.candidates_per_rollout, ACTION_DIMENSIONS),
         dtype=recorded_actions.dtype,
         device=recorded_actions.device,
         generator=generator,
     )
-    candidates = recorded_actions.unsqueeze(2) + noise * scales
+    candidates = recorded_actions.unsqueeze(2) + noise * (
+        scales.unsqueeze(2) if scales.ndim == recorded_actions.ndim else scales
+    )
     candidates = config.bounds.clip_tensor(candidates)
     if config.minimum_goal_cosine is not None:
         recorded_first = recorded_actions[0]
