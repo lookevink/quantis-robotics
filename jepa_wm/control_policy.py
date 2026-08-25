@@ -8,6 +8,7 @@ class ControlExecutionPolicy(str, Enum):
     CALIBRATION_COLLECTION = "calibration_collection"
     INSERTION_SAFETY_EVALUATION = "insertion_safety_evaluation"
     INSERTION_RESET_TRIAL = "insertion_reset_trial"
+    INSERTION_RESOLUTION_MEASUREMENT = "insertion_resolution_measurement"
     ZERO_BASELINE = "zero"
     SCRIPTED_BASELINE = "scripted"
     RESET_TRIAL_CANDIDATE = "reset_trial_candidate"

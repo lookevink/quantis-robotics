@@ -439,6 +439,7 @@ Commands:
   jepa-wm-control-step REFERENCE_RECORDING SEED [artifacts] [context-index]
   jepa-wm-insertion-safety REFERENCE_RECORDING SEED [artifacts] [context-index]
   jepa-wm-insertion-trial REFERENCE_RECORDING SEED ARTIFACTS SOURCE_SESSION [context-index]
+  jepa-wm-insertion-resolution REFERENCE_RECORDING SEED [context-index]
   jepa-wm-control-rollout REFERENCE_RECORDING SEED STEPS [artifacts] [context-index]
   jepa-wm-control-baseline REFERENCE_RECORDING SEED STEPS zero|scripted [context-index]
   jepa-wm-control-baselines EXPERIMENT DIRECT ZERO SCRIPTED REFERENCE SEED STEPS [direct-proposal] [direct-sessions]
@@ -1043,6 +1044,29 @@ case "${command}" in
       command_status=${backup_status}
     fi
     printf 'Insertion trial session: %s\n' "${session_id}"
+    exit "${command_status}"
+    ;;
+  jepa-wm-insertion-resolution)
+    reference_name="${2:-}"
+    exploration_seed="${3:-}"
+    context_index="${4:-43}"
+    is_safe_identifier "${reference_name}" || die "invalid reference recording"
+    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+    require_positive_integer "context index" "${context_index}" || exit 1
+    session_id="insertion-resolution-$(date -u +%Y%m%dT%H%M%SZ)-${exploration_seed}-c${context_index}"
+    command_status=0
+    sync_repo || command_status=$?
+    if (( command_status == 0 )); then
+      remote "bash ~/quantis-robotics/ops/run_insertion_resolution_measurement.sh '${session_id}' '${reference_name}' '${exploration_seed}' '${context_index}'" \
+        || command_status=$?
+    fi
+    backup_status=0
+    remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' \
+      || backup_status=$?
+    if (( command_status == 0 && backup_status != 0 )); then
+      command_status=${backup_status}
+    fi
+    printf 'Insertion resolution session: %s\n' "${session_id}"
     exit "${command_status}"
     ;;
   jepa-wm-control-rollout)

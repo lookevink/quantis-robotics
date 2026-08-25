@@ -2,6 +2,7 @@
 
 from sim.isaac_control_capture import capture_control_observation
 from sim.isaac_control_execution import apply_control_response
+from sim.isaac_control_resolution import measure_insertion_control_resolution
 from sim.isaac_control_followup import capture_followup_observation
 from sim.isaac_candidate_binding import (
     persist_experimental_candidate_response,
@@ -20,6 +21,7 @@ __all__ = (
     "apply_control_response",
     "capture_control_observation",
     "capture_followup_observation",
+    "measure_insertion_control_resolution",
     "evaluate_shadow_candidate",
     "evaluate_direct_insertion_candidate",
     "persist_insertion_trial_response",

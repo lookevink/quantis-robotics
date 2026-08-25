@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from math import dist, isfinite
 from time import time
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from jepa_wm.action import DroidActionScale, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
@@ -154,6 +154,60 @@ class SimulatorSafetyLimits:
             raise ValueError("simulator safety limits must be finite and positive")
         if self.minimum_warmup_frames < 0:
             raise ValueError("minimum warm-up frames must be non-negative")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "minimum_workspace_xyz": list(self.minimum_workspace_xyz),
+            "maximum_workspace_xyz": list(self.maximum_workspace_xyz),
+            "lower_joint_limits": list(self.lower_joint_limits),
+            "upper_joint_limits": list(self.upper_joint_limits),
+            "maximum_joint_velocity_radians_per_second": (
+                self.maximum_joint_velocity_radians_per_second
+            ),
+            "maximum_observation_joint_drift_radians": (
+                self.maximum_observation_joint_drift_radians
+            ),
+            "maximum_observation_plug_drift_meters": (
+                self.maximum_observation_plug_drift_meters
+            ),
+            "maximum_contact_force_newtons": self.maximum_contact_force_newtons,
+            "maximum_observation_age_seconds": self.maximum_observation_age_seconds,
+            "maximum_command_age_seconds": self.maximum_command_age_seconds,
+            "minimum_warmup_frames": self.minimum_warmup_frames,
+            "action_bounds": self.action_bounds.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> SimulatorSafetyLimits:
+        try:
+            return cls(
+                minimum_workspace_xyz=tuple(payload["minimum_workspace_xyz"]),
+                maximum_workspace_xyz=tuple(payload["maximum_workspace_xyz"]),
+                lower_joint_limits=tuple(payload["lower_joint_limits"]),
+                upper_joint_limits=tuple(payload["upper_joint_limits"]),
+                maximum_joint_velocity_radians_per_second=float(
+                    payload["maximum_joint_velocity_radians_per_second"]
+                ),
+                maximum_observation_joint_drift_radians=float(
+                    payload["maximum_observation_joint_drift_radians"]
+                ),
+                maximum_observation_plug_drift_meters=float(
+                    payload["maximum_observation_plug_drift_meters"]
+                ),
+                maximum_contact_force_newtons=float(
+                    payload["maximum_contact_force_newtons"]
+                ),
+                maximum_observation_age_seconds=float(
+                    payload["maximum_observation_age_seconds"]
+                ),
+                maximum_command_age_seconds=float(
+                    payload["maximum_command_age_seconds"]
+                ),
+                minimum_warmup_frames=int(payload["minimum_warmup_frames"]),
+                action_bounds=PlannerActionBounds.from_dict(payload["action_bounds"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("simulator safety limits are incomplete") from error
 
 
 class ControlGateReason(str, Enum):

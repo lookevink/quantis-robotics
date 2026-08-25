@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
+from typing import Any
 import numpy as np
 from scipy.spatial.transform import Rotation
 
@@ -33,6 +34,54 @@ class ResetEquivalenceTolerances:
         if not all(isfinite(value) and value >= 0.0 for value in values):
             raise ValueError("reset equivalence tolerances must be finite and nonnegative")
 
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "maximum_translation_difference_meters": (
+                self.maximum_translation_difference_meters
+            ),
+            "maximum_rotation_difference_radians": (
+                self.maximum_rotation_difference_radians
+            ),
+            "maximum_gripper_difference": self.maximum_gripper_difference,
+            "maximum_joint_difference_radians": (
+                self.maximum_joint_difference_radians
+            ),
+            "maximum_reset_contact_force_newtons": (
+                self.maximum_reset_contact_force_newtons
+            ),
+            "maximum_plug_position_difference_meters": (
+                self.maximum_plug_position_difference_meters
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ResetEquivalenceTolerances:
+        if not isinstance(payload, dict):
+            raise ValueError("reset equivalence tolerances must be an object")
+        try:
+            return cls(
+                maximum_translation_difference_meters=float(
+                    payload["maximum_translation_difference_meters"]
+                ),
+                maximum_rotation_difference_radians=float(
+                    payload["maximum_rotation_difference_radians"]
+                ),
+                maximum_gripper_difference=float(
+                    payload["maximum_gripper_difference"]
+                ),
+                maximum_joint_difference_radians=float(
+                    payload["maximum_joint_difference_radians"]
+                ),
+                maximum_reset_contact_force_newtons=float(
+                    payload["maximum_reset_contact_force_newtons"]
+                ),
+                maximum_plug_position_difference_meters=float(
+                    payload["maximum_plug_position_difference_meters"]
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("reset equivalence tolerances are incomplete") from error
+
 
 @dataclass(frozen=True)
 class TrialResetState:
@@ -60,6 +109,40 @@ class TrialResetState:
             or not isinstance(self.plug_attached, bool)
         ):
             raise ValueError("trial reset state is invalid")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "pose": list(self.pose.values),
+            "joint_positions": list(self.joint_positions),
+            "collision_detected": self.collision_detected,
+            "contact_force_newtons": self.contact_force_newtons,
+            "plug_position": (
+                list(self.plug_position) if self.plug_position is not None else None
+            ),
+            "plug_attached": self.plug_attached,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> TrialResetState:
+        if not isinstance(payload, dict):
+            raise ValueError("trial reset state must be an object")
+        try:
+            return cls(
+                pose=DroidPose(tuple(payload["pose"])),
+                joint_positions=tuple(
+                    float(value) for value in payload["joint_positions"]
+                ),
+                collision_detected=payload["collision_detected"],
+                contact_force_newtons=float(payload["contact_force_newtons"]),
+                plug_position=(
+                    tuple(float(value) for value in payload["plug_position"])
+                    if payload.get("plug_position") is not None
+                    else None
+                ),
+                plug_attached=payload["plug_attached"],
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("trial reset state is incomplete") from error
 
 
 @dataclass(frozen=True)

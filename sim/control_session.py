@@ -961,11 +961,14 @@ class ControlSession:
         _, state = self.load_capture()
         if (
             state.execution_policy
-            is ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION
+            in (
+                ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION,
+                ControlExecutionPolicy.INSERTION_RESOLUTION_MEASUREMENT,
+            )
             or self.direct_safety_path.exists()
         ):
             raise ValueError(
-                "no-actuation insertion safety sessions cannot be executed"
+                "restricted insertion diagnostic sessions cannot be executed"
             )
         try:
             with self.execution_path.open("x", encoding="utf-8") as output:

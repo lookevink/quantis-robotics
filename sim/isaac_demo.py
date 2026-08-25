@@ -23,6 +23,7 @@ from sim.isaac_control_bridge import (
     capture_control_observation,
     capture_followup_observation,
     evaluate_direct_insertion_candidate,
+    measure_insertion_control_resolution,
     evaluate_shadow_candidate,
     persist_experimental_candidate_response,
     persist_insertion_trial_response,
