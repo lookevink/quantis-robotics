@@ -17,7 +17,11 @@ from sim.control_session import (
 class ControlSessionTest(unittest.TestCase):
     def test_insertion_target_policy_is_persisted_and_required_for_its_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            session = ControlSession.at(Path(temp_dir), "insertion-target")
+            data_root = Path(temp_dir)
+            session = ControlSession.at(
+                data_root / "control_sessions",
+                "insertion-target",
+            )
             observation = ControlObservation(
                 123,
                 100.0,
@@ -58,7 +62,11 @@ class ControlSessionTest(unittest.TestCase):
 
             self.assertEqual(restored_observation, observation)
             self.assertEqual(restored_state, state)
-            validate.assert_called_once()
+            validate.assert_called_once_with(
+                observation,
+                data_root / "recordings" / "held-reference",
+                frame_root=data_root,
+            )
 
             stripped = state.to_dict()
             del stripped["insertion_target_policy"]

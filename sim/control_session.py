@@ -499,11 +499,12 @@ class ControlCaptureResult:
 @dataclass(frozen=True)
 class ControlSession:
     path: Path
+    data_root: Path
 
     @classmethod
     def at(cls, root: Path, session_id: str) -> ControlSession:
         validate_recording_id(session_id)
-        return cls(root / session_id)
+        return cls(root / session_id, root.parent)
 
     @property
     def session_id(self) -> str:
@@ -581,8 +582,8 @@ class ControlSession:
         if insertion_control_target_policy(state.execution_policy) is not None:
             state.validate_observation_target(
                 observation,
-                RECORDING_ROOT / state.reference_recording,
-                frame_root=QUANTIS_DATA_ROOT,
+                self.data_root / "recordings" / state.reference_recording,
+                frame_root=self.data_root,
             )
         return observation, state
 
