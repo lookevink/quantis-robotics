@@ -44,6 +44,7 @@ class ProposalLossWeights:
     goal_consistency: float = 1.0
     first_action_mse: float = 1.0
     active_direction: float = 0.1
+    goal_direction: float = 0.0
     inactive_gripper: float = 0.01
     first_gripper_mse: float = 1.0
 
@@ -55,6 +56,7 @@ class ProposalLossWeights:
                 self.goal_consistency,
                 self.first_action_mse,
                 self.active_direction,
+                self.goal_direction,
                 self.inactive_gripper,
                 self.first_gripper_mse,
             )
@@ -97,6 +99,7 @@ class ProposalLoss:
     goal_consistency_mse: torch.Tensor
     first_action_mse: torch.Tensor
     active_direction_loss: torch.Tensor
+    goal_direction_loss: torch.Tensor
     inactive_gripper_loss: torch.Tensor
     first_gripper_mse: torch.Tensor
 
@@ -106,6 +109,7 @@ class ProposalLoss:
             + weights.goal_consistency * self.goal_consistency_mse
             + weights.first_action_mse * self.first_action_mse
             + weights.active_direction * self.active_direction_loss
+            + weights.goal_direction * self.goal_direction_loss
             + weights.inactive_gripper * self.inactive_gripper_loss
             + weights.first_gripper_mse * self.first_gripper_mse
         )
@@ -117,6 +121,7 @@ class ProposalLossSnapshot:
     goal_consistency_mse: float
     first_action_mse: float
     active_direction_loss: float
+    goal_direction_loss: float
     inactive_gripper_loss: float
     first_gripper_mse: float
 
@@ -191,6 +196,19 @@ def proposal_loss(
         ((1.0 - cosine) * active_weights).sum()
         / torch.clamp_min(active_weights.sum(), 1.0)
     )
+    goal_active = (
+        torch.linalg.vector_norm(goal_delta, dim=1) > 1e-12
+    ).to(dtype=planned_first.dtype)
+    goal_cosine = torch.nn.functional.cosine_similarity(
+        goal_delta,
+        planned_first,
+        dim=1,
+        eps=1e-12,
+    )
+    goal_direction_loss = (
+        ((1.0 - goal_cosine) * goal_active).sum()
+        / torch.clamp_min(goal_active.sum(), 1.0)
+    )
     inactive_gripper = (
         torch.abs(recorded_first[:, 6])
         <= thresholds.recorded_activity.gripper_delta
@@ -211,6 +229,7 @@ def proposal_loss(
             target_standardized_actions[:, 0],
         ),
         direction_loss,
+        goal_direction_loss,
         inactive_gripper_loss,
         torch.nn.functional.mse_loss(
             predicted_standardized_actions[:, 0, 6],
@@ -406,6 +425,11 @@ def main() -> None:
         default=ProposalLossWeights.active_direction,
     )
     parser.add_argument(
+        "--goal-direction-weight",
+        type=float,
+        default=ProposalLossWeights.goal_direction,
+    )
+    parser.add_argument(
         "--inactive-gripper-weight",
         type=float,
         default=ProposalLossWeights.inactive_gripper,
@@ -457,6 +481,7 @@ def main() -> None:
                         goal_consistency=args.goal_consistency_weight,
                         first_action_mse=args.first_action_weight,
                         active_direction=args.active_direction_weight,
+                        goal_direction=args.goal_direction_weight,
                         inactive_gripper=args.inactive_gripper_weight,
                         first_gripper_mse=args.first_gripper_weight,
                     ),

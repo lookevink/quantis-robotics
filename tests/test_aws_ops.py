@@ -787,6 +787,20 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("--proposal 'insertion-proposal'", calls)
         self.assertNotIn("--adapter", calls)
 
+    def test_jepa_wm_insertion_proposal_training_diagnostic_is_named(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-proposal-training-diagnostic",
+            arguments=("insertion-proposal", "train-alignment"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("rsync ", calls)
+        self.assertIn(
+            "ops/jepa_wm.sh insertion-proposal-training-diagnostic "
+            "--proposal 'insertion-proposal' --output 'train-alignment'",
+            calls,
+        )
+
     def test_jepa_wm_proposal_train_forwards_recording_set_and_checkpoint_name(self):
         result, calls = self.run_command(
             "jepa-wm-proposal-train",

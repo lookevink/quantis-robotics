@@ -422,6 +422,7 @@ Commands:
   jepa-wm-insertion-wm-fresh-summarize FRESH_ROSTER [PROFILE]
   jepa-wm-insertion-plan-benchmark RECORDING ADAPTER PROPOSAL
   jepa-wm-insertion-plan-summarize FRESH_ROSTER PROPOSAL
+  jepa-wm-insertion-proposal-training-diagnostic PROPOSAL [OUTPUT]
   jepa-wm-plan-benchmark RECORDING [camera] [start] [count] [stride] [iterations] [samples] [elites] [adapter] [proposal]
   jepa-wm-proposal-train RECORDING[,RECORDING...] [camera] [steps] [proposal]
   jepa-wm-grasp-proposal-train RECORDING[,RECORDING...] [steps] PROPOSAL [hidden-dimension learning-rate weight-decay seed]
@@ -773,6 +774,14 @@ case "${command}" in
     [[ -n "${fresh_roster_payload}" ]] || die "fresh planner roster is empty"
     sync_repo
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-plan-summarize --fresh-roster-base64 '${fresh_roster_payload}' --proposal '${proposal_name}'"
+    ;;
+  jepa-wm-insertion-proposal-training-diagnostic)
+    proposal_name="${2:-}"
+    output_name="${3:-${proposal_name}_insertion_training_diagnostic}"
+    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    is_safe_identifier "${output_name}" || die "invalid diagnostic output name"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-proposal-training-diagnostic --proposal '${proposal_name}' --output '${output_name}'"
     ;;
   jepa-wm-proposal-train)
     recording_names="${2:-}"

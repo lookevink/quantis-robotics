@@ -76,6 +76,8 @@ task_proposal_setting() {
     insertion:seed) printf '2600\n' ;;
     grasp:inactive_gripper) printf '0\n' ;;
     insertion:inactive_gripper) printf '0.01\n' ;;
+    grasp:goal_direction) printf '0\n' ;;
+    insertion:goal_direction) printf '1.0\n' ;;
     grasp:readiness_module) printf 'jepa_wm.grasp_proposal_readiness\n' ;;
     insertion:readiness_module) printf 'jepa_wm.insertion_proposal_readiness\n' ;;
     grasp:readiness_suffix) printf 'grasp_readiness\n' ;;
@@ -507,6 +509,26 @@ summarize_insertion_planner() {
     --output "${output}"
 }
 
+diagnose_insertion_proposal_training() {
+  local -A options=()
+  parse_named_options options "proposal output" "$@"
+  local proposal_name="${options[proposal]:-}"
+  local output_name="${options[output]:-${proposal_name}_insertion_training_diagnostic}"
+  is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+  is_safe_identifier "${output_name}" || die "invalid diagnostic output name"
+  local proposal="${checkpoint_dir}/${proposal_name}.pth"
+  [[ -s "${proposal}" ]] || die "proposal does not exist: ${proposal_name}"
+  require_runtime
+  mkdir -p "${checkpoint_dir}/experiments"
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.insertion_proposal_training_diagnostic \
+    --source "${source_dir}" \
+    --checkpoint "${jepa_checkpoint}" \
+    --proposal "${proposal}" \
+    --recording-root "${HOME}/docker/isaac-sim/data/quantis/recordings" \
+    --output "${checkpoint_dir}/experiments/${output_name}.json"
+}
+
 benchmark_planner() {
   local -A options=()
   parse_named_options options \
@@ -596,7 +618,7 @@ benchmark_insertion_planner() {
 train_action_proposal() {
   local -A options=()
   parse_named_options options \
-    "recordings camera steps proposal start-index count stride hidden-dimension learning-rate weight-decay seed goal-consistency-weight first-action-weight active-direction-weight inactive-gripper-weight first-gripper-weight" "$@"
+    "recordings camera steps proposal start-index count stride hidden-dimension learning-rate weight-decay seed goal-consistency-weight first-action-weight active-direction-weight goal-direction-weight inactive-gripper-weight first-gripper-weight" "$@"
   local recording_list="${options[recordings]:-}"
   local camera_name="${options[camera]:-wrist}"
   local training_steps="${options[steps]:-2000}"
@@ -611,6 +633,7 @@ train_action_proposal() {
   local goal_consistency_weight="${options[goal-consistency-weight]:-1.0}"
   local first_action_weight="${options[first-action-weight]:-1.0}"
   local active_direction_weight="${options[active-direction-weight]:-0.1}"
+  local goal_direction_weight="${options[goal-direction-weight]:-0}"
   local inactive_gripper_weight="${options[inactive-gripper-weight]:-0.01}"
   local first_gripper_weight="${options[first-gripper-weight]:-1.0}"
   is_safe_identifier_list "${recording_list}" || die "invalid recording list"
@@ -627,6 +650,8 @@ train_action_proposal() {
     "${first_action_weight}" || exit 1
   require_nonnegative_number "active direction weight" \
     "${active_direction_weight}" || exit 1
+  require_nonnegative_number "goal direction weight" \
+    "${goal_direction_weight}" || exit 1
   require_nonnegative_number "inactive gripper weight" \
     "${inactive_gripper_weight}" || exit 1
   require_nonnegative_number "first gripper weight" \
@@ -670,6 +695,7 @@ train_action_proposal() {
     --goal-consistency-weight "${goal_consistency_weight}" \
     --first-action-weight "${first_action_weight}" \
     --active-direction-weight "${active_direction_weight}" \
+    --goal-direction-weight "${goal_direction_weight}" \
     --inactive-gripper-weight "${inactive_gripper_weight}" \
     --first-gripper-weight "${first_gripper_weight}" \
     "${window_arguments[@]}"
@@ -683,7 +709,7 @@ train_task_action_proposal() {
   read -r window_start window_count window_stride \
     <<<"$(task_proposal_window "${task_name}")"
   parse_named_options options \
-    "recordings steps proposal hidden-dimension learning-rate weight-decay seed goal-consistency-weight first-action-weight active-direction-weight inactive-gripper-weight first-gripper-weight" "$@"
+    "recordings steps proposal hidden-dimension learning-rate weight-decay seed goal-consistency-weight first-action-weight active-direction-weight goal-direction-weight inactive-gripper-weight first-gripper-weight" "$@"
   train_action_proposal \
     --recordings "${options[recordings]:-}" \
     --camera wrist \
@@ -696,6 +722,7 @@ train_task_action_proposal() {
     --goal-consistency-weight "${options[goal-consistency-weight]:-1.0}" \
     --first-action-weight "${options[first-action-weight]:-1.0}" \
     --active-direction-weight "${options[active-direction-weight]:-0.1}" \
+    --goal-direction-weight "${options[goal-direction-weight]:-$(task_proposal_setting "${task_name}" goal_direction)}" \
     --inactive-gripper-weight "${options[inactive-gripper-weight]:-$(task_proposal_setting "${task_name}" inactive_gripper)}" \
     --first-gripper-weight "${options[first-gripper-weight]:-1.0}" \
     --start-index "${window_start}" \
@@ -1469,6 +1496,9 @@ case "${1:-}" in
   insertion-plan-summarize)
     summarize_insertion_planner "${@:2}"
     ;;
+  insertion-proposal-training-diagnostic)
+    diagnose_insertion_proposal_training "${@:2}"
+    ;;
   proposal-train)
     train_action_proposal "${@:2}"
     ;;
@@ -1549,6 +1579,6 @@ case "${1:-}" in
       "${2:-}" "${3:-}" "${4:-}" "${5:-wrist}" "${6:-40}"
     ;;
   *)
-    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, insertion-plan-benchmark, insertion-plan-summarize, proposal-train, grasp-proposal-train, insertion-proposal-train, proposal-eval, grasp-proposal-eval, insertion-proposal-eval, proposal-summarize, grasp-proposal-summarize, insertion-proposal-summarize, insertion-wm-summarize, control-worker-configure, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, grasp-control-summarize, control-candidate-report, control-candidate-summarize, control-objective-calibrate, or summarize"
+    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, insertion-plan-benchmark, insertion-plan-summarize, insertion-proposal-training-diagnostic, proposal-train, grasp-proposal-train, insertion-proposal-train, proposal-eval, grasp-proposal-eval, insertion-proposal-eval, proposal-summarize, grasp-proposal-summarize, insertion-proposal-summarize, insertion-wm-summarize, control-worker-configure, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, grasp-control-summarize, control-candidate-report, control-candidate-summarize, control-objective-calibrate, or summarize"
     ;;
 esac

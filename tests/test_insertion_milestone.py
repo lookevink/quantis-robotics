@@ -60,7 +60,8 @@ class InsertionMilestoneTest(unittest.TestCase):
                 for index in range(12)
             )
             proposal = (
-                "contact-insertion-v9-2600_insertion_proposal_h256_s3000"
+                "contact-insertion-v9-2600_"
+                "insertion_proposal_goaldir_h256_s3000"
             )
             self.assertEqual(result.returncode, 2, result.stderr)
             self.assertEqual(

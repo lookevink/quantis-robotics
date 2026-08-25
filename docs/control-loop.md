@@ -532,6 +532,20 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     authority. Treat `22600–22601` as diagnostic from this point; improve the
     early insertion initializer from TRAIN-only evidence and retest a frozen
     revision on a new disjoint fresh pair.
+    The TRAIN-only diagnostic localized the main initializer failure at context
+    `44`: proposal `ea7ce27c...ea255` passed the goal cone in only `3/12`
+    recordings (`0.863752` mean cosine). A separately named proposal adds a
+    first-action-to-three-step-goal direction loss with weight `1.0`, retaining
+    all prior supervision. Frozen fingerprint `efdf848c...7596f` passed context
+    `44` in `12/12` TRAIN recordings (`0.998467` mean, `0.997284` minimum) and
+    passed `1,019/1,020` active-goal TRAIN rollouts overall. Its ordinary
+    diagnostic held-out proposal gate passed all `176/176` rollouts. With the
+    adapter and planner identity unchanged, both diagnostic planner seeds then
+    selected `8/8` contexts with `100%` goal/first-action passes: seed `12600`
+    beat zero/recorded `8/8` and seed `12601` beat them `8/8` and `6/8`.
+    Context `44` is selected on both with goal cosine above `0.998`. Freeze
+    these exact bytes and evaluate the unchanged planner on a new disjoint
+    two-seed recording pair; diagnostic success grants no live authority.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

@@ -21,7 +21,7 @@ configure_artifact() {
     proposal)
       default_steps=3000
       artifact_label="Proposal"
-      artifact_stem="insertion_proposal_h256_s"
+      artifact_stem="insertion_proposal_goaldir_h256_s"
       training_command=jepa-wm-insertion-proposal-train
       evaluation_command=jepa-wm-insertion-proposal-eval
       summary_command=jepa-wm-insertion-proposal-summarize

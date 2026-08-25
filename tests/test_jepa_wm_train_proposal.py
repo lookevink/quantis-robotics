@@ -92,11 +92,43 @@ class ProposalTrainingLossTest(unittest.TestCase):
                 goal_consistency=0.0,
                 first_action_mse=0.0,
                 active_direction=0.0,
+                goal_direction=0.0,
                 inactive_gripper=0.0,
                 first_gripper_mse=2.0,
             )
         )
         self.assertAlmostEqual(float(components.total(config.loss_weights)), 0.5)
+
+    def test_first_action_is_supervised_against_the_three_step_goal(self) -> None:
+        target = torch.zeros((1, 3, 7))
+        predicted = torch.zeros_like(target)
+        predicted[:, 0, 1] = 1.0
+        goal = torch.zeros((1, 7))
+        goal[:, 0] = 1.0
+
+        components = proposal_loss(
+            predicted,
+            target,
+            goal,
+            action_mean=torch.zeros((3, 7)),
+            action_standard_deviation=torch.ones((3, 7)),
+            goal_standard_deviation=torch.ones(7),
+        )
+
+        self.assertAlmostEqual(float(components.goal_direction_loss), 1.0)
+
+    def test_zero_goal_does_not_create_a_direction_penalty(self) -> None:
+        predicted = torch.ones((1, 3, 7))
+        components = proposal_loss(
+            predicted,
+            torch.zeros_like(predicted),
+            torch.zeros((1, 7)),
+            action_mean=torch.zeros((3, 7)),
+            action_standard_deviation=torch.ones((3, 7)),
+            goal_standard_deviation=torch.ones(7),
+        )
+
+        self.assertEqual(float(components.goal_direction_loss), 0.0)
 
     def test_goal_consistency_does_not_add_euler_rotation_deltas(self) -> None:
         predicted = torch.zeros((1, 3, 7))

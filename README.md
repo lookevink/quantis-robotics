@@ -962,6 +962,31 @@ recovery copy are preserved. The next revision must improve early-stroke
 proposal alignment using TRAIN-only evidence, then freeze and evaluate on a
 new disjoint fresh pair rather than tuning on seeds `22600–22601`.
 
+That TRAIN-only diagnosis found a concentrated initializer failure. Under
+proposal `ea7ce27c...ea255`, context `44` cleared the `0.95` observable-goal
+cone in only `3/12` TRAIN recordings, with `0.863752` mean and `0.451620`
+minimum goal cosine. A separately named proposal adds a
+first-action-to-three-step-goal direction loss while retaining the existing
+action, history, goal-delta, task-progress, gripper, and stationary-hold
+supervision. Its fingerprint is `efdf848c...7596f`; it was trained on the same
+exact 1,056 TRAIN rollouts with goal-direction weight `1.0` and no held-out
+adaptation. Context `44` then passed `12/12` at `0.998467` mean and `0.997284`
+minimum cosine. Across all 1,020 nonzero-goal TRAIN rollouts, `1,019` passed the
+goal cone. The ordinary proposal readiness gate also passed all 176 diagnostic
+held-out rollouts with `100%` first-action and active-direction pass rates and
+`0.998676` mean active cosine.
+
+With the adapter and planner policy unchanged, the revised initializer cleared
+the two now-diagnostic planner seeds: both selected `8/8` contexts and passed
+all selected first-action and goal-alignment checks. Seed `12600` beat zero and
+recorded actions `8/8`, with `+1.70849e-5` and `+8.94780e-6` mean improvements.
+Seed `12601` beat zero `8/8` and recorded `6/8`, with `+5.04660e-5` and
+`+3.22150e-5` mean improvements. Context `44`, formerly blocked on fresh seed
+`22600`, is now selected on both diagnostic seeds with goal cosine above
+`0.998`. These results justify freezing the exact proposal bytes, but they do
+not reopen live insertion: the next gate is the identical planner on a new
+two-seed recording pair disjoint from every seed used above.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

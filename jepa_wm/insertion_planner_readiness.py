@@ -297,7 +297,9 @@ class InsertionPlannerSeedEvidence:
             "training action library",
         )
         if training_action_library != expected_training_action_library:
-            raise ValueError("planner action library does not match the training corpus")
+            raise ValueError(
+                "planner action library does not match the training corpus"
+            )
         run = PlannerBenchmarkReport(
             provenance=PlannerBenchmarkProvenance(
                 model=MODEL_ID,
@@ -478,7 +480,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--adapter", type=Path, required=True)
     parser.add_argument("--proposal", type=Path, required=True)
     parser.add_argument("--base-checkpoint", type=Path, required=True)
-    parser.add_argument("--evaluation-report", type=Path, action="append", required=True)
+    parser.add_argument(
+        "--evaluation-report",
+        type=Path,
+        action="append",
+        required=True,
+    )
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args(argv)
     summary = summarize_insertion_planner_readiness(
