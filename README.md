@@ -946,6 +946,22 @@ recovery copy are preserved. This authorizes the frozen task-aware planner
 benchmark only; it does not authorize JEPA actuation, insertion filming, or
 production control.
 
+The frozen task-aware planner benchmark then evaluated eight fixed insertion
+contexts on each fresh seed with the exact adapter above, proposal fingerprint
+`ea7ce27c...ea255`, and unchanged `4 × 64 / 8 elites` search. Seed `22601`
+passed all eight contexts: selection, first-action direction, and goal
+alignment were `100%`, and selected actions beat recorded actions `8/8` with
+`+2.02691e-5` mean improvement. Seed `22600` passed only `7/8`: context `44`
+was correctly blocked because both the proposal initializer (`-0.360` goal
+cosine) and searched candidate (`0.891`) missed the `0.95` goal cone; among
+the seven selected contexts, only `4/7` beat recorded energy despite positive
+mean improvement. The reconstructive whole-seed planner gate therefore records
+`1/2`, keeps live insertion closed, and grants no production authority. The
+two raw planner reports, failed readiness artifact, and checksum-verified 12 GB
+recovery copy are preserved. The next revision must improve early-stroke
+proposal alignment using TRAIN-only evidence, then freeze and evaluate on a
+new disjoint fresh pair rather than tuning on seeds `22600–22601`.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

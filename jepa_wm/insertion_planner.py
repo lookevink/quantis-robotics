@@ -30,6 +30,7 @@ class InsertionPlannerProfile:
         8,
     )
     planner: CEMConfig = CEMConfig(iterations=4, samples=64, elites=8, seed=234)
+    scoring_batch_size: int = 64
     prior: ActionPriorConfig = ActionPriorConfig(penalty_weight=1e-5)
     task_policy: PlannerTaskPolicy = PlannerTaskPolicy(
         proposal_trust_region=CandidateTrustRegion(
@@ -56,6 +57,10 @@ class InsertionPlannerProfile:
             minimum_latent_improvement=1e-6,
         ),
     )
+
+    def __post_init__(self) -> None:
+        if self.scoring_batch_size <= 0:
+            raise ValueError("insertion planner scoring batch size must be positive")
 
 
 INSERTION_PLANNER_PROFILE = InsertionPlannerProfile()

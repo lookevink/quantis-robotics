@@ -440,6 +440,73 @@ summarize_insertion_world_model() {
     --output "${output}"
 }
 
+summarize_insertion_planner() {
+  local -A options=()
+  parse_named_options options "fresh-roster-base64 proposal" "$@"
+  local fresh_roster_payload="${options[fresh-roster-base64]:-}"
+  local proposal_name="${options[proposal]:-}"
+  [[ -n "${fresh_roster_payload}" ]] || die "fresh planner roster is required"
+  is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+  require_runtime
+  local experiment_root="${checkpoint_dir}/experiments"
+  mkdir -p "${experiment_root}"
+  local temporary_roster
+  temporary_roster="$(mktemp "${experiment_root}/.insertion-planner.XXXXXX.json")"
+  if ! printf '%s' "${fresh_roster_payload}" \
+    | base64 --decode >"${temporary_roster}"; then
+    rm -f "${temporary_roster}"
+    die "fresh planner roster encoding is invalid"
+  fi
+  cd "${repo_dir}"
+  local evaluation_id adapter_name held_out_list
+  if ! evaluation_id="$("${venv_dir}/bin/python" \
+    -m jepa_wm.insertion_corpus show-fresh \
+    --roster "${temporary_roster}" --format evaluation-id)" \
+    || ! adapter_name="$("${venv_dir}/bin/python" \
+      -m jepa_wm.insertion_corpus show-fresh \
+      --roster "${temporary_roster}" --format adapter-name)" \
+    || ! held_out_list="$("${venv_dir}/bin/python" \
+      -m jepa_wm.insertion_corpus show-fresh \
+      --roster "${temporary_roster}" --format held-out-csv)"; then
+    rm -f "${temporary_roster}"
+    die "fresh planner roster is invalid"
+  fi
+  is_safe_identifier "${evaluation_id}" || die "invalid planner evaluation ID"
+  is_safe_identifier "${adapter_name}" || die "invalid planner adapter name"
+  is_safe_identifier_list "${held_out_list}" || die "invalid planner recording list"
+  local fresh_roster="${experiment_root}/${evaluation_id}_insertion_fresh_evaluation.json"
+  mv "${temporary_roster}" "${fresh_roster}"
+  local adapter="${checkpoint_dir}/${adapter_name}.pth"
+  local proposal="${checkpoint_dir}/${proposal_name}.pth"
+  [[ -s "${adapter}" ]] || die "planner adapter does not exist: ${adapter_name}"
+  [[ -s "${proposal}" ]] || die "planner proposal does not exist: ${proposal_name}"
+  local window_start window_count window_stride
+  read -r window_start window_count window_stride \
+    <<<"$("${venv_dir}/bin/python" -c \
+      'from jepa_wm.insertion_planner import INSERTION_PLANNER_PROFILE as p; print(p.window.start_index, p.window.count, p.window.stride)')"
+  local -a recording_names report_arguments=()
+  local recording_name report_root
+  IFS=',' read -r -a recording_names <<<"${held_out_list}"
+  for recording_name in "${recording_names[@]}"; do
+    report_root="${HOME}/docker/isaac-sim/data/quantis/recordings/${recording_name}/jepa_wm"
+    local -a matches=(
+      "${report_root}/wrist_cem_benchmark_$(printf '%06d' "${window_start}")_$(printf '%03d' "${window_count}")_held_out_proposal_prior_"*.json
+    )
+    (( ${#matches[@]} == 1 )) && [[ -f "${matches[0]}" ]] \
+      || die "expected exactly one insertion planner report for ${recording_name}"
+    report_arguments+=(--evaluation-report "${matches[0]}")
+  done
+  local output="${experiment_root}/${evaluation_id}_insertion_planner_readiness.json"
+  "${venv_dir}/bin/python" -m jepa_wm.insertion_planner_readiness \
+    --fresh-roster "${fresh_roster}" \
+    --recording-root "${HOME}/docker/isaac-sim/data/quantis/recordings" \
+    --adapter "${adapter}" \
+    --proposal "${proposal}" \
+    --base-checkpoint "${jepa_checkpoint}" \
+    "${report_arguments[@]}" \
+    --output "${output}"
+}
+
 benchmark_planner() {
   local -A options=()
   parse_named_options options \
@@ -1399,6 +1466,9 @@ case "${1:-}" in
   insertion-plan-benchmark)
     benchmark_insertion_planner "${@:2}"
     ;;
+  insertion-plan-summarize)
+    summarize_insertion_planner "${@:2}"
+    ;;
   proposal-train)
     train_action_proposal "${@:2}"
     ;;
@@ -1479,6 +1549,6 @@ case "${1:-}" in
       "${2:-}" "${3:-}" "${4:-}" "${5:-wrist}" "${6:-40}"
     ;;
   *)
-    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, insertion-plan-benchmark, proposal-train, grasp-proposal-train, insertion-proposal-train, proposal-eval, grasp-proposal-eval, insertion-proposal-eval, proposal-summarize, grasp-proposal-summarize, insertion-proposal-summarize, insertion-wm-summarize, control-worker-configure, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, grasp-control-summarize, control-candidate-report, control-candidate-summarize, control-objective-calibrate, or summarize"
+    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, insertion-plan-benchmark, insertion-plan-summarize, proposal-train, grasp-proposal-train, insertion-proposal-train, proposal-eval, grasp-proposal-eval, insertion-proposal-eval, proposal-summarize, grasp-proposal-summarize, insertion-proposal-summarize, insertion-wm-summarize, control-worker-configure, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, grasp-control-summarize, control-candidate-report, control-candidate-summarize, control-objective-calibrate, or summarize"
     ;;
 esac

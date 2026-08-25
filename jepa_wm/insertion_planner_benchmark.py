@@ -50,7 +50,11 @@ def main() -> None:
     parser.add_argument("--adapter", type=Path, required=True)
     parser.add_argument("--proposal", type=Path, required=True)
     parser.add_argument("--camera", default="wrist")
-    parser.add_argument("--scoring-batch-size", type=int, default=64)
+    parser.add_argument(
+        "--scoring-batch-size",
+        type=int,
+        default=INSERTION_PLANNER_PROFILE.scoring_batch_size,
+    )
     arguments = parser.parse_args()
     if arguments.camera != "wrist":
         parser.error("insertion planner benchmark requires the wrist camera")

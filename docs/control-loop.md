@@ -521,6 +521,17 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     energy gate. The typed fresh roster, raw 112-frame recordings, reports,
     and 12 GB recovery copy are preserved. This opens only the frozen
     task-aware planner benchmark; JEPA actuation and filming remain closed.
+    That planner gate is currently `1/2`. With the exact frozen adapter,
+    proposal `ea7ce27c...ea255`, and one fixed `4 × 64 / 8` search identity,
+    seed `22601` selected `8/8`, kept direction/goal alignment at `100%`, and
+    beat recorded energy `8/8` at `+2.02691e-5` mean. Seed `22600` selected
+    `7/8`; context `44` blocked because initializer/search goal cosines were
+    `-0.360`/`0.891` against the `0.95` cone, and only `4/7` selected actions
+    beat recorded energy. The reconstructive readiness artifact therefore
+    remains false, is recovery-backed up, and grants no live or production
+    authority. Treat `22600–22601` as diagnostic from this point; improve the
+    early insertion initializer from TRAIN-only evidence and retest a frozen
+    revision on a new disjoint fresh pair.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

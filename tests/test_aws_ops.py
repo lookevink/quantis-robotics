@@ -768,6 +768,25 @@ class AwsLifecycleTests(unittest.TestCase):
             calls,
         )
 
+    def test_jepa_wm_insertion_plan_summary_forwards_only_roster_and_proposal(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            roster = Path(temporary_directory) / "fresh.json"
+            roster.write_text('{"schema":"fresh"}\n')
+            result, calls = self.run_command(
+                "jepa-wm-insertion-plan-summarize",
+                arguments=(str(roster), "insertion-proposal"),
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("rsync ", calls)
+        self.assertIn(
+            "ops/jepa_wm.sh insertion-plan-summarize "
+            "--fresh-roster-base64 '",
+            calls,
+        )
+        self.assertIn("--proposal 'insertion-proposal'", calls)
+        self.assertNotIn("--adapter", calls)
+
     def test_jepa_wm_proposal_train_forwards_recording_set_and_checkpoint_name(self):
         result, calls = self.run_command(
             "jepa-wm-proposal-train",
