@@ -29,8 +29,10 @@ from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_protocol import ControlObservation
 from jepa_wm.control_resolution_baseline import (
     CONTROL_RESOLUTION_BASELINE_TOLERANCES,
+    ControlResolutionBaselineAttempt,
     ControlResolutionBaselineEvidence,
     ControlResolutionBaselinePolicy,
+    ControlResolutionBaselineTrace,
 )
 from jepa_wm.control_resolution_profile import ControlResolutionLoad
 from jepa_wm.direct_safety import ControlSafetySnapshot
@@ -951,6 +953,7 @@ class ControlResolutionFailureEvidence:
     protocol: ControlResolutionProtocol = CONTROL_RESOLUTION_PROTOCOL
     load: ControlResolutionLoad = ControlResolutionLoad.ATTACHED
     baseline: ControlResolutionBaselineEvidence | None = None
+    baseline_attempt: ControlResolutionBaselineAttempt | None = None
 
     def __post_init__(self) -> None:
         validate_recording_id(self.session_id)
@@ -964,6 +967,8 @@ class ControlResolutionFailureEvidence:
             or not self.error
         ):
             raise ValueError("control resolution failure evidence is invalid")
+        if self.baseline is not None and self.baseline_attempt is not None:
+            raise ValueError("control resolution failure has two baseline variants")
         if self.baseline is not None:
             if self.protocol.baseline_policy is None:
                 raise ValueError("legacy protocol cannot carry baseline evidence")
@@ -980,6 +985,22 @@ class ControlResolutionFailureEvidence:
             raise ValueError(
                 "current control resolution failure lost its baseline evidence"
             )
+        if self.baseline_attempt is not None:
+            if self.protocol.baseline_policy is None:
+                raise ValueError("legacy protocol cannot carry a baseline attempt")
+            self.baseline_attempt.validate(
+                self.protocol.baseline_policy,
+                self.load,
+                self.protocol.safety_limits,
+            )
+            if (
+                self.reference_reset is not None
+                or self.completed_samples
+                or self.rejected_reset is not None
+            ):
+                raise ValueError(
+                    "failed baseline attempt cannot carry probe evidence"
+                )
         if self.reference_reset is None:
             if self.rejected_reset is not None:
                 raise ValueError(
@@ -1071,6 +1092,11 @@ class ControlResolutionFailureEvidence:
                 if self.baseline is not None
                 else {}
             ),
+            **(
+                {"baseline_attempt": self.baseline_attempt.to_dict()}
+                if self.baseline_attempt is not None
+                else {}
+            ),
             "diagnostic_only": self.diagnostic_only,
             "multi_step_authority_granted": self.multi_step_authority_granted,
             "production_authority_granted": self.production_authority_granted,
@@ -1120,6 +1146,13 @@ class ControlResolutionFailureEvidence:
                         payload["baseline"]
                     )
                     if "baseline" in payload
+                    else None
+                ),
+                baseline_attempt=(
+                    ControlResolutionBaselineAttempt.from_dict(
+                        payload["baseline_attempt"]
+                    )
+                    if "baseline_attempt" in payload
                     else None
                 ),
             )

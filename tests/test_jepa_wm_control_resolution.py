@@ -22,7 +22,9 @@ from jepa_wm.control_resolution import (
     ControlResolutionSettlementEvidence,
     FixedUpdateSettlement,
     ControlResolutionBaselineEvidence,
+    ControlResolutionBaselineAttempt,
     ControlResolutionBaselinePolicy,
+    ControlResolutionBaselineTrace,
     ControlResolutionLoad,
     ControlResolutionMotionTiming,
     RejectedControlResolutionReset,
@@ -48,6 +50,8 @@ from sim.isaac_control_resolution import (
     _require_resolution_reset,
     settle_resolution_motion,
     stabilize_resolution_baseline,
+    UnstableControlResolutionBaseline,
+    resolution_failure_evidence,
 )
 from sim.isaac_control_resolution import resolution_probe_observation
 from sim.isaac_control_resolution import resolution_joint_target
@@ -71,9 +75,11 @@ def _baseline(
 ) -> ControlResolutionBaselineEvidence:
     state = reset or _reset()
     return ControlResolutionBaselineEvidence(
-        (state, state, state),
-        (0.25, 0.25),
-        ControlInterlockEvidence(0.0, False),
+        ControlResolutionBaselineTrace(
+            (state, state, state),
+            (0.25, 0.25),
+            ControlInterlockEvidence(0.0, False),
+        )
     )
 
 
@@ -211,9 +217,11 @@ class ControlResolutionReportTest(unittest.TestCase):
             ),
         )
         evidence = ControlResolutionBaselineEvidence(
-            states=(reference, drifted, stable_one, stable_two),
-            interval_seconds=(0.25, 0.25, 0.25),
-            interlock=ControlInterlockEvidence(0.0, False),
+            ControlResolutionBaselineTrace(
+                states=(reference, drifted, stable_one, stable_two),
+                interval_seconds=(0.25, 0.25, 0.25),
+                interlock=ControlInterlockEvidence(0.0, False),
+            )
         )
 
         evidence.validate(
@@ -223,9 +231,11 @@ class ControlResolutionReportTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "stable"):
             ControlResolutionBaselineEvidence(
-                states=(reference, stable_one),
-                interval_seconds=(0.25,),
-                interlock=ControlInterlockEvidence(0.0, False),
+                ControlResolutionBaselineTrace(
+                    states=(reference, stable_one),
+                    interval_seconds=(0.25,),
+                    interlock=ControlInterlockEvidence(0.0, False),
+                )
             ).validate(
                 ControlResolutionBaselinePolicy(),
                 ControlResolutionLoad.ATTACHED,
@@ -233,18 +243,20 @@ class ControlResolutionReportTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "stable"):
             ControlResolutionBaselineEvidence(
-                states=(
-                    reference,
-                    drifted,
-                    stable_one,
-                    stable_two,
-                    reference,
-                    drifted,
-                    stable_one,
-                    stable_two,
+                ControlResolutionBaselineTrace(
+                    states=(
+                        reference,
+                        drifted,
+                        stable_one,
+                        stable_two,
+                        reference,
+                        drifted,
+                        stable_one,
+                        stable_two,
+                    ),
+                    interval_seconds=(0.25,) * 7,
+                    interlock=ControlInterlockEvidence(0.0, False),
                 ),
-                interval_seconds=(0.25,) * 7,
-                interlock=ControlInterlockEvidence(0.0, False),
             ).validate(
                 ControlResolutionBaselinePolicy(),
                 ControlResolutionLoad.ATTACHED,
@@ -469,6 +481,48 @@ class ControlResolutionReportTest(unittest.TestCase):
         self.assertEqual(payload["schema"], CONTROL_RESOLUTION_FAILURE_SCHEMA)
         self.assertEqual(payload["load"], "unloaded")
         self.assertEqual(restored, failure)
+
+    def test_unstable_baseline_failure_preserves_every_observed_state(self) -> None:
+        states = tuple(
+            replace(
+                _reset(),
+                pose=_reset().pose.applied(
+                    DroidAction((index * 2e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+                ),
+            )
+            for index in range(9)
+        )
+        attempt = ControlResolutionBaselineAttempt(
+            ControlResolutionBaselineTrace(
+                states,
+                (0.25,) * 8,
+                ControlInterlockEvidence(0.0, False),
+            )
+        )
+        failure = ControlResolutionFailureEvidence(
+            session_id="resolution-attached-52600-c43",
+            failed_at_unix_seconds=123.0,
+            reference_reset=None,
+            completed_samples=(),
+            error="RuntimeError: baseline did not stabilize",
+            baseline_attempt=attempt,
+        )
+
+        restored = ControlResolutionFailureEvidence.from_dict(failure.to_dict())
+
+        self.assertEqual(restored, failure)
+        self.assertEqual(len(restored.baseline_attempt.trace.states), 9)
+
+        runtime_failure = resolution_failure_evidence(
+            "resolution-attached-52600-c43",
+            CONTROL_RESOLUTION_PROTOCOL,
+            None,
+            (),
+            UnstableControlResolutionBaseline(attempt),
+            ControlResolutionLoad.ATTACHED,
+            None,
+        )
+        self.assertEqual(runtime_failure.baseline_attempt, attempt)
 
     def test_unsafe_reset_is_captured_before_typed_rejection(self) -> None:
         command = JointCommand(np.zeros(7), 0.04)
@@ -913,6 +967,49 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence.reference_reset, stable_two)
         self.assertEqual(advance_period.await_count, 3)
         advance_period.assert_awaited_with(0.25, interlock.observe)
+
+    @patch("sim.isaac_control_resolution.advance_simulation_period", new_callable=AsyncMock)
+    @patch("sim.isaac_control_resolution._capture_reset_state")
+    async def test_unstable_baseline_retains_the_complete_attempt(
+        self,
+        capture_reset: Mock,
+        advance_period: AsyncMock,
+    ) -> None:
+        states = tuple(
+            replace(
+                _reset(),
+                pose=_reset().pose.applied(
+                    DroidAction((index * 2e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+                ),
+            )
+            for index in range(9)
+        )
+        commands = tuple(
+            JointCommand(np.asarray(state.joint_positions), 0.04)
+            for state in states
+        )
+        capture_reset.side_effect = tuple(zip(commands, states))
+        interlock = SimpleNamespace(
+            observe=Mock(),
+            contact=SimpleNamespace(
+                evidence=ControlInterlockEvidence(0.0, False)
+            ),
+        )
+
+        with self.assertRaises(UnstableControlResolutionBaseline) as raised:
+            await stabilize_resolution_baseline(
+                SimpleNamespace(),
+                interlock,
+                ControlResolutionBaselinePolicy(),
+                Mock(side_effect=tuple(index * 0.25 for index in range(9))),
+            )
+
+        self.assertEqual(raised.exception.attempt.trace.states, states)
+        self.assertEqual(
+            raised.exception.attempt.trace.interval_seconds,
+            (0.25,) * 8,
+        )
+        self.assertEqual(advance_period.await_count, 8)
 
     async def test_settlement_requires_two_consecutive_tracked_updates(self) -> None:
         target = JointCommand(np.zeros(7), 0.04)

@@ -22,7 +22,9 @@ from jepa_wm.control_resolution import (
     TrackedErrorSettlement,
     ControlResolutionEndpoint,
     ControlResolutionBaselineEvidence,
+    ControlResolutionBaselineAttempt,
     ControlResolutionBaselinePolicy,
+    ControlResolutionBaselineTrace,
     ControlResolutionLoad,
     ControlResolutionMotionTiming,
     RejectedControlResolutionReset,
@@ -146,6 +148,45 @@ class ResolutionControlInterlock:
         return reading
 
 
+class UnstableControlResolutionBaseline(RuntimeError):
+    def __init__(self, attempt: ControlResolutionBaselineAttempt) -> None:
+        super().__init__("insertion control resolution baseline did not stabilize")
+        self.attempt = attempt
+
+
+def resolution_failure_evidence(
+    session_id: str,
+    protocol: ControlResolutionProtocol,
+    reference_reset: TrialResetState | None,
+    samples: tuple[ControlResolutionSample, ...],
+    error: Exception,
+    load: ControlResolutionLoad,
+    baseline: ControlResolutionBaselineEvidence | None,
+) -> ControlResolutionFailureEvidence:
+    """Bind a runtime failure to its exact acquired resolution evidence."""
+
+    return ControlResolutionFailureEvidence(
+        session_id=session_id,
+        failed_at_unix_seconds=time(),
+        protocol=protocol,
+        reference_reset=reference_reset,
+        completed_samples=samples,
+        error=f"{type(error).__name__}: {error}",
+        rejected_reset=(
+            error.evidence
+            if isinstance(error, ControlResolutionResetMismatch)
+            else None
+        ),
+        load=load,
+        baseline=baseline,
+        baseline_attempt=(
+            error.attempt
+            if isinstance(error, UnstableControlResolutionBaseline)
+            else None
+        ),
+    )
+
+
 async def stabilize_resolution_baseline(
     runtime: LiveControlRuntime,
     interlock: ResolutionControlInterlock,
@@ -178,14 +219,21 @@ async def stabilize_resolution_baseline(
             consecutive = 0
         if consecutive >= policy.required_consecutive_intervals:
             evidence = ControlResolutionBaselineEvidence(
-                tuple(states),
-                tuple(intervals),
-                interlock.contact.evidence,
+                ControlResolutionBaselineTrace(
+                    tuple(states),
+                    tuple(intervals),
+                    interlock.contact.evidence,
+                )
             )
             return command, evidence
-    raise RuntimeError(
-        "insertion control resolution baseline did not stabilize"
+    attempt = ControlResolutionBaselineAttempt(
+        ControlResolutionBaselineTrace(
+            tuple(states),
+            tuple(intervals),
+            interlock.contact.evidence,
+        )
     )
+    raise UnstableControlResolutionBaseline(attempt)
 
 
 def _maximum_joint_error(actual: JointCommand, target: JointCommand) -> float:
@@ -577,20 +625,14 @@ async def measure_insertion_control_resolution(
         write_json_atomic(report_path, report.to_dict())
         return report.to_dict()
     except Exception as error:
-        failure = ControlResolutionFailureEvidence(
-            session_id=session_id,
-            failed_at_unix_seconds=time(),
-            protocol=protocol,
-            reference_reset=reference_reset,
-            completed_samples=tuple(samples),
-            error=f"{type(error).__name__}: {error}",
-            rejected_reset=(
-                error.evidence
-                if isinstance(error, ControlResolutionResetMismatch)
-                else None
-            ),
-            load=load,
-            baseline=baseline,
+        failure = resolution_failure_evidence(
+            session_id,
+            protocol,
+            reference_reset,
+            tuple(samples),
+            error,
+            load,
+            baseline,
         )
         write_json_atomic(failure_path, failure.to_dict())
         raise

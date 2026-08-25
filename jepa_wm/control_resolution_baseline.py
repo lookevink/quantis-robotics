@@ -87,26 +87,20 @@ class ControlResolutionBaselinePolicy:
 
 
 @dataclass(frozen=True)
-class ControlResolutionBaselineEvidence:
+class ControlResolutionBaselineTrace:
     states: tuple[TrialResetState, ...]
     interval_seconds: tuple[float, ...]
     interlock: ControlInterlockEvidence
 
-    @property
-    def reference_reset(self) -> TrialResetState:
-        if not self.states:
-            raise ValueError("control resolution baseline has no states")
-        return self.states[-1]
-
-    def validate(
+    def interval_passes(
         self,
         policy: ControlResolutionBaselinePolicy,
         load: ControlResolutionLoad,
-        safety_limits: SimulatorSafetyLimits = SimulatorSafetyLimits(),
-    ) -> None:
-        expected_state_count = policy.maximum_intervals + 1
+        safety_limits: SimulatorSafetyLimits,
+    ) -> tuple[bool, ...]:
         if (
-            len(self.states) > expected_state_count
+            not self.states
+            or len(self.states) > policy.maximum_intervals + 1
             or len(self.interval_seconds) != len(self.states) - 1
             or any(
                 not isfinite(interval)
@@ -127,15 +121,47 @@ class ControlResolutionBaselineEvidence:
                 for state in self.states
             )
         ):
-            raise ValueError("control resolution baseline is invalid")
-        if len(self.states) < policy.required_consecutive_intervals + 1:
-            raise ValueError("control resolution baseline is not stable")
-        interval_passes = tuple(
-            ResetEquivalenceMeasurement.between(left, right)
-            .passes(policy.tolerances)
+            raise ValueError("control resolution baseline trace is invalid")
+        return tuple(
+            ResetEquivalenceMeasurement.between(left, right).passes(
+                policy.tolerances
+            )
             for left, right in zip(self.states, self.states[1:])
         )
-        first_qualifying_end = next(
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "states": [state.to_dict() for state in self.states],
+            "interval_seconds": list(self.interval_seconds),
+            "interlock": self.interlock.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ControlResolutionBaselineTrace:
+        if not isinstance(payload, Mapping):
+            raise ValueError("control resolution baseline trace must be an object")
+        try:
+            return cls(
+                tuple(
+                    TrialResetState.from_dict(state)
+                    for state in payload["states"]
+                ),
+                tuple(float(value) for value in payload["interval_seconds"]),
+                ControlInterlockEvidence.from_dict(payload["interlock"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "control resolution baseline trace is incomplete"
+            ) from error
+
+    def first_qualifying_end(
+        self,
+        policy: ControlResolutionBaselinePolicy,
+        load: ControlResolutionLoad,
+        safety_limits: SimulatorSafetyLimits,
+    ) -> int | None:
+        interval_passes = self.interval_passes(policy, load, safety_limits)
+        return next(
             (
                 end
                 for end in range(
@@ -150,28 +176,66 @@ class ControlResolutionBaselineEvidence:
             ),
             None,
         )
-        if first_qualifying_end != len(interval_passes) - 1:
+
+
+@dataclass(frozen=True)
+class ControlResolutionBaselineAttempt:
+    trace: ControlResolutionBaselineTrace
+
+    def validate(
+        self,
+        policy: ControlResolutionBaselinePolicy,
+        load: ControlResolutionLoad,
+        safety_limits: SimulatorSafetyLimits = SimulatorSafetyLimits(),
+    ) -> None:
+        first_qualifying_end = self.trace.first_qualifying_end(
+            policy,
+            load,
+            safety_limits,
+        )
+        if (
+            len(self.trace.interval_seconds) != policy.maximum_intervals
+            or first_qualifying_end is not None
+        ):
+            raise ValueError("control resolution baseline attempt is not a failure")
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.trace.to_dict()
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ControlResolutionBaselineAttempt:
+        return cls(ControlResolutionBaselineTrace.from_dict(payload))
+
+
+@dataclass(frozen=True)
+class ControlResolutionBaselineEvidence:
+    trace: ControlResolutionBaselineTrace
+
+    @property
+    def reference_reset(self) -> TrialResetState:
+        if not self.trace.states:
+            raise ValueError("control resolution baseline has no states")
+        return self.trace.states[-1]
+
+    def validate(
+        self,
+        policy: ControlResolutionBaselinePolicy,
+        load: ControlResolutionLoad,
+        safety_limits: SimulatorSafetyLimits = SimulatorSafetyLimits(),
+    ) -> None:
+        first_qualifying_end = self.trace.first_qualifying_end(
+            policy,
+            load,
+            safety_limits,
+        )
+        if len(self.trace.states) < policy.required_consecutive_intervals + 1:
+            raise ValueError("control resolution baseline is not stable")
+        if first_qualifying_end != len(self.trace.interval_seconds) - 1:
             raise ValueError("control resolution baseline is not stable")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "states": [state.to_dict() for state in self.states],
-            "interval_seconds": list(self.interval_seconds),
-            "interlock": self.interlock.to_dict(),
-        }
+        return self.trace.to_dict()
 
     @classmethod
     def from_dict(cls, payload: Any) -> ControlResolutionBaselineEvidence:
-        if not isinstance(payload, Mapping):
-            raise ValueError("control resolution baseline must be an object")
-        try:
-            return cls(
-                tuple(
-                    TrialResetState.from_dict(state)
-                    for state in payload["states"]
-                ),
-                tuple(float(value) for value in payload["interval_seconds"]),
-                ControlInterlockEvidence.from_dict(payload["interlock"]),
-            )
-        except (KeyError, TypeError, ValueError) as error:
-            raise ValueError("control resolution baseline is incomplete") from error
+        return cls(ControlResolutionBaselineTrace.from_dict(payload))
