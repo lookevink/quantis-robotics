@@ -1216,11 +1216,40 @@ retained attachment and recorded `0 N` contact with no collision. The typed
 report, preceding negatives, and checksum-verified 12 GB recovery copy are
 preserved.
 
-This closes the noise-floor measurement only. The next checkpoint must test
-bounded `0.5 mm` and `1.0 mm` translation-only probes with settling/tracking
-limits scaled to the requested joint motion, then derive a hold/deadband from
-measured resolution. No second receding-horizon action, insertion filming, or
-production authority is granted.
+The command-relative follow-up uses a `0.5 mrad` absolute joint-tracking floor
+or `25%` of requested joint motion, whichever is larger. It requires two
+consecutive passing physics updates and fails after 32 updates. Forward motion
+and rollback each persist the complete passing window and independent peak
+force/collision evidence. Session
+`insertion-resolution-20260825T192355Z-52600-c43` completed all three zero and
+all three `0.5 mm` probes, then rejected the first `1.0 mm` probe before
+actuation as `joint_velocity_violation`; the limits were not weakened. Its
+typed failure report preserves the six completed samples and the exact
+pre-actuation rejection.
+
+The safely narrowed exact-code run,
+`insertion-resolution-20260825T193221Z-52600-c43`, then completed all six
+probes (three each at `0` and `0.5 mm`) and independently reconstructed the raw
+report. Maximum zero-command drift was `0.0851 mm` translation, `0.195 mrad`
+orientation, and `0.154 mrad` joint tracking. Maximum start/rollback
+repeatability drift was `0.0851 mm` translation, `0.195 mrad` rotation,
+`0.154 mrad` joints, and `0.0943 mm` plug-axis position. The `0.5 mm` requests
+realized `0.558 mm` mean along-axis motion with `0.0854 mm` maximum translation
+error, `1.120 mrad` maximum orientation drift, and `0.154 mrad` maximum joint
+tracking error. Every forward and rollback interval settled in two updates,
+retained attachment, and recorded `0 N` peak contact with no collision. The
+successful report, the `1.0 mm` safety negative, and the checksum-verified
+12 GB recovery copy are preserved.
+
+This closes the bounded-resolution diagnostic: `0.5 mm` is a measurable,
+admissible translation scale at this pose, while `1.0 mm` is not admissible at
+this pose under the fixed `0.25 s` command period. The next controller
+checkpoint must encode
+a conservative close-enough deadband from the measured drift, select a farther
+recorded target when insertion geometry is not yet seated and a local target
+would demand a sub-resolution move, hold orientation inside a measured
+tolerance, and retest exactly one JEPA action. No second receding-horizon
+action, insertion filming, or production authority is granted.
 
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a

@@ -601,11 +601,13 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     fail-closed step boundary before another action can be authorized.
     Insertion filming and production authority remain false. Exact evidence is
     in the linked README checkpoint.
-    The diagnostic-only noise-floor measurement is complete: `30` and `100 um`
-    requests are below effective control resolution. The next checkpoint is
-    bounded `0.5`/`1.0 mm` translation-only probing plus command-relative
-    settling and a measured hold/deadband. Multi-step, filming, and production
-    authority remain false; exact metrics and evidence are in the
+    The diagnostic-only control-resolution measurement is complete. A bounded
+    `0.5 mm` translation is measurable and passed command-relative settlement,
+    interlock, attachment, and rollback checks; `1.0 mm` failed closed before
+    actuation at the joint-velocity gate. The next checkpoint is a measured
+    close-enough/farther-target and orientation-hold policy followed by exactly
+    one JEPA action. Multi-step, filming, and production authority remain
+    false; exact metrics and evidence are in the
     [insertion control-resolution checkpoint](../README.md#insertion-control-resolution-checkpoint).
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
