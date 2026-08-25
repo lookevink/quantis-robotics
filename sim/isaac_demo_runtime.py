@@ -53,6 +53,25 @@ class ContactReading:
         )
 
 
+def recording_safety_telemetry(
+    commanded: JointCommand,
+    actual: JointCommand,
+    contact: ContactReading,
+) -> RecordingSafetyTelemetry:
+    """Bind live tracking and contact evidence to one recorded command."""
+
+    return RecordingSafetyTelemetry(
+        collision_detected=contact.collision_detected,
+        contact_force_newtons=contact.force_newtons,
+        arm_tracking_error_rad=float(
+            np.max(np.abs(actual.arm_positions - commanded.arm_positions))
+        ),
+        gripper_tracking_error_m=abs(
+            actual.gripper_width_m - commanded.gripper_width_m
+        ),
+    )
+
+
 @dataclass
 class Actuators:
     articulation: Any
@@ -620,18 +639,7 @@ async def move_joint_command(
         )
         attachment.follow(world_pose(attachment.hand_prim)[0])
         actual = actuators.actual_command()
-        arm_tracking_error = float(
-            np.max(np.abs(actual.arm_positions - command.arm_positions))
-        )
-        gripper_tracking_error = abs(
-            actual.gripper_width_m - command.gripper_width_m
-        )
-        safety = RecordingSafetyTelemetry(
-            collision_detected=contact_reading.collision_detected,
-            contact_force_newtons=contact_reading.force_newtons,
-            arm_tracking_error_rad=arm_tracking_error,
-            gripper_tracking_error_m=gripper_tracking_error,
-        )
+        safety = recording_safety_telemetry(command, actual, contact_reading)
         snapshot = recording_snapshot(
             phase,
             stage,

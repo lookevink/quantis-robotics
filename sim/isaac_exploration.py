@@ -47,6 +47,7 @@ from sim.isaac_demo_runtime import (
     move_joint_command,
     prepare_fixed_joint_plug,
     prepare_plug,
+    recording_safety_telemetry,
     recording_snapshot,
 )
 from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH, SOCKET_PATH, world_pose
@@ -56,7 +57,6 @@ from sim.isaac_control_runtime import (
     read_contact,
 )
 from sim.recording import RecordingLabel, RecordingMoment
-from sim.recording import RecordingSafetyTelemetry
 
 
 class ExplorationRecordingMode(str, Enum):
@@ -558,17 +558,10 @@ async def record_exploration_trajectory(
             observation_stage,
             current,
             attachment,
-            safety=RecordingSafetyTelemetry(
-                collision_detected=initial_safety.collision_detected,
-                contact_force_newtons=initial_safety.force_newtons,
-                arm_tracking_error_rad=float(
-                    np.max(
-                        np.abs(initial_actual.arm_positions - current.arm_positions)
-                    )
-                ),
-                gripper_tracking_error_m=abs(
-                    initial_actual.gripper_width_m - current.gripper_width_m
-                ),
+            safety=recording_safety_telemetry(
+                current,
+                initial_actual,
+                initial_safety,
             ),
         )
         await recorder.capture(initial, advance=False)

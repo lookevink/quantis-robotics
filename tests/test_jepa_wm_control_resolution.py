@@ -56,6 +56,7 @@ from sim.isaac_control_resolution import (
 )
 from sim.isaac_control_resolution import resolution_probe_observation
 from sim.isaac_control_resolution import resolution_joint_target
+from sim.isaac_control_capture import stabilize_resolution_capture
 from sim.isaac_demo_runtime import JointCommand
 from sim.control_session import ControlSession, ControlSessionState
 
@@ -1085,6 +1086,37 @@ class ControlResolutionReportTest(unittest.TestCase):
 
 
 class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
+    @patch(
+        "sim.isaac_control_resolution.stabilize_resolution_baseline",
+        new_callable=AsyncMock,
+    )
+    async def test_capture_stabilizes_before_persisting_tracking_telemetry(
+        self,
+        stabilize: AsyncMock,
+    ) -> None:
+        command = JointCommand(np.zeros(7), 0.04)
+        actual = JointCommand(
+            np.asarray((2e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+            0.039,
+        )
+        baseline = Mock()
+        stabilize.return_value = (actual, baseline)
+        runtime = SimpleNamespace(
+            actuators=SimpleNamespace(actual_command=Mock(return_value=actual)),
+            attachment=SimpleNamespace(attached=True),
+            sensor=object(),
+        )
+        timeline = Mock()
+
+        safety = await stabilize_resolution_capture(runtime, timeline, command)
+
+        self.assertEqual(safety.arm_tracking_error_rad, 2e-4)
+        self.assertAlmostEqual(safety.gripper_tracking_error_m, 0.001)
+        self.assertFalse(safety.collision_detected)
+        self.assertEqual(safety.contact_force_newtons, 0.0)
+        stabilize.assert_awaited_once()
+        baseline.validate.assert_called_once()
+
     @patch("sim.isaac_control_resolution.advance_simulation_period", new_callable=AsyncMock)
     @patch("sim.isaac_control_resolution._capture_reset_state")
     async def test_baseline_waits_for_two_consecutive_stable_intervals(

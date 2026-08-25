@@ -46,17 +46,20 @@ from sim.exploration import (
 )
 from sim.isaac_control_runtime import (
     LiveContactInterlock,
+    LiveControlRuntime,
     bind_live_runtime,
     control_contact_sensors,
     synchronized_control_safety_snapshot,
 )
 from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, DemoRecorder
 from sim.isaac_demo_runtime import (
+    ContactReading,
     JointCommand,
     advance_physics_updates,
     create_actuators,
     move_joint_command,
     prepare_plug,
+    recording_safety_telemetry,
     recording_snapshot,
     reset_stage,
 )
@@ -66,7 +69,12 @@ from sim.isaac_exploration import (
     ExplorationRecordingProfile,
     apply_variant,
 )
-from sim.recording import RecordingLabel, RecordingMoment, validate_recording_id
+from sim.recording import (
+    RecordingLabel,
+    RecordingMoment,
+    RecordingSafetyTelemetry,
+    validate_recording_id,
+)
 
 
 def validated_control_reference(
@@ -102,6 +110,57 @@ def validated_control_reference(
             expected_split=expected_split.value,
         )
     return reference
+
+
+async def stabilize_resolution_capture(
+    runtime: LiveControlRuntime,
+    timeline: Any,
+    command: JointCommand,
+) -> RecordingSafetyTelemetry:
+    """Hold the drive-only reset until the captured state is demonstrably stable."""
+
+    from jepa_wm.control_resolution import (
+        CONTROL_RESOLUTION_PROTOCOL,
+        ControlResolutionLoad,
+    )
+    from sim.isaac_control_resolution import (
+        ResolutionControlInterlock,
+        stabilize_resolution_baseline,
+    )
+
+    baseline_policy = CONTROL_RESOLUTION_PROTOCOL.baseline_policy
+    if baseline_policy is None:
+        raise RuntimeError("control resolution capture has no baseline policy")
+    interlock = ResolutionControlInterlock(
+        LiveContactInterlock(
+            runtime.sensor,
+            CONTROL_RESOLUTION_PROTOCOL.safety_limits.maximum_contact_force_newtons,
+            "insertion control resolution capture stabilization",
+        ),
+        runtime,
+        expected_attachment=True,
+    )
+    _, baseline = await stabilize_resolution_baseline(
+        runtime,
+        interlock,
+        baseline_policy,
+        timeline.get_current_time,
+    )
+    baseline.validate(
+        baseline_policy,
+        ControlResolutionLoad.ATTACHED,
+        CONTROL_RESOLUTION_PROTOCOL.safety_limits,
+    )
+    actual = runtime.actuators.actual_command()
+    evidence = interlock.contact.evidence
+    return recording_safety_telemetry(
+        command,
+        actual,
+        ContactReading(
+            evidence.collision_detected,
+            evidence.maximum_contact_force_newtons,
+        ),
+    )
 
 
 async def capture_control_observation(
@@ -239,31 +298,60 @@ async def capture_control_observation(
                 np.asarray(step.arm_positions),
                 step.gripper_width_m,
             )
+            recording_phase = RecordingLabel(
+                (
+                    RecordingMoment.ATTACHED
+                    if step.plug_attached
+                    else RecordingMoment.MOTION
+                ),
+                Phase.GRASP if step.plug_attached else Phase.READY,
+            )
+            recording_stage = (
+                ObservationStage.CABLE_GRASPED
+                if step.plug_attached
+                else ObservationStage.APPROACHING_CABLE
+            )
+            stabilize_before_capture = (
+                policy
+                is ControlExecutionPolicy.INSERTION_RESOLUTION_MEASUREMENT
+                and step.index == context_index
+            )
             await move_joint_command(
                 actuators,
                 current,
                 command,
                 attachment,
                 frame_count=1,
-                phase=RecordingLabel(
-                    (
-                        RecordingMoment.ATTACHED
-                        if step.plug_attached
-                        else RecordingMoment.MOTION
-                    ),
-                    Phase.GRASP if step.plug_attached else Phase.READY,
-                ),
-                stage=(
-                    ObservationStage.CABLE_GRASPED
-                    if step.plug_attached
-                    else ObservationStage.APPROACHING_CABLE
-                ),
-                recorder=recorder,
+                phase=recording_phase,
+                stage=recording_stage,
+                recorder=None if stabilize_before_capture else recorder,
                 sample_period_seconds=plan.sample_period_seconds,
                 observe_safety=(
                     warmup_interlock.observe if insertion_control else None
                 ),
             )
+            if stabilize_before_capture:
+                capture_runtime = LiveControlRuntime(
+                    session_id,
+                    stage,
+                    actuators,
+                    attachment,
+                    sensor,
+                )
+                capture_safety = await stabilize_resolution_capture(
+                    capture_runtime,
+                    timeline,
+                    command,
+                )
+                await recorder.capture_current(
+                    recording_snapshot(
+                        recording_phase,
+                        recording_stage,
+                        command,
+                        attachment,
+                        safety=capture_safety,
+                    ),
+                )
             current = command
         captured_state = await synchronized_control_safety_snapshot(
             timeline,

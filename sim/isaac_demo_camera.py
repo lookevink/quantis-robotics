@@ -188,6 +188,20 @@ class DemoRecorder:
         *,
         advance: bool = True,
     ) -> None:
+        await self._capture(snapshot, advance=advance, max_attempts=8)
+
+    async def capture_current(self, snapshot: RecordingSnapshot) -> None:
+        """Persist only the already-rendered frame, without a physics update."""
+
+        await self._capture(snapshot, advance=False, max_attempts=1)
+
+    async def _capture(
+        self,
+        snapshot: RecordingSnapshot,
+        *,
+        advance: bool,
+        max_attempts: int,
+    ) -> None:
         import omni.kit.app
         from PIL import Image
 
@@ -199,6 +213,7 @@ class DemoRecorder:
             self._annotators,
             app.next_update_async,
             advance_before_first_read=advance,
+            max_attempts=max_attempts,
         )
 
         frame_paths = self._writer.frame_paths()
