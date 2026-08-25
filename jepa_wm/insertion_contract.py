@@ -1,10 +1,23 @@
 """Shared identity, geometry, and capture contract for reach-and-insert."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
+from math import dist, isfinite
+from pathlib import Path
 from typing import Any, Mapping
 
-from jepa_wm.trajectory import RolloutWindow
+from jepa_wm.action import ActionSelectionBounds
+from jepa_wm.control_policy import ControlExecutionPolicy
+from jepa_wm.control_protocol import ControlObservation, ControlTarget
+from jepa_wm.identifiers import validate_safe_identifier
+from jepa_wm.trajectory import (
+    RecordedRollout,
+    RolloutProtocol,
+    RolloutWindow,
+    load_rollout_at,
+)
 
 INSERTION_TASK_ID = "reach_and_insert"
 INSERTION_AXIS = (-1.0, 0.0, 0.0)
@@ -13,6 +26,133 @@ KINEMATIC_INSERTION_MODE = "kinematic_scripted_baseline"
 CONTACT_AWARE_INSERTION_MODE = "contact_aware_scripted_baseline"
 CONNECTOR_CONTACT_SENSOR_ID = "connector_tip"
 COMPLIANT_COLLISION_PARTS = ("latch",)
+
+
+@dataclass(frozen=True)
+class InsertionControlTargetPolicy:
+    minimum_translation_meters: float = 5e-4
+    minimum_action_horizon: int = 3
+    maximum_action_horizon: int = 8
+    camera: str = "wrist"
+    action_bounds: ActionSelectionBounds = ActionSelectionBounds(
+        minimum_action_norm=0.0
+    )
+
+    def __post_init__(self) -> None:
+        validate_safe_identifier(self.camera)
+        if (
+            not isfinite(self.minimum_translation_meters)
+            or self.minimum_translation_meters <= 0.0
+            or isinstance(self.minimum_action_horizon, bool)
+            or not isinstance(self.minimum_action_horizon, int)
+            or self.minimum_action_horizon <= 0
+            or isinstance(self.maximum_action_horizon, bool)
+            or not isinstance(self.maximum_action_horizon, int)
+            or self.maximum_action_horizon < self.minimum_action_horizon
+        ):
+            raise ValueError("insertion control target policy is invalid")
+
+    def select(
+        self,
+        recording: Path,
+        *,
+        context_index: int,
+    ) -> RecordedRollout:
+        """Select the nearest bounded-horizon target above control resolution."""
+
+        for horizon in range(
+            self.minimum_action_horizon,
+            self.maximum_action_horizon + 1,
+        ):
+            rollout = load_rollout_at(
+                recording,
+                camera=self.camera,
+                context_index=context_index,
+                protocol=RolloutProtocol(action_horizon=horizon),
+                bounds=self.action_bounds,
+            )
+            if (
+                dist(
+                    rollout.context_pose.values[:3],
+                    rollout.target_pose.values[:3],
+                )
+                >= self.minimum_translation_meters
+            ):
+                return rollout
+        raise ValueError(
+            "insertion control target has no resolvable bounded-horizon goal"
+        )
+
+    def validate_observation(
+        self,
+        observation: ControlObservation,
+        recording: Path,
+        *,
+        frame_root: Path,
+    ) -> None:
+        rollout = self.select(
+            recording,
+            context_index=observation.warmup_frames,
+        )
+        expected = ControlTarget(
+            rollout.target.path.relative_to(frame_root.resolve()),
+            rollout.target_pose,
+        )
+        if observation.target != expected:
+            raise ValueError("insertion control observation target is inconsistent")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "minimum_translation_meters": self.minimum_translation_meters,
+            "minimum_action_horizon": self.minimum_action_horizon,
+            "maximum_action_horizon": self.maximum_action_horizon,
+            "camera": self.camera,
+            "action_bounds": self.action_bounds.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> InsertionControlTargetPolicy:
+        if not isinstance(payload, Mapping):
+            raise ValueError("insertion control target policy must be an object")
+        minimum_horizon = payload.get("minimum_action_horizon")
+        maximum_horizon = payload.get("maximum_action_horizon")
+        camera = payload.get("camera")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int)
+            for value in (minimum_horizon, maximum_horizon)
+        ) or not isinstance(camera, str):
+            raise ValueError("insertion target policy fields are invalid")
+        try:
+            return cls(
+                minimum_translation_meters=float(
+                    payload["minimum_translation_meters"]
+                ),
+                minimum_action_horizon=minimum_horizon,
+                maximum_action_horizon=maximum_horizon,
+                camera=camera,
+                action_bounds=ActionSelectionBounds.from_dict(
+                    payload["action_bounds"]
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("insertion control target policy is incomplete") from error
+
+
+INSERTION_CONTROL_TARGET_POLICY = InsertionControlTargetPolicy()
+
+
+def insertion_control_target_policy(
+    execution_policy: ControlExecutionPolicy,
+) -> InsertionControlTargetPolicy | None:
+    return (
+        INSERTION_CONTROL_TARGET_POLICY
+        if execution_policy
+        in (
+            ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION,
+            ControlExecutionPolicy.INSERTION_RESET_TRIAL,
+        )
+        else None
+    )
 
 
 class ContactInsertionSegment(str, Enum):

@@ -2,9 +2,11 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from jepa_wm.action import DroidAction, DroidPose
+from jepa_wm.action import ActionSelectionBounds, DroidAction, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
+from jepa_wm.insertion_contract import InsertionControlTargetPolicy
 from sim.control_session import (
     ControlExecutionPolicy,
     ControlSession,
@@ -13,6 +15,61 @@ from sim.control_session import (
 
 
 class ControlSessionTest(unittest.TestCase):
+    def test_insertion_target_policy_is_persisted_and_required_for_its_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            session = ControlSession.at(Path(temp_dir), "insertion-target")
+            observation = ControlObservation(
+                123,
+                100.0,
+                Path("context.png"),
+                ControlTarget(
+                    Path("recordings/held-reference/wrist/frame_000048.png"),
+                    DroidPose((0.4005, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
+                ),
+                Path("/tmp/proposal.pth"),
+                DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
+                DroidAction((0.0,) * 7),
+                43,
+            )
+            target_policy = InsertionControlTargetPolicy(
+                minimum_translation_meters=4e-4,
+                maximum_action_horizon=6,
+                camera="overhead",
+                action_bounds=ActionSelectionBounds(minimum_action_norm=0.0),
+            )
+            state = ControlSessionState(
+                "insertion-target",
+                "held-reference",
+                52600,
+                "control-insertion-target",
+                (0.0,) * 7,
+                False,
+                0.0,
+                execution_policy=ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION,
+                insertion_target_policy=target_policy,
+            )
+            session.write_capture(observation, state)
+
+            with patch.object(
+                InsertionControlTargetPolicy,
+                "validate_observation",
+            ) as validate:
+                restored_observation, restored_state = session.load_capture()
+
+            self.assertEqual(restored_observation, observation)
+            self.assertEqual(restored_state, state)
+            validate.assert_called_once()
+
+            stripped = state.to_dict()
+            del stripped["insertion_target_policy"]
+            session.state_path.write_text(json.dumps(stripped))
+            with patch(
+                "sim.control_session.validate_observation_target",
+                side_effect=ValueError("legacy target is inconsistent"),
+            ):
+                with self.assertRaisesRegex(ValueError, "legacy target"):
+                    session.load_capture()
+
     def test_persists_only_a_response_bound_to_the_captured_session(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             session = ControlSession.at(Path(temp_dir), "session-a")
@@ -165,7 +222,11 @@ class ControlSessionTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "non-experimental"):
                 session.load()
 
-    def test_insertion_reset_trials_fail_closed_without_their_binding(self) -> None:
+    @patch("sim.control_session.validate_observation_target")
+    def test_insertion_reset_trials_fail_closed_without_their_binding(
+        self,
+        _validate_target,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             session = ControlSession.at(Path(temp_dir), "insertion-trial")
             proposal = Path("/tmp/proposal.pth")

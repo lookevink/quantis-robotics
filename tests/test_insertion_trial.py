@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from jepa_wm.action import DroidAction, DroidPose
 from jepa_wm.control_policy import ControlExecutionPolicy
@@ -162,7 +163,11 @@ class InsertionTrialBindingTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             InsertionTrialBinding.from_dict(payload)
 
-    def test_session_requires_source_evidence_and_equivalent_reset_before_claim(self) -> None:
+    @patch("sim.control_session.validate_observation_target")
+    def test_session_requires_source_evidence_and_equivalent_reset_before_claim(
+        self,
+        _validate_target,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             data_root = Path(temp_dir)
             control_root = data_root / "control_sessions"

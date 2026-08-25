@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from jepa_wm.action import DROID_FPS, DroidAction, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
@@ -105,7 +106,11 @@ class DirectInsertionSafetyEvidenceTest(unittest.TestCase):
 
 
 class DirectInsertionSafetySessionTest(unittest.TestCase):
-    def test_binds_gate_and_terminalizes_session_without_execution(self) -> None:
+    @patch("sim.control_session.validate_observation_target")
+    def test_binds_gate_and_terminalizes_session_without_execution(
+        self,
+        _validate_target,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             session = ControlSession.at(Path(temp_dir), "insertion-session")
             proposal_path = Path("/tmp/proposal.pth")

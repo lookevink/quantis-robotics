@@ -36,7 +36,12 @@ from jepa_wm.insertion_trial import (
     InsertionTrialExecutionEvidence,
     InsertionTrialSourceEvidence,
 )
-from jepa_wm.insertion_contract import INSERTION_TASK_ID
+from jepa_wm.insertion_contract import (
+    INSERTION_TASK_ID,
+    InsertionControlTargetPolicy,
+    insertion_control_target_policy,
+)
+from jepa_wm.trajectory import validate_observation_target
 from jepa_wm.persistence import write_json_atomic
 from jepa_wm.shadow_planning import ShadowPlanningRequest, ShadowSearchEvidence
 from jepa_wm.shadow_safety import ShadowSafetyEvidence
@@ -78,6 +83,7 @@ class ControlSessionState:
     plug_position: tuple[float, ...] | None = None
     plug_attached: bool = False
     current_gripper_width_m: float | None = None
+    insertion_target_policy: InsertionControlTargetPolicy | None = None
 
     @classmethod
     def from_dict(cls, payload: Any) -> ControlSessionState:
@@ -111,6 +117,13 @@ class ControlSessionState:
                 current_gripper_width_m=(
                     float(payload["current_gripper_width_m"])
                     if payload.get("current_gripper_width_m") is not None
+                    else None
+                ),
+                insertion_target_policy=(
+                    InsertionControlTargetPolicy.from_dict(
+                        payload["insertion_target_policy"]
+                    )
+                    if payload.get("insertion_target_policy") is not None
                     else None
                 ),
             )
@@ -148,7 +161,7 @@ class ControlSessionState:
         return state
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "session_id": self.session_id,
             "reference_recording": self.reference_recording,
             "seed": self.seed,
@@ -164,6 +177,11 @@ class ControlSessionState:
             "plug_attached": self.plug_attached,
             "current_gripper_width_m": self.current_gripper_width_m,
         }
+        if self.insertion_target_policy is not None:
+            payload["insertion_target_policy"] = (
+                self.insertion_target_policy.to_dict()
+            )
+        return payload
 
     def require_safety_snapshot(self) -> ControlSafetySnapshot:
         if self.current_gripper_width_m is None or self.plug_position is None:
@@ -176,6 +194,33 @@ class ControlSessionState:
             collision_detected=self.collision_detected,
             plug_attached=self.plug_attached,
         )
+
+    def validate_observation_target(
+        self,
+        observation: ControlObservation,
+        recording: Path,
+        *,
+        frame_root: Path,
+    ) -> None:
+        configured_policy = insertion_control_target_policy(
+            self.execution_policy
+        )
+        if self.insertion_target_policy is not None:
+            if configured_policy is None:
+                raise ValueError(
+                    "insertion target policy is invalid for the execution policy"
+                )
+            self.insertion_target_policy.validate_observation(
+                observation,
+                recording,
+                frame_root=frame_root,
+            )
+        else:
+            validate_observation_target(
+                observation,
+                recording,
+                frame_root=frame_root,
+            )
 
 
 @dataclass(frozen=True)
@@ -533,6 +578,12 @@ class ControlSession:
             raise ValueError(f"control session is incomplete: {self.session_id}") from error
         if state.session_id != self.session_id:
             raise ValueError("control state belongs to a different session")
+        if insertion_control_target_policy(state.execution_policy) is not None:
+            state.validate_observation_target(
+                observation,
+                RECORDING_ROOT / state.reference_recording,
+                frame_root=QUANTIS_DATA_ROOT,
+            )
         return observation, state
 
     def load_result(self) -> ControlResult:

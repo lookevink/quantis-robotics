@@ -18,11 +18,13 @@ from jepa_wm.action import (
     DroidPose,
 )
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
+from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.domain_recording import DomainRecording
 from jepa_wm.insertion_contract import (
     CONTACT_INSERTION_RECORDING,
     ContactInsertionSegment,
     INSERTION_TASK_ID,
+    insertion_control_target_policy,
 )
 from jepa_wm.insertion_recording import ContactInsertionEvidence
 from jepa_wm.control_safety import SimulatorSafetyLimits
@@ -32,7 +34,6 @@ from sim.control_session import (
     QUANTIS_DATA_ROOT,
     RECORDING_ROOT,
     ControlCaptureResult,
-    ControlExecutionPolicy,
     ControlSession,
     ControlSessionState,
 )
@@ -138,11 +139,19 @@ async def capture_control_observation(
     if insertion_profile is not None:
         plan = insertion_profile.apply_to_plan(plan)
     context_steps = load_control_context(reference.path, context_index, plan)
-    reference_rollout = load_rollout_at(
-        reference.path,
-        camera="wrist",
-        context_index=context_index,
-        bounds=ActionSelectionBounds(minimum_action_norm=0.0),
+    target_policy = insertion_control_target_policy(policy)
+    reference_rollout = (
+        target_policy.select(
+            reference.path,
+            context_index=context_index,
+        )
+        if target_policy is not None
+        else load_rollout_at(
+            reference.path,
+            camera="wrist",
+            context_index=context_index,
+            bounds=ActionSelectionBounds(minimum_action_norm=0.0),
+        )
     )
     await reset_stage()
     stage = omni.usd.get_context().get_stage()
@@ -312,6 +321,7 @@ async def capture_control_observation(
         plug_position=captured_state.plug_position,
         plug_attached=captured_state.plug_attached,
         current_gripper_width_m=captured_state.gripper_width_m,
+        insertion_target_policy=target_policy,
     )
     session.write_capture(observation, state)
     bind_live_runtime(session_id, stage, actuators, attachment, sensor)

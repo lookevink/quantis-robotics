@@ -15,7 +15,6 @@ from jepa_wm.objective_calibration import (
     CalibrationIdentity,
 )
 from jepa_wm.worker_artifacts import ControlWorkerArtifacts
-from jepa_wm.trajectory import validate_observation_target
 from sim.control_session import ControlSessionState
 
 if TYPE_CHECKING:
@@ -79,9 +78,10 @@ def main() -> None:
         if args.state is None or args.recording_root is None:
             parser.error("shadow planning requires --state and --recording-root")
         state = ControlSessionState.from_dict(json.loads(args.state.read_text()))
-        validate_observation_target(
+        recording = args.recording_root / "recordings" / state.reference_recording
+        state.validate_observation_target(
             observation,
-            args.recording_root / "recordings" / state.reference_recording,
+            recording,
             frame_root=args.recording_root,
         )
         direct = ProposedControl.from_dict(json.loads(args.direct_response.read_text()))

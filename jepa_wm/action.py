@@ -273,6 +273,19 @@ class ActionSelectionBounds:
             "maximum_gripper_action": self.maximum_gripper_action,
         }
 
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> ActionSelectionBounds:
+        try:
+            return cls(
+                minimum_action_norm=float(payload["minimum_action_norm"]),
+                maximum_pose_action_norm=float(
+                    payload["maximum_pose_action_norm"]
+                ),
+                maximum_gripper_action=float(payload["maximum_gripper_action"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("action selection bounds are incomplete") from error
+
 
 DEFAULT_ACTION_SELECTION_BOUNDS = ActionSelectionBounds()
 

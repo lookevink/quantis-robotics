@@ -1,0 +1,144 @@
+from dataclasses import replace
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from jepa_wm.action import ActionSelectionBounds, DroidAction, DroidPose
+from jepa_wm.control_protocol import ControlObservation, ControlTarget
+from jepa_wm.insertion_contract import InsertionControlTargetPolicy
+from jepa_wm.trajectory import RecordedFrame, RecordedRollout
+
+
+def _rollout(horizon: int, translation_meters: float) -> RecordedRollout:
+    return RecordedRollout(
+        context=(RecordedFrame(43, Path("recording/wrist/frame_000043.png")),),
+        context_pose=DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
+        previous_action=DroidAction((0.0,) * 7),
+        target=RecordedFrame(
+            43 + horizon,
+            Path(f"recording/wrist/frame_{43 + horizon:06d}.png"),
+        ),
+        target_pose=DroidPose(
+            (0.4 + translation_meters, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)
+        ),
+        actions=(DroidAction((0.0,) * 7),) * horizon,
+    )
+
+
+class InsertionControlTargetPolicyTest(unittest.TestCase):
+    def test_rejects_unsafe_camera_identifier(self) -> None:
+        for camera in (".", "..", "../wrist", "wrist/camera"):
+            with self.subTest(camera=camera):
+                with self.assertRaises(ValueError):
+                    InsertionControlTargetPolicy(camera=camera)
+
+    def test_nondefault_policy_round_trips_and_validates_exact_observation(self) -> None:
+        policy = InsertionControlTargetPolicy(
+            minimum_translation_meters=4e-4,
+            maximum_action_horizon=6,
+            camera="overhead",
+            action_bounds=ActionSelectionBounds(
+                minimum_action_norm=0.0,
+                maximum_pose_action_norm=0.08,
+                maximum_gripper_action=0.5,
+            ),
+        )
+        self.assertEqual(InsertionControlTargetPolicy.from_dict(policy.to_dict()), policy)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir).resolve()
+            target_path = (
+                root / "recordings/reference/overhead/frame_000048.png"
+            )
+            rollout = replace(
+                _rollout(5, 5.14e-4),
+                target=RecordedFrame(48, target_path),
+            )
+            observation = ControlObservation(
+                observation_id=1,
+                captured_at_unix_seconds=1.0,
+                context_frame=Path(
+                    "recordings/reference/overhead/frame_000043.png"
+                ),
+                target=ControlTarget(
+                    target_path.relative_to(root),
+                    rollout.target_pose,
+                ),
+                expected_proposal=Path("/tmp/proposal.pth"),
+                pose=rollout.context_pose,
+                previous_action=rollout.previous_action,
+                warmup_frames=43,
+            )
+            with patch(
+                "jepa_wm.insertion_contract.load_rollout_at",
+                side_effect=(_rollout(3, 1e-4), _rollout(4, 2e-4), rollout),
+            ) as load:
+                policy.validate_observation(
+                    observation,
+                    root / "recordings/reference",
+                    frame_root=root,
+                )
+
+            self.assertEqual(load.call_args.kwargs["camera"], "overhead")
+            self.assertEqual(load.call_args.kwargs["bounds"], policy.action_bounds)
+            with patch.object(
+                InsertionControlTargetPolicy,
+                "select",
+                return_value=rollout,
+            ):
+                with self.assertRaisesRegex(ValueError, "inconsistent"):
+                    policy.validate_observation(
+                        replace(
+                            observation,
+                            target=ControlTarget(
+                                Path(
+                                    "recordings/reference/overhead/frame_000047.png"
+                                ),
+                                rollout.target_pose,
+                            ),
+                        ),
+                        root / "recordings/reference",
+                        frame_root=root,
+                    )
+
+    def test_selects_first_bounded_horizon_above_measured_resolution(self) -> None:
+        policy = InsertionControlTargetPolicy()
+        with patch(
+            "jepa_wm.insertion_contract.load_rollout_at",
+            side_effect=(
+                _rollout(3, 1.89e-4),
+                _rollout(4, 3.32e-4),
+                _rollout(5, 5.14e-4),
+            ),
+        ) as load:
+            selected = policy.select(
+                Path("recording"),
+                context_index=43,
+            )
+
+        self.assertEqual(selected.target.index, 48)
+        self.assertEqual(
+            [item.kwargs["protocol"].action_horizon for item in load.call_args_list],
+            [3, 4, 5],
+        )
+        self.assertEqual(
+            [item.kwargs["bounds"] for item in load.call_args_list],
+            [policy.action_bounds] * 3,
+        )
+
+    def test_fails_when_no_bounded_horizon_is_resolvable(self) -> None:
+        policy = InsertionControlTargetPolicy(maximum_action_horizon=4)
+        with patch(
+            "jepa_wm.insertion_contract.load_rollout_at",
+            side_effect=(_rollout(3, 1e-4), _rollout(4, 2e-4)),
+        ):
+            with self.assertRaisesRegex(ValueError, "no resolvable"):
+                policy.select(
+                    Path("recording"),
+                    context_index=43,
+                )
+
+
+if __name__ == "__main__":
+    unittest.main()
