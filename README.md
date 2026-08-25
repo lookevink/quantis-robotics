@@ -1160,6 +1160,20 @@ and the checksum-verified recovery copy remains 12 GB. This authorizes only the
 predeclared bounded one-action trial; multi-step insertion, filming, and
 production authority remain false.
 
+That bounded trial is complete and remains a progress negative. Session
+`insertion-trial-20260825T155926Z-52600-c43` rebound the exact seed-`52600`
+source, proposal fingerprint, captured reset, and quarter-scale projection. The
+single fresh command requested `0.186 mm` translation and passed IK with
+`0.000508 rad` maximum joint change. It executed with `0 N` peak contact, no
+collision, retained attachment, and passing bounded tracking, but realized only
+`0.0285 mm` translation progress: target error fell from `0.189 mm` to
+`0.161 mm`, or `15.1%`, below the required `25%`. Rotation error increased from
+`0.0000106 rad` to `0.000566 rad`. The terminal rollout and 12 GB recovery copy
+are preserved. No second action was authorized. The next controller checkpoint
+must fail closed on realized post-action target progress before opening another
+step, then address the sub-millimeter tracking/noise floor; multi-step
+insertion, filming, and production authority remain false.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

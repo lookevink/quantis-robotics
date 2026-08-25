@@ -594,6 +594,11 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     the quarter-scale projection with fresh timing, retained attachment, zero
     contact, no collision, and no execution result. This opens only the
     predeclared bounded one-action trial; multi-step authority remains closed.
+    That trial executed safely with retained attachment and zero contact, but
+    realized only `15.1%` translation-error reduction against the required
+    `25%`, while rotation error increased. It stopped after one action and is
+    preserved as a negative. Realized post-action progress must become the next
+    fail-closed step boundary before another action can be authorized.
     Insertion filming and production authority remain false. Exact evidence is
     in the linked README checkpoint.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
