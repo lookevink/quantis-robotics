@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from time import time
-from typing import Any
+from typing import Any, Callable
 
 from jepa.contract import ObservationStage
 from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
@@ -21,6 +21,10 @@ from jepa_wm.control_resolution import (
     ControlResolutionSettlementEvidence,
     TrackedErrorSettlement,
     ControlResolutionEndpoint,
+    ControlResolutionBaselineEvidence,
+    ControlResolutionBaselinePolicy,
+    ControlResolutionLoad,
+    ControlResolutionMotionTiming,
     RejectedControlResolutionReset,
 )
 from jepa_wm.control_safety import SimulatorSafetyLimits
@@ -28,6 +32,7 @@ from jepa_wm.control_safety import SafetyProjectionAttempt
 from jepa_wm.direct_safety import ControlSafetySnapshot
 from jepa_wm.persistence import write_json_atomic
 from jepa_wm.trial_equivalence import (
+    ResetEquivalenceMeasurement,
     ResetEquivalenceTolerances,
     TrialResetState,
     validate_reset_equivalence,
@@ -48,6 +53,7 @@ from sim.isaac_demo_runtime import (
     ContactReading,
     JointCommand,
     advance_physics_updates,
+    advance_simulation_period,
     move_joint_command,
     recording_snapshot,
 )
@@ -126,17 +132,60 @@ def _require_resolution_reset(
 
 
 @dataclass
-class AttachedControlInterlock:
-    """Abort one diagnostic interval immediately if the plug detaches."""
+class ResolutionControlInterlock:
+    """Abort if contact is unsafe or the configured load state changes."""
 
     contact: LiveContactInterlock
     runtime: LiveControlRuntime
+    expected_attachment: bool
 
     def observe(self) -> Any:
         reading = self.contact.observe()
-        if not self.runtime.attachment.attached:
-            raise RuntimeError("insertion control resolution lost plug attachment")
+        if self.runtime.attachment.attached is not self.expected_attachment:
+            raise RuntimeError("insertion control resolution load state changed")
         return reading
+
+
+async def stabilize_resolution_baseline(
+    runtime: LiveControlRuntime,
+    interlock: ResolutionControlInterlock,
+    policy: ControlResolutionBaselinePolicy,
+    simulation_time_seconds: Callable[[], float],
+) -> tuple[JointCommand, ControlResolutionBaselineEvidence]:
+    """Require consecutive stable no-command intervals before the first probe."""
+
+    interlock.observe()
+    command, initial = _capture_reset_state(runtime)
+    states = [initial]
+    intervals = []
+    consecutive = 0
+    previous_time = simulation_time_seconds()
+    for _ in range(policy.maximum_intervals):
+        await advance_simulation_period(
+            policy.observation_period_seconds,
+            interlock.observe,
+        )
+        current_time = simulation_time_seconds()
+        intervals.append(current_time - previous_time)
+        previous_time = current_time
+        command, current = _capture_reset_state(runtime)
+        states.append(current)
+        if ResetEquivalenceMeasurement.between(
+            states[-2], states[-1]
+        ).passes(policy.tolerances):
+            consecutive += 1
+        else:
+            consecutive = 0
+        if consecutive >= policy.required_consecutive_intervals:
+            evidence = ControlResolutionBaselineEvidence(
+                tuple(states),
+                tuple(intervals),
+                interlock.contact.evidence,
+            )
+            return command, evidence
+    raise RuntimeError(
+        "insertion control resolution baseline did not stabilize"
+    )
 
 
 def _maximum_joint_error(actual: JointCommand, target: JointCommand) -> float:
@@ -153,7 +202,7 @@ async def settle_resolution_target(
     runtime: LiveControlRuntime,
     start: JointCommand,
     target: JointCommand,
-    interlock: AttachedControlInterlock,
+    interlock: ResolutionControlInterlock,
     policy: TrackedErrorSettlement,
 ) -> ControlResolutionSettlementEvidence:
     """Wait for consecutive command-relative tracking passes within a bound."""
@@ -187,7 +236,7 @@ async def settle_resolution_motion(
     runtime: LiveControlRuntime,
     start: JointCommand,
     target: JointCommand,
-    interlock: AttachedControlInterlock,
+    interlock: ResolutionControlInterlock,
     settlement: ControlResolutionSettlement,
 ) -> ControlResolutionSettlementEvidence | None:
     if isinstance(settlement, TrackedErrorSettlement):
@@ -260,9 +309,12 @@ def resolution_probe_observation(
 
 async def measure_insertion_control_resolution(
     session_id: str,
+    load: ControlResolutionLoad | str = ControlResolutionLoad.ATTACHED,
     protocol: ControlResolutionProtocol = CONTROL_RESOLUTION_PROTOCOL,
 ) -> dict[str, Any]:
     """Run bounded retreat probes, returning to one verified reset after each."""
+
+    load = ControlResolutionLoad(load)
 
     import omni.kit.app
     import omni.timeline
@@ -310,19 +362,42 @@ async def measure_insertion_control_resolution(
     runtime = synchronized.runtime
     samples: list[ControlResolutionSample] = []
     reference_reset: TrialResetState | None = None
+    baseline: ControlResolutionBaselineEvidence | None = None
     try:
+        if load is ControlResolutionLoad.UNLOADED:
+            runtime.attachment.remove_load_for_diagnostic()
         timeline.play()
-        baseline_command, reference_reset = _capture_reset_state(
+        if protocol.baseline_policy is None:
+            raise RuntimeError("current control resolution has no baseline policy")
+        baseline_interlock = ResolutionControlInterlock(
+            LiveContactInterlock(
+                runtime.sensor,
+                limits.maximum_contact_force_newtons,
+                "insertion control resolution baseline",
+            ),
             runtime,
+            load.plug_attached,
         )
+        baseline_command, baseline = await stabilize_resolution_baseline(
+            runtime,
+            baseline_interlock,
+            protocol.baseline_policy,
+            timeline.get_current_time,
+        )
+        baseline.validate(protocol.baseline_policy, load, limits)
+        reference_reset = baseline.reference_reset
+        captured_reset = ControlSession.trial_context(observation, state).reset
+        if load is ControlResolutionLoad.UNLOADED:
+            captured_reset = replace(captured_reset, plug_attached=False)
         _require_resolution_reset(
-            ControlSession.trial_context(observation, state).reset,
+            captured_reset,
             reference_reset,
             protocol.capture_tolerances,
             ControlResolutionResetPhase.CAPTURE_TO_BASELINE,
         )
 
         for index, magnitude in enumerate(protocol.requested_translations):
+            motion_period_seconds = protocol.motion_period_for(magnitude)
             start_command, start_reset = _capture_reset_state(
                 runtime,
             )
@@ -357,6 +432,7 @@ async def measure_insertion_control_resolution(
                 start_reset.contact_force_newtons,
                 start_reset.collision_detected,
                 limits,
+                control_period_seconds=motion_period_seconds,
             )
             if magnitude == 0.0:
                 gate = safety.evaluate(
@@ -390,14 +466,16 @@ async def measure_insertion_control_resolution(
                 )
             target = resolution_joint_target(magnitude, start_command, selected)
 
-            sample_interlock = AttachedControlInterlock(
+            sample_interlock = ResolutionControlInterlock(
                 LiveContactInterlock(
                     runtime.sensor,
                     limits.maximum_contact_force_newtons,
                     f"insertion control resolution sample {index}",
                 ),
                 runtime,
+                load.plug_attached,
             )
+            motion_started_at_sim_seconds = timeline.get_current_time()
             await move_joint_command(
                 runtime.actuators,
                 start_command,
@@ -407,7 +485,7 @@ async def measure_insertion_control_resolution(
                 phase=RecordingLabel(RecordingMoment.MOTION, Phase.READY),
                 stage=ObservationStage.CABLE_GRASPED,
                 recorder=None,
-                sample_period_seconds=protocol.motion_period_seconds,
+                sample_period_seconds=motion_period_seconds,
                 observe_safety=sample_interlock.observe,
             )
             motion_settlement = await settle_resolution_motion(
@@ -418,15 +496,17 @@ async def measure_insertion_control_resolution(
                 protocol.settlement,
             )
             actual, endpoint = _capture_endpoint(runtime)
+            motion_settled_at_sim_seconds = timeline.get_current_time()
             sample_interlock.observe()
 
-            rollback_interlock = AttachedControlInterlock(
+            rollback_interlock = ResolutionControlInterlock(
                 LiveContactInterlock(
                     runtime.sensor,
                     limits.maximum_contact_force_newtons,
                     f"insertion control resolution rollback {index}",
                 ),
                 runtime,
+                load.plug_attached,
             )
             await move_joint_command(
                 runtime.actuators,
@@ -437,7 +517,7 @@ async def measure_insertion_control_resolution(
                 phase=RecordingLabel(RecordingMoment.SETTLE, Phase.READY),
                 stage=ObservationStage.CABLE_GRASPED,
                 recorder=None,
-                sample_period_seconds=protocol.motion_period_seconds,
+                sample_period_seconds=motion_period_seconds,
                 observe_safety=rollback_interlock.observe,
             )
             rollback_settlement = await settle_resolution_motion(
@@ -473,6 +553,10 @@ async def measure_insertion_control_resolution(
                         rollback_settlement,
                         rollback_interlock.contact.evidence,
                     ),
+                    motion_timing=ControlResolutionMotionTiming(
+                        motion_started_at_sim_seconds,
+                        motion_settled_at_sim_seconds,
+                    ),
                 )
             )
 
@@ -487,6 +571,8 @@ async def measure_insertion_control_resolution(
             reference_reset=reference_reset,
             samples=tuple(samples),
             protocol=protocol,
+            load=load,
+            baseline=baseline,
         )
         write_json_atomic(report_path, report.to_dict())
         return report.to_dict()
@@ -503,6 +589,8 @@ async def measure_insertion_control_resolution(
                 if isinstance(error, ControlResolutionResetMismatch)
                 else None
             ),
+            load=load,
+            baseline=baseline,
         )
         write_json_atomic(failure_path, failure.to_dict())
         raise

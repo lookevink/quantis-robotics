@@ -209,7 +209,7 @@ async def capture_control_observation(
             context_steps[0].gripper_width_m,
         )
         timeline.play()
-        actuators.apply(origin)
+        actuators.set_reset_state(origin)
         if insertion_control:
             await advance_physics_updates(16, warmup_interlock.observe)
         else:

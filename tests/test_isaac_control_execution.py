@@ -28,6 +28,42 @@ from sim.isaac_demo_runtime import JointCommand
 
 
 class ControlProjectionTest(unittest.TestCase):
+    def test_longer_probe_period_preserves_velocity_limit_without_rejection(self) -> None:
+        joints = np.asarray((0.0, -0.5, 0.0, -1.5, 0.0, 1.0, 0.0))
+        observation = ControlObservation(
+            123,
+            100.0,
+            Path("context.png"),
+            ControlTarget(Path("target.png")),
+            Path("/tmp/proposal.pth"),
+            DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
+            DroidAction((0.0,) * 7),
+            43,
+        )
+        proposal = ProposedControl(
+            123,
+            100.1,
+            (DroidAction((0.0,) * 7),) * 3,
+            Path("/tmp/proposal.pth"),
+        )
+        proposed = joints.copy()
+        proposed[0] += 0.2
+        fixed_period = ExecutionSafetyContext(
+            observation,
+            JointCommand(joints, 0.04),
+            tuple(joints),
+            0.0,
+            False,
+            SimulatorSafetyLimits(),
+        )
+        longer_period = replace(fixed_period, control_period_seconds=0.5)
+
+        fixed = fixed_period.evaluate(proposal, tuple(proposed), now_unix_seconds=100.2)
+        longer = longer_period.evaluate(proposal, tuple(proposed), now_unix_seconds=100.2)
+
+        self.assertIn(ControlGateReason.JOINT_VELOCITY_VIOLATION, fixed.reasons)
+        self.assertNotIn(ControlGateReason.JOINT_VELOCITY_VIOLATION, longer.reasons)
+
     def test_target_progress_rejects_overshoot_until_quarter_scale(self) -> None:
         current_joints = np.asarray((0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5))
         observation = ControlObservation(
@@ -205,6 +241,9 @@ class FakeActuators:
             raise AssertionError("physics tensor is invalid")
         return self.command
 
+    def apply_drive_command(self, command: object) -> None:
+        self.command = command
+
 
 class IsaacControlExecutionTest(unittest.TestCase):
     def test_reads_post_action_state_after_camera_capture_advances_physics(self) -> None:
@@ -337,7 +376,6 @@ class IsaacControlExecutionTest(unittest.TestCase):
         target = JointCommand(np.zeros(7), 0.04)
         actuators = FakeActuators(valid=True)
         actuators.command = JointCommand(np.ones(7), 0.02)
-        actuators.apply = lambda command: setattr(actuators, "command", command)
         events = []
 
         async def advance() -> None:
@@ -359,8 +397,36 @@ class IsaacControlExecutionTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(events, ["advance", "observe"])
+        self.assertEqual(events, ["advance", "observe", "advance", "observe"])
         self.assertIs(actuators.command, target)
+
+    def test_rollback_waits_for_consecutive_drive_tracking_passes(self) -> None:
+        target = JointCommand(np.zeros(7), 0.04)
+        actuators = FakeActuators(valid=True)
+        tracking = iter((0.01, 5e-4, 2e-4))
+        updates = 0
+
+        def actual_command() -> JointCommand:
+            error = next(tracking)
+            return JointCommand(np.full(7, error), 0.04)
+
+        actuators.actual_command = actual_command
+
+        async def advance() -> None:
+            nonlocal updates
+            updates += 1
+
+        asyncio.run(
+            rollback_control_command(
+                actuators,
+                target,
+                type("Attachment", (), {"attached": True})(),
+                advance,
+                expected_attachment=True,
+            )
+        )
+
+        self.assertEqual(updates, 3)
 
 
 if __name__ == "__main__":

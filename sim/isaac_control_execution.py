@@ -68,6 +68,14 @@ class ExecutionSafetyContext:
     contact_force_newtons: float
     collision_detected: bool
     limits: SimulatorSafetyLimits
+    control_period_seconds: float = 1.0 / DROID_FPS
+
+    def __post_init__(self) -> None:
+        if (
+            not np.isfinite(self.control_period_seconds)
+            or self.control_period_seconds <= 0.0
+        ):
+            raise ValueError("execution control period is invalid")
 
     def evaluate(
         self,
@@ -83,7 +91,7 @@ class ExecutionSafetyContext:
                 observed_joint_positions=self.observed_joint_positions,
                 current_joint_positions=tuple(self.current.arm_positions),
                 proposed_joint_positions=proposed_joint_positions,
-                control_period_seconds=1.0 / DROID_FPS,
+                control_period_seconds=self.control_period_seconds,
                 contact_force_newtons=self.contact_force_newtons,
                 collision_detected=self.collision_detected,
             ),
@@ -160,6 +168,23 @@ async def settle_joint_command(
             observe_safety()
 
 
+@dataclass(frozen=True)
+class RollbackSettlementPolicy:
+    maximum_arm_error_radians: float = 1e-3
+    maximum_gripper_error_meters: float = 1e-3
+    required_consecutive_updates: int = 2
+    maximum_updates: int = 32
+
+    def __post_init__(self) -> None:
+        if (
+            self.maximum_arm_error_radians <= 0.0
+            or self.maximum_gripper_error_meters <= 0.0
+            or self.required_consecutive_updates <= 0
+            or self.maximum_updates < self.required_consecutive_updates
+        ):
+            raise ValueError("rollback settlement policy is invalid")
+
+
 async def rollback_control_command(
     actuators: Actuators,
     target: JointCommand,
@@ -168,26 +193,41 @@ async def rollback_control_command(
     *,
     expected_attachment: bool,
     observe_safety: Callable[[], ContactReading] | None = None,
+    settlement: RollbackSettlementPolicy = RollbackSettlementPolicy(),
 ) -> None:
-    """Apply and verify one rollback update through the same live interlock."""
+    """Drive back to reset and require bounded consecutive tracking passes."""
 
-    actuators.apply(target)
-    await advance()
-    if observe_safety is not None:
-        observe_safety()
-    actual = actuators.actual_command()
-    arm_error = float(np.max(np.abs(actual.arm_positions - target.arm_positions)))
-    gripper_error = abs(actual.gripper_width_m - target.gripper_width_m)
-    if arm_error > 0.01 or gripper_error > 0.003:
-        raise RuntimeError(
-            "rollback command did not track: "
-            f"arm_error={arm_error:.6f} rad, "
-            f"gripper_error={gripper_error:.6f} m"
+    actuators.apply_drive_command(target)
+    consecutive = 0
+    arm_error = float("inf")
+    gripper_error = float("inf")
+    for _ in range(settlement.maximum_updates):
+        await advance()
+        if observe_safety is not None:
+            observe_safety()
+        if attachment.attached is not expected_attachment:
+            raise RuntimeError(
+                "rollback attachment state did not match its captured reset"
+            )
+        actual = actuators.actual_command()
+        arm_error = float(
+            np.max(np.abs(actual.arm_positions - target.arm_positions))
         )
-    if attachment.attached is not expected_attachment:
-        raise RuntimeError(
-            "rollback attachment state did not match its captured reset"
-        )
+        gripper_error = abs(actual.gripper_width_m - target.gripper_width_m)
+        if (
+            arm_error <= settlement.maximum_arm_error_radians
+            and gripper_error <= settlement.maximum_gripper_error_meters
+        ):
+            consecutive += 1
+            if consecutive >= settlement.required_consecutive_updates:
+                return
+        else:
+            consecutive = 0
+    raise RuntimeError(
+        "rollback command did not settle: "
+        f"arm_error={arm_error:.6f} rad, "
+        f"gripper_error={gripper_error:.6f} m"
+    )
 
 
 def project_control_candidate(

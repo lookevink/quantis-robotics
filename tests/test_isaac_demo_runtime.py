@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 import unittest
-from types import ModuleType
-from unittest.mock import patch
+from types import ModuleType, SimpleNamespace
+from unittest.mock import Mock, patch
 
 import numpy as np
 
 from sim.isaac_demo_runtime import (
+    Actuators,
     FixedJointPlugMotion,
     ContactReading,
+    JointCommand,
     PlugAttachment,
     PlugCollisionPolicy,
     _advance_sample,
+    move_joint_command,
 )
+from jepa.contract import ObservationStage
+from sim.demo_sequence import Phase
+from sim.recording import RecordingLabel, RecordingMoment
 
 
 class _RigidPrim:
@@ -155,6 +161,64 @@ class SafetyInterlockTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(reading.collision_detected)
         self.assertEqual(reading.force_newtons, 1.5)
+
+
+class DriveOnlyMotionTest(unittest.IsolatedAsyncioTestCase):
+    def test_explicit_reset_retains_direct_state_initialization(self) -> None:
+        articulation = Mock()
+        actuators = Actuators(
+            articulation,
+            [Mock() for _ in range(7)],
+            [Mock(), Mock()],
+        )
+        command = JointCommand(np.full(7, 0.001), 0.04)
+
+        actuators.set_reset_state(command)
+
+        self.assertEqual(articulation.set_dof_positions.call_count, 2)
+
+    async def test_runtime_motion_never_sets_articulation_state_directly(self) -> None:
+        articulation = Mock()
+        articulation.get_dof_positions.return_value = np.asarray(
+            [0.001] * 7 + [0.02, 0.02], dtype=np.float64
+        )
+        arm_attributes = [Mock() for _ in range(7)]
+        finger_attributes = [Mock(), Mock()]
+        actuators = Actuators(
+            articulation,
+            arm_attributes,
+            finger_attributes,
+        )
+        attachment = Mock(hand_prim=object())
+
+        async def advance(_period, _observer):
+            return ContactReading()
+
+        with (
+            patch("sim.isaac_demo_runtime._advance_sample", advance),
+            patch(
+                "sim.isaac_demo_runtime.world_pose",
+                return_value=(np.zeros(3), np.asarray([1.0, 0.0, 0.0, 0.0])),
+            ),
+            patch(
+                "sim.isaac_demo_runtime.recording_snapshot",
+                return_value=SimpleNamespace(simulation_time_seconds=None),
+            ),
+        ):
+            await move_joint_command(
+                actuators,
+                JointCommand(np.zeros(7), 0.04),
+                JointCommand(np.full(7, 0.001), 0.04),
+                attachment,
+                frame_count=1,
+                phase=RecordingLabel(RecordingMoment.MOTION, Phase.READY),
+                stage=ObservationStage.CABLE_GRASPED,
+                recorder=None,
+            )
+
+        articulation.set_dof_positions.assert_not_called()
+        for attribute in (*arm_attributes, *finger_attributes):
+            attribute.Set.assert_called_once()
 
 
 if __name__ == "__main__":

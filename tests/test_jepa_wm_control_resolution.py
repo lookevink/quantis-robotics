@@ -11,6 +11,7 @@ import numpy as np
 
 from jepa_wm.action import DroidAction, DroidPose
 from jepa_wm.control_resolution import (
+    CONTROL_RESOLUTION_FAILURE_SCHEMA,
     CONTROL_RESOLUTION_PROTOCOL,
     ControlResolutionEndpoint,
     ControlResolutionFailureEvidence,
@@ -20,6 +21,10 @@ from jepa_wm.control_resolution import (
     ControlResolutionSample,
     ControlResolutionSettlementEvidence,
     FixedUpdateSettlement,
+    ControlResolutionBaselineEvidence,
+    ControlResolutionBaselinePolicy,
+    ControlResolutionLoad,
+    ControlResolutionMotionTiming,
     RejectedControlResolutionReset,
     TrackedErrorSettlement,
     TrackedSettlementEvidence,
@@ -36,12 +41,13 @@ from jepa_wm.trial_equivalence import (
     TrialResetState,
 )
 from sim.isaac_control_resolution import (
-    AttachedControlInterlock,
+    ResolutionControlInterlock,
     ControlResolutionResetMismatch,
     _capture_endpoint,
     _capture_reset_state,
     _require_resolution_reset,
     settle_resolution_motion,
+    stabilize_resolution_baseline,
 )
 from sim.isaac_control_resolution import resolution_probe_observation
 from sim.isaac_control_resolution import resolution_joint_target
@@ -57,6 +63,17 @@ def _reset() -> TrialResetState:
         contact_force_newtons=0.0,
         plug_position=(0.1, 0.0, 0.2),
         plug_attached=True,
+    )
+
+
+def _baseline(
+    reset: TrialResetState | None = None,
+) -> ControlResolutionBaselineEvidence:
+    state = reset or _reset()
+    return ControlResolutionBaselineEvidence(
+        (state, state, state),
+        (0.25, 0.25),
+        ControlInterlockEvidence(0.0, False),
     )
 
 
@@ -109,19 +126,142 @@ def _sample(index: int, magnitude: float) -> ControlResolutionSample:
             ),
             rollback_interlock=ControlInterlockEvidence(0.0, False),
         ),
+        motion_timing=ControlResolutionMotionTiming(
+            1.0,
+            1.55 if magnitude == 1e-3 else 1.3,
+        ),
     )
 
 
 class ControlResolutionReportTest(unittest.TestCase):
+    def test_corrected_protocol_uses_drive_safe_periods_for_zero_half_and_one_mm(self) -> None:
+        self.assertEqual(
+            CONTROL_RESOLUTION_PROTOCOL.translation_magnitudes_meters,
+            (0.0, 5e-4, 1e-3),
+        )
+        self.assertEqual(CONTROL_RESOLUTION_PROTOCOL.repeats_per_magnitude, 3)
+        self.assertEqual(
+            CONTROL_RESOLUTION_PROTOCOL.motion_period_for(0.0),
+            0.25,
+        )
+        self.assertEqual(
+            CONTROL_RESOLUTION_PROTOCOL.motion_period_for(5e-4),
+            0.25,
+        )
+        self.assertEqual(
+            CONTROL_RESOLUTION_PROTOCOL.motion_period_for(1e-3),
+            0.5,
+        )
+
+    def test_report_rejects_settling_timestamps_shorter_than_motion_period(self) -> None:
+        samples = tuple(
+            _sample(index, magnitude)
+            for index, magnitude in enumerate(
+                CONTROL_RESOLUTION_PROTOCOL.requested_translations
+            )
+        )
+        one_millimeter_index = next(
+            index
+            for index, sample in enumerate(samples)
+            if sample.requested_translation_meters == 1e-3
+        )
+        samples = (
+            *samples[:one_millimeter_index],
+            replace(
+                samples[one_millimeter_index],
+                motion_timing=ControlResolutionMotionTiming(1.0, 1.49),
+            ),
+            *samples[one_millimeter_index + 1 :],
+        )
+
+        with self.assertRaisesRegex(ValueError, "does not match its protocol"):
+            ControlResolutionReport(
+                session_id="resolution-52600-c43",
+                reference_recording="contact-insertion-held-00",
+                seed=52600,
+                context_index=43,
+                observation_id=123,
+                captured_pose=_reset().pose,
+                recorded_target_pose=DroidPose(
+                    (0.401, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)
+                ),
+                reference_reset=_reset(),
+                samples=samples,
+                baseline=_baseline(),
+            )
+
+    def test_baseline_requires_two_stable_observation_intervals(self) -> None:
+        reference = _reset()
+        drifted = replace(
+            reference,
+            pose=reference.pose.applied(
+                DroidAction((2e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            ),
+        )
+        stable_one = replace(
+            reference,
+            pose=reference.pose.applied(
+                DroidAction((2.1e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            ),
+        )
+        stable_two = replace(
+            reference,
+            pose=reference.pose.applied(
+                DroidAction((2.2e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            ),
+        )
+        evidence = ControlResolutionBaselineEvidence(
+            states=(reference, drifted, stable_one, stable_two),
+            interval_seconds=(0.25, 0.25, 0.25),
+            interlock=ControlInterlockEvidence(0.0, False),
+        )
+
+        evidence.validate(
+            ControlResolutionBaselinePolicy(),
+            ControlResolutionLoad.ATTACHED,
+        )
+
+        with self.assertRaisesRegex(ValueError, "stable"):
+            ControlResolutionBaselineEvidence(
+                states=(reference, stable_one),
+                interval_seconds=(0.25,),
+                interlock=ControlInterlockEvidence(0.0, False),
+            ).validate(
+                ControlResolutionBaselinePolicy(),
+                ControlResolutionLoad.ATTACHED,
+            )
+
+        with self.assertRaisesRegex(ValueError, "stable"):
+            ControlResolutionBaselineEvidence(
+                states=(
+                    reference,
+                    drifted,
+                    stable_one,
+                    stable_two,
+                    reference,
+                    drifted,
+                    stable_one,
+                    stable_two,
+                ),
+                interval_seconds=(0.25,) * 7,
+                interlock=ControlInterlockEvidence(0.0, False),
+            ).validate(
+                ControlResolutionBaselinePolicy(),
+                ControlResolutionLoad.ATTACHED,
+            )
+
     def test_legacy_fixed_settling_report_remains_reconstructible(self) -> None:
         protocol = ControlResolutionProtocol(
             translation_magnitudes_meters=(0.0, 3e-5, 1e-4, 2e-4),
+            motion_period_overrides=(),
+            baseline_policy=None,
             settlement=FixedUpdateSettlement(8),
         )
         samples = tuple(
             replace(
                 _sample(index, magnitude),
                 tracked_settlement=None,
+                motion_timing=None,
             )
             for index, magnitude in enumerate(protocol.requested_translations)
         )
@@ -203,6 +343,7 @@ class ControlResolutionReportTest(unittest.TestCase):
                 recorded_target_pose=recorded_target,
                 reference_reset=_reset(),
                 samples=samples,
+                baseline=_baseline(),
             )
 
     def test_summary_exposes_bounded_reset_repeatability_noise(self) -> None:
@@ -254,6 +395,7 @@ class ControlResolutionReportTest(unittest.TestCase):
             ),
             reference_reset=reference,
             samples=samples,
+            baseline=_baseline(reference),
         )
 
         repeatability = report.summary.rollback_repeatability
@@ -288,6 +430,7 @@ class ControlResolutionReportTest(unittest.TestCase):
             completed_samples=(),
             error="ValueError: reset mismatch",
             rejected_reset=rejected,
+            baseline=_baseline(reference),
         )
 
         restored = ControlResolutionFailureEvidence.from_dict(failure.to_dict())
@@ -309,6 +452,23 @@ class ControlResolutionReportTest(unittest.TestCase):
         malformed["rejected_reset"]["sample_index"] = True
         with self.assertRaisesRegex(ValueError, "incomplete"):
             ControlResolutionFailureEvidence.from_dict(malformed)
+
+    def test_prebaseline_failure_preserves_unloaded_mode(self) -> None:
+        failure = ControlResolutionFailureEvidence(
+            session_id="resolution-unloaded-52600-c43",
+            failed_at_unix_seconds=123.0,
+            reference_reset=None,
+            completed_samples=(),
+            error="RuntimeError: baseline did not stabilize",
+            load=ControlResolutionLoad.UNLOADED,
+        )
+
+        payload = failure.to_dict()
+        restored = ControlResolutionFailureEvidence.from_dict(payload)
+
+        self.assertEqual(payload["schema"], CONTROL_RESOLUTION_FAILURE_SCHEMA)
+        self.assertEqual(payload["load"], "unloaded")
+        self.assertEqual(restored, failure)
 
     def test_unsafe_reset_is_captured_before_typed_rejection(self) -> None:
         command = JointCommand(np.zeros(7), 0.04)
@@ -373,6 +533,7 @@ class ControlResolutionReportTest(unittest.TestCase):
             reference_reset=_reset(),
             completed_samples=(_sample(0, 0.0),),
             error="RuntimeError: stopped",
+            baseline=_baseline(),
         )
 
         self.assertEqual(
@@ -407,6 +568,10 @@ class ControlResolutionReportTest(unittest.TestCase):
             ControlResolutionFailureEvidence.from_dict(unsafe_endpoint)
         with self.assertRaisesRegex(ValueError, "reference reset"):
             replace(failure, reference_reset=None)
+        missing_baseline = failure.to_dict()
+        del missing_baseline["baseline"]
+        with self.assertRaisesRegex(ValueError, "failure evidence is incomplete"):
+            ControlResolutionFailureEvidence.from_dict(missing_baseline)
 
     def test_capture_endpoint_returns_raw_pose_and_live_safety_state(self) -> None:
         command = JointCommand(np.zeros(7), 0.04)
@@ -453,16 +618,17 @@ class ControlResolutionReportTest(unittest.TestCase):
     def test_live_interlock_aborts_immediately_on_attachment_loss(self) -> None:
         contact = Mock()
         contact.observe.return_value = object()
-        observer = AttachedControlInterlock(
+        observer = ResolutionControlInterlock(
             contact,
             type(
                 "Runtime",
                 (),
                 {"attachment": type("Attachment", (), {"attached": False})()},
             )(),
+            True,
         )
 
-        with self.assertRaisesRegex(RuntimeError, "lost plug attachment"):
+        with self.assertRaisesRegex(RuntimeError, "load state changed"):
             observer.observe()
 
         contact.observe.assert_called_once_with()
@@ -495,6 +661,7 @@ class ControlResolutionReportTest(unittest.TestCase):
             ),
             reference_reset=_reset(),
             samples=samples,
+            baseline=_baseline(),
         )
 
         restored = ControlResolutionReport.from_dict(report.to_dict())
@@ -505,7 +672,7 @@ class ControlResolutionReportTest(unittest.TestCase):
         self.assertAlmostEqual(summary.zero_orientation_drift_radians, 1e-5)
         self.assertEqual(
             tuple(result.requested_translation_meters for result in summary.responses),
-            (5e-4,),
+            (5e-4, 1e-3),
         )
         self.assertTrue(summary.diagnostic_only)
         self.assertFalse(summary.multi_step_authority_granted)
@@ -579,6 +746,46 @@ class ControlResolutionReportTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "restricted insertion"):
                 session.claim_execution()
 
+    def test_unloaded_report_requires_detached_noncolliding_evidence(self) -> None:
+        unloaded_reset = replace(_reset(), plug_attached=False)
+        samples = tuple(
+            replace(
+                _sample(index, magnitude),
+                start_reset=unloaded_reset,
+                endpoint=replace(
+                    _sample(index, magnitude).endpoint,
+                    safety=replace(
+                        _sample(index, magnitude).endpoint.safety,
+                        plug_attached=False,
+                    ),
+                ),
+                rollback_reset=unloaded_reset,
+            )
+            for index, magnitude in enumerate(
+                CONTROL_RESOLUTION_PROTOCOL.requested_translations
+            )
+        )
+        report = ControlResolutionReport(
+            session_id="resolution-unloaded-52600-c43",
+            reference_recording="contact-insertion-held-00",
+            seed=52600,
+            context_index=43,
+            observation_id=123,
+            captured_pose=_reset().pose,
+            recorded_target_pose=DroidPose(
+                (0.401, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)
+            ),
+            reference_reset=unloaded_reset,
+            samples=samples,
+            load=ControlResolutionLoad.UNLOADED,
+            baseline=_baseline(unloaded_reset),
+        )
+
+        restored = ControlResolutionReport.from_dict(report.to_dict())
+
+        self.assertEqual(restored, report)
+        self.assertEqual(restored.load, ControlResolutionLoad.UNLOADED)
+
     def test_rejects_missing_roster_reset_drift_and_unsafe_evidence(self) -> None:
         samples = tuple(
             _sample(index, magnitude)
@@ -597,6 +804,7 @@ class ControlResolutionReportTest(unittest.TestCase):
                 (0.401, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)
             ),
             reference_reset=_reset(),
+            baseline=_baseline(),
         )
 
         with self.assertRaisesRegex(ValueError, "sample roster"):
@@ -653,6 +861,59 @@ class ControlResolutionReportTest(unittest.TestCase):
 
 
 class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
+    @patch("sim.isaac_control_resolution.advance_simulation_period", new_callable=AsyncMock)
+    @patch("sim.isaac_control_resolution._capture_reset_state")
+    async def test_baseline_waits_for_two_consecutive_stable_intervals(
+        self,
+        capture_reset: Mock,
+        advance_period: AsyncMock,
+    ) -> None:
+        reference = _reset()
+        drifted = replace(
+            reference,
+            pose=reference.pose.applied(
+                DroidAction((2e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            ),
+        )
+        stable_one = replace(
+            reference,
+            pose=reference.pose.applied(
+                DroidAction((2.1e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            ),
+        )
+        stable_two = replace(
+            reference,
+            pose=reference.pose.applied(
+                DroidAction((2.2e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            ),
+        )
+        commands = tuple(
+            JointCommand(np.asarray(state.joint_positions), 0.04)
+            for state in (reference, drifted, stable_one, stable_two)
+        )
+        capture_reset.side_effect = tuple(
+            zip(commands, (reference, drifted, stable_one, stable_two))
+        )
+        interlock = SimpleNamespace(
+            observe=Mock(),
+            contact=SimpleNamespace(
+                evidence=ControlInterlockEvidence(0.0, False)
+            ),
+        )
+
+        command, evidence = await stabilize_resolution_baseline(
+            SimpleNamespace(),
+            interlock,
+            ControlResolutionBaselinePolicy(),
+            Mock(side_effect=(0.0, 0.25, 0.5, 0.75)),
+        )
+
+        self.assertIs(command, commands[-1])
+        interlock.observe.assert_called_once_with()
+        self.assertEqual(evidence.reference_reset, stable_two)
+        self.assertEqual(advance_period.await_count, 3)
+        advance_period.assert_awaited_with(0.25, interlock.observe)
+
     async def test_settlement_requires_two_consecutive_tracked_updates(self) -> None:
         target = JointCommand(np.zeros(7), 0.04)
         actual_commands = (

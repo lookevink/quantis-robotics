@@ -84,7 +84,7 @@ class Actuators:
             )
         return JointCommand(values[:7].copy(), float(values[7] + values[8]))
 
-    def apply(self, command: JointCommand) -> None:
+    def _set_drive_targets(self, command: JointCommand) -> float:
         for attribute, target_degrees in zip(
             self.arm_attributes, np.rad2deg(command.arm_positions)
         ):
@@ -92,6 +92,17 @@ class Actuators:
         finger_position = command.gripper_width_m / 2.0
         for attribute in self.finger_attributes:
             attribute.Set(finger_position)
+        return finger_position
+
+    def apply_drive_command(self, command: JointCommand) -> None:
+        """Set drive targets without directly changing articulation state."""
+
+        self._set_drive_targets(command)
+
+    def set_reset_state(self, command: JointCommand) -> None:
+        """Set targets and DOF state for explicit reset or initialization only."""
+
+        finger_position = self._set_drive_targets(command)
 
         self.articulation.set_dof_positions(
             positions=command.arm_positions,
@@ -117,6 +128,8 @@ class PlugMotion(Protocol):
     def attach(self, hand_position: np.ndarray) -> None: ...
 
     def detach_at(self, position: np.ndarray) -> None: ...
+
+    def remove_load_for_diagnostic(self) -> None: ...
 
 
 @dataclass
@@ -152,6 +165,9 @@ class KinematicPlugMotion:
 
         self.hand_to_plug_offset = None
         self.prim.GetAttribute("xformOp:translate").Set(Gf.Vec3d(*position))
+
+    def remove_load_for_diagnostic(self) -> None:
+        self.hand_to_plug_offset = None
 
 
 @dataclass
@@ -190,6 +206,15 @@ class FixedJointPlugMotion:
         self.hand_to_plug_offset = None
         self.fixed_joint.CreateJointEnabledAttr().Set(False)
         self.rigid_prim.set_world_poses(positions=[position])
+
+    def remove_load_for_diagnostic(self) -> None:
+        """Disable the hand load while leaving the plug fixed and non-colliding."""
+
+        from pxr import UsdPhysics
+
+        self.hand_to_plug_offset = None
+        self.fixed_joint.CreateJointEnabledAttr().Set(False)
+        UsdPhysics.RigidBodyAPI(self.prim).CreateKinematicEnabledAttr().Set(True)
 
     def _enable_fixed_joint(
         self,
@@ -292,6 +317,10 @@ class PlugAttachment:
 
     def detach_at(self, position: np.ndarray) -> None:
         self.motion.detach_at(position)
+
+    def remove_load_for_diagnostic(self) -> None:
+        self.motion.remove_load_for_diagnostic()
+        self.set_collisions(False)
 
     def set_collisions(self, enabled: bool) -> None:
         self.collisions.set_collisions(enabled)
@@ -548,6 +577,17 @@ async def advance_physics_updates(
     return latest
 
 
+async def advance_simulation_period(
+    period_seconds: float,
+    observe_safety: Callable[[], ContactReading] | None = None,
+) -> ContactReading:
+    """Advance one measured simulation interval through the live interlock."""
+
+    if not isfinite(period_seconds) or period_seconds <= 0.0:
+        raise ValueError("simulation period must be finite and positive")
+    return await _advance_sample(period_seconds, observe_safety)
+
+
 async def move_joint_command(
     actuators: Actuators,
     start: JointCommand,
@@ -573,7 +613,7 @@ async def move_joint_command(
             start.gripper_width_m
             + (end.gripper_width_m - start.gripper_width_m) * blend,
         )
-        actuators.apply(command)
+        actuators.apply_drive_command(command)
         contact_reading = await _advance_sample(
             sample_period_seconds,
             observe_safety,

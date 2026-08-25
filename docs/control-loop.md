@@ -601,15 +601,16 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     fail-closed step boundary before another action can be authorized.
     Insertion filming and production authority remain false. Exact evidence is
     in the linked README checkpoint.
-    The diagnostic-only control-resolution measurement is complete. A bounded
-    `0.5 mm` translation is measurable and passed command-relative settlement,
-    interlock, attachment, and rollback checks; `1.0 mm` failed closed before
-    actuation at the joint-velocity gate. The farther-target/orientation-hold
-    policy then passed `2/2` reserved seeds without actuation, including its
-    target selection, explicit orientation hold, and insertion interlocks.
-    Before exactly one action is retested, live execution must apply the
-    measured command-relative settling rule and persist a fail-closed
-    realized-progress/close-enough decision.
+    The control-resolution checkpoint is paused for correction. Its prior
+    runtime path combined drive targets with direct articulation state-setting,
+    so the measurements establish neither Franka precision nor a defensible
+    command deadband. The corrected benchmark uses drive-only runtime motion,
+    first proves a stable observed baseline, and repeats zero, `0.5`, and
+    `1.0 mm` probes at three representative poses with and without the attached
+    load. It preserves the `3 mm` task tolerance and all existing force,
+    collision, attachment, joint, and velocity limits; the longer `1.0 mm`
+    period does not weaken the velocity gate. No further JEPA action is allowed
+    until this benchmark establishes the deadband and orientation-hold bound.
     Multi-step, filming, and production authority remain false; exact metrics
     and evidence are in the
     [insertion control-resolution checkpoint](../README.md#insertion-control-resolution-checkpoint).

@@ -547,7 +547,7 @@ async def record_exploration_trajectory(
         observation_stage = ObservationStage.APPROACHING_CABLE
         timeline.play()
         await advance_physics_updates(1, safety_observer)
-        actuators.apply(origin)
+        actuators.set_reset_state(origin)
         initial_safety = await advance_physics_updates(
             16,
             safety_observer,

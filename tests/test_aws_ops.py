@@ -1249,6 +1249,22 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("'43'", calls)
         self.assertIn("ops/backup_state.sh", calls)
 
+    def test_insertion_resolution_forwards_unloaded_diagnostic_mode(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-resolution",
+            arguments=(
+                "insertion-fresh-held-00",
+                "52600",
+                "64",
+                "unloaded",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/run_insertion_resolution_measurement.sh", calls)
+        self.assertIn("'64' 'unloaded'", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+
     def test_insertion_resolution_backs_up_a_failed_measurement(self):
         result, calls = self.run_command(
             "jepa-wm-insertion-resolution",

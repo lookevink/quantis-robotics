@@ -61,6 +61,19 @@ insertion_planner_profile_field() {
   )
 }
 
+control_resolution_profile_field() {
+  local repository="$1"
+  local python_bin="$2"
+  local field="$3"
+  local load="${4:-}"
+  (
+    cd "${repository}"
+    local -a arguments=(-m jepa_wm.control_resolution_profile "${field}")
+    [[ -z "${load}" ]] || arguments+=(--load "${load}")
+    "${python_bin}" "${arguments[@]}"
+  )
+}
+
 cem_settings_requested() {
   [[ -n "$1$2$3$4" ]]
 }

@@ -27,6 +27,12 @@ from jepa_wm.control_safety import (
 )
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_protocol import ControlObservation
+from jepa_wm.control_resolution_baseline import (
+    CONTROL_RESOLUTION_BASELINE_TOLERANCES,
+    ControlResolutionBaselineEvidence,
+    ControlResolutionBaselinePolicy,
+)
+from jepa_wm.control_resolution_profile import ControlResolutionLoad
 from jepa_wm.direct_safety import ControlSafetySnapshot
 from jepa_wm.trial_equivalence import (
     ResetEquivalenceMeasurement,
@@ -37,8 +43,12 @@ from jepa_wm.trial_equivalence import (
 from sim.recording import validate_recording_id
 
 
-CONTROL_RESOLUTION_SCHEMA = "quantis.jepa_wm_control_resolution.v1"
-CONTROL_RESOLUTION_FAILURE_SCHEMA = "quantis.jepa_wm_control_resolution_failure.v1"
+CONTROL_RESOLUTION_SCHEMA_V1 = "quantis.jepa_wm_control_resolution.v1"
+CONTROL_RESOLUTION_SCHEMA = "quantis.jepa_wm_control_resolution.v2"
+CONTROL_RESOLUTION_FAILURE_SCHEMA_V1 = (
+    "quantis.jepa_wm_control_resolution_failure.v1"
+)
+CONTROL_RESOLUTION_FAILURE_SCHEMA = "quantis.jepa_wm_control_resolution_failure.v2"
 CONTROL_RESOLUTION_RESET_TOLERANCES = ResetEquivalenceTolerances(
     maximum_translation_difference_meters=5e-4,
     maximum_rotation_difference_radians=1e-3,
@@ -47,6 +57,37 @@ CONTROL_RESOLUTION_RESET_TOLERANCES = ResetEquivalenceTolerances(
     maximum_reset_contact_force_newtons=0.01,
     maximum_plug_position_difference_meters=5e-4,
 )
+@dataclass(frozen=True)
+class ControlResolutionMotionPeriod:
+    translation_meters: float
+    seconds: float
+
+    def __post_init__(self) -> None:
+        if (
+            not isfinite(self.translation_meters)
+            or self.translation_meters <= 0.0
+            or not isfinite(self.seconds)
+            or self.seconds <= 0.0
+        ):
+            raise ValueError("control resolution motion period is invalid")
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "translation_meters": self.translation_meters,
+            "seconds": self.seconds,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ControlResolutionMotionPeriod:
+        if not isinstance(payload, Mapping):
+            raise ValueError("control resolution motion period must be an object")
+        try:
+            return cls(
+                float(payload["translation_meters"]),
+                float(payload["seconds"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("control resolution motion period is incomplete") from error
 
 
 def retreat_direction(
@@ -235,9 +276,15 @@ def _settlement_from_protocol_dict(
 
 @dataclass(frozen=True)
 class ControlResolutionProtocol:
-    translation_magnitudes_meters: tuple[float, ...] = (0.0, 5e-4)
+    translation_magnitudes_meters: tuple[float, ...] = (0.0, 5e-4, 1e-3)
     repeats_per_magnitude: int = 3
     motion_period_seconds: float = 0.25
+    motion_period_overrides: tuple[ControlResolutionMotionPeriod, ...] = (
+        ControlResolutionMotionPeriod(1e-3, 0.5),
+    )
+    baseline_policy: ControlResolutionBaselinePolicy | None = (
+        ControlResolutionBaselinePolicy()
+    )
     settlement: ControlResolutionSettlement = TrackedErrorSettlement()
     safety_limits: SimulatorSafetyLimits = SimulatorSafetyLimits()
     capture_tolerances: ResetEquivalenceTolerances = ResetEquivalenceTolerances()
@@ -258,6 +305,19 @@ class ControlResolutionProtocol:
             or self.repeats_per_magnitude < 2
             or not isfinite(self.motion_period_seconds)
             or self.motion_period_seconds != 1.0 / DROID_FPS
+            or len(
+                {
+                    override.translation_meters
+                    for override in self.motion_period_overrides
+                }
+            )
+            != len(self.motion_period_overrides)
+            or any(
+                override.translation_meters
+                not in self.translation_magnitudes_meters
+                or override.seconds < self.motion_period_seconds
+                for override in self.motion_period_overrides
+            )
             or not isinstance(
                 self.settlement,
                 (FixedUpdateSettlement, TrackedErrorSettlement),
@@ -271,6 +331,18 @@ class ControlResolutionProtocol:
             magnitude
             for magnitude in self.translation_magnitudes_meters
             for _ in range(self.repeats_per_magnitude)
+        )
+
+    def motion_period_for(self, translation_meters: float) -> float:
+        if translation_meters not in self.translation_magnitudes_meters:
+            raise ValueError("control resolution magnitude is not in the protocol")
+        return next(
+            (
+                override.seconds
+                for override in self.motion_period_overrides
+                if override.translation_meters == translation_meters
+            ),
+            self.motion_period_seconds,
         )
 
     def probe_action(
@@ -331,6 +403,8 @@ class ControlResolutionProtocol:
         self,
         reference_reset: TrialResetState,
         sample: ControlResolutionSample,
+        *,
+        expected_attachment: bool = True,
     ) -> None:
         expected_joint_delta = max(
             abs(proposed - current)
@@ -378,7 +452,7 @@ class ControlResolutionProtocol:
             sample.endpoint.safety.collision_detected
             or sample.endpoint.safety.contact_force_newtons
             > self.safety_limits.maximum_contact_force_newtons
-            or not sample.endpoint.safety.plug_attached
+            or sample.endpoint.safety.plug_attached is not expected_attachment
         ):
             raise ValueError("control resolution sample failed safety")
 
@@ -396,6 +470,12 @@ class ControlResolutionProtocol:
             "rotation_policy": "hold_current_orientation",
             "gripper_policy": "hold_current_width",
         }
+        if self.motion_period_overrides:
+            payload["motion_period_overrides"] = [
+                override.to_dict() for override in self.motion_period_overrides
+            ]
+        if self.baseline_policy is not None:
+            payload["baseline_policy"] = self.baseline_policy.to_dict()
         payload.update(self.settlement.protocol_fields())
         return payload
 
@@ -411,6 +491,17 @@ class ControlResolutionProtocol:
                 ),
                 repeats_per_magnitude=int(payload["repeats_per_magnitude"]),
                 motion_period_seconds=float(payload["motion_period_seconds"]),
+                motion_period_overrides=tuple(
+                    ControlResolutionMotionPeriod.from_dict(override)
+                    for override in payload.get("motion_period_overrides", ())
+                ),
+                baseline_policy=(
+                    ControlResolutionBaselinePolicy.from_dict(
+                        payload["baseline_policy"]
+                    )
+                    if "baseline_policy" in payload
+                    else None
+                ),
                 settlement=_settlement_from_protocol_dict(payload),
                 safety_limits=SimulatorSafetyLimits.from_dict(
                     payload["safety_limits"]
@@ -692,6 +783,47 @@ class ControlResolutionEndpoint:
 
 
 @dataclass(frozen=True)
+class ControlResolutionMotionTiming:
+    started_at_sim_seconds: float
+    settled_at_sim_seconds: float
+
+    def __post_init__(self) -> None:
+        if (
+            not isfinite(self.started_at_sim_seconds)
+            or not isfinite(self.settled_at_sim_seconds)
+            or self.settled_at_sim_seconds <= self.started_at_sim_seconds
+        ):
+            raise ValueError("control resolution motion timing is invalid")
+
+    @property
+    def duration_seconds(self) -> float:
+        return self.settled_at_sim_seconds - self.started_at_sim_seconds
+
+    def protocol_fields(self) -> dict[str, float]:
+        return {
+            "motion_started_at_sim_seconds": self.started_at_sim_seconds,
+            "motion_settled_at_sim_seconds": self.settled_at_sim_seconds,
+            "settling_time_seconds": self.duration_seconds,
+        }
+
+    @classmethod
+    def from_sample_dict(
+        cls,
+        payload: Mapping[str, Any],
+    ) -> ControlResolutionMotionTiming | None:
+        has_started = "motion_started_at_sim_seconds" in payload
+        has_settled = "motion_settled_at_sim_seconds" in payload
+        if has_started != has_settled:
+            raise ValueError("control resolution motion timing is incomplete")
+        if not has_started:
+            return None
+        return cls(
+            float(payload["motion_started_at_sim_seconds"]),
+            float(payload["motion_settled_at_sim_seconds"]),
+        )
+
+
+@dataclass(frozen=True)
 class ControlResolutionSample:
     index: int
     requested_translation_meters: float
@@ -703,6 +835,7 @@ class ControlResolutionSample:
     interlock: ControlInterlockEvidence
     rollback_reset: TrialResetState
     tracked_settlement: TrackedSettlementEvidence | None = None
+    motion_timing: ControlResolutionMotionTiming | None = None
 
     def __post_init__(self) -> None:
         scalars = (
@@ -740,6 +873,10 @@ class ControlResolutionSample:
             Rotation.from_euler("xyz", self.actual_action.values[3:6]).magnitude()
         )
 
+    @property
+    def settling_time_seconds(self) -> float | None:
+        return self.motion_timing.duration_seconds if self.motion_timing else None
+
     def to_dict(self) -> dict[str, Any]:
         payload = {
             "index": self.index,
@@ -758,6 +895,8 @@ class ControlResolutionSample:
         }
         if self.tracked_settlement is not None:
             payload["tracked_settlement"] = self.tracked_settlement.to_dict()
+        if self.motion_timing is not None:
+            payload.update(self.motion_timing.protocol_fields())
         return payload
 
     @classmethod
@@ -784,6 +923,9 @@ class ControlResolutionSample:
                     if payload.get("tracked_settlement") is not None
                     else None
                 ),
+                motion_timing=ControlResolutionMotionTiming.from_sample_dict(
+                    payload
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("control resolution sample is incomplete") from error
@@ -791,6 +933,8 @@ class ControlResolutionSample:
             payload.get("actual_action") != list(sample.actual_action.values)
             or payload.get("settled_joint_tracking_error_radians")
             != sample.settled_joint_tracking_error_radians
+            or payload.get("settling_time_seconds")
+            != sample.settling_time_seconds
         ):
             raise ValueError("control resolution sample claims are inconsistent")
         return sample
@@ -805,6 +949,8 @@ class ControlResolutionFailureEvidence:
     error: str
     rejected_reset: RejectedControlResolutionReset | None = None
     protocol: ControlResolutionProtocol = CONTROL_RESOLUTION_PROTOCOL
+    load: ControlResolutionLoad = ControlResolutionLoad.ATTACHED
+    baseline: ControlResolutionBaselineEvidence | None = None
 
     def __post_init__(self) -> None:
         validate_recording_id(self.session_id)
@@ -818,6 +964,22 @@ class ControlResolutionFailureEvidence:
             or not self.error
         ):
             raise ValueError("control resolution failure evidence is invalid")
+        if self.baseline is not None:
+            if self.protocol.baseline_policy is None:
+                raise ValueError("legacy protocol cannot carry baseline evidence")
+            self.baseline.validate(
+                self.protocol.baseline_policy,
+                self.load,
+                self.protocol.safety_limits,
+            )
+            if self.reference_reset != self.baseline.reference_reset:
+                raise ValueError("control resolution baseline reset is inconsistent")
+        elif self.protocol.baseline_policy is not None and (
+            self.reference_reset is not None or self.completed_samples
+        ):
+            raise ValueError(
+                "current control resolution failure lost its baseline evidence"
+            )
         if self.reference_reset is None:
             if self.rejected_reset is not None:
                 raise ValueError(
@@ -830,7 +992,11 @@ class ControlResolutionFailureEvidence:
             require_complete=False,
         )
         for sample in self.completed_samples:
-            self.protocol.validate_sample_execution(self.reference_reset, sample)
+            self.protocol.validate_sample_execution(
+                self.reference_reset,
+                sample,
+                expected_attachment=self.load.plug_attached,
+            )
         if self.rejected_reset is None:
             return
         capture_failure = (
@@ -875,8 +1041,13 @@ class ControlResolutionFailureEvidence:
         return False
 
     def to_dict(self) -> dict[str, Any]:
+        current = self.protocol.baseline_policy is not None
         return {
-            "schema": CONTROL_RESOLUTION_FAILURE_SCHEMA,
+            "schema": (
+                CONTROL_RESOLUTION_FAILURE_SCHEMA
+                if current
+                else CONTROL_RESOLUTION_FAILURE_SCHEMA_V1
+            ),
             "session_id": self.session_id,
             "failed_at_unix_seconds": self.failed_at_unix_seconds,
             "protocol": self.protocol.to_dict(),
@@ -894,6 +1065,12 @@ class ControlResolutionFailureEvidence:
                 if self.rejected_reset is not None
                 else None
             ),
+            **({"load": self.load.value} if current else {}),
+            **(
+                {"baseline": self.baseline.to_dict()}
+                if self.baseline is not None
+                else {}
+            ),
             "diagnostic_only": self.diagnostic_only,
             "multi_step_authority_granted": self.multi_step_authority_granted,
             "production_authority_granted": self.production_authority_granted,
@@ -903,10 +1080,17 @@ class ControlResolutionFailureEvidence:
     def from_dict(cls, payload: Any) -> ControlResolutionFailureEvidence:
         if (
             not isinstance(payload, dict)
-            or payload.get("schema") != CONTROL_RESOLUTION_FAILURE_SCHEMA
+            or payload.get("schema")
+            not in (
+                CONTROL_RESOLUTION_FAILURE_SCHEMA_V1,
+                CONTROL_RESOLUTION_FAILURE_SCHEMA,
+            )
         ):
             raise ValueError("control resolution failure schema is invalid")
         try:
+            current = payload["schema"] == CONTROL_RESOLUTION_FAILURE_SCHEMA
+            if current != ("load" in payload):
+                raise ValueError("control resolution failure load is missing")
             evidence = cls(
                 session_id=str(payload["session_id"]),
                 failed_at_unix_seconds=float(payload["failed_at_unix_seconds"]),
@@ -928,11 +1112,23 @@ class ControlResolutionFailureEvidence:
                     if payload.get("rejected_reset") is not None
                     else None
                 ),
+                load=ControlResolutionLoad(
+                    payload.get("load", ControlResolutionLoad.ATTACHED.value)
+                ),
+                baseline=(
+                    ControlResolutionBaselineEvidence.from_dict(
+                        payload["baseline"]
+                    )
+                    if "baseline" in payload
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(
                 "control resolution failure evidence is incomplete"
             ) from error
+        if current != (evidence.protocol.baseline_policy is not None):
+            raise ValueError("control resolution failure protocol generation is invalid")
         if (
             payload.get("diagnostic_only") is not evidence.diagnostic_only
             or payload.get("multi_step_authority_granted")
@@ -945,15 +1141,31 @@ class ControlResolutionFailureEvidence:
 
 
 @dataclass(frozen=True)
+class ControlResolutionTimingSummary:
+    mean_seconds: float
+    maximum_seconds: float
+
+    def __post_init__(self) -> None:
+        if (
+            not isfinite(self.mean_seconds)
+            or not isfinite(self.maximum_seconds)
+            or self.mean_seconds <= 0.0
+            or self.maximum_seconds < self.mean_seconds
+        ):
+            raise ValueError("control resolution timing summary is invalid")
+
+
+@dataclass(frozen=True)
 class ControlResolutionResponse:
     requested_translation_meters: float
     mean_realized_along_axis_meters: float
     maximum_translation_error_meters: float
     maximum_orientation_drift_radians: float
     maximum_joint_tracking_error_radians: float
+    settling_time: ControlResolutionTimingSummary | None
 
     def to_dict(self) -> dict[str, float]:
-        return {
+        payload = {
             "requested_translation_meters": self.requested_translation_meters,
             "mean_realized_along_axis_meters": self.mean_realized_along_axis_meters,
             "maximum_translation_error_meters": self.maximum_translation_error_meters,
@@ -962,6 +1174,12 @@ class ControlResolutionResponse:
                 self.maximum_joint_tracking_error_radians
             ),
         }
+        if self.settling_time is not None:
+            payload["mean_settling_time_seconds"] = self.settling_time.mean_seconds
+            payload["maximum_settling_time_seconds"] = (
+                self.settling_time.maximum_seconds
+            )
+        return payload
 
 
 @dataclass(frozen=True)
@@ -969,6 +1187,7 @@ class ControlResolutionSummary:
     zero_translation_drift_meters: float
     zero_orientation_drift_radians: float
     zero_joint_tracking_error_radians: float
+    maximum_zero_settling_time_seconds: float | None
     start_repeatability: ResetEquivalenceMeasurement
     rollback_repeatability: ResetEquivalenceMeasurement
     responses: tuple[ControlResolutionResponse, ...]
@@ -986,7 +1205,7 @@ class ControlResolutionSummary:
         return False
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "zero_translation_drift_meters": self.zero_translation_drift_meters,
             "zero_orientation_drift_radians": self.zero_orientation_drift_radians,
             "zero_joint_tracking_error_radians": (
@@ -999,6 +1218,11 @@ class ControlResolutionSummary:
             "multi_step_authority_granted": self.multi_step_authority_granted,
             "production_authority_granted": self.production_authority_granted,
         }
+        if self.maximum_zero_settling_time_seconds is not None:
+            payload["maximum_zero_settling_time_seconds"] = (
+                self.maximum_zero_settling_time_seconds
+            )
+        return payload
 
 
 @dataclass(frozen=True)
@@ -1013,6 +1237,8 @@ class ControlResolutionReport:
     reference_reset: TrialResetState
     samples: tuple[ControlResolutionSample, ...]
     protocol: ControlResolutionProtocol = CONTROL_RESOLUTION_PROTOCOL
+    load: ControlResolutionLoad = ControlResolutionLoad.ATTACHED
+    baseline: ControlResolutionBaselineEvidence | None = None
 
     def __post_init__(self) -> None:
         validate_recording_id(self.session_id)
@@ -1029,7 +1255,23 @@ class ControlResolutionReport:
             self.samples,
             require_complete=True,
         )
+        if self.baseline is not None:
+            if self.protocol.baseline_policy is None:
+                raise ValueError("legacy protocol cannot carry baseline evidence")
+            self.baseline.validate(
+                self.protocol.baseline_policy,
+                self.load,
+                safety_limits,
+            )
+            if self.reference_reset != self.baseline.reference_reset:
+                raise ValueError("control resolution baseline reset is inconsistent")
+        elif self.protocol.baseline_policy is not None:
+            raise ValueError("current control resolution report has no stable baseline")
+        elif any(sample.settling_time_seconds is not None for sample in self.samples):
+            raise ValueError("legacy control resolution report has settling time")
         for sample in self.samples:
+            if self.baseline is not None and sample.settling_time_seconds is None:
+                raise ValueError("current control resolution sample has no settling time")
             expected_action = self.protocol.probe_action(
                 sample.start_reset.pose,
                 self.recorded_target_pose,
@@ -1097,10 +1339,23 @@ class ControlResolutionReport:
                 )
                 or expected_joint_delta
                 > safety_limits.maximum_joint_velocity_radians_per_second
-                * self.protocol.motion_period_seconds
+                * self.protocol.motion_period_for(
+                    sample.requested_translation_meters
+                )
+                or (
+                    sample.settling_time_seconds is not None
+                    and sample.settling_time_seconds
+                    < self.protocol.motion_period_for(
+                        sample.requested_translation_meters
+                    )
+                )
             ):
                 raise ValueError("control resolution command does not match its protocol")
-            self.protocol.validate_sample_execution(self.reference_reset, sample)
+            self.protocol.validate_sample_execution(
+                self.reference_reset,
+                sample,
+                expected_attachment=self.load.plug_attached,
+            )
 
     @property
     def summary(self) -> ControlResolutionSummary:
@@ -1113,6 +1368,11 @@ class ControlResolutionReport:
             matching = tuple(
                 sample for sample in self.samples
                 if sample.requested_translation_meters == magnitude
+            )
+            settling_times = tuple(
+                sample.settling_time_seconds
+                for sample in matching
+                if sample.settling_time_seconds is not None
             )
             expected_translations = tuple(
                 np.asarray(
@@ -1159,6 +1419,14 @@ class ControlResolutionReport:
                         sample.settled_joint_tracking_error_radians
                         for sample in matching
                     ),
+                    settling_time=(
+                        ControlResolutionTimingSummary(
+                            sum(settling_times) / len(settling_times),
+                            max(settling_times),
+                        )
+                        if settling_times
+                        else None
+                    ),
                 )
             )
         return ControlResolutionSummary(
@@ -1170,6 +1438,15 @@ class ControlResolutionReport:
             ),
             zero_joint_tracking_error_radians=max(
                 sample.settled_joint_tracking_error_radians for sample in zero
+            ),
+            maximum_zero_settling_time_seconds=(
+                max(
+                    sample.settling_time_seconds
+                    for sample in zero
+                    if sample.settling_time_seconds is not None
+                )
+                if self.baseline is not None
+                else None
             ),
             start_repeatability=ResetEquivalenceMeasurement.worst_case(
                 tuple(
@@ -1194,7 +1471,11 @@ class ControlResolutionReport:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema": CONTROL_RESOLUTION_SCHEMA,
+            "schema": (
+                CONTROL_RESOLUTION_SCHEMA
+                if self.baseline is not None
+                else CONTROL_RESOLUTION_SCHEMA_V1
+            ),
             "session_id": self.session_id,
             "reference_recording": self.reference_recording,
             "seed": self.seed,
@@ -1206,6 +1487,14 @@ class ControlResolutionReport:
             "reference_reset": self.reference_reset.to_dict(),
             "samples": [sample.to_dict() for sample in self.samples],
             "summary": self.summary.to_dict(),
+            **(
+                {
+                    "load": self.load.value,
+                    "baseline": self.baseline.to_dict(),
+                }
+                if self.baseline is not None
+                else {}
+            ),
         }
 
     def validate_capture(self, request: Any, state: Any) -> None:
@@ -1218,6 +1507,15 @@ class ControlResolutionReport:
         captured_reset = ControlSession.trial_context(
             observation, session_state
         ).reset
+        if self.load is ControlResolutionLoad.UNLOADED:
+            captured_reset = TrialResetState(
+                captured_reset.pose,
+                captured_reset.joint_positions,
+                captured_reset.collision_detected,
+                captured_reset.contact_force_newtons,
+                captured_reset.plug_position,
+                False,
+            )
         if (
             observation.observation_id != self.observation_id
             or observation.pose != self.captured_pose
@@ -1238,9 +1536,15 @@ class ControlResolutionReport:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> ControlResolutionReport:
-        if payload.get("schema") != CONTROL_RESOLUTION_SCHEMA:
+        if payload.get("schema") not in (
+            CONTROL_RESOLUTION_SCHEMA_V1,
+            CONTROL_RESOLUTION_SCHEMA,
+        ):
             raise ValueError("control resolution schema is invalid")
         try:
+            current = payload["schema"] == CONTROL_RESOLUTION_SCHEMA
+            if current != ("load" in payload and "baseline" in payload):
+                raise ValueError("control resolution generation fields are invalid")
             report = cls(
                 session_id=str(payload["session_id"]),
                 reference_recording=str(payload["reference_recording"]),
@@ -1257,9 +1561,21 @@ class ControlResolutionReport:
                     ControlResolutionSample.from_dict(sample)
                     for sample in payload["samples"]
                 ),
+                load=ControlResolutionLoad(
+                    payload.get("load", ControlResolutionLoad.ATTACHED.value)
+                ),
+                baseline=(
+                    ControlResolutionBaselineEvidence.from_dict(
+                        payload["baseline"]
+                    )
+                    if "baseline" in payload
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("control resolution report is incomplete") from error
+        if current != (report.protocol.baseline_policy is not None):
+            raise ValueError("control resolution protocol generation is invalid")
         if payload.get("summary") != report.summary.to_dict():
             raise ValueError("control resolution summary is inconsistent")
         return report

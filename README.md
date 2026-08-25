@@ -1176,6 +1176,28 @@ insertion, filming, and production authority remain false.
 
 ### Insertion control-resolution checkpoint
 
+This checkpoint is paused for correction before it can authorize another JEPA
+action. The measurements below do **not** establish Franka arm precision: the
+shared runtime path set drive targets and also called
+`articulation.set_dof_positions()`, so the reported response combined direct
+simulator state-setting with subsequent physics settling. Direct state-setting
+is now restricted to explicit scene reset/initialization; runtime probes and
+rollbacks use drive targets only. The corrected diagnostic also requires a
+stable observed pre-probe baseline before measuring zero-command drift.
+
+Accordingly, the prior `30`-`100 um` result supports only a roughly `0.187 mm`
+settling/noise floor under the old simulator path. The prior `0.5 mm` request
+realizing `0.558 mm` describes that path only. The rejected `1.0 mm` request
+was a fixed-`0.25 s` joint-velocity-gate result, not evidence that the arm
+cannot resolve `1.0 mm`. The corrected benchmark keeps the `3 mm` insertion
+tolerance and every force, collision, attachment, joint, and velocity limit;
+it gives the `1.0 mm` request a persisted `0.5 s` period instead of weakening
+the velocity gate. It will measure zero, `0.5`, and `1.0 mm` drive-only probes
+three times at representative insertion contexts `43`, `74`, and `106`, both
+with and without the attached plug/load. Until those results establish a
+defensible command deadband and orientation-hold tolerance, no further JEPA
+insertion action is authorized.
+
 The next diagnostic measured the simulator/controller noise floor before
 authorizing another insertion action. The first exact-code run stopped before
 any probe because the provisional `20 um`/`0.1 mrad` repeat contract was
@@ -1241,12 +1263,11 @@ retained attachment, and recorded `0 N` peak contact with no collision. The
 successful report, the `1.0 mm` safety negative, and the checksum-verified
 12 GB recovery copy are preserved.
 
-This closes the bounded-resolution diagnostic: `0.5 mm` is a measurable,
-admissible translation scale at this pose, while `1.0 mm` is not admissible at
-this pose under the fixed `0.25 s` command period. The next controller
-checkpoint therefore selected the first bounded recorded target at least
-`0.5 mm` away (searching action horizons 3 through 8) and held orientation
-whenever its target error was inside a persisted `1.25 mrad` tolerance.
+This was initially treated as closing the bounded-resolution diagnostic and
+motivated selecting a target at least `0.5 mm` away plus a persisted
+`1.25 mrad` orientation hold. That interpretation is now superseded by the
+drive-only correction above; the earlier no-actuation policy evidence remains
+preserved, but it does not reopen action authority.
 
 That farther-target/orientation-hold no-actuation checkpoint passed both
 reserved seeds. Session `insertion-safety-20260825T201612Z-52600-c43` selected
@@ -1264,11 +1285,11 @@ change. Its response arrived in `0.442 s` and safety was timestamped at
 checksum-verified 12 GB recovery copy.
 
 This `2/2` result authorizes no motion. Before retesting exactly one JEPA
-action, insertion execution must use the measured command-relative settlement
-rule and persist a realized target-progress decision with a conservative
-close-enough deadband. A failed realized-progress decision must terminate and
-roll back rather than opening another action. No second receding-horizon
-action, insertion filming, or production authority is granted.
+action, the corrected drive-only benchmark must establish the command-relative
+settlement rule, command deadband, and orientation-hold tolerance. Execution
+must also persist a realized target-progress decision; a failed decision must
+terminate and roll back rather than opening another action. No second
+receding-horizon action, insertion filming, or production authority is granted.
 
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a

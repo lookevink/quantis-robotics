@@ -128,7 +128,7 @@ async def record_candidate_demo(
             gripper_width_from_closedness(result.post_action.pose.values[-1]),
         )
         timeline.play()
-        actuators.apply(start)
+        actuators.set_reset_state(start)
         for _ in range(16):
             await omni.kit.app.get_app().next_update_async()
         actual_start = replay.observe(start)
