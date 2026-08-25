@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import importlib
 from pathlib import Path
 import sys
 from types import ModuleType
@@ -11,6 +12,7 @@ from types import ModuleType
 def _reload_project_module_from_source(module_name: str) -> ModuleType:
     """Refresh one project module from source, bypassing stale bind-mount bytecode."""
 
+    importlib.invalidate_caches()
     module = sys.modules.get(module_name)
     spec = (
         module.__spec__

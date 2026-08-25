@@ -47,6 +47,18 @@ from sim.control_session import (
 
 
 class ControlRolloutTest(unittest.TestCase):
+    def test_parses_reset_trial_preflight_failure(self) -> None:
+        failure = OrchestrationFailure.parse(
+            "reset_trial_source_preflight:exit_7"
+        )
+
+        self.assertEqual(
+            failure.operation,
+            OrchestrationOperation.RESET_TRIAL_SOURCE_PREFLIGHT,
+        )
+        self.assertEqual(failure.exit_code, 7)
+        self.assertIsNone(failure.step_index)
+
     def _write_step(
         self,
         root: Path,

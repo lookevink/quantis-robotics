@@ -250,19 +250,19 @@ run_reset_trial_control_session() {
   local capture_timeout="$9"
   local prepare_function="${10}"
   local persist_function="${11}"
-  RESET_TRIAL_PHASE="source_preflight"
+  RESET_TRIAL_PHASE="reset_trial_source_preflight"
   trap finalize_reset_trial_control_session EXIT
   isaac_server_call \
     "demo.${prepare_function}('${source_session_id}')" 180 true
-  RESET_TRIAL_PHASE="capture"
+  RESET_TRIAL_PHASE="reset_trial_capture"
   isaac_server_call \
     "await demo.capture_control_observation('${RESET_TRIAL_SESSION_ID}','${RESET_TRIAL_REFERENCE}',${RESET_TRIAL_SEED},'${RESET_TRIAL_PROPOSAL}','${RESET_TRIAL_POLICY}',${context_index})" \
     "${capture_timeout}"
-  RESET_TRIAL_PHASE="binding"
+  RESET_TRIAL_PHASE="reset_trial_binding"
   isaac_server_call \
     "demo.${persist_function}('${RESET_TRIAL_SESSION_ID}','${source_session_id}')" \
     180
-  RESET_TRIAL_PHASE="apply"
+  RESET_TRIAL_PHASE="reset_trial_apply"
   isaac_server_call \
     "await demo.apply_control_response('${RESET_TRIAL_SESSION_ID}')" 180
   RESET_TRIAL_PHASE="complete"

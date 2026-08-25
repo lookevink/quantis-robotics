@@ -52,6 +52,10 @@ class OrchestrationOperation(str, Enum):
     FOLLOWUP_INFERENCE = "followup_inference"
     FOLLOWUP_APPLY = "followup_apply"
     FOLLOWUP_STATUS = "followup_status"
+    RESET_TRIAL_SOURCE_PREFLIGHT = "reset_trial_source_preflight"
+    RESET_TRIAL_CAPTURE = "reset_trial_capture"
+    RESET_TRIAL_BINDING = "reset_trial_binding"
+    RESET_TRIAL_APPLY = "reset_trial_apply"
 
     @property
     def requires_step_index(self) -> bool:

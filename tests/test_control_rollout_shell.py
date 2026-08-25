@@ -12,6 +12,43 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ControlRolloutShellTest(unittest.TestCase):
+    def test_shared_reset_trial_reports_a_typed_preflight_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir)
+            ops = home / "quantis-robotics" / "ops"
+            ops.mkdir(parents=True)
+            shutil.copy(REPO_ROOT / "ops" / "shell_helpers.sh", ops)
+            log = home / "calls.log"
+            (ops / "jepa_wm.sh").write_text(
+                "#!/usr/bin/env bash\nprintf '%s\n' \"$*\" >> \"${CALLS}\"\n"
+            )
+            runner = home / "run.sh"
+            runner.write_text(
+                """#!/usr/bin/env bash
+set -euo pipefail
+source "${HOME}/quantis-robotics/ops/shell_helpers.sh"
+isaac_server_call() { return 7; }
+run_reset_trial_control_session \
+  "${HOME}/quantis-robotics" trial-session insertion-held-00 52600 \
+  proposal-test insertion_reset_trial safety-session 43 900 \
+  prepare_insertion_trial_source persist_insertion_trial_response
+"""
+            )
+
+            result = subprocess.run(
+                ["bash", str(runner)],
+                env={**os.environ, "HOME": str(home), "CALLS": str(log)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 7, result.stderr)
+            self.assertIn(
+                "--orchestration-failure reset_trial_source_preflight:exit_7",
+                log.read_text(),
+            )
+
     def test_shared_reset_trial_flow_preflights_binds_applies_and_reports(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             home = Path(temp_dir)

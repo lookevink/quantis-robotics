@@ -12,6 +12,25 @@ from sim.runtime_loader import _reload_project_module_from_source
 
 
 class RuntimeLoaderTest(unittest.TestCase):
+    def test_reload_discovers_a_new_source_after_a_cached_miss(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            module_name = "quantis_new_reload_fixture"
+            sys.path.insert(0, str(root))
+            try:
+                importlib.invalidate_caches()
+                self.assertIsNone(importlib.util.find_spec(module_name))
+                cached_directory_mtime = root.stat().st_mtime
+                (root / f"{module_name}.py").write_text("VALUE = 'new'\n")
+                os.utime(root, (cached_directory_mtime, cached_directory_mtime))
+
+                loaded = _reload_project_module_from_source(module_name)
+
+                self.assertEqual(loaded.VALUE, "new")
+            finally:
+                sys.path.remove(str(root))
+                sys.modules.pop(module_name, None)
+
     def test_reload_uses_source_when_timestamp_bytecode_is_stale(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
