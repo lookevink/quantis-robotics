@@ -38,9 +38,9 @@ class InsertionPlannerProfile:
             maximum_gripper_deviation=0.02,
         ),
         first_action_thresholds=FirstActionThresholds(
-            recorded_translation_activity=1e-5,
-            recorded_rotation_activity=1e-5,
-            recorded_gripper_activity=0.005,
+            recorded_activity=(
+                InsertionAdapterProfile.GOAL_ALIGNED.descriptor.first_action_activity
+            ),
             maximum_stationary_translation=5e-5,
             maximum_stationary_rotation=5e-4,
             maximum_stationary_gripper=0.005,

@@ -85,6 +85,17 @@ class InsertionWorldModelReadinessTest(unittest.TestCase):
                 "maximum_gripper_delta": 0.25,
             },
             "minimum_goal_cosine": minimum_goal_cosine,
+            "first_action_activity": {
+                "translation_norm": (
+                    1e-5 if minimum_goal_cosine is not None else 0.001
+                ),
+                "rotation_norm": (
+                    1e-5 if minimum_goal_cosine is not None else 0.005
+                ),
+                "gripper_delta": (
+                    0.005 if minimum_goal_cosine is not None else 0.02
+                ),
+            },
         }
         config = {"candidate_mining": candidate_mining}
         config_fingerprint = training_configuration_fingerprint(config)

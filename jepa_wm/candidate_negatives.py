@@ -9,6 +9,7 @@ from typing import Any, Mapping
 import torch
 
 from jepa_wm.action import ACTION_DIMENSIONS
+from jepa_wm.action_activity import DroidActionActivityThresholds
 from jepa_wm.planner import PlannerActionBounds
 from jepa_wm.rollout_scoring import score_actions
 
@@ -20,6 +21,9 @@ class CandidateMiningConfig:
     noise_scale: float = 0.25
     bounds: PlannerActionBounds = PlannerActionBounds()
     minimum_goal_cosine: float | None = None
+    first_action_activity: DroidActionActivityThresholds = (
+        DroidActionActivityThresholds()
+    )
 
     def __post_init__(self) -> None:
         if self.candidates_per_rollout < 2:
@@ -41,6 +45,7 @@ class CandidateMiningConfig:
             "noise_scale": self.noise_scale,
             "bounds": self.bounds.to_dict(),
             "minimum_goal_cosine": self.minimum_goal_cosine,
+            "first_action_activity": self.first_action_activity.to_dict(),
         }
 
     @classmethod
@@ -55,6 +60,12 @@ class CandidateMiningConfig:
                 if payload.get("minimum_goal_cosine") is not None
                 else None
             ),
+            first_action_activity=DroidActionActivityThresholds.from_dict(
+                payload.get(
+                    "first_action_activity",
+                    DroidActionActivityThresholds().to_dict(),
+                )
+            ),
         )
 
 
@@ -63,6 +74,7 @@ def _goal_align_first_actions(
     recorded_actions: torch.Tensor,
     goal_actions: torch.Tensor | None,
     minimum_cosine: float,
+    first_action_activity: DroidActionActivityThresholds,
 ) -> torch.Tensor:
     batch = recorded_actions.shape[1]
     if (
@@ -73,12 +85,15 @@ def _goal_align_first_actions(
         raise ValueError("goal-aligned candidate mining requires finite [batch, 7] goals")
     goals = goal_actions[:, None, :]
     recorded_first = recorded_actions[0]
+    recorded_stationary = ~first_action_activity.active_tensor(recorded_first)
     recorded_cosines = torch.nn.functional.cosine_similarity(
         recorded_first,
         goal_actions,
         dim=-1,
     )
-    if torch.any(recorded_cosines < minimum_cosine - 1e-6):
+    if torch.any(
+        ~recorded_stationary & (recorded_cosines < minimum_cosine - 1e-6)
+    ):
         raise ValueError("recorded first action does not satisfy the goal alignment")
     first_actions = candidates[0]
     candidate_cosines = torch.nn.functional.cosine_similarity(
@@ -86,8 +101,12 @@ def _goal_align_first_actions(
         goals,
         dim=-1,
     )
+    keep_candidate = (
+        ~recorded_stationary[:, None]
+        & (candidate_cosines >= minimum_cosine - 1e-6)
+    )
     aligned_first = torch.where(
-        (candidate_cosines >= minimum_cosine - 1e-6).unsqueeze(-1),
+        keep_candidate.unsqueeze(-1),
         first_actions,
         recorded_first[:, None, :],
     )
@@ -131,6 +150,7 @@ def sample_local_candidates(
             recorded_actions,
             goal_actions,
             config.minimum_goal_cosine,
+            config.first_action_activity,
         )
     return candidates
 

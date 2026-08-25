@@ -471,10 +471,17 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     alignment, but seed `12600` beat the recorded action only `1/7` times.
     Goal-aligned train-only negative mining and fresh whole held-out seeds
     remain required before any live insertion or filming checkpoint. The
-    distinct `goal_aligned` adapter profile mines only bounded sequences whose
-    first action meets the same `0.95` observable-goal cone, while preserving
-    perturbed future actions as hard negatives. Existing held-out seeds are
-    diagnostic only after informing this change.
+    distinct `goal_aligned` adapter profile mines only bounded sequences.
+    Active first actions must meet the same `0.95` observable-goal cone;
+    first actions stay stationary when translation/rotation norms are at most
+    `1e-5` and gripper delta is at most `0.005`, while future actions remain
+    perturbed as hard negatives. The first run wrote no checkpoint: 72
+    zero-action and 12 sub-`1.6 µm` transition frames exposed the missing
+    stationary branch. That fail-closed result is recovery-backed up. The
+    corrected exact-corpus preflight classifies 960 active and 96 stationary
+    first actions; all active actions clear the cone with minimum cosine
+    `0.988497`. Existing held-out seeds are diagnostic only after informing
+    this change.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

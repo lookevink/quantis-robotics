@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Sequence
 
+from jepa_wm.action_activity import DroidActionActivityThresholds
+
 if TYPE_CHECKING:
     from jepa_wm.candidate_negatives import CandidateMiningConfig
 
@@ -15,11 +17,17 @@ if TYPE_CHECKING:
 class InsertionAdapterProfileDescriptor:
     artifact_stem: str
     minimum_goal_cosine: float | None
+    first_action_activity: DroidActionActivityThresholds = (
+        DroidActionActivityThresholds()
+    )
 
     def candidate_mining_config(self) -> CandidateMiningConfig:
         from jepa_wm.candidate_negatives import CandidateMiningConfig
 
-        return CandidateMiningConfig(minimum_goal_cosine=self.minimum_goal_cosine)
+        return CandidateMiningConfig(
+            minimum_goal_cosine=self.minimum_goal_cosine,
+            first_action_activity=self.first_action_activity,
+        )
 
 
 class InsertionAdapterProfile(str, Enum):
@@ -39,6 +47,11 @@ INSERTION_ADAPTER_PROFILES = {
     InsertionAdapterProfile.GOAL_ALIGNED: InsertionAdapterProfileDescriptor(
         artifact_stem="insertion_adapter_goal_aligned_s",
         minimum_goal_cosine=0.95,
+        first_action_activity=DroidActionActivityThresholds(
+            translation_norm=1e-5,
+            rotation_norm=1e-5,
+            gripper_delta=0.005,
+        ),
     ),
 }
 

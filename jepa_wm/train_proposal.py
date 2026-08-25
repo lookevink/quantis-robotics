@@ -182,16 +182,7 @@ def proposal_loss(
     ) / additive_goal_standard_deviation
     recorded_first = target_actions[:, 0]
     planned_first = predicted_actions[:, 0]
-    active = (
-        torch.linalg.vector_norm(recorded_first[:, :3], dim=1)
-        > thresholds.recorded_translation_activity
-    ) | (
-        torch.linalg.vector_norm(recorded_first[:, 3:6], dim=1)
-        > thresholds.recorded_rotation_activity
-    ) | (
-        torch.abs(recorded_first[:, 6])
-        > thresholds.recorded_gripper_activity
-    )
+    active = thresholds.recorded_activity.active_tensor(recorded_first)
     cosine = torch.nn.functional.cosine_similarity(
         recorded_first, planned_first, dim=1, eps=1e-12
     )
@@ -202,7 +193,7 @@ def proposal_loss(
     )
     inactive_gripper = (
         torch.abs(recorded_first[:, 6])
-        <= thresholds.recorded_gripper_activity
+        <= thresholds.recorded_activity.gripper_delta
     ).to(dtype=planned_first.dtype)
     inactive_gripper_loss = (
         torch.square(

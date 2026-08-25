@@ -9,6 +9,7 @@ except ModuleNotFoundError:
     torch = None
 
 if torch is not None:
+    from jepa_wm.action_activity import DroidActionActivityThresholds
     from jepa_wm.candidate_negatives import (
         CandidateMiningConfig,
         mine_lowest_energy_candidates,
@@ -25,6 +26,26 @@ class _CandidateEnergyModel:
 
 @unittest.skipIf(torch is None, "PyTorch is not installed in the local test runtime")
 class CandidateNegativesTest(unittest.TestCase):
+    def test_tensor_activity_matches_scalar_activity_contract(self) -> None:
+        thresholds = DroidActionActivityThresholds(
+            translation_norm=1e-5,
+            rotation_norm=1e-5,
+            gripper_delta=0.005,
+        )
+        actions = torch.tensor(
+            (
+                (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.001),
+                (0.0001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                (0.0, 0.0, 0.0, 0.0001, 0.0, 0.0, 0.0),
+                (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.006),
+            )
+        )
+
+        tensor_activity = thresholds.active_tensor(actions).tolist()
+        scalar_activity = [thresholds.is_active(action.tolist()) for action in actions]
+
+        self.assertEqual(tensor_activity, scalar_activity)
+
     def test_samples_finite_candidates_inside_planner_bounds(self) -> None:
         recorded = torch.zeros((3, 2, 7))
         candidates = sample_local_candidates(
@@ -74,6 +95,8 @@ class CandidateNegativesTest(unittest.TestCase):
             CandidateMiningConfig(noise_scale=0.0)
         with self.assertRaises(ValueError):
             CandidateMiningConfig(minimum_goal_cosine=1.01)
+        with self.assertRaises(ValueError):
+            DroidActionActivityThresholds(translation_norm=-1.0)
 
     def test_tensor_clipping_matches_numpy_planner_bounds(self) -> None:
         import numpy as np
@@ -125,7 +148,7 @@ class CandidateNegativesTest(unittest.TestCase):
 
     def test_goal_aligned_mining_replaces_only_misaligned_first_actions(self) -> None:
         recorded = torch.zeros((3, 2, 7))
-        recorded[:, :, 0] = 0.001
+        recorded[:, :, 0] = 0.0011
         goals = torch.zeros((2, 7))
         goals[:, 0] = 0.003
         candidates = sample_local_candidates(
@@ -148,9 +171,40 @@ class CandidateNegativesTest(unittest.TestCase):
         self.assertTrue((cosines >= 0.95 - 1e-6).all())
         self.assertTrue((candidates[1:] != recorded[1:, :, None, :]).any())
 
+    def test_goal_aligned_mining_preserves_stationary_first_actions(self) -> None:
+        recorded = torch.zeros((3, 2, 7))
+        recorded[1:, :, 0] = 0.001
+        recorded[0, 0, 6] = 0.001
+        recorded[0, 1, 0] = 0.0011
+        goals = torch.zeros((2, 7))
+        goals[:, 0] = 0.003
+
+        candidates = sample_local_candidates(
+            recorded,
+            config=CandidateMiningConfig(
+                candidates_per_rollout=8,
+                noise_scale=2.0,
+                minimum_goal_cosine=0.95,
+            ),
+            generator=torch.Generator().manual_seed(7),
+            goal_actions=goals,
+        )
+
+        torch.testing.assert_close(
+            candidates[0, 0],
+            recorded[0, 0].expand_as(candidates[0, 0]),
+        )
+        active_cosines = torch.nn.functional.cosine_similarity(
+            candidates[0, 1],
+            goals[1].expand_as(candidates[0, 1]),
+            dim=-1,
+        )
+        self.assertTrue((active_cosines >= 0.95 - 1e-6).all())
+        self.assertTrue((candidates[1:] != recorded[1:, :, None, :]).any())
+
     def test_goal_aligned_mining_requires_aligned_recorded_actions(self) -> None:
         recorded = torch.zeros((3, 1, 7))
-        recorded[:, 0, 1] = 0.001
+        recorded[:, 0, 1] = 0.0011
         goals = torch.tensor(((0.003, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),))
 
         with self.assertRaisesRegex(ValueError, "recorded first action"):

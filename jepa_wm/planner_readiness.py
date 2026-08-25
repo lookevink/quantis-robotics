@@ -8,6 +8,7 @@ from math import fsum, isclose, isfinite, sqrt
 from typing import Any, Sequence
 
 from jepa_wm.action import DroidAction
+from jepa_wm.action_activity import DroidActionActivityThresholds
 
 
 class FirstActionReason(str, Enum):
@@ -19,26 +20,21 @@ class FirstActionReason(str, Enum):
 
 @dataclass(frozen=True)
 class FirstActionThresholds:
-    recorded_translation_activity: float = 0.001
-    recorded_rotation_activity: float = 0.005
-    recorded_gripper_activity: float = 0.02
+    recorded_activity: DroidActionActivityThresholds = (
+        DroidActionActivityThresholds()
+    )
     maximum_stationary_translation: float = 0.002
     maximum_stationary_rotation: float = 0.01
     maximum_stationary_gripper: float = 0.02
     minimum_active_cosine: float = 0.5
 
     def __post_init__(self) -> None:
-        activity = (
-            self.recorded_translation_activity,
-            self.recorded_rotation_activity,
-            self.recorded_gripper_activity,
-        )
         stationary = (
             self.maximum_stationary_translation,
             self.maximum_stationary_rotation,
             self.maximum_stationary_gripper,
         )
-        if not all(isfinite(value) and value >= 0.0 for value in activity + stationary):
+        if not all(isfinite(value) and value >= 0.0 for value in stationary):
             raise ValueError("first-action thresholds must be finite and non-negative")
         if (
             not isfinite(self.minimum_active_cosine)
@@ -50,9 +46,9 @@ class FirstActionThresholds:
 
     def to_dict(self) -> dict[str, float]:
         return {
-            "recorded_translation_activity": self.recorded_translation_activity,
-            "recorded_rotation_activity": self.recorded_rotation_activity,
-            "recorded_gripper_activity": self.recorded_gripper_activity,
+            "recorded_translation_activity": self.recorded_activity.translation_norm,
+            "recorded_rotation_activity": self.recorded_activity.rotation_norm,
+            "recorded_gripper_activity": self.recorded_activity.gripper_delta,
             "maximum_stationary_translation": self.maximum_stationary_translation,
             "maximum_stationary_rotation": self.maximum_stationary_rotation,
             "maximum_stationary_gripper": self.maximum_stationary_gripper,
@@ -64,7 +60,23 @@ class FirstActionThresholds:
         if not isinstance(payload, dict):
             raise ValueError("first-action thresholds must be an object")
         try:
-            return cls(**{key: float(payload[key]) for key in cls.__dataclass_fields__})
+            return cls(
+                recorded_activity=DroidActionActivityThresholds(
+                    translation_norm=float(payload["recorded_translation_activity"]),
+                    rotation_norm=float(payload["recorded_rotation_activity"]),
+                    gripper_delta=float(payload["recorded_gripper_activity"]),
+                ),
+                maximum_stationary_translation=float(
+                    payload["maximum_stationary_translation"]
+                ),
+                maximum_stationary_rotation=float(
+                    payload["maximum_stationary_rotation"]
+                ),
+                maximum_stationary_gripper=float(
+                    payload["maximum_stationary_gripper"]
+                ),
+                minimum_active_cosine=float(payload["minimum_active_cosine"]),
+            )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("first-action thresholds are incomplete") from error
 
@@ -246,11 +258,7 @@ class FirstActionGate:
         return FirstActionDecision(active, cosine, tuple(reasons))
 
     def is_active(self, action: DroidAction) -> bool:
-        return (
-            _norm(action.values[:3]) > self.thresholds.recorded_translation_activity
-            or _norm(action.values[3:6]) > self.thresholds.recorded_rotation_activity
-            or abs(action.values[6]) > self.thresholds.recorded_gripper_activity
-        )
+        return self.thresholds.recorded_activity.is_active(action.values)
 
 
 def evaluate_first_actions(

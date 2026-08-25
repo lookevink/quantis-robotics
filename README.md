@@ -851,15 +851,24 @@ Run that train-only checkpoint as a distinct artifact:
 ```
 
 Its candidate miner keeps all local sequences inside the persisted planner
-bounds, requires the demonstrated first action itself to meet the `0.95` goal
-cosine, and replaces a sampled off-direction first action with that recorded
-first action before asking JEPA-WM for the most deceptive negative. Later
-actions remain perturbed, so the adapter learns a margin against plausible
-wrong-future insertion sequences rather than receiving easy off-task
-negatives. The profile has a distinct checkpoint name and serialized mining
-contract. Training and evaluation remain offline; the two current held-out
-seeds have already informed this design, so a passing rerun is diagnostic and
-fresh whole held-out seeds are still required for readiness.
+bounds. Active demonstrated first actions must meet the `0.95` goal cosine;
+sampled off-direction first actions are replaced with that recorded action.
+Stationary demonstrated first actions—translation and rotation norms at or
+below `1e-5` and gripper delta at or below `0.005`—remain stationary instead of
+being forced through a direction cosine that is undefined at zero motion.
+Later actions remain perturbed, so the adapter learns
+a margin against plausible wrong-future insertion sequences rather than
+receiving easy off-task negatives. The first attempted run correctly stopped
+when 72 zero-action frames and the 12 sub-`1.6 µm` context-41 transition
+actions exposed the missing stationary branch. No checkpoint was written, and
+the negative result was recovery-backed up. The corrected axis-aware preflight
+classifies 960 active and 96 stationary first actions across the exact
+1,056-rollout corpus; every active action clears the cone with minimum cosine
+`0.988497`. The profile has a distinct checkpoint name and serialized mining
+contract.
+Training and evaluation remain offline; the two current held-out seeds have
+already informed this design, so a passing rerun is diagnostic and fresh whole
+held-out seeds are still required for readiness.
 
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
