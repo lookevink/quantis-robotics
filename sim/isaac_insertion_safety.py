@@ -7,7 +7,10 @@ from typing import Any
 
 import numpy as np
 
-from jepa_wm.control_safety import SimulatorSafetyLimits
+from jepa_wm.control_safety import (
+    INSERTION_TARGET_PROGRESS,
+    SimulatorSafetyLimits,
+)
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.direct_safety import (
     ControlSafetySnapshot,
@@ -83,6 +86,7 @@ async def evaluate_direct_insertion_candidate(session_id: str) -> dict[str, Any]
         safety,
         proposal,
         now_unix_seconds=evaluated_at,
+        target_progress=INSERTION_TARGET_PROGRESS,
     )
     evidence = DirectInsertionSafetyEvidence(
         observation_id=observation.observation_id,

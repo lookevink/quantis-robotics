@@ -580,9 +580,14 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     context-43 checks on both untouched seeds with fresh responses, passing
     live IK/contact/attachment evidence, and no result. The no-actuation policy
     rejects execution for both sessions. This closes `2/2` resident
-    first-action freshness/no-actuation safety only. A separately authorized
-    bounded live trial remains open; insertion filming and production authority
-    remain false. Exact per-seed evidence is in the linked README checkpoint.
+    first-action freshness/no-actuation safety only. The separately authorized
+    one-action trial then executed safely with zero contact and retained
+    attachment, but regressed its three-frame translation target, so no
+    multi-step authority opened. The controller now fails closed unless a
+    projected insertion action reduces that target error by at least `25%`;
+    fresh `2/2` no-actuation evidence under this stronger rule is next.
+    Insertion filming and production authority remain false. Exact evidence is
+    in the linked README checkpoint.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

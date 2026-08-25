@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -9,7 +10,11 @@ import numpy as np
 
 from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
-from jepa_wm.control_safety import ControlGateReason, SimulatorSafetyLimits
+from jepa_wm.control_safety import (
+    ControlGateReason,
+    INSERTION_TARGET_PROGRESS,
+    SimulatorSafetyLimits,
+)
 from sim.isaac_control_execution import (
     ExecutionSafetyContext,
     capture_synchronized_post_action,
@@ -23,6 +28,81 @@ from sim.isaac_demo_runtime import JointCommand
 
 
 class ControlProjectionTest(unittest.TestCase):
+    def test_target_progress_rejects_overshoot_until_quarter_scale(self) -> None:
+        current_joints = np.asarray((0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5))
+        observation = ControlObservation(
+            observation_id=123,
+            captured_at_unix_seconds=100.0,
+            context_frame=Path("context.png"),
+            target=ControlTarget(
+                Path("target.png"),
+                DroidPose((0.401, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
+            ),
+            expected_proposal=Path("/tmp/proposal.pth"),
+            pose=DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
+            previous_action=DroidAction((0.0,) * 7),
+            warmup_frames=4,
+        )
+        proposal = ProposedControl(
+            123,
+            100.1,
+            (
+                DroidAction((0.004, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+                DroidAction((0.0,) * 7),
+                DroidAction((0.0,) * 7),
+            ),
+            Path("/tmp/proposal.pth"),
+        )
+        context = ExecutionSafetyContext(
+            observation,
+            JointCommand(current_joints, 0.04),
+            tuple(current_joints),
+            0.0,
+            False,
+            SimulatorSafetyLimits(),
+        )
+
+        def solve(pose: DroidPose, warm_start: np.ndarray) -> SolvedPose:
+            return SolvedPose(pose, warm_start, np.zeros(3), 0.04, 0.0, 0.0)
+
+        attempts, selected = select_safe_projection(
+            context,
+            proposal,
+            solve=solve,
+            now_unix_seconds=100.2,
+            target_progress=INSERTION_TARGET_PROGRESS,
+        )
+
+        self.assertIsNotNone(selected)
+        self.assertEqual(attempts[-1].scale, DroidActionScale.uniform(0.25))
+        self.assertTrue(attempts[-1].gate.passed)
+        self.assertTrue(
+            all(
+                attempt.gate.reasons
+                == (ControlGateReason.TARGET_PROGRESS_INSUFFICIENT,)
+                for attempt in attempts[:-1]
+            )
+        )
+
+        missing_target = replace(
+            observation,
+            target=ControlTarget(Path("target.png")),
+        )
+        missing_attempts, missing_selection = select_safe_projection(
+            replace(context, observation=missing_target),
+            proposal,
+            solve=solve,
+            now_unix_seconds=100.2,
+            target_progress=INSERTION_TARGET_PROGRESS,
+        )
+        self.assertIsNone(missing_selection)
+        self.assertTrue(
+            all(
+                attempt.gate.reasons == (ControlGateReason.TARGET_POSE_MISSING,)
+                for attempt in missing_attempts
+            )
+        )
+
     def test_falls_back_after_quarter_scale_ik_failure(self) -> None:
         current_joints = np.asarray((0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5))
         observation = ControlObservation(

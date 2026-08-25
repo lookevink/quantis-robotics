@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from math import isfinite
+from math import dist, isfinite
 from time import time
 from typing import Any, Sequence
 
@@ -171,6 +171,64 @@ class ControlGateReason(str, Enum):
     IK_SOLUTION_FAILED = "ik_solution_failed"
     COLLISION_DETECTED = "collision_detected"
     FORCE_LIMIT_EXCEEDED = "force_limit_exceeded"
+    TARGET_POSE_MISSING = "target_pose_missing"
+    TARGET_PROGRESS_INSUFFICIENT = "target_progress_insufficient"
+
+
+@dataclass(frozen=True)
+class ProjectedTargetProgressPolicy:
+    """Require one projected action to close a useful share of its target gap."""
+
+    minimum_translation_error_reduction_fraction: float = 0.25
+
+    def __post_init__(self) -> None:
+        if (
+            not isfinite(self.minimum_translation_error_reduction_fraction)
+            or not 0.0 < self.minimum_translation_error_reduction_fraction <= 1.0
+        ):
+            raise ValueError("projected target-progress policy is invalid")
+
+    def failure_reason(
+        self,
+        current: DroidPose,
+        target: DroidPose | None,
+        projected: DroidPose,
+    ) -> ControlGateReason | None:
+        if target is None:
+            return ControlGateReason.TARGET_POSE_MISSING
+        current_error = dist(current.values[:3], target.values[:3])
+        projected_error = dist(projected.values[:3], target.values[:3])
+        maximum_projected_error = current_error * (
+            1.0 - self.minimum_translation_error_reduction_fraction
+        )
+        return (
+            None
+            if projected_error <= maximum_projected_error + 1e-12
+            else ControlGateReason.TARGET_PROGRESS_INSUFFICIENT
+        )
+
+    def apply(
+        self,
+        decision: ControlGateDecision,
+        current: DroidPose,
+        target: DroidPose | None,
+    ) -> ControlGateDecision:
+        """Apply target-progress policy without weakening an existing rejection."""
+        if not decision.passed:
+            return decision
+        failure = self.failure_reason(current, target, decision.next_pose)
+        return (
+            decision
+            if failure is None
+            else ControlGateDecision(
+                decision.observation_id,
+                decision.next_pose,
+                (failure,),
+            )
+        )
+
+
+INSERTION_TARGET_PROGRESS = ProjectedTargetProgressPolicy()
 
 
 @dataclass(frozen=True)

@@ -39,7 +39,10 @@ def _observation(identifier: int) -> ControlObservation:
         identifier,
         100.0,
         Path("context.png"),
-        ControlTarget(Path("target.png")),
+        ControlTarget(
+            Path("target.png"),
+            DroidPose((0.401, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04)),
+        ),
         _PROPOSAL,
         DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04)),
         DroidAction((0.0,) * 7),

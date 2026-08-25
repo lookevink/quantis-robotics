@@ -15,6 +15,7 @@ from jepa_wm.control_safety import (
     ControlInterlockEvidence,
     ControlGateDecision,
     ControlGateReason,
+    INSERTION_TARGET_PROGRESS,
     SafetyProjectionAttempt,
     SimulatorControlGate,
     SimulatorSafetyState,
@@ -862,6 +863,15 @@ class ControlSession:
                 safety_state,
                 now_unix_seconds=as_of_unix_seconds,
             )
+            if state.execution_policy in (
+                ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION,
+                ControlExecutionPolicy.INSERTION_RESET_TRIAL,
+            ):
+                expected_gate = INSERTION_TARGET_PROGRESS.apply(
+                    expected_gate,
+                    observation.pose,
+                    observation.target_pose,
+                )
             expected_delta = max(
                 abs(proposed - current)
                 for proposed, current in zip(

@@ -17,6 +17,8 @@ from jepa_wm.control_safety import (
     ACTION_SCALES,
     ControlGateDecision,
     ControlGateReason,
+    INSERTION_TARGET_PROGRESS,
+    ProjectedTargetProgressPolicy,
     SimulatorControlGate,
     SimulatorSafetyLimits,
     SimulatorSafetyState,
@@ -194,6 +196,7 @@ def project_control_candidate(
     *,
     solve: Callable[[DroidPose, np.ndarray], SolvedPose] = solve_droid_pose,
     now_unix_seconds: float | None = None,
+    target_progress: ProjectedTargetProgressPolicy | None = None,
 ) -> tuple[SafetyProjectionAttempt, SafeProjection | None]:
     candidate_action = scale.apply(proposal.first_action)
     candidate = proposal.with_actions((candidate_action, *proposal.actions[1:]))
@@ -209,6 +212,12 @@ def project_control_candidate(
     preliminary = context.evaluate(
         candidate, current_joints, now_unix_seconds=now_unix_seconds
     )
+    if target_progress is not None:
+        preliminary = target_progress.apply(
+            preliminary,
+            context.observation.pose,
+            context.observation.target_pose,
+        )
     if not preliminary.passed:
         return SafetyProjectionAttempt(scale, preliminary, 0.0, current_joints), None
     try:
@@ -244,6 +253,7 @@ def select_safe_projection(
     solve: Callable[[DroidPose, np.ndarray], SolvedPose] = solve_droid_pose,
     now_unix_seconds: float | None = None,
     action_scales: tuple[DroidActionScale, ...] = ACTION_SCALES,
+    target_progress: ProjectedTargetProgressPolicy | None = None,
 ) -> tuple[tuple[SafetyProjectionAttempt, ...], SafeProjection | None]:
     attempts = []
     if not action_scales:
@@ -255,6 +265,7 @@ def select_safe_projection(
             action_scale,
             solve=solve,
             now_unix_seconds=now_unix_seconds,
+            target_progress=target_progress,
         )
         attempts.append(attempt)
         if selected is not None:
@@ -331,16 +342,19 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             limits,
         )
         action_scales = ACTION_SCALES
+        target_progress = None
         if (
             persisted_state.execution_policy
             is ControlExecutionPolicy.INSERTION_RESET_TRIAL
         ):
             binding = session.load_insertion_trial_binding(proposal)
             action_scales = binding.allowed_projection_scales
+            target_progress = INSERTION_TARGET_PROGRESS
         attempts, selected = select_safe_projection(
             safety,
             proposal,
             action_scales=action_scales,
+            target_progress=target_progress,
         )
 
         candidate = None

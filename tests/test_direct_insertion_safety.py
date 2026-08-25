@@ -98,7 +98,10 @@ class DirectInsertionSafetySessionTest(unittest.TestCase):
                 observation_id=9,
                 captured_at_unix_seconds=100.0,
                 context_frame=Path("context.png"),
-                target=ControlTarget(Path("target.png")),
+                target=ControlTarget(
+                    Path("target.png"),
+                    DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
+                ),
                 expected_proposal=proposal_path,
                 pose=DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
                 previous_action=DroidAction((0.0,) * 7),

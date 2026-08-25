@@ -12,7 +12,12 @@ import numpy as np
 from jepa_wm.action import DroidAction, DroidPose, MAX_GRIPPER_WIDTH_M
 from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
 from jepa_wm.control_policy import ControlExecutionPolicy
-from jepa_wm.control_safety import ACTION_SCALES, ControlGateDecision, SafetyProjectionAttempt
+from jepa_wm.control_safety import (
+    ACTION_SCALES,
+    ControlGateDecision,
+    INSERTION_TARGET_PROGRESS,
+    SafetyProjectionAttempt,
+)
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
 from sim.control_session import ControlSessionState
 from sim.isaac_demo_runtime import JointCommand
@@ -27,7 +32,10 @@ class DirectInsertionSafetyRuntimeTest(unittest.TestCase):
             9,
             100.0,
             Path("context.png"),
-            ControlTarget(Path("target.png")),
+            ControlTarget(
+                Path("target.png"),
+                DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
+            ),
             proposal_path,
             DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
             DroidAction((0.0,) * 7),
@@ -100,7 +108,7 @@ class DirectInsertionSafetyRuntimeTest(unittest.TestCase):
             patch(
                 "sim.isaac_insertion_safety.select_safe_projection",
                 return_value=((attempt,), object()),
-            ),
+            ) as select_projection,
             patch("sim.isaac_insertion_safety.time", return_value=100.2),
         ):
             payload = asyncio.run(
@@ -109,6 +117,10 @@ class DirectInsertionSafetyRuntimeTest(unittest.TestCase):
 
         self.assertTrue(payload["passed"])
         self.assertEqual(payload["authority"], "no_actuation")
+        self.assertIs(
+            select_projection.call_args.kwargs["target_progress"],
+            INSERTION_TARGET_PROGRESS,
+        )
         session.write_direct_safety.assert_called_once()
         self.assertFalse(session.claim_execution.called)
         self.assertFalse(session.write_result.called)

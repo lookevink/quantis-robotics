@@ -1103,6 +1103,32 @@ result closes resident first-action freshness and no-actuation safety only. A
 predeclared bounded live action trial remains required before any multi-step
 insertion attempt. Insertion filming and production authority remain false.
 
+That bounded trial is now complete, but it is a task-progress negative. An
+initial invocation failed before capture because the long-lived Isaac process
+had cached the absence of the newly synced insertion-trial module; backup still
+completed, and commit `621b89a` invalidates finder caches before source
+discovery and gives reset-trial failures typed report phases. The successful
+retry, session `insertion-trial-20260825T133416Z-52600-c43`, rebound the exact
+seed-`52600` source, proposal fingerprint, reset, and full-translation/
+quarter-rotation scale. Its one `0.746 mm` requested translation was fresh
+(`1.155 s` observation age, `0.6255 s` command age), tracked with `0.97734`
+translation cosine and `0.159 mm` translation error, retained attachment, and
+measured `0 N` peak contact with no collision. However, the action overshot its
+three-frame target: translation error increased from `0.189 mm` to `0.567 mm`
+(`-0.378 mm` progress), while rotation error also increased. The terminal
+rollout and checksum-verified recovery copy are preserved. This opens no
+multi-step, filming, insertion-completion, or production authority.
+
+The follow-up controller gate therefore requires an insertion first-action
+projection to reduce the current three-frame target translation error by at
+least `25%`; a missing target fails closed. Against the measured trial, the
+existing ordered scale policy rejects the full and half translation projections
+as overshoots and first accepts the quarter-scale projection. Persisted
+no-actuation and reset-trial projection evidence is reconstructed through the
+same rule, so the earlier source evidence cannot authorize another trial under
+the stronger code. The next live checkpoint is fresh `2/2` no-actuation
+evidence for this target-progress policy, not another actuation attempt.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded
