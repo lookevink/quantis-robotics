@@ -11,7 +11,7 @@ from typing import Any, Mapping
 from jepa_wm.action import DroidAction, DroidActionScale
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_protocol import ProposedControl
-from jepa_wm.control_safety import ACTION_SCALES
+from jepa_wm.control_safety import insertion_projection_policy_for_scale
 from jepa_wm.direct_safety import DirectInsertionSafetyEvidence
 from jepa_wm.training_artifact import ArtifactIdentity
 from jepa_wm.trial_equivalence import ControlTrialContext, validate_reset_equivalence
@@ -52,12 +52,15 @@ class InsertionTrialBinding:
     def __post_init__(self) -> None:
         validate_recording_id(self.execution_session_id)
         validate_recording_id(self.source_session_id)
+        try:
+            insertion_projection_policy_for_scale(self.source_selected_action_scale)
+        except ValueError as error:
+            raise ValueError("insertion trial binding is invalid") from error
         if (
             self.execution_session_id == self.source_session_id
             or self.source_observation_id <= 0
             or self.execution_observation_id <= 0
             or len(self.actions) != 3
-            or self.source_selected_action_scale not in ACTION_SCALES
             or self.authority is not InsertionTrialAuthority.RESET_TRIAL_ONLY
         ):
             raise ValueError("insertion trial binding is invalid")
@@ -68,8 +71,11 @@ class InsertionTrialBinding:
 
     @property
     def allowed_projection_scales(self) -> tuple[DroidActionScale, ...]:
-        source_index = ACTION_SCALES.index(self.source_selected_action_scale)
-        return ACTION_SCALES[source_index:]
+        policy = insertion_projection_policy_for_scale(
+            self.source_selected_action_scale
+        )
+        source_index = policy.index(self.source_selected_action_scale)
+        return policy[source_index:]
 
     def validate_attempted_projection_scales(
         self,

@@ -13,7 +13,7 @@ from jepa_wm.control_safety import (
     ControlInterlockEvidence,
     SafetyProjectionAttempt,
     SimulatorSafetyLimits,
-    projection_policy_for_attempts,
+    insertion_projection_policy_for_attempts,
 )
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
 from jepa_wm.insertion_task import InsertionTaskLimits
@@ -188,7 +188,7 @@ class DirectInsertionSafetyEvidence:
         )
         if (self.selected_action_scale is None) == bool(selected):
             raise ValueError("direct insertion safety selection is inconsistent")
-        projection_policy = projection_policy_for_attempts(
+        projection_policy = insertion_projection_policy_for_attempts(
             attempt.scale for attempt in self.attempts
         )
         if any(

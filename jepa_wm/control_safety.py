@@ -36,7 +36,27 @@ ACTION_SCALES = (
     *LEGACY_ACTION_SCALES,
 )
 
+ORIENTATION_HOLD_ACTION_SCALES = tuple(
+    DroidActionScale(scale.translation, 0.0, scale.gripper)
+    for scale in ACTION_SCALES
+)
+
 ACTION_SCALE_POLICIES = (ACTION_SCALES, LEGACY_ACTION_SCALES)
+INSERTION_ACTION_SCALE_POLICIES = (
+    *ACTION_SCALE_POLICIES,
+    ORIENTATION_HOLD_ACTION_SCALES,
+)
+
+
+def _projection_policy_for_attempts(
+    attempted_scales: Sequence[DroidActionScale],
+    policies: Sequence[tuple[DroidActionScale, ...]],
+) -> tuple[DroidActionScale, ...]:
+    scales = tuple(attempted_scales)
+    for policy in policies:
+        if scales and scales == policy[: len(scales)]:
+            return policy
+    raise ValueError("safety projection order is invalid")
 
 
 def projection_policy_for_attempts(
@@ -44,11 +64,29 @@ def projection_policy_for_attempts(
 ) -> tuple[DroidActionScale, ...]:
     """Return the current or historical policy matching an ordered attempt prefix."""
 
-    scales = tuple(attempted_scales)
-    for policy in ACTION_SCALE_POLICIES:
-        if scales and scales == policy[: len(scales)]:
+    return _projection_policy_for_attempts(attempted_scales, ACTION_SCALE_POLICIES)
+
+
+def insertion_projection_policy_for_attempts(
+    attempted_scales: Sequence[DroidActionScale],
+) -> tuple[DroidActionScale, ...]:
+    """Return an insertion policy matching an ordered attempt prefix."""
+
+    return _projection_policy_for_attempts(
+        attempted_scales,
+        INSERTION_ACTION_SCALE_POLICIES,
+    )
+
+
+def insertion_projection_policy_for_scale(
+    scale: DroidActionScale,
+) -> tuple[DroidActionScale, ...]:
+    """Return the insertion projection policy containing one selected scale."""
+
+    for policy in INSERTION_ACTION_SCALE_POLICIES:
+        if scale in policy:
             return policy
-    raise ValueError("safety projection order is invalid")
+    raise ValueError("safety projection scale is invalid")
 
 
 def _finite_tuple(name: str, values: Sequence[float], count: int) -> tuple[float, ...]:

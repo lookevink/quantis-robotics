@@ -4,13 +4,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from math import dist, isfinite
+from math import dist, isfinite, sqrt
 from pathlib import Path
 from typing import Any, Mapping
 
-from jepa_wm.action import ActionSelectionBounds
+from jepa_wm.action import (
+    ActionSelectionBounds,
+    DroidActionScale,
+    DroidPose,
+    action_between,
+)
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
+from jepa_wm.control_safety import ACTION_SCALES, ORIENTATION_HOLD_ACTION_SCALES
 from jepa_wm.identifiers import validate_safe_identifier
 from jepa_wm.trajectory import (
     RecordedRollout,
@@ -31,6 +37,7 @@ COMPLIANT_COLLISION_PARTS = ("latch",)
 @dataclass(frozen=True)
 class InsertionControlTargetPolicy:
     minimum_translation_meters: float = 5e-4
+    orientation_hold_tolerance_radians: float | None = 1.25e-3
     minimum_action_horizon: int = 3
     maximum_action_horizon: int = 8
     camera: str = "wrist"
@@ -43,6 +50,13 @@ class InsertionControlTargetPolicy:
         if (
             not isfinite(self.minimum_translation_meters)
             or self.minimum_translation_meters <= 0.0
+            or (
+                self.orientation_hold_tolerance_radians is not None
+                and (
+                    not isfinite(self.orientation_hold_tolerance_radians)
+                    or self.orientation_hold_tolerance_radians <= 0.0
+                )
+            )
             or isinstance(self.minimum_action_horizon, bool)
             or not isinstance(self.minimum_action_horizon, int)
             or self.minimum_action_horizon <= 0
@@ -51,6 +65,23 @@ class InsertionControlTargetPolicy:
             or self.maximum_action_horizon < self.minimum_action_horizon
         ):
             raise ValueError("insertion control target policy is invalid")
+
+    def projection_scales(
+        self,
+        current: DroidPose,
+        target: DroidPose | None,
+    ) -> tuple[DroidActionScale, ...]:
+        """Hold orientation when its target error is below measured resolution."""
+
+        if target is None or self.orientation_hold_tolerance_radians is None:
+            return ACTION_SCALES
+        relative = action_between(current, target)
+        rotation_error = sqrt(sum(value * value for value in relative.values[3:6]))
+        return (
+            ORIENTATION_HOLD_ACTION_SCALES
+            if rotation_error <= self.orientation_hold_tolerance_radians
+            else ACTION_SCALES
+        )
 
     def select(
         self,
@@ -102,13 +133,18 @@ class InsertionControlTargetPolicy:
             raise ValueError("insertion control observation target is inconsistent")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "minimum_translation_meters": self.minimum_translation_meters,
             "minimum_action_horizon": self.minimum_action_horizon,
             "maximum_action_horizon": self.maximum_action_horizon,
             "camera": self.camera,
             "action_bounds": self.action_bounds.to_dict(),
         }
+        if self.orientation_hold_tolerance_radians is not None:
+            payload["orientation_hold_tolerance_radians"] = (
+                self.orientation_hold_tolerance_radians
+            )
+        return payload
 
     @classmethod
     def from_dict(cls, payload: Any) -> InsertionControlTargetPolicy:
@@ -126,6 +162,11 @@ class InsertionControlTargetPolicy:
             return cls(
                 minimum_translation_meters=float(
                     payload["minimum_translation_meters"]
+                ),
+                orientation_hold_tolerance_radians=(
+                    float(payload["orientation_hold_tolerance_radians"])
+                    if "orientation_hold_tolerance_radians" in payload
+                    else None
                 ),
                 minimum_action_horizon=minimum_horizon,
                 maximum_action_horizon=maximum_horizon,

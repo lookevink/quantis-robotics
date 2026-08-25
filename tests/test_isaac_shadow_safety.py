@@ -6,6 +6,7 @@ from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_safety import (
     ACTION_SCALES,
     LEGACY_ACTION_SCALES,
+    ORIENTATION_HOLD_ACTION_SCALES,
     ControlGateDecision,
     ControlGateReason,
     SafetyProjectionAttempt,
@@ -66,7 +67,29 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
                 evaluated_at_unix_seconds=101.0,
                 counterfactual_as_of_unix_seconds=100.2,
                 planned_actions=(DroidAction((0.0,) * 7),) * 3,
-            attempts=(SafetyProjectionAttempt(scale, blocked, 0.01, (0.0,) * 7),),
+                attempts=(
+                    SafetyProjectionAttempt(scale, blocked, 0.01, (0.0,) * 7),
+                ),
+                selected_action_scale=scale,
+            )
+
+    def test_rejects_insertion_only_orientation_hold_scales(self) -> None:
+        scale = ORIENTATION_HOLD_ACTION_SCALES[0]
+        gate = ControlGateDecision(
+            9,
+            DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
+            (),
+        )
+
+        with self.assertRaisesRegex(ValueError, "projection order"):
+            ShadowSafetyEvidence(
+                observation_id=9,
+                evaluated_at_unix_seconds=101.0,
+                counterfactual_as_of_unix_seconds=100.2,
+                planned_actions=(DroidAction((0.0,) * 7),) * 3,
+                attempts=(
+                    SafetyProjectionAttempt(scale, gate, 0.01, (0.0,) * 7),
+                ),
                 selected_action_scale=scale,
             )
 

@@ -19,6 +19,7 @@ from jepa_wm.control_safety import (
     SafetyProjectionAttempt,
 )
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
+from jepa_wm.insertion_contract import InsertionControlTargetPolicy
 from sim.control_session import ControlSessionState
 from sim.isaac_demo_runtime import JointCommand
 from sim.isaac_insertion_safety import evaluate_direct_insertion_candidate
@@ -53,6 +54,7 @@ class DirectInsertionSafetyRuntimeTest(unittest.TestCase):
             plug_attached=True,
             current_gripper_width_m=0.04,
             execution_policy=ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION,
+            insertion_target_policy=InsertionControlTargetPolicy(),
         )
         response = ProposedControl(
             9,
@@ -141,6 +143,13 @@ class DirectInsertionSafetyRuntimeTest(unittest.TestCase):
         self.assertIs(
             select_projection.call_args.kwargs["target_progress"],
             INSERTION_TARGET_PROGRESS,
+        )
+        self.assertEqual(
+            select_projection.call_args.kwargs["action_scales"],
+            state.insertion_target_policy.projection_scales(
+                observation.pose,
+                observation.target_pose,
+            ),
         )
         session.write_direct_safety.assert_called_once()
         self.assertFalse(session.claim_execution.called)

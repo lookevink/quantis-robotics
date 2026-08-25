@@ -13,6 +13,7 @@ from jepa_wm.control_protocol import ControlObservation, ControlTarget, Proposed
 from jepa_wm.control_safety import (
     ACTION_SCALES,
     ControlGateDecision,
+    ORIENTATION_HOLD_ACTION_SCALES,
     SafetyProjectionAttempt,
 )
 from jepa_wm.direct_safety import (
@@ -128,6 +129,15 @@ class InsertionTrialBindingTest(unittest.TestCase):
         capped.validate_attempted_projection_scales((ACTION_SCALES[1],))
         with self.assertRaisesRegex(ValueError, "exceeded"):
             capped.validate_attempted_projection_scales((ACTION_SCALES[0],))
+
+        held = replace(
+            binding,
+            source_selected_action_scale=ORIENTATION_HOLD_ACTION_SCALES[0],
+        )
+        self.assertEqual(
+            held.allowed_projection_scales,
+            ORIENTATION_HOLD_ACTION_SCALES,
+        )
 
     def test_rejects_reset_drift_and_non_trial_execution_policy(self) -> None:
         execution = _context(10, ControlExecutionPolicy.INSERTION_RESET_TRIAL)

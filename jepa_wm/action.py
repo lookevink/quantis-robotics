@@ -186,9 +186,18 @@ class DroidActionScale:
     gripper: float
 
     def __post_init__(self) -> None:
-        values = (self.translation, self.rotation, self.gripper)
-        if not all(isfinite(value) and 0.0 < value <= 1.0 for value in values):
-            raise ValueError("action scales must be finite and between zero and one")
+        if (
+            not isfinite(self.translation)
+            or not 0.0 < self.translation <= 1.0
+            or not isfinite(self.rotation)
+            or not 0.0 <= self.rotation <= 1.0
+            or not isfinite(self.gripper)
+            or not 0.0 < self.gripper <= 1.0
+        ):
+            raise ValueError(
+                "action translation/gripper scales must be positive and rotation "
+                "must be nonnegative, with every scale at most one"
+            )
 
     @classmethod
     def uniform(cls, scale: float) -> DroidActionScale:

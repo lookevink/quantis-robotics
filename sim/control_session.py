@@ -12,6 +12,7 @@ from typing import Any
 from jepa_wm.action import DROID_FPS, DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.control_safety import (
+    ACTION_SCALES,
     ControlInterlockEvidence,
     ControlGateDecision,
     ControlGateReason,
@@ -221,6 +222,17 @@ class ControlSessionState:
                 recording,
                 frame_root=frame_root,
             )
+
+    def insertion_projection_scales(
+        self,
+        observation: ControlObservation,
+    ) -> tuple[DroidActionScale, ...]:
+        if self.insertion_target_policy is None:
+            return ACTION_SCALES
+        return self.insertion_target_policy.projection_scales(
+            observation.pose,
+            observation.target_pose,
+        )
 
 
 @dataclass(frozen=True)
@@ -969,6 +981,10 @@ class ControlSession:
             or evidence.evaluated_at_unix_seconds < response.created_at_unix_seconds
         ):
             raise ValueError("direct insertion safety is not bound to its session")
+        expected_scales = state.insertion_projection_scales(observation)
+        attempted_scales = tuple(attempt.scale for attempt in evidence.attempts)
+        if attempted_scales != expected_scales[: len(attempted_scales)]:
+            raise ValueError("direct insertion safety used the wrong projection policy")
         try:
             evidence.live_state.validate_continuity(state.require_safety_snapshot())
         except ValueError as error:

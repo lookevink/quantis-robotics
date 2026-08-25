@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from jepa_wm.action import ActionSelectionBounds, DroidAction, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
+from jepa_wm.control_safety import ACTION_SCALES, ORIENTATION_HOLD_ACTION_SCALES
 from jepa_wm.insertion_contract import InsertionControlTargetPolicy
 from jepa_wm.trajectory import RecordedFrame, RecordedRollout
 
@@ -27,6 +28,31 @@ def _rollout(horizon: int, translation_meters: float) -> RecordedRollout:
 
 
 class InsertionControlTargetPolicyTest(unittest.TestCase):
+    def test_holds_orientation_inside_measured_resolution(self) -> None:
+        policy = InsertionControlTargetPolicy()
+        current = DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+
+        held = policy.projection_scales(
+            current,
+            DroidPose((0.4005, 0.0, 0.5, 0.0, 0.0, 0.001, 0.5)),
+        )
+        active = policy.projection_scales(
+            current,
+            DroidPose((0.4005, 0.0, 0.5, 0.0, 0.0, 0.002, 0.5)),
+        )
+
+        self.assertEqual(held, ORIENTATION_HOLD_ACTION_SCALES)
+        self.assertEqual(active, ACTION_SCALES)
+
+        legacy_payload = policy.to_dict()
+        del legacy_payload["orientation_hold_tolerance_radians"]
+        legacy = InsertionControlTargetPolicy.from_dict(legacy_payload)
+        self.assertIsNone(legacy.orientation_hold_tolerance_radians)
+        self.assertEqual(
+            legacy.projection_scales(current, target=current),
+            ACTION_SCALES,
+        )
+
     def test_rejects_unsafe_camera_identifier(self) -> None:
         for camera in (".", "..", "../wrist", "wrist/camera"):
             with self.subTest(camera=camera):
@@ -37,6 +63,7 @@ class InsertionControlTargetPolicyTest(unittest.TestCase):
         policy = InsertionControlTargetPolicy(
             minimum_translation_meters=4e-4,
             maximum_action_horizon=6,
+            orientation_hold_tolerance_radians=9e-4,
             camera="overhead",
             action_bounds=ActionSelectionBounds(
                 minimum_action_norm=0.0,
