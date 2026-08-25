@@ -53,6 +53,7 @@ def reload_demo_runtime() -> ModuleType:
     # Every owner must be refreshed before modules that import its classes.
     for module_name in (
         "jepa.contract",
+        "jepa_wm.identifiers",
         "jepa_wm.action",
         "jepa_wm.training_artifact",
         "jepa_wm.control_policy",
@@ -75,6 +76,7 @@ def reload_demo_runtime() -> ModuleType:
         "jepa_wm.trial_equivalence",
         "sim.demo_sequence",
         "sim.recording",
+        "sim.control_identity",
         "jepa_wm.candidate_demo",
         "jepa_wm.grasp_demo",
         "jepa_wm.experimental_candidate",
