@@ -26,6 +26,7 @@ from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.trial_equivalence import TrialResetState
 from sim.isaac_control_resolution import AttachedControlInterlock, _capture_endpoint
+from sim.isaac_control_resolution import resolution_probe_observation
 from sim.isaac_control_resolution import resolution_joint_target
 from sim.isaac_demo_runtime import JointCommand
 from sim.control_session import ControlSession, ControlSessionState
@@ -80,6 +81,27 @@ def _sample(index: int, magnitude: float) -> ControlResolutionSample:
 
 
 class ControlResolutionReportTest(unittest.TestCase):
+    def test_probe_observation_uses_live_pose_and_probe_timestamp(self) -> None:
+        observation = ControlObservation(
+            observation_id=123,
+            captured_at_unix_seconds=1.0,
+            context_frame=Path("context.png"),
+            target=ControlTarget(Path("target.png"), _reset().pose),
+            expected_proposal=Path("/tmp/proposal.pth"),
+            pose=_reset().pose,
+            previous_action=DroidAction((0.0,) * 7),
+            warmup_frames=43,
+        )
+        live_pose = observation.pose.applied(
+            DroidAction((1e-5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+        )
+
+        probe = resolution_probe_observation(observation, live_pose, 2.0)
+
+        self.assertEqual(probe.pose, live_pose)
+        self.assertEqual(probe.captured_at_unix_seconds, 2.0)
+        self.assertEqual(probe.observation_id, observation.observation_id)
+
     def test_failure_evidence_round_trip_requires_reset_for_samples(self) -> None:
         failure = ControlResolutionFailureEvidence(
             session_id="resolution-52600-c43",

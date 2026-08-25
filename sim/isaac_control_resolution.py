@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import time
 from typing import Any
 
 from jepa.contract import ObservationStage
-from jepa_wm.action import DroidAction, DroidActionScale
+from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_policy import ControlExecutionPolicy
-from jepa_wm.control_protocol import ProposedControl
+from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.control_resolution import (
     CONTROL_RESOLUTION_PROTOCOL,
     ControlResolutionFailureEvidence,
@@ -161,6 +161,20 @@ def resolution_joint_target(
     )
 
 
+def resolution_probe_observation(
+    captured: ControlObservation,
+    live_pose: DroidPose,
+    captured_at_unix_seconds: float,
+) -> ControlObservation:
+    """Bind one probe safety decision to its live pose and timestamp."""
+
+    return replace(
+        captured,
+        captured_at_unix_seconds=captured_at_unix_seconds,
+        pose=live_pose,
+    )
+
+
 async def measure_insertion_control_resolution(
     session_id: str,
     protocol: ControlResolutionProtocol = CONTROL_RESOLUTION_PROTOCOL,
@@ -247,10 +261,10 @@ async def measure_insertion_control_resolution(
                 )
             )
             sample_time = time()
-            sample_observation = replace(
+            sample_observation = resolution_probe_observation(
                 observation,
-                captured_at_unix_seconds=sample_time,
-                pose=start_reset.pose,
+                start_reset.pose,
+                sample_time,
             )
             proposal = ProposedControl(
                 observation_id=observation.observation_id,
