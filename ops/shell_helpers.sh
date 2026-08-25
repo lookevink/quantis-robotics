@@ -198,7 +198,7 @@ capture_and_respond_control_session() {
 isaac_demo_code() {
   local expression="$1"
   printf \
-    "import sys,json,importlib; sys.path.insert(0,'/workspace') if '/workspace' not in sys.path else None; importlib.invalidate_caches(); import sim.runtime_loader as loader; importlib.reload(loader); demo=loader.reload_demo_runtime(); print(json.dumps(%s,indent=2))" \
+    "import sys,json,runpy; sys.path.insert(0,'/workspace') if '/workspace' not in sys.path else None; runtime=runpy.run_path('/workspace/sim/runtime_loader.py'); demo=runtime['reload_demo_runtime'](); print(json.dumps(%s,indent=2))" \
     "${expression}"
 }
 

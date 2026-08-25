@@ -1,11 +1,40 @@
 from __future__ import annotations
 
 import unittest
+import importlib
+import os
+from pathlib import Path
 import subprocess
 import sys
+import tempfile
+
+from sim.runtime_loader import _reload_project_module_from_source
 
 
 class RuntimeLoaderTest(unittest.TestCase):
+    def test_reload_uses_source_when_timestamp_bytecode_is_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            module_name = "quantis_stale_reload_fixture"
+            source = root / f"{module_name}.py"
+            source.write_text("VALUE = 'old'\nOLD = True\n")
+            timestamp = source.stat().st_mtime
+            sys.path.insert(0, str(root))
+            try:
+                imported = importlib.import_module(module_name)
+                self.assertEqual(imported.VALUE, "old")
+                source.write_text("VALUE = 'new'\nNEW = True\n")
+                os.utime(source, (timestamp, timestamp))
+
+                refreshed = _reload_project_module_from_source(module_name)
+
+                self.assertEqual(refreshed.VALUE, "new")
+                self.assertTrue(refreshed.NEW)
+                self.assertFalse(hasattr(refreshed, "OLD"))
+            finally:
+                sys.path.remove(str(root))
+                sys.modules.pop(module_name, None)
+
     def test_reloads_action_safety_and_shadow_contract_as_one_generation(self) -> None:
         source = """
 from sim.runtime_loader import reload_demo_runtime

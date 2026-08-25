@@ -2,14 +2,48 @@
 
 from __future__ import annotations
 
-import importlib
+import importlib.util
+from pathlib import Path
+import sys
 from types import ModuleType
 
 
-def _reload(module_name: str) -> ModuleType:
-    """Import or refresh one module after its dependencies are current."""
+def _reload_project_module_from_source(module_name: str) -> ModuleType:
+    """Refresh one project module from source, bypassing stale bind-mount bytecode."""
 
-    return importlib.reload(importlib.import_module(module_name))
+    module = sys.modules.get(module_name)
+    spec = (
+        module.__spec__
+        if module is not None
+        else importlib.util.find_spec(module_name)
+    )
+    if spec is None or spec.origin is None or not spec.origin.endswith(".py"):
+        raise RuntimeError(f"project module has no Python source: {module_name}")
+    created = module is None
+    if module is None:
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+    source_path = Path(spec.origin)
+    code = compile(source_path.read_text(encoding="utf-8"), str(source_path), "exec")
+    namespace = module.__dict__
+    preserved = {
+        "__name__": module_name,
+        "__package__": spec.parent,
+        "__loader__": spec.loader,
+        "__spec__": spec,
+        "__file__": spec.origin,
+        "__cached__": spec.cached,
+        "__builtins__": namespace.get("__builtins__", __builtins__),
+    }
+    namespace.clear()
+    namespace.update(preserved)
+    try:
+        exec(code, namespace)
+    except Exception:
+        if created:
+            sys.modules.pop(module_name, None)
+        raise
+    return module
 
 
 def reload_demo_runtime() -> ModuleType:
@@ -77,5 +111,5 @@ def reload_demo_runtime() -> ModuleType:
         "sim.isaac_grasp_demo",
         "sim.isaac_control_bridge",
     ):
-        _reload(module_name)
-    return _reload("sim.isaac_demo")
+        _reload_project_module_from_source(module_name)
+    return _reload_project_module_from_source("sim.isaac_demo")

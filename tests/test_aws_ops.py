@@ -368,7 +368,7 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("rsync ", calls)
         self.assertIn("127.0.0.1 8226", calls)
-        self.assertIn("sim.runtime_loader", calls)
+        self.assertIn("sim/runtime_loader.py", calls)
         self.assertIn("run_demo", calls)
 
     def test_demo_run_propagates_python_server_errors(self):
