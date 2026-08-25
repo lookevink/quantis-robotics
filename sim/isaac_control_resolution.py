@@ -19,7 +19,6 @@ from jepa_wm.control_resolution import (
     ControlResolutionSample,
     ControlResolutionEndpoint,
     RejectedControlResolutionReset,
-    retreat_direction,
 )
 from jepa_wm.control_safety import SimulatorSafetyLimits
 from jepa_wm.control_safety import SafetyProjectionAttempt
@@ -243,7 +242,6 @@ async def measure_insertion_control_resolution(
         operation="insertion control resolution synchronization",
     )
     runtime = synchronized.runtime
-    direction = retreat_direction(observation.pose, observation.target_pose)
     samples: list[ControlResolutionSample] = []
     reference_reset: TrialResetState | None = None
     try:
@@ -269,16 +267,10 @@ async def measure_insertion_control_resolution(
                 ControlResolutionResetPhase.SAMPLE_START,
                 index,
             )
-            commanded = DroidAction(
-                (
-                    direction[0] * magnitude,
-                    direction[1] * magnitude,
-                    direction[2] * magnitude,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                )
+            commanded = protocol.probe_action(
+                start_reset.pose,
+                observation.target_pose,
+                magnitude,
             )
             sample_time = time()
             sample_observation = resolution_probe_observation(

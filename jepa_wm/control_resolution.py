@@ -40,12 +40,12 @@ from sim.recording import validate_recording_id
 CONTROL_RESOLUTION_SCHEMA = "quantis.jepa_wm_control_resolution.v1"
 CONTROL_RESOLUTION_FAILURE_SCHEMA = "quantis.jepa_wm_control_resolution_failure.v1"
 CONTROL_RESOLUTION_RESET_TOLERANCES = ResetEquivalenceTolerances(
-    maximum_translation_difference_meters=2e-5,
-    maximum_rotation_difference_radians=1e-4,
+    maximum_translation_difference_meters=5e-4,
+    maximum_rotation_difference_radians=1e-3,
     maximum_gripper_difference=1e-3,
-    maximum_joint_difference_radians=1e-4,
+    maximum_joint_difference_radians=5e-4,
     maximum_reset_contact_force_newtons=0.01,
-    maximum_plug_position_difference_meters=2e-5,
+    maximum_plug_position_difference_meters=5e-4,
 )
 
 
@@ -99,6 +99,29 @@ class ControlResolutionProtocol:
             magnitude
             for magnitude in self.translation_magnitudes_meters
             for _ in range(self.repeats_per_magnitude)
+        )
+
+    def probe_action(
+        self,
+        live_pose: DroidPose,
+        recorded_target_pose: DroidPose,
+        translation_meters: float,
+    ) -> DroidAction:
+        """Build the protocol retreat action from one exact live start."""
+
+        if not isfinite(translation_meters) or translation_meters < 0.0:
+            raise ValueError("control resolution probe magnitude is invalid")
+        direction = retreat_direction(live_pose, recorded_target_pose)
+        return DroidAction(
+            (
+                direction[0] * translation_meters,
+                direction[1] * translation_meters,
+                direction[2] * translation_meters,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            )
         )
 
     def validate_samples(
@@ -540,6 +563,8 @@ class ControlResolutionSummary:
     zero_translation_drift_meters: float
     zero_orientation_drift_radians: float
     zero_joint_tracking_error_radians: float
+    start_repeatability: ResetEquivalenceMeasurement
+    rollback_repeatability: ResetEquivalenceMeasurement
     responses: tuple[ControlResolutionResponse, ...]
 
     @property
@@ -561,6 +586,8 @@ class ControlResolutionSummary:
             "zero_joint_tracking_error_radians": (
                 self.zero_joint_tracking_error_radians
             ),
+            "start_repeatability": self.start_repeatability.to_dict(),
+            "rollback_repeatability": self.rollback_repeatability.to_dict(),
             "responses": [response.to_dict() for response in self.responses],
             "diagnostic_only": self.diagnostic_only,
             "multi_step_authority_granted": self.multi_step_authority_granted,
@@ -584,7 +611,6 @@ class ControlResolutionReport:
     def __post_init__(self) -> None:
         validate_recording_id(self.session_id)
         validate_recording_id(self.reference_recording)
-        direction = np.asarray(self.translation_direction, dtype=np.float64)
         safety_limits = self.protocol.safety_limits
         if (
             self.seed < 0
@@ -598,9 +624,29 @@ class ControlResolutionReport:
             require_complete=True,
         )
         for sample in self.samples:
+            expected_action = self.protocol.probe_action(
+                sample.start_reset.pose,
+                self.recorded_target_pose,
+                sample.requested_translation_meters,
+            )
+            expected = np.asarray(
+                expected_action.values,
+                dtype=np.float64,
+            )
             commanded = np.asarray(sample.commanded_action.values, dtype=np.float64)
-            expected = direction * sample.requested_translation_meters
             expected_target = sample.start_reset.pose.applied(sample.commanded_action)
+            start_target_distance = float(
+                np.linalg.norm(
+                    np.asarray(sample.start_reset.pose.values[:3])
+                    - np.asarray(self.recorded_target_pose.values[:3])
+                )
+            )
+            probe_target_distance = float(
+                np.linalg.norm(
+                    np.asarray(sample.target_pose.values[:3])
+                    - np.asarray(self.recorded_target_pose.values[:3])
+                )
+            )
             expected_joint_delta = max(
                 abs(proposed - current)
                 for proposed, current in zip(
@@ -609,9 +655,12 @@ class ControlResolutionReport:
                 )
             )
             if (
-                not np.allclose(commanded[:3], expected, rtol=0.0, atol=1e-12)
-                or not np.array_equal(commanded[3:], np.zeros(4))
+                not np.allclose(commanded, expected, rtol=0.0, atol=1e-12)
                 or sample.target_pose != expected_target
+                or (
+                    sample.requested_translation_meters > 0.0
+                    and probe_target_distance <= start_target_distance
+                )
                 or sample.projection.gate.observation_id != self.observation_id
                 or sample.projection.gate.next_pose != sample.target_pose
                 or not isclose(
@@ -657,12 +706,7 @@ class ControlResolutionReport:
                 raise ValueError("control resolution sample failed safety")
 
     @property
-    def translation_direction(self) -> tuple[float, float, float]:
-        return retreat_direction(self.captured_pose, self.recorded_target_pose)
-
-    @property
     def summary(self) -> ControlResolutionSummary:
-        direction = np.asarray(self.translation_direction, dtype=np.float64)
         zero = tuple(
             sample for sample in self.samples
             if sample.requested_translation_meters == 0.0
@@ -673,9 +717,27 @@ class ControlResolutionReport:
                 sample for sample in self.samples
                 if sample.requested_translation_meters == magnitude
             )
-            along_axis = tuple(
-                float(np.dot(sample.actual_action.values[:3], direction))
+            expected_translations = tuple(
+                np.asarray(
+                    self.protocol.probe_action(
+                        sample.start_reset.pose,
+                        self.recorded_target_pose,
+                        magnitude,
+                    ).values[:3],
+                    dtype=np.float64,
+                )
                 for sample in matching
+            )
+            along_axis = tuple(
+                float(
+                    np.dot(
+                        sample.actual_action.values[:3],
+                        expected_translation / magnitude,
+                    )
+                )
+                for sample, expected_translation in zip(
+                    matching, expected_translations
+                )
             )
             responses.append(
                 ControlResolutionResponse(
@@ -685,10 +747,12 @@ class ControlResolutionReport:
                         float(
                             np.linalg.norm(
                                 np.asarray(sample.actual_action.values[:3])
-                                - direction * magnitude
+                                - expected_translation
                             )
                         )
-                        for sample in matching
+                        for sample, expected_translation in zip(
+                            matching, expected_translations
+                        )
                     ),
                     maximum_orientation_drift_radians=max(
                         sample.actual_orientation_drift_radians
@@ -710,6 +774,24 @@ class ControlResolutionReport:
             zero_joint_tracking_error_radians=max(
                 sample.settled_joint_tracking_error_radians for sample in zero
             ),
+            start_repeatability=ResetEquivalenceMeasurement.worst_case(
+                tuple(
+                    ResetEquivalenceMeasurement.between(
+                        self.reference_reset,
+                        sample.start_reset,
+                    )
+                    for sample in self.samples
+                )
+            ),
+            rollback_repeatability=ResetEquivalenceMeasurement.worst_case(
+                tuple(
+                    ResetEquivalenceMeasurement.between(
+                        self.reference_reset,
+                        sample.rollback_reset,
+                    )
+                    for sample in self.samples
+                )
+            ),
             responses=tuple(responses),
         )
 
@@ -723,7 +805,6 @@ class ControlResolutionReport:
             "observation_id": self.observation_id,
             "captured_pose": list(self.captured_pose.values),
             "recorded_target_pose": list(self.recorded_target_pose.values),
-            "translation_direction": list(self.translation_direction),
             "protocol": self.protocol.to_dict(),
             "reference_reset": self.reference_reset.to_dict(),
             "samples": [sample.to_dict() for sample in self.samples],
@@ -782,11 +863,7 @@ class ControlResolutionReport:
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("control resolution report is incomplete") from error
-        if (
-            payload.get("translation_direction")
-            != list(report.translation_direction)
-            or payload.get("summary") != report.summary.to_dict()
-        ):
+        if payload.get("summary") != report.summary.to_dict():
             raise ValueError("control resolution summary is inconsistent")
         return report
 

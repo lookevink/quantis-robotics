@@ -160,6 +160,49 @@ class ResetEquivalenceMeasurement:
             ),
         )
 
+    @classmethod
+    def worst_case(
+        cls,
+        measurements: tuple[ResetEquivalenceMeasurement, ...],
+    ) -> ResetEquivalenceMeasurement:
+        if not measurements:
+            raise ValueError("reset equivalence measurements cannot be empty")
+        return cls(
+            translation_difference_meters=max(
+                measurement.translation_difference_meters
+                for measurement in measurements
+            ),
+            rotation_difference_radians=max(
+                measurement.rotation_difference_radians
+                for measurement in measurements
+            ),
+            gripper_difference=max(
+                measurement.gripper_difference for measurement in measurements
+            ),
+            maximum_joint_difference_radians=max(
+                measurement.maximum_joint_difference_radians
+                for measurement in measurements
+            ),
+            maximum_contact_force_newtons=max(
+                measurement.maximum_contact_force_newtons
+                for measurement in measurements
+            ),
+            maximum_plug_axis_difference_meters=max(
+                measurement.maximum_plug_axis_difference_meters
+                for measurement in measurements
+            ),
+            plug_presence_matches=all(
+                measurement.plug_presence_matches
+                for measurement in measurements
+            ),
+            attachment_matches=all(
+                measurement.attachment_matches for measurement in measurements
+            ),
+            collision_detected=any(
+                measurement.collision_detected for measurement in measurements
+            ),
+        )
+
     def state_matches(self, tolerances: ResetEquivalenceTolerances) -> bool:
         return (
             self.translation_difference_meters

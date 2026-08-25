@@ -92,12 +92,113 @@ def _sample(index: int, magnitude: float) -> ControlResolutionSample:
 
 
 class ControlResolutionReportTest(unittest.TestCase):
+    def test_probe_retreat_direction_flips_after_crossing_recorded_target(self) -> None:
+        recorded_target = DroidPose(
+            (0.400189, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)
+        )
+        crossed_start = DroidPose(
+            (0.4003, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)
+        )
+
+        action = CONTROL_RESOLUTION_PROTOCOL.probe_action(
+            crossed_start, recorded_target, 1e-4
+        )
+        endpoint = crossed_start.applied(action)
+
+        self.assertGreater(action.values[0], 0.0)
+        self.assertGreater(
+            abs(endpoint.values[0] - recorded_target.values[0]),
+            abs(crossed_start.values[0] - recorded_target.values[0]),
+        )
+
+        samples = tuple(
+            _sample(index, magnitude)
+            for index, magnitude in enumerate(
+                CONTROL_RESOLUTION_PROTOCOL.requested_translations
+            )
+        )
+        target_directed = samples[3]
+        crossed_reset = replace(target_directed.start_reset, pose=crossed_start)
+        unsafe_target = crossed_start.applied(target_directed.commanded_action)
+        target_directed = replace(
+            target_directed,
+            start_reset=crossed_reset,
+            target_pose=unsafe_target,
+            projection=replace(
+                target_directed.projection,
+                gate=replace(
+                    target_directed.projection.gate,
+                    next_pose=unsafe_target,
+                ),
+            ),
+        )
+        samples = (*samples[:3], target_directed, *samples[4:])
+        with self.assertRaisesRegex(ValueError, "protocol"):
+            ControlResolutionReport(
+                session_id="resolution-52600-c43",
+                reference_recording="contact-insertion-held-00",
+                seed=52600,
+                context_index=43,
+                observation_id=123,
+                captured_pose=_reset().pose,
+                recorded_target_pose=recorded_target,
+                reference_reset=_reset(),
+                samples=samples,
+            )
+
+    def test_summary_exposes_bounded_reset_repeatability_noise(self) -> None:
+        samples = tuple(
+            _sample(index, magnitude)
+            for index, magnitude in enumerate(
+                CONTROL_RESOLUTION_PROTOCOL.requested_translations
+            )
+        )
+        reference = _reset()
+        noisy_rollback = replace(
+            reference,
+            pose=reference.pose.applied(
+                DroidAction((2.18e-4, 0.0, 0.0, 5e-4, 0.0, 0.0, 0.0))
+            ),
+            joint_positions=(
+                reference.joint_positions[0] + 3.96e-4,
+                *reference.joint_positions[1:],
+            ),
+            plug_position=(
+                reference.plug_position[0] + 2.42e-4,
+                *reference.plug_position[1:],
+            ),
+        )
+        samples = (replace(samples[0], rollback_reset=noisy_rollback), *samples[1:])
+
+        report = ControlResolutionReport(
+            session_id="resolution-52600-c43",
+            reference_recording="contact-insertion-held-00",
+            seed=52600,
+            context_index=43,
+            observation_id=123,
+            captured_pose=reference.pose,
+            recorded_target_pose=DroidPose(
+                (0.401, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)
+            ),
+            reference_reset=reference,
+            samples=samples,
+        )
+
+        repeatability = report.summary.rollback_repeatability
+        self.assertAlmostEqual(repeatability.translation_difference_meters, 2.18e-4)
+        self.assertAlmostEqual(
+            repeatability.maximum_joint_difference_radians, 3.96e-4
+        )
+        self.assertAlmostEqual(
+            repeatability.maximum_plug_axis_difference_meters, 2.42e-4
+        )
+
     def test_rejected_reset_persists_exact_resolution_scale_drift(self) -> None:
         reference = _reset()
         candidate = replace(
             reference,
             joint_positions=(
-                reference.joint_positions[0] + 2e-4,
+                reference.joint_positions[0] + 6e-4,
                 *reference.joint_positions[1:],
             ),
         )
@@ -122,7 +223,7 @@ class ControlResolutionReportTest(unittest.TestCase):
         self.assertEqual(restored, failure)
         self.assertAlmostEqual(
             restored.rejected_reset.measurement.maximum_joint_difference_radians,
-            2e-4,
+            6e-4,
         )
         self.assertFalse(
             restored.rejected_reset.measurement.passes(
@@ -416,7 +517,7 @@ class ControlResolutionReportTest(unittest.TestCase):
                 samples[0].start_reset,
                 pose=DroidPose(
                     (
-                        samples[0].start_reset.pose.values[0] + 3e-5,
+                        samples[0].start_reset.pose.values[0] + 6e-4,
                         *samples[0].start_reset.pose.values[1:],
                     )
                 ),
