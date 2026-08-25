@@ -46,7 +46,7 @@ from sim.isaac_control_runtime import (
     LiveControlRuntime,
     live_runtime_for,
     read_control_contact,
-    synchronized_insertion_safety_snapshot,
+    synchronized_insertion_resolution_runtime,
 )
 from sim.isaac_control_execution import ExecutionSafetyContext, project_control_candidate
 from sim.isaac_demo_runtime import (
@@ -351,19 +351,19 @@ async def measure_insertion_control_resolution(
     timeline = omni.timeline.get_timeline_interface()
     advance = omni.kit.app.get_app().next_update_async
     limits = protocol.safety_limits
-    synchronized = await synchronized_insertion_safety_snapshot(
-        runtime,
-        timeline,
-        advance,
-        state.require_safety_snapshot(),
-        limits,
-        operation="insertion control resolution synchronization",
-    )
-    runtime = synchronized.runtime
     samples: list[ControlResolutionSample] = []
     reference_reset: TrialResetState | None = None
     baseline: ControlResolutionBaselineEvidence | None = None
     try:
+        synchronized = await synchronized_insertion_resolution_runtime(
+            runtime,
+            timeline,
+            advance,
+            state.require_safety_snapshot(),
+            limits,
+            operation="insertion control resolution synchronization",
+        )
+        runtime = synchronized.runtime
         if load is ControlResolutionLoad.UNLOADED:
             runtime.attachment.remove_load_for_diagnostic()
         timeline.play()

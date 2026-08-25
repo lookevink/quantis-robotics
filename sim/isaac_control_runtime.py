@@ -181,16 +181,16 @@ async def synchronized_control_safety_snapshot(
     return snapshot
 
 
-async def synchronized_insertion_safety_snapshot(
+async def _synchronized_insertion_runtime(
     runtime: LiveControlRuntime,
     timeline: Any,
     advance: Any,
-    captured: ControlSafetySnapshot,
     limits: SimulatorSafetyLimits,
     *,
     operation: str,
+    validate_resumed: Any | None = None,
 ) -> SynchronizedInsertionRuntime:
-    """Refresh, interlock, and rebind one paused insertion runtime."""
+    """Own the shared paused insertion refresh and interlock lifecycle."""
 
     resumed_interlock = LiveContactInterlock(
         runtime.sensor,
@@ -200,7 +200,8 @@ async def synchronized_insertion_safety_snapshot(
 
     def observe_resumed_state(_: LiveControlRuntime) -> None:
         resumed_interlock.observe()
-        captured.validate_contact_continuity(resumed_interlock.evidence)
+        if validate_resumed is not None:
+            validate_resumed(resumed_interlock.evidence)
 
     def observe_safety(value: LiveControlRuntime) -> None:
         interlock = LiveContactInterlock(
@@ -221,11 +222,58 @@ async def synchronized_insertion_safety_snapshot(
         observe_after_advance=observe_resumed_state,
         observe_safety=observe_safety,
     )
+    return SynchronizedInsertionRuntime(runtime, live)
+
+
+async def synchronized_insertion_safety_snapshot(
+    runtime: LiveControlRuntime,
+    timeline: Any,
+    advance: Any,
+    captured: ControlSafetySnapshot,
+    limits: SimulatorSafetyLimits,
+    *,
+    operation: str,
+) -> SynchronizedInsertionRuntime:
+    """Refresh, interlock, and require strict capture continuity."""
+
+    synchronized = await _synchronized_insertion_runtime(
+        runtime,
+        timeline,
+        advance,
+        limits,
+        operation=operation,
+        validate_resumed=captured.validate_contact_continuity,
+    )
     try:
-        live.validate_continuity(captured, limits)
+        synchronized.safety.validate_continuity(captured, limits)
     except ValueError as error:
         raise RuntimeError("live insertion state changed after capture") from error
-    return SynchronizedInsertionRuntime(runtime, live)
+    return synchronized
+
+
+async def synchronized_insertion_resolution_runtime(
+    runtime: LiveControlRuntime,
+    timeline: Any,
+    advance: Any,
+    captured: ControlSafetySnapshot,
+    limits: SimulatorSafetyLimits,
+    *,
+    operation: str,
+) -> SynchronizedInsertionRuntime:
+    """Refresh safely while deferring bounded settling to the baseline contract."""
+
+    synchronized = await _synchronized_insertion_runtime(
+        runtime,
+        timeline,
+        advance,
+        limits,
+        operation=operation,
+    )
+    if synchronized.safety.plug_attached is not captured.plug_attached:
+        raise RuntimeError(
+            "live insertion attachment changed before resolution baseline"
+        )
+    return synchronized
 
 
 _live_runtime: LiveControlRuntime | None = None

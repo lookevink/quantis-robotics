@@ -17,6 +17,7 @@ from sim.isaac_control_runtime import (
     refresh_live_control_runtime,
     synchronized_control_safety_snapshot,
     synchronized_insertion_safety_snapshot,
+    synchronized_insertion_resolution_runtime,
 )
 
 
@@ -255,6 +256,89 @@ class ContactReadingTest(unittest.TestCase):
         captured.validate_contact_continuity.assert_called_once_with(
             ControlInterlockEvidence(0.0, False)
         )
+        self.assertEqual(timeline.events, ["play", "pause"])
+
+    def test_resolution_refresh_defers_bounded_drift_to_stable_baseline(self) -> None:
+        timeline = _Timeline(playing=False)
+        old_runtime = LiveControlRuntime(
+            "session", object(), Mock(), Mock(), Mock()
+        )
+        refreshed_runtime = LiveControlRuntime(
+            "session", old_runtime.stage, Mock(), Mock(attached=True), Mock()
+        )
+        captured = Mock(plug_attached=True)
+        live = Mock(plug_attached=True)
+
+        async def advance() -> None:
+            return None
+
+        with (
+            patch(
+                "sim.isaac_control_runtime.refresh_live_control_runtime",
+                return_value=refreshed_runtime,
+            ),
+            patch(
+                "sim.isaac_control_runtime._control_safety_snapshot",
+                return_value=live,
+            ),
+            patch(
+                "sim.isaac_control_runtime.LiveContactInterlock.observe",
+                return_value=SimpleNamespace(
+                    collision_detected=False,
+                    force_newtons=0.0,
+                ),
+            ) as observe,
+        ):
+            synchronized = asyncio.run(
+                synchronized_insertion_resolution_runtime(
+                    old_runtime,
+                    timeline,
+                    advance,
+                    captured,
+                    SimulatorSafetyLimits(),
+                    operation="test resolution refresh",
+                )
+            )
+
+        self.assertIs(synchronized.runtime, refreshed_runtime)
+        self.assertIs(synchronized.safety, live)
+        live.validate_continuity.assert_not_called()
+        self.assertEqual(observe.call_count, 2)
+        self.assertEqual(timeline.events, ["play", "pause"])
+
+    def test_resolution_refresh_rejects_attachment_change(self) -> None:
+        timeline = _Timeline(playing=False)
+        runtime = LiveControlRuntime("session", object(), Mock(), Mock(), Mock())
+        live = Mock(plug_attached=False)
+
+        async def advance() -> None:
+            return None
+
+        with (
+            patch(
+                "sim.isaac_control_runtime.refresh_live_control_runtime",
+                return_value=runtime,
+            ),
+            patch(
+                "sim.isaac_control_runtime._control_safety_snapshot",
+                return_value=live,
+            ),
+            patch(
+                "sim.isaac_control_runtime.LiveContactInterlock.observe"
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "attachment changed"):
+                asyncio.run(
+                    synchronized_insertion_resolution_runtime(
+                        runtime,
+                        timeline,
+                        advance,
+                        Mock(plug_attached=True),
+                        SimulatorSafetyLimits(),
+                        operation="test resolution refresh",
+                    )
+                )
+
         self.assertEqual(timeline.events, ["play", "pause"])
 
     def test_live_interlock_retains_the_peak_that_triggers_abort(self) -> None:
