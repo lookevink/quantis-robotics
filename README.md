@@ -1244,11 +1244,30 @@ successful report, the `1.0 mm` safety negative, and the checksum-verified
 This closes the bounded-resolution diagnostic: `0.5 mm` is a measurable,
 admissible translation scale at this pose, while `1.0 mm` is not admissible at
 this pose under the fixed `0.25 s` command period. The next controller
-checkpoint must encode
-a conservative close-enough deadband from the measured drift, select a farther
-recorded target when insertion geometry is not yet seated and a local target
-would demand a sub-resolution move, hold orientation inside a measured
-tolerance, and retest exactly one JEPA action. No second receding-horizon
+checkpoint therefore selected the first bounded recorded target at least
+`0.5 mm` away (searching action horizons 3 through 8) and held orientation
+whenever its target error was inside a persisted `1.25 mrad` tolerance.
+
+That farther-target/orientation-hold no-actuation checkpoint passed both
+reserved seeds. Session `insertion-safety-20260825T201612Z-52600-c43` selected
+frame 48 at `0.513522 mm`; its frozen proposal requested `0.792258 mm`
+translation while the `0.026835 mrad` target-orientation error caused the
+safety policy to persist scale `(translation=1.0, rotation=0.0, gripper=1.0)`.
+The response arrived in `0.505 s`, safety was timestamped at `1.929 s`, and IK
+required `0.002203 rad` maximum joint change. Session
+`insertion-safety-20260825T202426Z-52601-c43` selected frame 48 at
+`0.512412 mm`; its `0.902936 mm` proposal failed the full-scale target-progress
+gate, then passed at `(0.5, 0.0, 1.0)` with `0.001156 rad` maximum joint
+change. Its response arrived in `0.442 s` and safety was timestamped at
+`2.552 s`. Both retained attachment with `0 N` contact and no collision, carry
+`authority: no_actuation`, contain no execution/result artifact, and are in the
+checksum-verified 12 GB recovery copy.
+
+This `2/2` result authorizes no motion. Before retesting exactly one JEPA
+action, insertion execution must use the measured command-relative settlement
+rule and persist a realized target-progress decision with a conservative
+close-enough deadband. A failed realized-progress decision must terminate and
+roll back rather than opening another action. No second receding-horizon
 action, insertion filming, or production authority is granted.
 
 After insertion control clears its offline and live safety gates, the requested

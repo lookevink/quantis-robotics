@@ -604,10 +604,14 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     The diagnostic-only control-resolution measurement is complete. A bounded
     `0.5 mm` translation is measurable and passed command-relative settlement,
     interlock, attachment, and rollback checks; `1.0 mm` failed closed before
-    actuation at the joint-velocity gate. The next checkpoint is a measured
-    close-enough/farther-target and orientation-hold policy followed by exactly
-    one JEPA action. Multi-step, filming, and production authority remain
-    false; exact metrics and evidence are in the
+    actuation at the joint-velocity gate. The farther-target/orientation-hold
+    policy then passed `2/2` reserved seeds without actuation, including its
+    target selection, explicit orientation hold, and insertion interlocks.
+    Before exactly one action is retested, live execution must apply the
+    measured command-relative settling rule and persist a fail-closed
+    realized-progress/close-enough decision.
+    Multi-step, filming, and production authority remain false; exact metrics
+    and evidence are in the
     [insertion control-resolution checkpoint](../README.md#insertion-control-resolution-checkpoint).
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
