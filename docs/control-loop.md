@@ -734,6 +734,15 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     filming, and production remain closed pending a separately hard-capped,
     reconstructible rollout. Exact evidence is in the linked README
     checkpoint.
+    The hard-capped demo rollout is now independently reconstructed as `4/4`
+    applied on both predeclared held-out seeds under the unchanged settlement,
+    realized-progress, force, collision, attachment, velocity, and orientation
+    gates. Follow-up target search remains first-qualifying at the measured
+    `0.5 mm` floor and is bounded to horizons 3-12. This meets the
+    demo-suitable autonomous-drive checkpoint; the four-step lineage grants no
+    fifth action. Full seating, unknown-start insertion, filming, and
+    production authority remain false. Exact sessions and metrics are in the
+    linked README checkpoint.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

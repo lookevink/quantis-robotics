@@ -1894,6 +1894,53 @@ milestone is a hard-capped multi-step rollout whose lineage, per-step gates,
 terminal status, and recovery evidence reconstruct independently; no third
 action is inherited from this completed run.
 
+The first hard-capped four-action attempt,
+`insertion-demo-20260826T215726Z-52600-c43`, applied actions 1 and 2 before
+action-3 capture failed closed with no bounded-horizon target. Its terminal
+report records `2/3` applied and `followup_capture` failure; action 3 has no
+observation, inference, execution claim, or motion. The synchronized live pose
+had advanced beyond the old 3-8-frame target roster: the saved action-2
+endpoint placed frame 53 only marginally above the `0.5 mm` floor, and the
+subsequent interlocked settling state placed it about `0.278 mm` ahead while
+frame 54 remained about `0.660 mm` ahead. Commit `5a4ed94` therefore extends
+only the new-policy maximum search horizon from 8 to 12. Selection still
+returns the first forward target at least `0.5 mm` away; persisted older
+policies retain their exact maximum. No action, projection, IK, velocity,
+settlement, progress, force, collision, attachment, or orientation limit was
+changed. Local validation passes `569` tests with `70` optional skips, and both
+independent correctness and standards reviews pass. The failed run's 13 GB
+backup verified.
+
+Fresh held-out run `insertion-demo-20260826T221944Z-52600-c43` then
+independently reconstructed all four actions as applied. It selected reference
+frames 48, 51, 54, and 56. The first two actions passed at full translation
+with rotation held; actions 3 and 4 used the first passing projected scale,
+`0.5` translation and `0.125` rotation. Their realized target-error reductions
+were respectively `40.32%`, `50.55%`, `51.07%`, and `41.71%`; maximum terminal
+joint-tracking errors were `0.328`, `0.655`, `0.452`, and `0.467 mrad`.
+The terminal report records `4/4`, `all_steps_applied: true`, no orchestration
+failure, maximum command age `8.697 ms`, and `2.841710 mm` aggregate
+translation progress. Every action measured `0 N` peak contact, no collision,
+and retained attachment.
+
+The same unchanged code and gates then passed held-out seed 52601 in
+`insertion-demo-20260826T224600Z-52601-c43`, using reference recording
+`contact-insertion-v9-2600-fresh-52600-held-01`. It selected frames 48, 51,
+54, and 57. Realized target-error reductions were `42.56%`, `47.38%`,
+`45.79%`, and `61.06%`; maximum terminal joint-tracking errors were `0.330`,
+`0.635`, `0.533`, and `0.761 mrad`. Its terminal report likewise records
+`4/4`, `all_steps_applied: true`, no orchestration failure, maximum command age
+`10.226 ms`, and `3.314140 mm` aggregate translation progress. All four
+actions retained the plug at `0 N` with no collision. Both final workflows
+returned `demo_rollout_applied`, closed their persisted four-step lineage, and
+verified the 13 GB recovery backup.
+
+These two held-out `4/4` results meet the repository definition of a
+demo-suitable autonomous drive: repeatable, safety-gated JEPA-WM
+receding-horizon control from fresh attached resets. They do not establish full
+seating, an unknown-start approach/grasp/insertion run, filming authority, or
+production readiness. No fifth action or broader rollout authority is implied.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded
