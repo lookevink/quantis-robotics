@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import Enum
 from math import isclose, isfinite
 from pathlib import Path
@@ -22,10 +22,7 @@ from jepa_wm.target_progress import (
     RealizedTargetProgressDecision,
     RealizedTargetProgressPolicy,
 )
-from jepa_wm.direct_safety import (
-    ControlSafetySnapshot,
-    DirectInsertionSafetyEvidence,
-)
+from jepa_wm.direct_safety import DirectInsertionSafetyEvidence
 from jepa_wm.joint_settlement import (
     GripperTrackedJointSettlementAttempt,
     GripperTrackedJointSettlementEvidence,
@@ -39,7 +36,6 @@ from sim.recording import validate_recording_id
 
 
 INSERTION_TRIAL_SCHEMA = "quantis.jepa_wm_insertion_trial.v1"
-INSERTION_TRIAL_REFRESH_SCHEMA = "quantis.jepa_wm_insertion_trial_refresh.v1"
 INSERTION_ROLLBACK_GRIPPER_ERROR_METERS = 1e-3
 INSERTION_MAXIMUM_DRIVE_BIAS_RADIANS = 0.002
 INSERTION_TRIAL_SETTLEMENT_MAXIMUM_UPDATES = 48
@@ -118,75 +114,6 @@ class InsertionTrialSourceEvidence:
 class InsertionTrialExecutionEvidence:
     context: ControlTrialContext
     response: ProposedControl | None
-
-
-@dataclass(frozen=True)
-class InsertionTrialExecutionRefresh:
-    """Reauthorize an exact bound action after live reset continuity passes."""
-
-    refreshed_at_unix_seconds: float
-    live_state: ControlSafetySnapshot
-    live_pose: DroidPose | None = None
-
-    def __post_init__(self) -> None:
-        if not isfinite(self.refreshed_at_unix_seconds):
-            raise ValueError("insertion trial execution refresh time is invalid")
-
-    def authorize(
-        self,
-        captured: ControlObservation,
-        response: ProposedControl,
-        captured_state: ControlSafetySnapshot,
-    ) -> tuple[ControlObservation, ProposedControl]:
-        self.live_state.validate_continuity(captured_state)
-        if self.refreshed_at_unix_seconds < max(
-            captured.captured_at_unix_seconds,
-            response.created_at_unix_seconds,
-        ):
-            raise ValueError("insertion trial execution refresh precedes its source")
-        return (
-            replace(
-                captured,
-                captured_at_unix_seconds=self.refreshed_at_unix_seconds,
-                pose=(self.live_pose if self.live_pose is not None else captured.pose),
-            ),
-            replace(
-                response,
-                created_at_unix_seconds=self.refreshed_at_unix_seconds,
-            ),
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        payload = {
-            "schema": INSERTION_TRIAL_REFRESH_SCHEMA,
-            "refreshed_at_unix_seconds": self.refreshed_at_unix_seconds,
-            "live_state": self.live_state.to_dict(),
-        }
-        if self.live_pose is not None:
-            payload["live_pose"] = list(self.live_pose.values)
-        return payload
-
-    @classmethod
-    def from_dict(cls, payload: Any) -> InsertionTrialExecutionRefresh:
-        if (
-            not isinstance(payload, Mapping)
-            or payload.get("schema") != INSERTION_TRIAL_REFRESH_SCHEMA
-        ):
-            raise ValueError("insertion trial execution refresh schema is invalid")
-        try:
-            return cls(
-                float(payload["refreshed_at_unix_seconds"]),
-                ControlSafetySnapshot.from_dict(payload["live_state"]),
-                (
-                    DroidPose(tuple(payload["live_pose"]))
-                    if "live_pose" in payload
-                    else None
-                ),
-            )
-        except (KeyError, TypeError, ValueError) as error:
-            raise ValueError(
-                "insertion trial execution refresh is incomplete"
-            ) from error
 
 
 @dataclass(frozen=True)
@@ -809,6 +736,7 @@ class InsertionTrialBinding:
     actions: tuple[DroidAction, ...]
     source_selected_action_scale: DroidActionScale
     source_active_drive_target: JointDriveTarget | None = None
+    source_safety_refreshed_at_unix_seconds: float | None = None
     trial_policy: InsertionTrialPolicy | None = InsertionTrialPolicy()
     authority: InsertionTrialAuthority = InsertionTrialAuthority.RESET_TRIAL_ONLY
 
@@ -825,6 +753,18 @@ class InsertionTrialBinding:
             or self.execution_observation_id <= 0
             or len(self.actions) != 3
             or not isinstance(self.authority, InsertionTrialAuthority)
+            or (
+                self.source_safety_refreshed_at_unix_seconds is not None
+                and (
+                    isinstance(
+                        self.source_safety_refreshed_at_unix_seconds,
+                        bool,
+                    )
+                    or not isfinite(
+                        self.source_safety_refreshed_at_unix_seconds
+                    )
+                )
+            )
             or (
                 self.source_active_drive_target is not None
                 and not isinstance(
@@ -849,6 +789,7 @@ class InsertionTrialBinding:
             self.trial_policy is None
             or self.trial_policy.drive_bias_compensation is None
             or self.source_active_drive_target is None
+            or self.source_safety_refreshed_at_unix_seconds is None
         ):
             raise ValueError("legacy insertion trial cannot be executed")
         return self.trial_policy
@@ -906,6 +847,22 @@ class InsertionTrialBinding:
             or safety.selected_action_scale != self.source_selected_action_scale
             or source.active_drive_target != self.source_active_drive_target
             or (
+                self.source_safety_refreshed_at_unix_seconds is not None
+                and (
+                    safety.live_pose is None
+                    or not isclose(
+                        safety.evaluated_at_unix_seconds,
+                        self.source_safety_refreshed_at_unix_seconds,
+                        rel_tol=0.0,
+                        abs_tol=1e-9,
+                    )
+                )
+            )
+            or (
+                self.authority is InsertionTrialAuthority.FOLLOWUP_TRIAL_ONLY
+                and self.source_safety_refreshed_at_unix_seconds is None
+            )
+            or (
                 self.authority is InsertionTrialAuthority.FOLLOWUP_TRIAL_ONLY
                 and safety.active_drive_target != source.active_drive_target
             )
@@ -957,6 +914,10 @@ class InsertionTrialBinding:
             payload["source_active_drive_target"] = (
                 self.source_active_drive_target.to_dict()
             )
+        if self.source_safety_refreshed_at_unix_seconds is not None:
+            payload["source_safety_refreshed_at_unix_seconds"] = (
+                self.source_safety_refreshed_at_unix_seconds
+            )
         if self.trial_policy is not None:
             payload["trial_policy"] = self.trial_policy.to_dict()
         return payload
@@ -985,6 +946,9 @@ class InsertionTrialBinding:
                     if "source_active_drive_target" in payload
                     else None
                 ),
+                source_safety_refreshed_at_unix_seconds=payload.get(
+                    "source_safety_refreshed_at_unix_seconds"
+                ),
                 trial_policy=(
                     InsertionTrialPolicy.from_dict(payload["trial_policy"])
                     if "trial_policy" in payload
@@ -1012,6 +976,7 @@ def build_insertion_trial_response(
         source_response.proposal_fingerprint is None
         or safety.selected_action_scale is None
         or safety.active_drive_target != source.active_drive_target
+        or safety.live_pose is None
     ):
         raise ValueError("insertion trial source has no selected exact proposal")
     binding = InsertionTrialBinding(
@@ -1025,6 +990,9 @@ def build_insertion_trial_response(
         actions=source_response.actions,
         source_selected_action_scale=safety.selected_action_scale,
         source_active_drive_target=source.active_drive_target,
+        source_safety_refreshed_at_unix_seconds=(
+            safety.evaluated_at_unix_seconds
+        ),
         authority=InsertionTrialAuthority.for_execution_policy(execution.policy),
     )
     response = ProposedControl(

@@ -22,7 +22,7 @@ from jepa_wm.grasp_contract import GRASP_TASK_ID
 from jepa_wm.trajectory import load_rollout_at
 from sim.control_context import recording_task
 from jepa_wm.control_safety import SimulatorSafetyLimits
-from jepa_wm.direct_safety import ControlSafetySnapshot
+from jepa_wm.insertion_refresh import ControlSafetySnapshot
 from jepa_wm.control_tracking import ActionTrackingLimits
 from sim.control_session import (
     CONTROL_ROOT,

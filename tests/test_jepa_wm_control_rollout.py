@@ -42,12 +42,12 @@ from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.insertion_trial import (
     InsertionTrialBinding,
     InsertionTrialDriveEvidence,
-    InsertionTrialExecutionRefresh,
     InsertionTrialPostActionEvidence,
     InsertionTrialRollbackEvidence,
     InsertionTrialRollbackFailure,
     InsertionTrialRollbackFailureReason,
 )
+from jepa_wm.insertion_refresh import InsertionEvaluationRefresh
 from jepa_wm.insertion_contract import InsertionControlTargetPolicy
 from jepa_wm.planner import CEMConfig
 from jepa_wm.planner_readiness import FirstActionThresholds
@@ -174,7 +174,7 @@ class ControlRolloutTest(unittest.TestCase):
             0.0,
             post_action,
             execution_interlock=ControlInterlockEvidence(0.0, False),
-            insertion_trial_refresh=InsertionTrialExecutionRefresh(
+            insertion_trial_refresh=InsertionEvaluationRefresh(
                 100.3,
                 state.require_safety_snapshot(),
                 start,
@@ -196,6 +196,7 @@ class ControlRolloutTest(unittest.TestCase):
             response.actions,
             scale,
             source_active_drive_target=state.active_drive_target,
+            source_safety_refreshed_at_unix_seconds=100.2,
         )
         session = Mock(session_id=session_id)
         session.load_capture.return_value = (observation, state)

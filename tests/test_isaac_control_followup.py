@@ -16,11 +16,13 @@ from jepa_wm.control_safety import (
     ControlInterlockEvidence,
     SafetyProjectionAttempt,
 )
-from jepa_wm.direct_safety import ControlSafetySnapshot
+from jepa_wm.insertion_refresh import (
+    ControlSafetySnapshot,
+    InsertionEvaluationRefresh,
+)
 from jepa_wm.insertion_contract import INSERTION_CONTROL_TARGET_POLICY
 from jepa_wm.insertion_trial import (
     InsertionTrialDriveEvidence,
-    InsertionTrialExecutionRefresh,
     InsertionTrialPostActionEvidence,
 )
 from jepa_wm.joint_drive import JointDriveTarget
@@ -180,7 +182,7 @@ class FollowupContinuityTest(unittest.TestCase):
             0.0,
             previous,
             execution_interlock=ControlInterlockEvidence(0.0, False),
-            insertion_trial_refresh=InsertionTrialExecutionRefresh(
+            insertion_trial_refresh=InsertionEvaluationRefresh(
                 101.0,
                 ControlSafetySnapshot(
                     previous.joint_positions,

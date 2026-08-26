@@ -8,7 +8,7 @@ from typing import Any
 
 from jepa_wm.action import DroidPose
 from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimits
-from jepa_wm.direct_safety import ControlSafetySnapshot
+from jepa_wm.insertion_refresh import ControlSafetySnapshot
 from jepa_wm.joint_drive import JointDriveTarget
 from sim.isaac_demo_runtime import (
     Actuators,

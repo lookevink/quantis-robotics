@@ -4,27 +4,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from math import dist, isclose, isfinite
 from pathlib import Path
 from typing import Any
 
-from jepa_wm.action import DroidAction, DroidActionScale
+from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_safety import (
-    ControlInterlockEvidence,
     SafetyProjectionAttempt,
-    SimulatorSafetyLimits,
     insertion_projection_policy_for_attempts,
 )
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
+from jepa_wm.insertion_refresh import (
+    ControlSafetySnapshot,
+    InsertionEvaluationRefresh,
+)
 from jepa_wm.insertion_task import InsertionTaskLimits
 from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.training_artifact import ArtifactIdentity
 
 
 DIRECT_SAFETY_SCHEMA_V1 = "quantis.jepa_wm_direct_insertion_safety.v1"
-DIRECT_SAFETY_SCHEMA = "quantis.jepa_wm_direct_insertion_safety.v2"
-MAXIMUM_CAPTURED_GRIPPER_DRIFT_METERS = 1e-6
-MAXIMUM_CAPTURED_CONTACT_DRIFT_NEWTONS = 1e-9
+DIRECT_SAFETY_SCHEMA_V2 = "quantis.jepa_wm_direct_insertion_safety.v2"
+DIRECT_SAFETY_SCHEMA = "quantis.jepa_wm_direct_insertion_safety.v3"
 
 
 class DirectSafetyAuthority(str, Enum):
@@ -49,127 +49,117 @@ def _strict_positive_int(payload: dict[str, Any], field: str) -> int:
 
 
 @dataclass(frozen=True)
-class ControlSafetySnapshot:
-    joint_positions: tuple[float, ...]
-    gripper_width_m: float
-    plug_position: tuple[float, ...]
-    contact_force_newtons: float
-    collision_detected: bool
-    plug_attached: bool
-
-    def __post_init__(self) -> None:
-        if (
-            len(self.joint_positions) != 7
-            or not all(
-                not isinstance(value, bool) and isfinite(value)
-                for value in self.joint_positions
-            )
-            or isinstance(self.gripper_width_m, bool)
-            or not isfinite(self.gripper_width_m)
-            or not 0.0 <= self.gripper_width_m <= 0.08
-            or len(self.plug_position) != 3
-            or not all(
-                not isinstance(value, bool) and isfinite(value)
-                for value in self.plug_position
-            )
-            or isinstance(self.contact_force_newtons, bool)
-            or not isfinite(self.contact_force_newtons)
-            or self.contact_force_newtons < 0.0
-            or not isinstance(self.collision_detected, bool)
-            or not isinstance(self.plug_attached, bool)
-        ):
-            raise ValueError("control safety snapshot is invalid")
-
-    def validate_continuity(
-        self,
-        captured: ControlSafetySnapshot,
-        limits: SimulatorSafetyLimits = SimulatorSafetyLimits(),
-    ) -> None:
-        captured.validate_contact_continuity(
-            ControlInterlockEvidence(
-                self.contact_force_newtons,
-                self.collision_detected,
-            )
-        )
-        if (
-            max(
-                abs(live - expected)
-                for live, expected in zip(
-                    self.joint_positions, captured.joint_positions
-                )
-            )
-            > limits.maximum_observation_joint_drift_radians
-            or not isclose(
-                self.gripper_width_m,
-                captured.gripper_width_m,
-                rel_tol=0.0,
-                abs_tol=MAXIMUM_CAPTURED_GRIPPER_DRIFT_METERS,
-            )
-            or dist(self.plug_position, captured.plug_position)
-            > limits.maximum_observation_plug_drift_meters
-            or self.plug_attached is not captured.plug_attached
-        ):
-            raise ValueError("live control safety state changed after capture")
-
-    def validate_contact_continuity(
-        self,
-        evidence: ControlInterlockEvidence,
-    ) -> None:
-        if (
-            evidence.collision_detected is not self.collision_detected
-            or not isclose(
-                evidence.maximum_contact_force_newtons,
-                self.contact_force_newtons,
-                rel_tol=0.0,
-                abs_tol=MAXIMUM_CAPTURED_CONTACT_DRIFT_NEWTONS,
-            )
-        ):
-            raise ValueError("live control contact state changed after capture")
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "joint_positions": list(self.joint_positions),
-            "gripper_width_m": self.gripper_width_m,
-            "plug_position": list(self.plug_position),
-            "contact_force_newtons": self.contact_force_newtons,
-            "collision_detected": self.collision_detected,
-            "plug_attached": self.plug_attached,
-        }
+class _DirectSafetySchema:
+    name: str
+    requires_active_drive_target: bool
+    nested_evaluation: bool
 
     @classmethod
-    def from_dict(cls, payload: Any) -> ControlSafetySnapshot:
-        if not isinstance(payload, dict):
-            raise ValueError("control safety snapshot must be an object")
+    def for_evidence(
+        cls,
+        evidence: DirectInsertionSafetyEvidence,
+    ) -> _DirectSafetySchema:
+        if evidence.live_pose is not None:
+            return _DIRECT_SAFETY_SCHEMAS[DIRECT_SAFETY_SCHEMA]
+        if evidence.active_drive_target is not None:
+            return _DIRECT_SAFETY_SCHEMAS[DIRECT_SAFETY_SCHEMA_V2]
+        return _DIRECT_SAFETY_SCHEMAS[DIRECT_SAFETY_SCHEMA_V1]
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> _DirectSafetySchema:
         try:
-            return cls(
-                joint_positions=tuple(
-                    _strict_number_value(value, "joint_positions")
-                    for value in payload["joint_positions"]
-                ),
-                gripper_width_m=_strict_number(payload, "gripper_width_m"),
-                plug_position=tuple(
-                    _strict_number_value(value, "plug_position")
-                    for value in payload["plug_position"]
-                ),
-                contact_force_newtons=_strict_number(
-                    payload, "contact_force_newtons"
-                ),
-                collision_detected=payload["collision_detected"],
-                plug_attached=payload["plug_attached"],
+            schema = _DIRECT_SAFETY_SCHEMAS[payload["schema"]]
+        except (KeyError, TypeError) as error:
+            raise ValueError("direct insertion safety schema is invalid") from error
+        present_target = "active_drive_target" in payload
+        present_evaluation = "evaluation" in payload
+        present_legacy_evaluation = any(
+            field in payload
+            for field in ("evaluated_at_unix_seconds", "live_state", "live_pose")
+        )
+        complete_legacy_evaluation = all(
+            field in payload for field in ("evaluated_at_unix_seconds", "live_state")
+        ) and "live_pose" not in payload
+        if (
+            present_target is not schema.requires_active_drive_target
+            or present_evaluation is not schema.nested_evaluation
+            or (
+                schema.nested_evaluation
+                and present_legacy_evaluation
             )
-        except (KeyError, TypeError, ValueError) as error:
-            raise ValueError("control safety snapshot is incomplete") from error
+            or (
+                not schema.nested_evaluation
+                and not complete_legacy_evaluation
+            )
+        ):
+            raise ValueError("direct insertion safety evidence is incomplete")
+        return schema
+
+    def evidence_fields(
+        self,
+        evidence: DirectInsertionSafetyEvidence,
+    ) -> dict[str, Any]:
+        fields: dict[str, Any] = {}
+        if self.requires_active_drive_target:
+            assert evidence.active_drive_target is not None
+            fields["active_drive_target"] = evidence.active_drive_target.to_dict()
+        if self.nested_evaluation:
+            fields["evaluation"] = evidence.evaluation.to_dict()
+        else:
+            fields["evaluated_at_unix_seconds"] = evidence.evaluated_at_unix_seconds
+            fields["live_state"] = evidence.live_state.to_dict()
+        return fields
+
+    def parse_evaluation(
+        self,
+        payload: dict[str, Any],
+    ) -> InsertionEvaluationRefresh:
+        if self.nested_evaluation:
+            evaluation = InsertionEvaluationRefresh.from_dict(payload["evaluation"])
+            if evaluation.live_pose is None:
+                raise ValueError("direct insertion safety live pose is missing")
+            return evaluation
+        return InsertionEvaluationRefresh(
+            _strict_number(payload, "evaluated_at_unix_seconds"),
+            ControlSafetySnapshot.from_dict(payload["live_state"]),
+        )
+
+    def parse_active_drive_target(
+        self,
+        payload: dict[str, Any],
+    ) -> JointDriveTarget | None:
+        if not self.requires_active_drive_target:
+            return None
+        return JointDriveTarget.from_dict(payload["active_drive_target"])
+
+
+_DIRECT_SAFETY_SCHEMAS = {
+    DIRECT_SAFETY_SCHEMA_V1: _DirectSafetySchema(
+        DIRECT_SAFETY_SCHEMA_V1,
+        requires_active_drive_target=False,
+        nested_evaluation=False,
+    ),
+    DIRECT_SAFETY_SCHEMA_V2: _DirectSafetySchema(
+        DIRECT_SAFETY_SCHEMA_V2,
+        requires_active_drive_target=True,
+        nested_evaluation=False,
+    ),
+    DIRECT_SAFETY_SCHEMA: _DirectSafetySchema(
+        DIRECT_SAFETY_SCHEMA,
+        requires_active_drive_target=True,
+        nested_evaluation=True,
+    ),
+}
 
 
 @dataclass(frozen=True)
 class DirectInsertionSafetyEvidence:
     observation_id: int
-    evaluated_at_unix_seconds: float
+    evaluation: InsertionEvaluationRefresh
     proposed_actions: tuple[DroidAction, ...]
     proposal: ArtifactIdentity
     attempts: tuple[SafetyProjectionAttempt, ...]
     selected_action_scale: DroidActionScale | None
-    live_state: ControlSafetySnapshot
     active_drive_target: JointDriveTarget | None = None
     authority: DirectSafetyAuthority = DirectSafetyAuthority.NO_ACTUATION
 
@@ -177,10 +167,13 @@ class DirectInsertionSafetyEvidence:
         if (
             isinstance(self.observation_id, bool)
             or self.observation_id <= 0
-            or isinstance(self.evaluated_at_unix_seconds, bool)
-            or not isfinite(self.evaluated_at_unix_seconds)
             or len(self.proposed_actions) != 3
             or not self.attempts
+            or not isinstance(self.evaluation, InsertionEvaluationRefresh)
+            or (
+                self.evaluation.live_pose is not None
+                and self.active_drive_target is None
+            )
             or self.authority is not DirectSafetyAuthority.NO_ACTUATION
         ):
             raise ValueError("direct insertion safety evidence is invalid")
@@ -208,6 +201,18 @@ class DirectInsertionSafetyEvidence:
             raise ValueError("direct insertion safety stopped before exhaustion")
 
     @property
+    def evaluated_at_unix_seconds(self) -> float:
+        return self.evaluation.refreshed_at_unix_seconds
+
+    @property
+    def live_state(self) -> ControlSafetySnapshot:
+        return self.evaluation.live_state
+
+    @property
+    def live_pose(self) -> DroidPose | None:
+        return self.evaluation.live_pose
+
+    @property
     def passed(self) -> bool:
         return (
             self.selected_action_scale is not None
@@ -218,15 +223,11 @@ class DirectInsertionSafetyEvidence:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        schema = _DirectSafetySchema.for_evidence(self)
         return {
-            "schema": (
-                DIRECT_SAFETY_SCHEMA
-                if self.active_drive_target is not None
-                else DIRECT_SAFETY_SCHEMA_V1
-            ),
+            "schema": schema.name,
             "task": INSERTION_TASK_ID,
             "observation_id": self.observation_id,
-            "evaluated_at_unix_seconds": self.evaluated_at_unix_seconds,
             "proposed_actions": [list(action.values) for action in self.proposed_actions],
             "proposal": self.proposal.to_dict(),
             "attempts": [attempt.to_dict() for attempt in self.attempts],
@@ -235,32 +236,21 @@ class DirectInsertionSafetyEvidence:
                 if self.selected_action_scale is not None
                 else None
             ),
-            "live_state": self.live_state.to_dict(),
-            **(
-                {"active_drive_target": self.active_drive_target.to_dict()}
-                if self.active_drive_target is not None
-                else {}
-            ),
+            **schema.evidence_fields(self),
             "passed": self.passed,
             "authority": self.authority.value,
         }
 
     @classmethod
     def from_dict(cls, payload: Any) -> DirectInsertionSafetyEvidence:
-        if (
-            not isinstance(payload, dict)
-            or payload.get("schema")
-            not in (DIRECT_SAFETY_SCHEMA_V1, DIRECT_SAFETY_SCHEMA)
-            or payload.get("task") != INSERTION_TASK_ID
-        ):
+        if not isinstance(payload, dict) or payload.get("task") != INSERTION_TASK_ID:
             raise ValueError("direct insertion safety schema is invalid")
         try:
+            schema = _DirectSafetySchema.from_payload(payload)
             selected = payload["selected_action_scale"]
             evidence = cls(
                 observation_id=_strict_positive_int(payload, "observation_id"),
-                evaluated_at_unix_seconds=_strict_number(
-                    payload, "evaluated_at_unix_seconds"
-                ),
+                evaluation=schema.parse_evaluation(payload),
                 proposed_actions=tuple(
                     DroidAction(tuple(values)) for values in payload["proposed_actions"]
                 ),
@@ -274,21 +264,11 @@ class DirectInsertionSafetyEvidence:
                     if selected is not None
                     else None
                 ),
-                live_state=ControlSafetySnapshot.from_dict(payload["live_state"]),
-                active_drive_target=(
-                    JointDriveTarget.from_dict(payload["active_drive_target"])
-                    if payload.get("schema") == DIRECT_SAFETY_SCHEMA
-                    else None
-                ),
+                active_drive_target=schema.parse_active_drive_target(payload),
                 authority=DirectSafetyAuthority(payload["authority"]),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("direct insertion safety evidence is incomplete") from error
         if payload.get("passed") is not evidence.passed:
             raise ValueError("direct insertion safety pass claim is inconsistent")
-        if (
-            payload.get("schema") == DIRECT_SAFETY_SCHEMA
-            and "active_drive_target" not in payload
-        ):
-            raise ValueError("direct insertion safety evidence is incomplete")
         return evidence

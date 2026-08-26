@@ -31,9 +31,10 @@ from jepa_wm.control_safety import (
 from jepa_wm.control_tracking import ActionTrackingDecision, ActionTrackingLimits
 from jepa_wm.joint_settlement import JointSettlementAttempt
 from jepa_wm.joint_drive import JointDriveTarget
-from jepa_wm.direct_safety import (
+from jepa_wm.direct_safety import DirectInsertionSafetyEvidence
+from jepa_wm.insertion_refresh import (
     ControlSafetySnapshot,
-    DirectInsertionSafetyEvidence,
+    InsertionEvaluationRefresh,
 )
 from jepa_wm.control_policy import (
     ControlExecutionPolicy,
@@ -48,7 +49,6 @@ from jepa_wm.insertion_trial import (
     InsertionTrialDriveEvidence,
     InsertionTrialBinding,
     InsertionTrialExecutionEvidence,
-    InsertionTrialExecutionRefresh,
     InsertionTrialPostActionEvidence,
     InsertionTrialRollbackEvidence,
     InsertionTrialRollbackFailure,
@@ -429,7 +429,7 @@ class ControlResult:
     post_action: PostActionEvidence | None = None
     execution_error: str | None = None
     execution_interlock: ControlInterlockEvidence | None = None
-    insertion_trial_refresh: InsertionTrialExecutionRefresh | None = None
+    insertion_trial_refresh: InsertionEvaluationRefresh | None = None
     insertion_trial_drive: InsertionTrialDriveEvidence | None = None
     insertion_trial_rollback: InsertionTrialRollbackOutcome | None = None
     insertion_trial_settlement_failure: JointSettlementAttempt | None = None
@@ -610,7 +610,7 @@ class ControlResult:
                     else None
                 ),
                 insertion_trial_refresh=(
-                    InsertionTrialExecutionRefresh.from_dict(
+                    InsertionEvaluationRefresh.from_dict(
                         insertion_trial_refresh
                     )
                     if insertion_trial_refresh is not None
@@ -1227,19 +1227,34 @@ class ControlSession:
         ):
             raise ValueError("direct insertion safety is not bound to its session")
         expected_scales = state.insertion_projection_scales(observation)
-        attempted_scales = tuple(attempt.scale for attempt in evidence.attempts)
-        if attempted_scales != expected_scales[: len(attempted_scales)]:
-            raise ValueError("direct insertion safety used the wrong projection policy")
+        evaluation_observation = observation
+        evaluation_response = response
         try:
-            evidence.live_state.validate_continuity(state.require_safety_snapshot())
+            if evidence.live_pose is not None:
+                refresh = evidence.evaluation
+                evaluation_observation, evaluation_response = refresh.authorize(
+                    observation,
+                    response,
+                    state.require_safety_snapshot(),
+                )
+                expected_scales = state.insertion_projection_scales(
+                    evaluation_observation
+                )
+            else:
+                evidence.live_state.validate_continuity(
+                    state.require_safety_snapshot()
+                )
         except ValueError as error:
             raise ValueError(
                 "direct insertion safety is not bound to its session"
             ) from error
+        attempted_scales = tuple(attempt.scale for attempt in evidence.attempts)
+        if attempted_scales != expected_scales[: len(attempted_scales)]:
+            raise ValueError("direct insertion safety used the wrong projection policy")
         self._validate_projection_attempts(
-            observation,
+            evaluation_observation,
             state,
-            response,
+            evaluation_response,
             evidence.attempts,
             evidence.evaluated_at_unix_seconds,
             response.actions,

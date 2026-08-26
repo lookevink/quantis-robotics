@@ -19,16 +19,16 @@ from jepa_wm.control_safety import (
     SafetyProjectionAttempt,
     SimulatorSafetyLimits,
 )
-from jepa_wm.direct_safety import (
+from jepa_wm.direct_safety import DirectInsertionSafetyEvidence
+from jepa_wm.insertion_refresh import (
     ControlSafetySnapshot,
-    DirectInsertionSafetyEvidence,
+    InsertionEvaluationRefresh,
 )
 from jepa_wm.insertion_trial import (
     INSERTION_TRIAL_SETTLEMENT_MAXIMUM_UPDATES,
     InsertionTrialAuthority,
     InsertionTrialBinding,
     InsertionTrialExecutionEvidence,
-    InsertionTrialExecutionRefresh,
     InsertionTrialPolicy,
     InsertionTrialRollbackFailure,
     InsertionTrialRollbackFailureReason,
@@ -101,21 +101,21 @@ def _source() -> InsertionTrialSourceEvidence:
         0.0,
         _JOINTS,
     )
+    safety_state = ControlSafetySnapshot(
+        _JOINTS,
+        0.04,
+        (0.4, 0.0, 0.5),
+        0.0,
+        False,
+        True,
+    )
     safety = DirectInsertionSafetyEvidence(
         9,
-        100.2,
+        InsertionEvaluationRefresh(100.2, safety_state, _observation(9).pose),
         _ACTIONS,
         ArtifactIdentity(_PROPOSAL, _FINGERPRINT),
         (attempt,),
         attempt.scale,
-        ControlSafetySnapshot(
-            _JOINTS,
-            0.04,
-            (0.4, 0.0, 0.5),
-            0.0,
-            False,
-            True,
-        ),
         JointDriveTarget(_JOINTS, 0.04),
     )
     return InsertionTrialSourceEvidence(
@@ -219,7 +219,7 @@ class InsertionTrialBindingTest(unittest.TestCase):
             True,
         )
         live_pose = DroidPose((0.4001, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04))
-        refresh = InsertionTrialExecutionRefresh(107.5, captured_state, live_pose)
+        refresh = InsertionEvaluationRefresh(107.5, captured_state, live_pose)
 
         observation, authorized = refresh.authorize(
             captured,
@@ -232,7 +232,7 @@ class InsertionTrialBindingTest(unittest.TestCase):
         self.assertEqual(observation.pose, live_pose)
         self.assertEqual(authorized.actions, response.actions)
         self.assertEqual(
-            InsertionTrialExecutionRefresh.from_dict(refresh.to_dict()),
+            InsertionEvaluationRefresh.from_dict(refresh.to_dict()),
             refresh,
         )
         blocked_gate = ControlGateDecision(
@@ -263,7 +263,7 @@ class InsertionTrialBindingTest(unittest.TestCase):
 
         drifted = replace(captured_state, joint_positions=(0.01, *_JOINTS[1:]))
         with self.assertRaisesRegex(ValueError, "changed after capture"):
-            InsertionTrialExecutionRefresh(107.5, drifted).authorize(
+            InsertionEvaluationRefresh(107.5, drifted).authorize(
                 captured,
                 response,
                 captured_state,
@@ -291,15 +291,31 @@ class InsertionTrialBindingTest(unittest.TestCase):
         )
         legacy_source = replace(
             _source(),
-            safety=replace(_source().safety, active_drive_target=None),
+            safety=replace(
+                _source().safety,
+                active_drive_target=None,
+                evaluation=replace(_source().safety.evaluation, live_pose=None),
+            ),
         )
-        binding.validate_execution(
+        legacy_binding = replace(
+            binding,
+            source_safety_refreshed_at_unix_seconds=None,
+        )
+        legacy_binding.validate_execution(
             legacy_source,
             InsertionTrialExecutionEvidence(
                 _context(10, ControlExecutionPolicy.INSERTION_RESET_TRIAL),
                 response,
             ),
         )
+        with self.assertRaisesRegex(ValueError, "not bound"):
+            binding.validate_execution(
+                legacy_source,
+                InsertionTrialExecutionEvidence(
+                    _context(10, ControlExecutionPolicy.INSERTION_RESET_TRIAL),
+                    response,
+                ),
+            )
         with self.assertRaisesRegex(ValueError, "selected exact proposal"):
             build_insertion_trial_response(
                 execution_session_id="new-insertion-trial",
@@ -316,6 +332,10 @@ class InsertionTrialBindingTest(unittest.TestCase):
         self.assertFalse(binding.production_authority_granted)
         self.assertIsNotNone(binding.trial_policy)
         self.assertIs(binding.require_current_execution(), binding.trial_policy)
+        invalid_refresh = binding.to_dict()
+        invalid_refresh["source_safety_refreshed_at_unix_seconds"] = True
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            InsertionTrialBinding.from_dict(invalid_refresh)
         self.assertEqual(
             binding.trial_policy.joint_settlement.maximum_updates,
             INSERTION_TRIAL_SETTLEMENT_MAXIMUM_UPDATES,

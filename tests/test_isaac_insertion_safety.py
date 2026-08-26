@@ -128,6 +128,7 @@ class DirectInsertionSafetyRuntimeTest(unittest.TestCase):
                 return_value=SimpleNamespace(
                     runtime=runtime,
                     safety=state.require_safety_snapshot(),
+                    pose=observation.pose,
                     active_drive_target=state.active_drive_target,
                 ),
             ),
@@ -135,7 +136,7 @@ class DirectInsertionSafetyRuntimeTest(unittest.TestCase):
                 "sim.isaac_insertion_safety.select_safe_projection",
                 return_value=((attempt,), object()),
             ) as select_projection,
-            patch("sim.isaac_insertion_safety.time", return_value=100.2),
+            patch("sim.isaac_insertion_safety.time", return_value=103.3),
         ):
             payload = asyncio.run(
                 evaluate_direct_insertion_candidate("insertion-session")
@@ -158,6 +159,12 @@ class DirectInsertionSafetyRuntimeTest(unittest.TestCase):
                 observation.target_pose,
             ),
         )
+        safety_context, refreshed_response = select_projection.call_args.args
+        self.assertEqual(
+            safety_context.observation.captured_at_unix_seconds,
+            103.3,
+        )
+        self.assertEqual(refreshed_response.created_at_unix_seconds, 103.3)
         session.write_direct_safety.assert_called_once()
         self.assertFalse(session.claim_execution.called)
         self.assertFalse(session.write_result.called)

@@ -42,7 +42,6 @@ from jepa_wm.joint_settlement import (
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
 from jepa_wm.insertion_trial import (
     InsertionTrialDriveEvidence,
-    InsertionTrialExecutionRefresh,
     InsertionTrialOutcomeObservation,
     InsertionTrialPostActionEvidence,
     InsertionTrialRollbackEvidence,
@@ -50,6 +49,7 @@ from jepa_wm.insertion_trial import (
     InsertionTrialRollbackFailureReason,
     InsertionTrialRollbackOutcome,
 )
+from jepa_wm.insertion_refresh import InsertionEvaluationRefresh
 from sim.control_session import (
     ControlResult,
     ControlResultStatus,
@@ -664,7 +664,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             refreshed_drive_target.gripper_width_m,
         )
         insertion_trial_active_drive_target = persisted_state.active_drive_target
-        insertion_trial_refresh = InsertionTrialExecutionRefresh(
+        insertion_trial_refresh = InsertionEvaluationRefresh(
             time(),
             live_state,
             synchronized.pose,

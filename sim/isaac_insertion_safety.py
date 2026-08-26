@@ -16,6 +16,7 @@ from jepa_wm.direct_safety import (
     DirectInsertionSafetyEvidence,
 )
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
+from jepa_wm.insertion_refresh import InsertionEvaluationRefresh
 from jepa_wm.training_artifact import ArtifactIdentity
 from sim.control_context import recording_task
 from sim.control_session import CONTROL_ROOT, RECORDING_ROOT, ControlSession
@@ -74,6 +75,18 @@ async def evaluate_direct_insertion_candidate(session_id: str) -> dict[str, Any]
     )
 
     evaluated_at = time()
+    if synchronized.pose is None:
+        raise RuntimeError("insertion safety live pose was not refreshed")
+    refresh = InsertionEvaluationRefresh(
+        evaluated_at,
+        live_state,
+        synchronized.pose,
+    )
+    observation, proposal = refresh.authorize(
+        observation,
+        proposal,
+        captured_state,
+    )
     safety = ExecutionSafetyContext(
         observation=observation,
         current=JointCommand(
@@ -94,12 +107,11 @@ async def evaluate_direct_insertion_candidate(session_id: str) -> dict[str, Any]
     )
     evidence = DirectInsertionSafetyEvidence(
         observation_id=observation.observation_id,
-        evaluated_at_unix_seconds=evaluated_at,
+        evaluation=refresh,
         proposed_actions=proposal.actions,
         proposal=ArtifactIdentity(proposal.proposal, proposal.proposal_fingerprint),
         attempts=attempts,
         selected_action_scale=(attempts[-1].scale if selected is not None else None),
-        live_state=live_state,
         active_drive_target=active_drive_target,
     )
     session.write_direct_safety(evidence)

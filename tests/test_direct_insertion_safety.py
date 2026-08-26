@@ -18,9 +18,10 @@ from jepa_wm.control_safety import (
     SimulatorControlGate,
     SimulatorSafetyState,
 )
-from jepa_wm.direct_safety import (
+from jepa_wm.direct_safety import DirectInsertionSafetyEvidence
+from jepa_wm.insertion_refresh import (
     ControlSafetySnapshot,
-    DirectInsertionSafetyEvidence,
+    InsertionEvaluationRefresh,
 )
 from jepa_wm.training_artifact import ArtifactIdentity
 from jepa_wm.joint_drive import JointDriveTarget
@@ -42,14 +43,9 @@ def _attempt(*, passed: bool = True) -> SafetyProjectionAttempt:
 
 def _evidence(*, passed: bool = True) -> DirectInsertionSafetyEvidence:
     attempt = _attempt(passed=passed)
-    return DirectInsertionSafetyEvidence(
-        observation_id=9,
-        evaluated_at_unix_seconds=100.2,
-        proposed_actions=(DroidAction((0.0,) * 7),) * 3,
-        proposal=ArtifactIdentity(Path("/tmp/proposal.pth"), _FINGERPRINT),
-        attempts=(attempt,),
-        selected_action_scale=attempt.scale if passed else None,
-        live_state=ControlSafetySnapshot(
+    evaluation = InsertionEvaluationRefresh(
+        100.2,
+        ControlSafetySnapshot(
             _JOINTS,
             0.04,
             (0.4, 0.0, 0.5),
@@ -57,6 +53,15 @@ def _evidence(*, passed: bool = True) -> DirectInsertionSafetyEvidence:
             False,
             True,
         ),
+        DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
+    )
+    return DirectInsertionSafetyEvidence(
+        observation_id=9,
+        evaluation=evaluation,
+        proposed_actions=(DroidAction((0.0,) * 7),) * 3,
+        proposal=ArtifactIdentity(Path("/tmp/proposal.pth"), _FINGERPRINT),
+        attempts=(attempt,),
+        selected_action_scale=attempt.scale if passed else None,
         active_drive_target=JointDriveTarget(_JOINTS, 0.04),
     )
 
@@ -86,27 +91,53 @@ class DirectInsertionSafetyEvidenceTest(unittest.TestCase):
         )
 
     def test_current_evidence_requires_its_evaluated_drive_target(self) -> None:
-        payload = _evidence().to_dict()
-        del payload["active_drive_target"]
+        for field in ("active_drive_target", "evaluation"):
+            with self.subTest(field=field):
+                payload = _evidence().to_dict()
+                del payload[field]
 
+                with self.assertRaisesRegex(ValueError, "incomplete"):
+                    DirectInsertionSafetyEvidence.from_dict(payload)
+
+    def test_reads_v2_without_upgrading_its_refresh_claim(self) -> None:
+        payload = _evidence().to_dict()
+        payload["schema"] = "quantis.jepa_wm_direct_insertion_safety.v2"
+        evaluation = payload.pop("evaluation")
+        payload["evaluated_at_unix_seconds"] = evaluation[
+            "refreshed_at_unix_seconds"
+        ]
+        payload["live_state"] = evaluation["live_state"]
+
+        legacy = DirectInsertionSafetyEvidence.from_dict(payload)
+
+        self.assertIsNone(legacy.live_pose)
+        self.assertEqual(legacy.active_drive_target, _evidence().active_drive_target)
+
+        payload["live_pose"] = list(_evidence().live_pose.values)
         with self.assertRaisesRegex(ValueError, "incomplete"):
             DirectInsertionSafetyEvidence.from_dict(payload)
 
     def test_rejects_tampered_authority_and_numeric_strings(self) -> None:
         for field, value, nested in (
             ("authority", "command", False),
-            ("evaluated_at_unix_seconds", "100.2", False),
+            ("refreshed_at_unix_seconds", "100.2", False),
             ("contact_force_newtons", "0.25", True),
         ):
             with self.subTest(field=field):
                 payload = _evidence().to_dict()
-                (payload["live_state"] if nested else payload)[field] = value
+                evaluation = payload["evaluation"]
+                target = (
+                    evaluation["live_state"]
+                    if nested
+                    else (payload if field == "authority" else evaluation)
+                )
+                target[field] = value
                 with self.assertRaises(ValueError):
                     DirectInsertionSafetyEvidence.from_dict(payload)
 
     def test_attachment_is_required_for_a_passing_task_claim(self) -> None:
         payload = _evidence().to_dict()
-        payload["live_state"]["plug_attached"] = False
+        payload["evaluation"]["live_state"]["plug_attached"] = False
         payload["passed"] = False
 
         evidence = DirectInsertionSafetyEvidence.from_dict(payload)
@@ -173,19 +204,22 @@ class DirectInsertionSafetySessionTest(unittest.TestCase):
             attempt = SafetyProjectionAttempt(ACTION_SCALES[0], gate, 0.0, _JOINTS)
             evidence = DirectInsertionSafetyEvidence(
                 observation_id=9,
-                evaluated_at_unix_seconds=100.2,
+                evaluation=InsertionEvaluationRefresh(
+                    100.2,
+                    ControlSafetySnapshot(
+                        _JOINTS,
+                        0.04,
+                        (0.4, 0.0, 0.5),
+                        0.25,
+                        False,
+                        True,
+                    ),
+                    observation.pose,
+                ),
                 proposed_actions=response.actions,
                 proposal=ArtifactIdentity(proposal_path, _FINGERPRINT),
                 attempts=(attempt,),
                 selected_action_scale=attempt.scale,
-                live_state=ControlSafetySnapshot(
-                    _JOINTS,
-                    0.04,
-                    (0.4, 0.0, 0.5),
-                    0.25,
-                    False,
-                    True,
-                ),
                 active_drive_target=JointDriveTarget(_JOINTS, 0.04),
             )
             session.write_capture(observation, state)
@@ -199,7 +233,7 @@ class DirectInsertionSafetySessionTest(unittest.TestCase):
             self.assertFalse(session.execution_path.exists())
             self.assertFalse(session.result_path.exists())
             payload = json.loads(session.direct_safety_path.read_text())
-            payload["live_state"]["plug_position"][0] += 0.01
+            payload["evaluation"]["live_state"]["plug_position"][0] += 0.01
             session.direct_safety_path.write_text(json.dumps(payload))
             with self.assertRaisesRegex(ValueError, "not bound"):
                 session.load_direct_safety()
@@ -207,6 +241,11 @@ class DirectInsertionSafetySessionTest(unittest.TestCase):
             payload = evidence.to_dict()
             payload["schema"] = "quantis.jepa_wm_direct_insertion_safety.v1"
             del payload["active_drive_target"]
+            evaluation = payload.pop("evaluation")
+            payload["evaluated_at_unix_seconds"] = evaluation[
+                "refreshed_at_unix_seconds"
+            ]
+            payload["live_state"] = evaluation["live_state"]
             session.direct_safety_path.write_text(json.dumps(payload))
             self.assertIsNone(session.load_direct_safety().active_drive_target)
 

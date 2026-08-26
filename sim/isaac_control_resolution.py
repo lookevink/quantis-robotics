@@ -52,7 +52,7 @@ from jepa_wm.control_resolution import (
 from jepa_wm.control_safety import SimulatorSafetyLimits
 from jepa_wm.control_resolution_baseline import ControlResolutionCaptureSourceIdentity
 from jepa_wm.control_safety import SafetyProjectionAttempt
-from jepa_wm.direct_safety import ControlSafetySnapshot
+from jepa_wm.insertion_refresh import ControlSafetySnapshot
 from jepa_wm.persistence import write_json_atomic
 from jepa_wm.trial_equivalence import (
     ResetEquivalenceMeasurement,

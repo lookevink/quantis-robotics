@@ -62,7 +62,7 @@ from jepa_wm.control_resolution_baseline import (
 )
 from jepa_wm.control_resolution_drive import ControlResolutionDriveBiasCompensation
 from jepa_wm.action import DroidActionScale
-from jepa_wm.direct_safety import ControlSafetySnapshot
+from jepa_wm.insertion_refresh import ControlSafetySnapshot
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.trial_equivalence import (
