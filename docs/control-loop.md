@@ -674,6 +674,17 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     Multi-step, filming, and production authority remain false; exact metrics
     and evidence are in the
     [insertion control-resolution checkpoint](../README.md#insertion-control-resolution-checkpoint).
+    A second 48-update retry proved that extending the observation cap alone
+    did not solve loaded settlement. The corrected controller now separates
+    active drive targets from stable realized reset targets, authenticates both
+    before motion, and reuses the bounded drive-only load compensation without
+    weakening any gate. Fresh exact-code no-actuation checks then passed `2/2`.
+    One separately invoked context-43 action subsequently passed settlement,
+    action tracking, realized progress, attachment, and the contact/collision
+    interlock, and terminalized after exactly `1/1` applied step. No automatic
+    second action, multi-step insertion, filming, or production authority is
+    granted. Exact negative and successful evidence is in the linked README
+    checkpoint.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

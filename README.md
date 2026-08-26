@@ -1646,6 +1646,68 @@ single context-43 retry. No action was launched from these safety sessions, and
 they do not authorize an automatic second action, multi-step insertion,
 filming, or production use.
 
+The separately invoked 48-update retry,
+`insertion-trial-20260826T130225Z-52600-c43`, disproved the hypothesis that the
+32-update cap alone caused the prior failure. Its projected maximum joint
+change was `1.639752 mrad`. Forward settlement requested `1.408707 mrad`; the
+error reached a best `0.799910 mrad`, then regressed to
+`0.899683 mrad` at update 48 without reaching the unchanged `0.500000 mrad`
+threshold. Rollback requested `1.521826 mrad` and improved to
+`1.032352 mrad` at update 48, so the terminal result again was
+`rollback_failed` with `0/1` applied steps. Contact remained `0 N`, collision
+stayed false, attachment was retained, and the 13 GB recovery copy verified.
+
+That negative exposed a target-semantics mismatch rather than a JEPA, IK,
+contact, or attachment failure. Under the attached load, the active Isaac
+drive target and the stable realized reset differ by about a milliradian. The
+insertion path had commanded the raw desired joints and then used the stable
+realized reset itself as the rollback drive target. Commit `967e28e` separates
+those concepts: capture persists the exact active drive target; the forward
+command applies the same bounded `2 mrad` load-bias compensation validated by
+the drive-only checkpoint while settlement remains relative to the desired
+physical joints; rollback reapplies the captured active target while judging
+return against the stable reset. The fixed `0.25 s` command period and complete
+drive targets, including gripper width, are persisted and reconstructed. A
+missing or over-bound target fails before actuation. No force, collision,
+attachment, velocity, settlement, reset, progress, or orientation limit was
+weakened. The full local suite passes `538` tests with `70` optional skips, and
+both independent correctness and standards reviews pass.
+
+Fresh exact-code safety then requalified the reserved seeds. The first seed
+52600 attempt, `insertion-safety-20260826T134024Z-52600-c43`, is retained as a
+freshness negative: its live safety snapshot/evaluation timestamp was about
+`2.815 s` after the response, so every scale failed the unchanged `2.5 s`
+command-age limit before IK.
+Independent sessions `insertion-safety-20260826T134906Z-52600-c43` and
+`insertion-safety-20260826T135750Z-52601-c43` then passed `2/2` at full
+translation with rotation held. Their projected maximum joint changes were
+`1.634438 mrad` and `1.711919 mrad`; both retained attachment at `0 N` with no
+collision, carry `authority: no_actuation`, and are present in verified 13 GB
+backups.
+
+One separately invoked action then passed in session
+`insertion-trial-20260826T140640Z-52600-c43`. It authenticated the fresh seed
+52600 source and frozen proposal fingerprint
+`efdf848c120a2e4bba5b5e08f16093eb9b20695940e525906313e5cb1057596f`, selected
+full translation with rotation held, and projected a `1.641107 mrad` maximum
+joint change. The compensated drive command settled in 19 updates; terminal
+joint error was `0.327749 mrad`, below the unchanged `0.500000 mrad` limit.
+The realized action tracked the translation direction at cosine `0.999314`,
+reduced target translation error from `0.740117 mm` to `0.441414 mm`, and
+therefore passed the terminal progress gate at `40.3589%` reduction versus the
+required `25%`. Orientation error increased by only `0.180730 mrad`, within
+the persisted `1.25 mrad` allowance. The result is exactly `1/1` applied with
+retained attachment, `0 N` maximum contact, no collision, no rollback, and a
+verified 13 GB recovery copy.
+
+This is the first successful bounded JEPA-WM-driven insertion action under the
+corrected drive-only controller contract. It is not autonomous multi-step
+insertion: no second action was requested, and the session is terminal.
+Authorizing a receding-horizon follow-up requires a new milestone that binds a
+fresh observation to the post-action state and proves the same safety,
+tracking, progress, attachment, and rollback contracts across that boundary.
+Insertion filming and production authority remain false.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded
