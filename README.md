@@ -1849,6 +1849,51 @@ both independent reviews pass, but this correction has not yet been
 requalified live. The result proves repeatable action-1 control and a genuine
 fresh second observation; it does not yet prove a second applied action.
 
+Run `insertion-two-step-20260826T182601Z-52600-c43` requalified the live-origin
+target selection: action 2 selected frame 50 and retained the half-scale
+proposal that the earlier offline reconstruction predicted. It still failed
+closed before IK or motion because insertion binding reconstruction occurred
+after the exact live refresh; the resulting action-2 command age was
+`4.839203 s`. Action 1 remained applied with `40.32%` target-error reduction,
+so the terminal rollout was `1/2`. The 13 GB recovery backup verified.
+
+Commit `bf5f58a` moved all disk-backed binding reconstruction and current-policy
+validation before execution claim, physics initialization, and synchronized
+live refresh. The refreshed observation, response, safety state, pose, and
+drive target still pass through the unchanged freshness and safety gates; the
+change removes no limit. Its invalid-binding regression proves that a rejected
+binding cannot resume physics. Local validation passes `557` tests with `70`
+optional skips, and both independent reviews pass.
+
+The subsequent fresh run
+`insertion-two-step-20260826T184753Z-52600-c43` is the first independently
+reconstructed two-action JEPA-WM closed loop. Safety-1 passed at full
+translation scale with a `1.638828 mrad` projected joint change. Action session
+`insertion-two-step-20260826T184753Z-52600-c43-action1` applied with a
+`9.262 ms` command age, settled in 19 updates, ended at `0.327545 mrad` joint
+tracking error, and reduced its target error from `0.740117 mm` to
+`0.441824 mm` (`40.30%`).
+
+The interlocked live-origin follow-up selected frame 50. Full scale failed the
+unchanged projected-progress gate; half scale passed with a `1.387768 mrad`
+projected joint change. Action session
+`insertion-two-step-20260826T184753Z-52600-c43-action2` then applied with an
+`8.744 ms` command age, settled in 16 updates, ended at `0.280594 mrad` joint
+tracking error, and reduced its live target error from `0.637628 mm` to
+`0.412927 mm` (`35.24%`). Translation tracking cosines were `0.9993` and
+`0.9985`. Both actions retained the plug at `0 N` with no collision; neither
+orientation increase exceeded the unchanged `1.25 mrad` hold tolerance.
+
+The terminal typed report records `attempted_steps: 2`, `applied_steps: 2`,
+`all_steps_applied: true`, no orchestration failure, and `0.731469 mm` aggregate
+translation progress. The 13 GB recovery backup verified. This proves a
+genuine bounded two-step closed loop from a fresh reset. It does not by itself
+prove arbitrary-length insertion, a seated terminal state, cross-reset
+repeatability, filming readiness, or production authority. The next bounded
+milestone is a hard-capped multi-step rollout whose lineage, per-step gates,
+terminal status, and recovery evidence reconstruct independently; no third
+action is inherited from this completed run.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

@@ -724,6 +724,16 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     remains `1/2`, and the live-pose correction still requires requalification
     before claiming a two-action loop. Exact evidence is in the linked README
     checkpoint.
+    A subsequent run exposed one remaining freshness-owner error: binding
+    reconstruction still occurred after live refresh. Moving that preflight
+    before any physics resume preserved every gate and reduced both live
+    command ages to milliseconds. The next fresh chain then reconstructed as
+    exactly `2/2` applied with passing settlement, tracking, realized progress,
+    attachment, and contact/collision evidence. This establishes the bounded
+    two-action closed loop. A third action, arbitrary multi-step insertion,
+    filming, and production remain closed pending a separately hard-capped,
+    reconstructible rollout. Exact evidence is in the linked README
+    checkpoint.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

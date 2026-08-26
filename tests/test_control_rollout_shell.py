@@ -12,6 +12,82 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ControlRolloutShellTest(unittest.TestCase):
+    def test_insertion_demo_rollout_runs_exactly_four_verified_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir)
+            ops = home / "quantis-robotics" / "ops"
+            ops.mkdir(parents=True)
+            shutil.copy(REPO_ROOT / "ops" / "run_insertion_demo_rollout.sh", ops)
+            log = home / "calls.log"
+            (ops / "shell_helpers.sh").write_text(
+                """#!/usr/bin/env bash
+is_safe_identifier() { return 0; }
+require_nonnegative_integer() { return 0; }
+require_positive_integer() { return 0; }
+insertion_rollout_profile_field() {
+  [[ "$3" == demo ]] || return 9
+  printf '4\n'
+}
+isaac_server_call() { printf 'verify %s\n' "$1" >> "${CALLS}"; }
+"""
+            )
+            for name in (
+                "run_insertion_safety_check.sh",
+                "run_insertion_reset_trial.sh",
+                "run_insertion_followup_trial.sh",
+            ):
+                (ops / name).write_text(
+                    "#!/usr/bin/env bash\nprintf '%s %s\\n' "
+                    f"'{name}' \"$*\" >> \"${{CALLS}}\"\n"
+                )
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(ops / "run_insertion_demo_rollout.sh"),
+                    "demo-run",
+                    "insertion-held-00",
+                    "52600",
+                    "worker-test",
+                    "43",
+                ],
+                env={**os.environ, "HOME": str(home), "CALLS": str(log)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            calls = log.read_text().splitlines()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                [line.split()[0] for line in calls],
+                [
+                    "run_insertion_safety_check.sh",
+                    "run_insertion_reset_trial.sh",
+                    "verify",
+                    "run_insertion_followup_trial.sh",
+                    "verify",
+                    "run_insertion_followup_trial.sh",
+                    "verify",
+                    "run_insertion_followup_trial.sh",
+                    "verify",
+                ],
+            )
+            self.assertIn(
+                "verify_insertion_demo_rollout_result('demo-run-action1,demo-run-action2,demo-run-action3,demo-run-action4'",
+                calls[-1],
+            )
+            self.assertTrue(calls[0].endswith(" demo"), calls[0])
+            self.assertTrue(calls[1].endswith(" demo"), calls[1])
+            self.assertIn(
+                "demo-run-action1,demo-run-action2,demo-run-action3 3",
+                calls[5],
+            )
+            self.assertIn(
+                "demo-run-action1,demo-run-action2,demo-run-action3,demo-run-action4 4",
+                calls[7],
+            )
+
     def test_insertion_two_step_requires_action_one_before_followup(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             home = Path(temp_dir)
@@ -75,6 +151,8 @@ isaac_server_call() {
                 "verify_insertion_followup_source('two-step-run-action1')",
                 calls[2],
             )
+            self.assertTrue(calls[0].endswith(" two-step"), calls[0])
+            self.assertTrue(calls[1].endswith(" two-step"), calls[1])
             self.assertIn(
                 "verify_insertion_two_step_result('two-step-run-action1','two-step-run-action2','insertion-held-00',52600)",
                 calls[4],
@@ -249,6 +327,10 @@ is_safe_identifier() { return 0; }
 require_nonnegative_integer() { return 0; }
 require_positive_integer() { return 0; }
 control_proposal_from_identity() { printf 'proposal-test\n'; }
+insertion_rollout_profile_field() {
+  [[ "$3" == two-step ]] || return 9
+  printf '2\n'
+}
 run_reset_trial_control_session() { printf '%s\n' "$*" >> "${CALLS}"; }
 """
             )
@@ -263,6 +345,7 @@ run_reset_trial_control_session() { printf '%s\n' "$*" >> "${CALLS}"; }
                     "worker-test",
                     "safety-session",
                     "43",
+                    "two-step",
                 ],
                 env={**os.environ, "HOME": str(home), "CALLS": str(log)},
                 text=True,
@@ -286,6 +369,10 @@ run_reset_trial_control_session() { printf '%s\n' "$*" >> "${CALLS}"; }
             (ops / "shell_helpers.sh").write_text(
                 """#!/usr/bin/env bash
 isaac_server_call() { printf '%s\\n' "$1" >> "${CALLS}"; }
+insertion_rollout_profile_field() {
+  [[ "$3" == two-step ]] || return 9
+  printf '2\n'
+}
 capture_and_respond_control_session() {
   [[ "$6" == insertion_safety_evaluation ]] || return 8
   printf 'capture_control_observation %s\\n' "$2" >> "${CALLS}"
@@ -303,6 +390,7 @@ capture_and_respond_control_session() {
                     "52600",
                     "worker-test",
                     "43",
+                    "two-step",
                 ],
                 env={
                     **os.environ,

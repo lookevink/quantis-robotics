@@ -20,6 +20,11 @@ from jepa_wm.insertion_contract import (
     INSERTION_TASK_ID,
     InsertionControlTargetPolicy,
 )
+from jepa_wm.insertion_rollout import (
+    DEMO_INSERTION_ROLLOUT,
+    TWO_STEP_INSERTION_ROLLOUT,
+    InsertionRolloutRoster,
+)
 from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.grasp_contract import GRASP_TASK_ID
 from jepa_wm.trajectory import load_rollout_at
@@ -57,7 +62,7 @@ from sim.isaac_demo_scene import ROBOT_PATH
 from sim.recording import RecordingLabel, RecordingMoment, validate_recording_id
 
 if TYPE_CHECKING:
-    from jepa_wm.control_rollout import ControlStepSummary
+    from jepa_wm.control_rollout import ControlRolloutReport, ControlStepSummary
 
 
 def build_insertion_followup_capture(
@@ -107,6 +112,7 @@ def build_insertion_followup_capture(
         current_gripper_width_m=current.gripper_width_m,
         insertion_target_policy=target_policy,
         active_drive_target=active_drive_target,
+        insertion_rollout_position=lineage.rollout_position.followup(),
     )
     lineage.validate_source(observation, state)
     return observation, state
@@ -178,6 +184,36 @@ def verify_insertion_followup_source(session_id: str) -> dict[str, Any]:
     }
 
 
+def _verify_insertion_rollout_result(
+    roster: InsertionRolloutRoster,
+    reference_name: str,
+    exploration_seed: int,
+) -> ControlRolloutReport:
+    """Reconstruct one exact bounded rollout and require every action applied."""
+
+    from jepa_wm.control_rollout import ControlRolloutReport, ControlStepSummary
+
+    steps = tuple(
+        ControlStepSummary.from_session(ControlSession.at(CONTROL_ROOT, session_id))
+        for session_id in roster.session_ids
+    )
+    if tuple(
+        step.state.resolved_insertion_rollout_position() for step in steps
+    ) != roster.positions:
+        raise ValueError("insertion rollout positions are invalid")
+    report = ControlRolloutReport.from_sessions(
+        QUANTIS_DATA_ROOT,
+        roster.session_ids[-1],
+        roster.session_ids,
+        reference_recording=reference_name,
+        seed=exploration_seed,
+        proposal=steps[0].observation.expected_proposal,
+        requested_steps=roster.maximum_steps,
+    )
+    report.require_all_steps_applied()
+    return report
+
+
 def verify_insertion_two_step_result(
     first_session_id: str,
     second_session_id: str,
@@ -186,26 +222,42 @@ def verify_insertion_two_step_result(
 ) -> dict[str, Any]:
     """Reconstruct and require exactly two applied insertion actions."""
 
-    from jepa_wm.control_rollout import ControlRolloutReport, ControlStepSummary
-
-    first_step = ControlStepSummary.from_session(
-        ControlSession.at(CONTROL_ROOT, first_session_id)
-    )
-
-    report = ControlRolloutReport.from_sessions(
-        QUANTIS_DATA_ROOT,
-        second_session_id,
+    roster = InsertionRolloutRoster(
         (first_session_id, second_session_id),
-        reference_recording=reference_name,
-        seed=exploration_seed,
-        proposal=first_step.observation.expected_proposal,
-        requested_steps=2,
+        TWO_STEP_INSERTION_ROLLOUT.maximum_steps,
     )
-    report.require_all_steps_applied()
+    report = _verify_insertion_rollout_result(
+        roster,
+        reference_name,
+        exploration_seed,
+    )
     return {
         "status": "two_step_applied",
         "first_session_id": first_session_id,
         "second_session_id": second_session_id,
+        "report": report.to_dict(),
+    }
+
+
+def verify_insertion_demo_rollout_result(
+    session_roster: str,
+    reference_name: str,
+    exploration_seed: int,
+) -> dict[str, Any]:
+    """Reconstruct and require the complete hard-capped demo rollout."""
+
+    roster = InsertionRolloutRoster.from_csv(
+        session_roster,
+        DEMO_INSERTION_ROLLOUT.maximum_steps,
+    )
+    report = _verify_insertion_rollout_result(
+        roster,
+        reference_name,
+        exploration_seed,
+    )
+    return {
+        "status": "demo_rollout_applied",
+        "sessions": list(roster.session_ids),
         "report": report.to_dict(),
     }
 

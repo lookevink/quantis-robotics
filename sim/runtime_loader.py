@@ -95,6 +95,7 @@ def reload_demo_runtime() -> ModuleType:
         "jepa_wm.control_protocol",
         "jepa_wm.control_safety",
         "jepa_wm.insertion_refresh",
+        "jepa_wm.insertion_rollout",
         "jepa_wm.joint_settlement",
         "jepa_wm.joint_drive",
         "jepa_wm.target_progress",

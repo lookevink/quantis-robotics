@@ -74,6 +74,17 @@ control_resolution_profile_field() {
   )
 }
 
+insertion_rollout_profile_field() {
+  local repository="$1"
+  local python_bin="$2"
+  local profile="$3"
+  local field="$4"
+  (
+    cd "${repository}"
+    "${python_bin}" -m jepa_wm.insertion_rollout "${profile}" "${field}"
+  )
+}
+
 cem_settings_requested() {
   [[ -n "$1$2$3$4" ]]
 }
@@ -201,6 +212,8 @@ capture_and_respond_control_session() {
   local checkpoint_root="$8"
   local python_bin="$9"
   local source_session_id="${10:-}"
+  local insertion_rollout_maximum_steps="${11:-}"
+  local insertion_rollout_argument="None"
   local proposal_name
   for identifier in "${session_id}" "${reference_name}" "${control_identity}"; do
     is_safe_identifier "${identifier}" || {
@@ -210,13 +223,19 @@ capture_and_respond_control_session() {
   done
   require_nonnegative_integer "exploration seed" "${exploration_seed}" || return 1
   require_positive_integer "context index" "${context_index}" || return 1
+  if [[ -n "${insertion_rollout_maximum_steps}" ]]; then
+    require_positive_integer \
+      "insertion rollout maximum steps" \
+      "${insertion_rollout_maximum_steps}" || return 1
+    insertion_rollout_argument="${insertion_rollout_maximum_steps}"
+  fi
   validate_control_policy "${policy}" || return 1
   cd "${repository}"
   proposal_name="$(control_proposal_from_identity \
     "${policy}" "${control_identity}" "${checkpoint_root}" "${python_bin}")" \
     || return 1
   isaac_server_call \
-    "await demo.capture_control_observation('${session_id}','${reference_name}',${exploration_seed},'${proposal_name}','${policy}',${context_index})" \
+    "await demo.capture_control_observation('${session_id}','${reference_name}',${exploration_seed},'${proposal_name}','${policy}',${context_index},${insertion_rollout_argument})" \
     900 true
   respond_to_control_session \
     "${repository}" "${session_id}" "${policy}" "${source_session_id}"
@@ -263,13 +282,21 @@ run_reset_trial_control_session() {
   local capture_timeout="$9"
   local prepare_function="${10}"
   local persist_function="${11}"
+  local insertion_rollout_maximum_steps="${12:-}"
+  local insertion_rollout_argument="None"
+  if [[ -n "${insertion_rollout_maximum_steps}" ]]; then
+    require_positive_integer \
+      "insertion rollout maximum steps" \
+      "${insertion_rollout_maximum_steps}" || return 1
+    insertion_rollout_argument="${insertion_rollout_maximum_steps}"
+  fi
   RESET_TRIAL_PHASE="reset_trial_source_preflight"
   trap finalize_reset_trial_control_session EXIT
   isaac_server_call \
     "demo.${prepare_function}('${source_session_id}')" 180 true
   RESET_TRIAL_PHASE="reset_trial_capture"
   isaac_server_call \
-    "await demo.capture_control_observation('${RESET_TRIAL_SESSION_ID}','${RESET_TRIAL_REFERENCE}',${RESET_TRIAL_SEED},'${RESET_TRIAL_PROPOSAL}','${RESET_TRIAL_POLICY}',${context_index})" \
+    "await demo.capture_control_observation('${RESET_TRIAL_SESSION_ID}','${RESET_TRIAL_REFERENCE}',${RESET_TRIAL_SEED},'${RESET_TRIAL_PROPOSAL}','${RESET_TRIAL_POLICY}',${context_index},${insertion_rollout_argument})" \
     "${capture_timeout}"
   RESET_TRIAL_PHASE="reset_trial_binding"
   isaac_server_call \
@@ -290,6 +317,8 @@ run_insertion_followup_trial() {
   local reference_name="$5"
   local exploration_seed="$6"
   local proposal_name="$7"
+  local session_roster="${8:-${previous_session_id},${execution_session_id}}"
+  local requested_steps="${9:-2}"
   local phase="followup_capture_01"
   local command_status=0
   local report_status=0
@@ -299,9 +328,11 @@ run_insertion_followup_trial() {
     --seed "${exploration_seed}"
     --proposal "${proposal_name}"
     --policy insertion_followup_trial
-    --sessions "${previous_session_id},${execution_session_id}"
-    --requested-steps 2
+    --sessions "${session_roster}"
+    --requested-steps "${requested_steps}"
   )
+  require_positive_integer "requested rollout steps" "${requested_steps}" \
+    || return 1
 
   isaac_server_call \
     "await demo.capture_followup_observation('${safety_session_id}','${previous_session_id}','${proposal_name}')" \

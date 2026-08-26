@@ -36,6 +36,11 @@ from jepa_wm.insertion_refresh import (
     ControlSafetySnapshot,
     InsertionEvaluationRefresh,
 )
+from jepa_wm.insertion_rollout import (
+    TWO_STEP_INSERTION_ROLLOUT,
+    InsertionRolloutPosition,
+    is_insertion_rollout_policy,
+)
 from jepa_wm.control_policy import (
     ControlExecutionPolicy,
     is_insertion_trial_execution_policy,
@@ -121,6 +126,7 @@ class ControlSessionState:
     current_gripper_width_m: float | None = None
     insertion_target_policy: InsertionControlTargetPolicy | None = None
     active_drive_target: JointDriveTarget | None = None
+    insertion_rollout_position: InsertionRolloutPosition | None = None
 
     @classmethod
     def from_dict(cls, payload: Any) -> ControlSessionState:
@@ -168,6 +174,13 @@ class ControlSessionState:
                     if payload.get("active_drive_target") is not None
                     else None
                 ),
+                insertion_rollout_position=(
+                    InsertionRolloutPosition.from_dict(
+                        payload["insertion_rollout_position"]
+                    )
+                    if payload.get("insertion_rollout_position") is not None
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("control session state is incomplete") from error
@@ -202,6 +215,20 @@ class ControlSessionState:
                 state.active_drive_target is not None
                 and not isinstance(state.active_drive_target, JointDriveTarget)
             )
+            or (
+                state.insertion_rollout_position is not None
+                and not isinstance(
+                    state.insertion_rollout_position,
+                    InsertionRolloutPosition,
+                )
+            )
+            or (
+                state.insertion_rollout_position is not None
+                and (
+                    state.insertion_target_policy is None
+                    or not is_insertion_rollout_policy(state.execution_policy)
+                )
+            )
         ):
             raise ValueError("control session state is invalid")
         return state
@@ -229,7 +256,26 @@ class ControlSessionState:
             )
         if self.active_drive_target is not None:
             payload["active_drive_target"] = self.active_drive_target.to_dict()
+        if self.insertion_rollout_position is not None:
+            payload["insertion_rollout_position"] = (
+                self.insertion_rollout_position.to_dict()
+            )
         return payload
+
+    def resolved_insertion_rollout_position(self) -> InsertionRolloutPosition:
+        """Return current position or the bounded legacy two-step interpretation."""
+
+        if self.insertion_rollout_position is not None:
+            return self.insertion_rollout_position
+        if (
+            self.insertion_target_policy is None
+            or not is_insertion_rollout_policy(self.execution_policy)
+        ):
+            raise ValueError("control session has no insertion rollout position")
+        return InsertionRolloutPosition(
+            1 if self.previous_session_id is None else 2,
+            TWO_STEP_INSERTION_ROLLOUT.maximum_steps,
+        )
 
     def require_safety_snapshot(self) -> ControlSafetySnapshot:
         if self.current_gripper_width_m is None or self.plug_position is None:
@@ -658,10 +704,15 @@ class InsertionFollowupLineage:
             or not post_action.insertion_trial.realized_target_progress.passed
             or self.result.insertion_trial_drive is None
             or self.state.insertion_target_policy is None
-            or self.state.previous_session_id is not None
             or not is_insertion_trial_execution_policy(self.state.execution_policy)
         ):
             raise ValueError("follow-up lineage requires one safe applied insertion")
+        if not self.rollout_position.can_followup:
+            raise ValueError("insertion rollout reached its maximum step")
+
+    @property
+    def rollout_position(self) -> InsertionRolloutPosition:
+        return self.state.resolved_insertion_rollout_position()
 
     @property
     def post_action(self) -> PostActionEvidence:
@@ -695,6 +746,8 @@ class InsertionFollowupLineage:
             or state.seed != self.state.seed
             or state.insertion_target_policy
             != self.state.insertion_target_policy.for_followup()
+            or state.resolved_insertion_rollout_position()
+            != self.rollout_position.followup()
             or state.active_drive_target != self.active_drive_target
             or observation.previous_action
             != action_between(self.observation.pose, observation.pose)
@@ -1001,11 +1054,20 @@ class ControlSession:
     ) -> None:
         observation, state = self.load_capture()
         source = ControlSession.at(self.path.parent, binding.source_session_id)
+        _, source_state = source.load_capture()
         if source_evidence is None:
             source_evidence = source.load_insertion_trial_source_evidence()
         if (
             binding.execution_session_id != self.session_id
             or binding.source_session_id != source.session_id
+            or (
+                (
+                    state.insertion_rollout_position is not None
+                    or source_state.insertion_rollout_position is not None
+                )
+                and state.resolved_insertion_rollout_position()
+                != source_state.resolved_insertion_rollout_position()
+            )
         ):
             raise ValueError("insertion trial is not bound to its safety source")
         binding.validate_execution(

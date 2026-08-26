@@ -485,6 +485,7 @@ Commands:
   jepa-wm-insertion-trial REFERENCE_RECORDING SEED ARTIFACTS SOURCE_SESSION [context-index]
   jepa-wm-insertion-followup REFERENCE_RECORDING SEED ARTIFACTS PREVIOUS_SESSION
   jepa-wm-insertion-two-step REFERENCE_RECORDING SEED ARTIFACTS [context-index]
+  jepa-wm-insertion-demo-rollout REFERENCE_RECORDING SEED ARTIFACTS [context-index]
   jepa-wm-insertion-resolution REFERENCE_RECORDING SEED [context-index] [attached|unloaded]
   jepa-wm-control-rollout REFERENCE_RECORDING SEED STEPS [artifacts] [context-index]
   jepa-wm-control-baseline REFERENCE_RECORDING SEED STEPS zero|scripted [context-index]
@@ -1052,7 +1053,7 @@ case "${command}" in
         || command_status=$?
     fi
     if (( command_status == 0 )); then
-      remote "bash ~/quantis-robotics/ops/run_insertion_safety_check.sh '${session_id}' '${reference_name}' '${exploration_seed}' '${artifacts_name}' '${context_index}'" \
+      remote "bash ~/quantis-robotics/ops/run_insertion_safety_check.sh '${session_id}' '${reference_name}' '${exploration_seed}' '${artifacts_name}' '${context_index}' 'two-step'" \
         || command_status=$?
     fi
     backup_status=0
@@ -1080,7 +1081,7 @@ case "${command}" in
     command_status=0
     sync_repo || command_status=$?
     if (( command_status == 0 )); then
-      remote "bash ~/quantis-robotics/ops/run_insertion_reset_trial.sh '${session_id}' '${reference_name}' '${exploration_seed}' '${artifacts_name}' '${source_session_id}' '${context_index}'" \
+      remote "bash ~/quantis-robotics/ops/run_insertion_reset_trial.sh '${session_id}' '${reference_name}' '${exploration_seed}' '${artifacts_name}' '${source_session_id}' '${context_index}' 'two-step'" \
         || command_status=$?
     fi
     backup_status=0
@@ -1131,6 +1132,25 @@ case "${command}" in
     command_status=0
     run_guarded_insertion_workflow "${artifacts_name}" \
       "bash ~/quantis-robotics/ops/run_insertion_two_step_trial.sh '${run_id}' '${reference_name}' '${exploration_seed}' '${artifacts_name}' '${context_index}'" \
+      || command_status=$?
+    exit "${command_status}"
+    ;;
+  jepa-wm-insertion-demo-rollout)
+    run_id=""
+    arm_guarded_insertion_workflow
+    reference_name="${2:-}"
+    exploration_seed="${3:-}"
+    artifacts_name="${4:-}"
+    context_index="${5:-43}"
+    validate_guarded_insertion_identifiers "${reference_name}" "${artifacts_name}"
+    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+    require_positive_integer "context index" "${context_index}" || exit 1
+    timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    run_id="insertion-demo-${timestamp}-${exploration_seed}-c${context_index}"
+    guarded_insertion_summary="Insertion demo rollout: ${run_id}"
+    command_status=0
+    run_guarded_insertion_workflow "${artifacts_name}" \
+      "bash ~/quantis-robotics/ops/run_insertion_demo_rollout.sh '${run_id}' '${reference_name}' '${exploration_seed}' '${artifacts_name}' '${context_index}'" \
       || command_status=$?
     exit "${command_status}"
     ;;

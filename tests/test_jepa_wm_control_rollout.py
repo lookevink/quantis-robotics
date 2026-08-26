@@ -663,6 +663,38 @@ class ControlRolloutTest(unittest.TestCase):
             self.assertEqual(report["applied_steps"], 2)
             self.assertAlmostEqual(report["translation_progress_meters"], 0.02)
 
+    def test_four_step_report_reconstructs_the_complete_lineage_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._write_reference(root)
+            for index in range(4):
+                self._write_step(
+                    root,
+                    f"session-{index}",
+                    previous_session_id=(
+                        f"session-{index - 1}" if index else None
+                    ),
+                    pose_x=0.40 + 0.01 * index,
+                    post_x=0.41 + 0.01 * index,
+                    warmup_frames=4 + index,
+                    captured_at=100.0 + index,
+                    previous_action_x=0.01 if index else 0.0,
+                )
+
+            report = self._report(
+                root,
+                tuple(f"session-{index}" for index in range(4)),
+                requested_steps=4,
+            )
+
+            self.assertTrue(report["all_steps_applied"])
+            with self.assertRaisesRegex(ValueError, "session chain"):
+                self._report(
+                    root,
+                    ("session-1", "session-2"),
+                    requested_steps=2,
+                )
+
     def test_insertion_followup_accepts_policy_selected_target_and_bounded_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

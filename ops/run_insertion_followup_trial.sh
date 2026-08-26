@@ -10,6 +10,8 @@ previous_session_id="${3:-}"
 reference_name="${4:-}"
 exploration_seed="${5:-}"
 control_identity="${6:-}"
+session_roster="${7:-${previous_session_id},${execution_session_id}}"
+requested_steps="${8:-2}"
 checkpoint_dir="${HOME}/docker/jepa-wm/checkpoints"
 venv_python="${HOME}/.venvs/quantis-jepa-wm/bin/python"
 
@@ -22,6 +24,7 @@ for identifier in \
   }
 done
 require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+require_positive_integer "requested rollout steps" "${requested_steps}" || exit 1
 
 cd "${repo_dir}"
 proposal_name="$(control_proposal_from_identity \
@@ -30,4 +33,4 @@ proposal_name="$(control_proposal_from_identity \
 run_insertion_followup_trial \
   "${repo_dir}" "${safety_session_id}" "${execution_session_id}" \
   "${previous_session_id}" "${reference_name}" "${exploration_seed}" \
-  "${proposal_name}"
+  "${proposal_name}" "${session_roster}" "${requested_steps}"

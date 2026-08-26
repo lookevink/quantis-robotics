@@ -1315,6 +1315,23 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/backup_state.sh", calls)
         self.assertNotIn("unbound variable", result.stderr)
 
+    def test_insertion_demo_rollout_runs_one_guarded_chain_and_always_backs_up(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-demo-rollout",
+            arguments=(
+                "insertion-fresh-held-00",
+                "52600",
+                "contact-insertion-v9-2600-dense-control",
+                "43",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/run_insertion_demo_rollout.sh", calls)
+        self.assertIn("contact-insertion-v9-2600-dense-control", calls)
+        self.assertIn("'43'", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+
     def test_insertion_resolution_runs_diagnostic_and_always_backs_up(self):
         result, calls = self.run_command(
             "jepa-wm-insertion-resolution",

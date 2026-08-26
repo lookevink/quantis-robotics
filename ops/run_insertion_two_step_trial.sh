@@ -31,10 +31,11 @@ printf 'Insertion two-step action 2: %s\n' "${second_action_session_id}"
 cd "${repo_dir}"
 bash "${repo_dir}/ops/run_insertion_safety_check.sh" \
   "${first_safety_session_id}" "${reference_name}" "${exploration_seed}" \
-  "${control_identity}" "${context_index}"
+  "${control_identity}" "${context_index}" two-step
 bash "${repo_dir}/ops/run_insertion_reset_trial.sh" \
   "${first_action_session_id}" "${reference_name}" "${exploration_seed}" \
-  "${control_identity}" "${first_safety_session_id}" "${context_index}"
+  "${control_identity}" "${first_safety_session_id}" "${context_index}" \
+  two-step
 isaac_server_call \
   "demo.verify_insertion_followup_source('${first_action_session_id}')" 180
 bash "${repo_dir}/ops/run_insertion_followup_trial.sh" \

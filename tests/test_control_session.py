@@ -7,6 +7,7 @@ from unittest.mock import patch
 from jepa_wm.action import ActionSelectionBounds, DroidAction, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
 from jepa_wm.insertion_contract import InsertionControlTargetPolicy
+from jepa_wm.insertion_rollout import InsertionRolloutPosition
 from jepa_wm.joint_drive import JointDriveTarget
 from sim.control_session import (
     ControlExecutionPolicy,
@@ -16,6 +17,28 @@ from sim.control_session import (
 
 
 class ControlSessionTest(unittest.TestCase):
+    def test_round_trips_only_a_typed_bounded_insertion_rollout_position(self) -> None:
+        state = ControlSessionState(
+            "insertion-rollout",
+            "held-reference",
+            52600,
+            "control-insertion-rollout",
+            (0.0,) * 7,
+            False,
+            0.0,
+            execution_policy=ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION,
+            insertion_target_policy=InsertionControlTargetPolicy(),
+            insertion_rollout_position=InsertionRolloutPosition(3, 4),
+        )
+
+        self.assertEqual(ControlSessionState.from_dict(state.to_dict()), state)
+        malformed = state.to_dict()
+        malformed["insertion_rollout_position"]["step_index"] = True
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            ControlSessionState.from_dict(malformed)
+        with self.assertRaisesRegex(ValueError, "invalid"):
+            InsertionRolloutPosition(1, 5)
+
     def test_insertion_target_policy_is_persisted_and_required_for_its_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             data_root = Path(temp_dir)

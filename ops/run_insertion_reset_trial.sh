@@ -10,9 +10,12 @@ exploration_seed="${3:-}"
 control_identity="${4:-}"
 source_session_id="${5:-}"
 context_index="${6:-43}"
+insertion_rollout_profile="${7:-}"
 policy="insertion_reset_trial"
 checkpoint_dir="${HOME}/docker/jepa-wm/checkpoints"
 venv_python="${HOME}/.venvs/quantis-jepa-wm/bin/python"
+insertion_rollout_maximum_steps="$(insertion_rollout_profile_field \
+  "${repo_dir}" "${venv_python}" "${insertion_rollout_profile}" maximum-steps)"
 
 for identifier in \
   "${session_id}" "${reference_name}" "${control_identity}" "${source_session_id}"; do
@@ -30,4 +33,5 @@ proposal_name="$(control_proposal_from_identity \
 run_reset_trial_control_session \
   "${repo_dir}" "${session_id}" "${reference_name}" "${exploration_seed}" \
   "${proposal_name}" "${policy}" "${source_session_id}" "${context_index}" \
-  900 prepare_insertion_trial_source persist_insertion_trial_response
+  900 prepare_insertion_trial_source persist_insertion_trial_response \
+  "${insertion_rollout_maximum_steps}"

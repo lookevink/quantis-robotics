@@ -20,6 +20,7 @@ from jepa_wm.insertion_refresh import (
     ControlSafetySnapshot,
     InsertionEvaluationRefresh,
 )
+from jepa_wm.insertion_rollout import InsertionRolloutPosition
 from jepa_wm.insertion_contract import INSERTION_CONTROL_TARGET_POLICY
 from jepa_wm.insertion_trial import (
     InsertionTrialDriveEvidence,
@@ -39,6 +40,7 @@ from sim.control_session import (
 from sim.isaac_control_followup import (
     build_insertion_followup_capture,
     validate_followup_continuity,
+    verify_insertion_demo_rollout_result,
     verify_insertion_two_step_result,
 )
 from sim.isaac_demo_runtime import JointCommand
@@ -116,12 +118,19 @@ class FollowupContinuityTest(unittest.TestCase):
     def test_terminal_verifier_uses_the_authenticated_proposal_path(self) -> None:
         first_step = Mock()
         first_step.observation.expected_proposal = Path("/tmp/actual-proposal.pth")
+        first_step.state.resolved_insertion_rollout_position.return_value = (
+            InsertionRolloutPosition(1, 2)
+        )
+        second_step = Mock()
+        second_step.state.resolved_insertion_rollout_position.return_value = (
+            InsertionRolloutPosition(2, 2)
+        )
         report = Mock()
         report.to_dict.return_value = {"all_steps_applied": True}
         with (
             patch(
                 "jepa_wm.control_rollout.ControlStepSummary.from_session",
-                return_value=first_step,
+                side_effect=(first_step, second_step),
             ),
             patch(
                 "jepa_wm.control_rollout.ControlRolloutReport.from_sessions",
@@ -141,6 +150,42 @@ class FollowupContinuityTest(unittest.TestCase):
             from_sessions.call_args.kwargs["proposal"],
             Path("/tmp/actual-proposal.pth"),
         )
+        report.require_all_steps_applied.assert_called_once_with()
+
+    def test_demo_verifier_requires_the_complete_persisted_four_step_roster(self) -> None:
+        steps = []
+        for step_index in range(1, 5):
+            step = Mock()
+            step.observation.expected_proposal = Path("/tmp/actual-proposal.pth")
+            step.state.insertion_rollout_position = InsertionRolloutPosition(
+                step_index,
+                4,
+            )
+            step.state.resolved_insertion_rollout_position.return_value = (
+                step.state.insertion_rollout_position
+            )
+            steps.append(step)
+        report = Mock()
+        report.to_dict.return_value = {"all_steps_applied": True}
+        with (
+            patch(
+                "jepa_wm.control_rollout.ControlStepSummary.from_session",
+                side_effect=steps,
+            ),
+            patch(
+                "jepa_wm.control_rollout.ControlRolloutReport.from_sessions",
+                return_value=report,
+            ) as from_sessions,
+            patch("sim.isaac_control_followup.ControlSession.at"),
+        ):
+            result = verify_insertion_demo_rollout_result(
+                "run-action1,run-action2,run-action3,run-action4",
+                "reference",
+                52600,
+            )
+
+        self.assertEqual(result["status"], "demo_rollout_applied")
+        self.assertEqual(from_sessions.call_args.kwargs["requested_steps"], 4)
         report.require_all_steps_applied.assert_called_once_with()
 
     def test_builds_a_followup_capture_from_the_exact_applied_drive_target(self) -> None:
@@ -220,6 +265,7 @@ class FollowupContinuityTest(unittest.TestCase):
             current_gripper_width_m=0.04,
             insertion_target_policy=INSERTION_CONTROL_TARGET_POLICY,
             active_drive_target=drive.active_target,
+            insertion_rollout_position=InsertionRolloutPosition(1, 4),
         )
         current = ControlSafetySnapshot(
             previous.joint_positions,
@@ -252,15 +298,30 @@ class FollowupContinuityTest(unittest.TestCase):
         self.assertEqual(state.previous_session_id, result.session_id)
         self.assertEqual(state.active_drive_target, drive.forward_target)
         self.assertEqual(
+            state.insertion_rollout_position,
+            InsertionRolloutPosition(2, 4),
+        )
+        self.assertEqual(
             state.execution_policy,
             ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION,
         )
-        with self.assertRaisesRegex(ValueError, "safe applied"):
+        continued = InsertionFollowupLineage(
+            prior_observation,
+            replace(
+                prior_state,
+                previous_session_id="insertion-trial-before-previous",
+                insertion_rollout_position=InsertionRolloutPosition(2, 4),
+            ),
+            result,
+        )
+        self.assertEqual(continued.rollout_position.step_index, 2)
+        with self.assertRaisesRegex(ValueError, "maximum"):
             InsertionFollowupLineage(
                 prior_observation,
                 replace(
                     prior_state,
                     previous_session_id="insertion-trial-before-previous",
+                    insertion_rollout_position=InsertionRolloutPosition(4, 4),
                 ),
                 result,
             )

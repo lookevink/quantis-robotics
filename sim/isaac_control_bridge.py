@@ -5,6 +5,7 @@ from sim.isaac_control_execution import apply_control_response
 from sim.isaac_control_resolution import measure_insertion_control_resolution
 from sim.isaac_control_followup import (
     capture_followup_observation,
+    verify_insertion_demo_rollout_result,
     verify_insertion_followup_source,
     verify_insertion_two_step_result,
 )
@@ -26,6 +27,7 @@ __all__ = (
     "apply_control_response",
     "capture_control_observation",
     "capture_followup_observation",
+    "verify_insertion_demo_rollout_result",
     "verify_insertion_followup_source",
     "verify_insertion_two_step_result",
     "measure_insertion_control_resolution",

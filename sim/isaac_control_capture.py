@@ -29,6 +29,10 @@ from jepa_wm.insertion_contract import (
     insertion_control_target_policy,
 )
 from jepa_wm.joint_drive import JointDriveTarget
+from jepa_wm.insertion_rollout import (
+    InsertionRolloutPosition,
+    is_insertion_rollout_policy,
+)
 from jepa_wm.insertion_recording import ContactInsertionEvidence
 from jepa_wm.persistence import write_json_atomic
 from jepa_wm.control_safety import SimulatorSafetyLimits
@@ -203,6 +207,7 @@ async def capture_control_observation(
     proposal_name: str,
     execution_policy: str = ControlExecutionPolicy.DIRECT.value,
     context_index: int = 4,
+    insertion_rollout_maximum_steps: int | None = None,
 ) -> dict[str, Any]:
     """Replay a seeded segment prefix and persist one live wrist observation."""
 
@@ -508,6 +513,11 @@ async def capture_control_observation(
                 active_command.gripper_width_m,
             )
             if active_command is not None
+            else None
+        ),
+        insertion_rollout_position=(
+            InsertionRolloutPosition.initial(insertion_rollout_maximum_steps)
+            if is_insertion_rollout_policy(policy)
             else None
         ),
     )

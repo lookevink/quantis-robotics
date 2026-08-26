@@ -35,7 +35,11 @@ from jepa_wm.insertion_trial import (
     InsertionTrialSourceEvidence,
     build_insertion_trial_response,
 )
-from jepa_wm.insertion_contract import INSERTION_CONTROL_TARGET_POLICY
+from jepa_wm.insertion_contract import (
+    INSERTION_CONTROL_TARGET_POLICY,
+    InsertionControlTargetPolicy,
+)
+from jepa_wm.insertion_rollout import InsertionRolloutPosition
 from jepa_wm.joint_settlement import JointSettlementAttempt
 from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.training_artifact import ArtifactIdentity
@@ -494,8 +498,10 @@ class InsertionTrialBindingTest(unittest.TestCase):
             InsertionTrialBinding.from_dict(payload)
 
     @patch("sim.control_session.validate_observation_target")
+    @patch.object(InsertionControlTargetPolicy, "validate_observation")
     def test_session_requires_source_evidence_and_equivalent_reset_before_claim(
         self,
+        _validate_insertion_target,
         _validate_target,
     ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -520,6 +526,9 @@ class InsertionTrialBindingTest(unittest.TestCase):
                 plug_position=(0.4, 0.0, 0.5),
                 plug_attached=True,
                 current_gripper_width_m=0.04,
+                insertion_target_policy=InsertionControlTargetPolicy(
+                    orientation_hold_tolerance_radians=None,
+                ),
                 active_drive_target=JointDriveTarget(_JOINTS, 0.04),
             )
             source_evidence = _source()
@@ -543,6 +552,7 @@ class InsertionTrialBindingTest(unittest.TestCase):
                 session_id="insertion-trial",
                 recording="control-insertion-trial",
                 execution_policy=ControlExecutionPolicy.INSERTION_RESET_TRIAL,
+                insertion_rollout_position=InsertionRolloutPosition(1, 2),
             )
             trial.write_capture(trial_observation, trial_state)
             execution = trial.trial_context(trial_observation, trial_state)
