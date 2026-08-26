@@ -9,7 +9,14 @@ from math import isclose, isfinite
 from pathlib import Path
 from typing import Any
 
-from jepa_wm.action import DROID_FPS, DroidAction, DroidActionScale, DroidPose
+from jepa_wm.action import (
+    DROID_FPS,
+    MAX_GRIPPER_WIDTH_M,
+    DroidAction,
+    DroidActionScale,
+    DroidPose,
+    action_between,
+)
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.control_safety import (
     ACTION_SCALES,
@@ -21,14 +28,17 @@ from jepa_wm.control_safety import (
     SimulatorControlGate,
     SimulatorSafetyState,
 )
-from jepa_wm.control_tracking import ActionTrackingDecision
+from jepa_wm.control_tracking import ActionTrackingDecision, ActionTrackingLimits
 from jepa_wm.joint_settlement import JointSettlementAttempt
 from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.direct_safety import (
     ControlSafetySnapshot,
     DirectInsertionSafetyEvidence,
 )
-from jepa_wm.control_policy import ControlExecutionPolicy
+from jepa_wm.control_policy import (
+    ControlExecutionPolicy,
+    is_insertion_trial_execution_policy,
+)
 from jepa_wm.experimental_candidate import (
     CandidateExecutionEvidence,
     CandidateSourceEvidence,
@@ -305,6 +315,37 @@ class PostActionEvidence:
         )
         if not all(isfinite(value) and value >= 0.0 for value in scalars):
             raise ValueError("post-action safety evidence is invalid")
+
+    def require_safety_snapshot(self) -> ControlSafetySnapshot:
+        if self.plug_position is None:
+            raise ValueError("post-action plug position is missing")
+        return ControlSafetySnapshot(
+            self.joint_positions,
+            (1.0 - self.pose.values[6]) * MAX_GRIPPER_WIDTH_M,
+            self.plug_position,
+            self.contact_force_newtons,
+            self.collision_detected,
+            self.plug_attached,
+        )
+
+    def validate_followup_capture(
+        self,
+        observation: ControlObservation,
+        state: ControlSessionState,
+    ) -> None:
+        self.require_safety_snapshot().validate_continuity(
+            state.require_safety_snapshot()
+        )
+        drift = action_between(self.pose, observation.pose)
+        limits = ActionTrackingLimits()
+        if (
+            sum(value * value for value in drift.values[:3])
+            > limits.maximum_translation_error_meters**2
+            or sum(value * value for value in drift.values[3:6])
+            > limits.maximum_rotation_error_radians**2
+            or abs(drift.values[6]) > limits.maximum_gripper_error
+        ):
+            raise ValueError("follow-up capture changed after its applied result")
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -599,6 +640,61 @@ class ControlResult:
 
 
 @dataclass(frozen=True)
+class InsertionFollowupLineage:
+    """One applied insertion result authorized to produce one follow-up source."""
+
+    observation: ControlObservation
+    state: ControlSessionState
+    result: ControlResult
+
+    def __post_init__(self) -> None:
+        post_action = self.result.post_action
+        if (
+            self.result.session_id != self.state.session_id
+            or self.result.status is not ControlResultStatus.APPLIED
+            or post_action is None
+            or post_action.insertion_trial is None
+            or not post_action.insertion_trial.realized_target_progress.passed
+            or self.result.insertion_trial_drive is None
+            or self.state.insertion_target_policy is None
+            or self.state.previous_session_id is not None
+            or not is_insertion_trial_execution_policy(self.state.execution_policy)
+        ):
+            raise ValueError("follow-up lineage requires one safe applied insertion")
+
+    @property
+    def post_action(self) -> PostActionEvidence:
+        if self.result.post_action is None:
+            raise ValueError("follow-up lineage has no post-action evidence")
+        return self.result.post_action
+
+    @property
+    def active_drive_target(self) -> JointDriveTarget:
+        if self.result.insertion_trial_drive is None:
+            raise ValueError("follow-up lineage has no drive evidence")
+        return self.result.insertion_trial_drive.forward_target
+
+    def validate_source(
+        self,
+        observation: ControlObservation,
+        state: ControlSessionState,
+    ) -> None:
+        if (
+            state.previous_session_id != self.result.session_id
+            or observation.warmup_frames != self.observation.warmup_frames + 1
+            or observation.expected_proposal != self.observation.expected_proposal
+            or state.reference_recording != self.state.reference_recording
+            or state.seed != self.state.seed
+            or state.insertion_target_policy != self.state.insertion_target_policy
+            or state.active_drive_target != self.active_drive_target
+            or observation.previous_action
+            != action_between(self.observation.pose, observation.pose)
+        ):
+            raise ValueError("insertion follow-up source lineage is invalid")
+        self.post_action.validate_followup_capture(observation, state)
+
+
+@dataclass(frozen=True)
 class ControlCaptureResult:
     session_id: str
     observation: ControlObservation
@@ -749,8 +845,8 @@ class ControlSession:
         is_candidate = (
             state.execution_policy is ControlExecutionPolicy.RESET_TRIAL_CANDIDATE
         )
-        is_insertion_trial = (
-            state.execution_policy is ControlExecutionPolicy.INSERTION_RESET_TRIAL
+        is_insertion_trial = is_insertion_trial_execution_policy(
+            state.execution_policy
         )
         if is_candidate:
             self.load_candidate_binding(proposal)
@@ -871,6 +967,16 @@ class ControlSession:
             != INSERTION_TASK_ID
         ):
             raise ValueError("insertion trial source does not reference insertion evidence")
+        if state.previous_session_id is not None:
+            from jepa_wm.control_rollout import ControlStepSummary
+
+            previous = ControlSession.at(self.path.parent, state.previous_session_id)
+            previous_step = ControlStepSummary.from_session(previous)
+            InsertionFollowupLineage(
+                previous_step.observation,
+                previous_step.state,
+                previous_step.result,
+            ).validate_source(observation, state)
         return InsertionTrialSourceEvidence(
             self.trial_context(observation, state),
             self.load_response(),
@@ -1106,6 +1212,10 @@ class ControlSession:
             or evidence.proposal.path != response.proposal
             or evidence.proposal.fingerprint != response.proposal_fingerprint
             or evidence.evaluated_at_unix_seconds < response.created_at_unix_seconds
+            or (
+                evidence.active_drive_target is not None
+                and evidence.active_drive_target != state.active_drive_target
+            )
         ):
             raise ValueError("direct insertion safety is not bound to its session")
         expected_scales = state.insertion_projection_scales(observation)
@@ -1165,7 +1275,7 @@ class ControlSession:
             raise ValueError(
                 "restricted insertion diagnostic sessions cannot be executed"
             )
-        if state.execution_policy is ControlExecutionPolicy.INSERTION_RESET_TRIAL:
+        if is_insertion_trial_execution_policy(state.execution_policy):
             self.load_insertion_trial_binding().require_current_execution()
         try:
             with self.execution_path.open("x", encoding="utf-8") as output:

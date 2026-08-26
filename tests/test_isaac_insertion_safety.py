@@ -20,6 +20,7 @@ from jepa_wm.control_safety import (
 )
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
 from jepa_wm.insertion_contract import InsertionControlTargetPolicy
+from jepa_wm.joint_drive import JointDriveTarget
 from sim.control_session import ControlSessionState
 from sim.isaac_demo_runtime import JointCommand
 from sim.isaac_insertion_safety import evaluate_direct_insertion_candidate
@@ -55,6 +56,7 @@ class DirectInsertionSafetyRuntimeTest(unittest.TestCase):
             current_gripper_width_m=0.04,
             execution_policy=ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION,
             insertion_target_policy=InsertionControlTargetPolicy(),
+            active_drive_target=JointDriveTarget(joints, 0.04),
         )
         response = ProposedControl(
             9,
@@ -126,6 +128,7 @@ class DirectInsertionSafetyRuntimeTest(unittest.TestCase):
                 return_value=SimpleNamespace(
                     runtime=runtime,
                     safety=state.require_safety_snapshot(),
+                    active_drive_target=state.active_drive_target,
                 ),
             ),
             patch(
@@ -140,6 +143,10 @@ class DirectInsertionSafetyRuntimeTest(unittest.TestCase):
 
         self.assertTrue(payload["passed"])
         self.assertEqual(payload["authority"], "no_actuation")
+        self.assertEqual(
+            payload["active_drive_target"],
+            state.active_drive_target.to_dict(),
+        )
         self.assertIs(
             select_projection.call_args.kwargs["target_progress"],
             INSERTION_TARGET_PROGRESS,

@@ -102,10 +102,10 @@ load_control_policy_descriptor() {
   local policy="$1"
   local direct_proposal="${2:-direct-proposal}"
   case "${policy}" in
-    direct|calibration_collection|insertion_safety_evaluation|insertion_reset_trial)
+    direct|calibration_collection|insertion_safety_evaluation|insertion_reset_trial|insertion_followup_trial)
       CONTROL_POLICY_PROPOSAL="${direct_proposal}"
       CONTROL_POLICY_REQUIRES_CHECKPOINT=true
-      if [[ "${policy}" == "insertion_reset_trial" ]]; then
+      if [[ "${policy}" == "insertion_reset_trial" || "${policy}" == "insertion_followup_trial" ]]; then
         CONTROL_POLICY_RESPONDER=insertion_trial
       else
         CONTROL_POLICY_RESPONDER=direct
@@ -280,6 +280,76 @@ run_reset_trial_control_session() {
     "await demo.apply_control_response('${RESET_TRIAL_SESSION_ID}')" 180
   RESET_TRIAL_PHASE="complete"
   finalize_reset_trial_control_session
+}
+
+run_insertion_followup_trial() {
+  local repository="$1"
+  local safety_session_id="$2"
+  local execution_session_id="$3"
+  local previous_session_id="$4"
+  local reference_name="$5"
+  local exploration_seed="$6"
+  local proposal_name="$7"
+  local phase="followup_capture_01"
+  local command_status=0
+  local report_status=0
+  local -a report_arguments=(
+    --rollout "${execution_session_id}"
+    --reference "${reference_name}"
+    --seed "${exploration_seed}"
+    --proposal "${proposal_name}"
+    --policy insertion_followup_trial
+    --sessions "${previous_session_id},${execution_session_id}"
+    --requested-steps 2
+  )
+
+  isaac_server_call \
+    "await demo.capture_followup_observation('${safety_session_id}','${previous_session_id}','${proposal_name}')" \
+    180 true || command_status=$?
+  if (( command_status == 0 )); then
+    phase="followup_inference_01"
+    respond_to_control_session \
+      "${repository}" "${safety_session_id}" insertion_safety_evaluation \
+      || command_status=$?
+  fi
+  if (( command_status == 0 )); then
+    phase="followup_safety_01"
+    isaac_server_call \
+      "await demo.evaluate_direct_insertion_candidate('${safety_session_id}')" \
+      180 || command_status=$?
+  fi
+  if (( command_status == 0 )); then
+    phase="followup_source_preflight_01"
+    isaac_server_call \
+      "demo.prepare_insertion_trial_source('${safety_session_id}')" \
+      180 || command_status=$?
+  fi
+  if (( command_status == 0 )); then
+    phase="followup_binding_01"
+    isaac_server_call \
+      "demo.persist_insertion_followup_response('${execution_session_id}','${safety_session_id}')" \
+      180 || command_status=$?
+  fi
+  if (( command_status == 0 )); then
+    phase="followup_apply_01"
+    isaac_server_call \
+      "await demo.apply_control_response('${execution_session_id}')" \
+      180 || command_status=$?
+  fi
+  if (( command_status != 0 )); then
+    report_arguments+=(
+      --orchestration-failure "${phase}:exit_${command_status}"
+    )
+  fi
+  set +e
+  bash "${repository}/ops/jepa_wm.sh" control-rollout-report \
+    "${report_arguments[@]}"
+  report_status=$?
+  set -e
+  if (( command_status == 0 && report_status != 0 )); then
+    command_status=${report_status}
+  fi
+  return "${command_status}"
 }
 
 isaac_demo_code() {

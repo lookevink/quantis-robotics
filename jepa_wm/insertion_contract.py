@@ -191,6 +191,7 @@ def insertion_control_target_policy(
         in (
             ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION,
             ControlExecutionPolicy.INSERTION_RESET_TRIAL,
+            ControlExecutionPolicy.INSERTION_FOLLOWUP_TRIAL,
         )
         else None
     )

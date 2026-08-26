@@ -17,10 +17,12 @@ from jepa_wm.control_safety import (
 )
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
 from jepa_wm.insertion_task import InsertionTaskLimits
+from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.training_artifact import ArtifactIdentity
 
 
-DIRECT_SAFETY_SCHEMA = "quantis.jepa_wm_direct_insertion_safety.v1"
+DIRECT_SAFETY_SCHEMA_V1 = "quantis.jepa_wm_direct_insertion_safety.v1"
+DIRECT_SAFETY_SCHEMA = "quantis.jepa_wm_direct_insertion_safety.v2"
 MAXIMUM_CAPTURED_GRIPPER_DRIFT_METERS = 1e-6
 MAXIMUM_CAPTURED_CONTACT_DRIFT_NEWTONS = 1e-9
 
@@ -168,6 +170,7 @@ class DirectInsertionSafetyEvidence:
     attempts: tuple[SafetyProjectionAttempt, ...]
     selected_action_scale: DroidActionScale | None
     live_state: ControlSafetySnapshot
+    active_drive_target: JointDriveTarget | None = None
     authority: DirectSafetyAuthority = DirectSafetyAuthority.NO_ACTUATION
 
     def __post_init__(self) -> None:
@@ -216,7 +219,11 @@ class DirectInsertionSafetyEvidence:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema": DIRECT_SAFETY_SCHEMA,
+            "schema": (
+                DIRECT_SAFETY_SCHEMA
+                if self.active_drive_target is not None
+                else DIRECT_SAFETY_SCHEMA_V1
+            ),
             "task": INSERTION_TASK_ID,
             "observation_id": self.observation_id,
             "evaluated_at_unix_seconds": self.evaluated_at_unix_seconds,
@@ -229,6 +236,11 @@ class DirectInsertionSafetyEvidence:
                 else None
             ),
             "live_state": self.live_state.to_dict(),
+            **(
+                {"active_drive_target": self.active_drive_target.to_dict()}
+                if self.active_drive_target is not None
+                else {}
+            ),
             "passed": self.passed,
             "authority": self.authority.value,
         }
@@ -237,7 +249,8 @@ class DirectInsertionSafetyEvidence:
     def from_dict(cls, payload: Any) -> DirectInsertionSafetyEvidence:
         if (
             not isinstance(payload, dict)
-            or payload.get("schema") != DIRECT_SAFETY_SCHEMA
+            or payload.get("schema")
+            not in (DIRECT_SAFETY_SCHEMA_V1, DIRECT_SAFETY_SCHEMA)
             or payload.get("task") != INSERTION_TASK_ID
         ):
             raise ValueError("direct insertion safety schema is invalid")
@@ -262,10 +275,20 @@ class DirectInsertionSafetyEvidence:
                     else None
                 ),
                 live_state=ControlSafetySnapshot.from_dict(payload["live_state"]),
+                active_drive_target=(
+                    JointDriveTarget.from_dict(payload["active_drive_target"])
+                    if payload.get("schema") == DIRECT_SAFETY_SCHEMA
+                    else None
+                ),
                 authority=DirectSafetyAuthority(payload["authority"]),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("direct insertion safety evidence is incomplete") from error
         if payload.get("passed") is not evidence.passed:
             raise ValueError("direct insertion safety pass claim is inconsistent")
+        if (
+            payload.get("schema") == DIRECT_SAFETY_SCHEMA
+            and "active_drive_target" not in payload
+        ):
+            raise ValueError("direct insertion safety evidence is incomplete")
         return evidence

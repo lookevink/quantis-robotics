@@ -12,6 +12,7 @@ from sim.isaac_baseline_response import persist_baseline_response
 from sim.isaac_shadow_safety import evaluate_shadow_candidate
 from sim.isaac_insertion_safety import evaluate_direct_insertion_candidate
 from sim.isaac_insertion_trial import (
+    persist_insertion_followup_response,
     persist_insertion_trial_response,
     prepare_insertion_trial_source,
 )
@@ -24,6 +25,7 @@ __all__ = (
     "measure_insertion_control_resolution",
     "evaluate_shadow_candidate",
     "evaluate_direct_insertion_candidate",
+    "persist_insertion_followup_response",
     "persist_insertion_trial_response",
     "prepare_insertion_trial_source",
     "persist_experimental_candidate_response",

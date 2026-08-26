@@ -56,6 +56,7 @@ def tracking_limits_for_policy(
     if policy in (
         ControlExecutionPolicy.RESET_TRIAL_CANDIDATE,
         ControlExecutionPolicy.INSERTION_RESET_TRIAL,
+        ControlExecutionPolicy.INSERTION_FOLLOWUP_TRIAL,
     ):
         return EXPERIMENTAL_CANDIDATE_TRACKING_LIMITS
     return ActionTrackingLimits()

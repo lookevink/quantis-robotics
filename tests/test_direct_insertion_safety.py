@@ -23,6 +23,7 @@ from jepa_wm.direct_safety import (
     DirectInsertionSafetyEvidence,
 )
 from jepa_wm.training_artifact import ArtifactIdentity
+from jepa_wm.joint_drive import JointDriveTarget
 from sim.control_session import ControlSession, ControlSessionState
 
 
@@ -56,6 +57,7 @@ def _evidence(*, passed: bool = True) -> DirectInsertionSafetyEvidence:
             False,
             True,
         ),
+        active_drive_target=JointDriveTarget(_JOINTS, 0.04),
     )
 
 
@@ -82,6 +84,13 @@ class DirectInsertionSafetyEvidenceTest(unittest.TestCase):
         self.assertEqual(
             DirectInsertionSafetyEvidence.from_dict(evidence.to_dict()), evidence
         )
+
+    def test_current_evidence_requires_its_evaluated_drive_target(self) -> None:
+        payload = _evidence().to_dict()
+        del payload["active_drive_target"]
+
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            DirectInsertionSafetyEvidence.from_dict(payload)
 
     def test_rejects_tampered_authority_and_numeric_strings(self) -> None:
         for field, value, nested in (
@@ -138,6 +147,7 @@ class DirectInsertionSafetySessionTest(unittest.TestCase):
                 plug_position=(0.4, 0.0, 0.5),
                 plug_attached=True,
                 current_gripper_width_m=0.04,
+                active_drive_target=JointDriveTarget(_JOINTS, 0.04),
                 execution_policy=ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION,
             )
             response = ProposedControl(
@@ -176,6 +186,7 @@ class DirectInsertionSafetySessionTest(unittest.TestCase):
                     False,
                     True,
                 ),
+                active_drive_target=JointDriveTarget(_JOINTS, 0.04),
             )
             session.write_capture(observation, state)
             session.write_response(response)
@@ -189,6 +200,18 @@ class DirectInsertionSafetySessionTest(unittest.TestCase):
             self.assertFalse(session.result_path.exists())
             payload = json.loads(session.direct_safety_path.read_text())
             payload["live_state"]["plug_position"][0] += 0.01
+            session.direct_safety_path.write_text(json.dumps(payload))
+            with self.assertRaisesRegex(ValueError, "not bound"):
+                session.load_direct_safety()
+
+            payload = evidence.to_dict()
+            payload["schema"] = "quantis.jepa_wm_direct_insertion_safety.v1"
+            del payload["active_drive_target"]
+            session.direct_safety_path.write_text(json.dumps(payload))
+            self.assertIsNone(session.load_direct_safety().active_drive_target)
+
+            payload = evidence.to_dict()
+            payload["active_drive_target"]["joint_positions"][0] += 0.001
             session.direct_safety_path.write_text(json.dumps(payload))
             with self.assertRaisesRegex(ValueError, "not bound"):
                 session.load_direct_safety()

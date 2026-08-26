@@ -65,6 +65,13 @@ async def evaluate_direct_insertion_candidate(session_id: str) -> dict[str, Any]
         operation="insertion safety synchronization",
     )
     live_state = synchronized.safety
+    active_drive_target = synchronized.active_drive_target
+    if active_drive_target is None or persisted_state.active_drive_target is None:
+        raise RuntimeError("insertion safety drive target was not refreshed")
+    persisted_state.active_drive_target.validate_active(
+        active_drive_target.joint_positions,
+        active_drive_target.gripper_width_m,
+    )
 
     evaluated_at = time()
     safety = ExecutionSafetyContext(
@@ -93,6 +100,7 @@ async def evaluate_direct_insertion_candidate(session_id: str) -> dict[str, Any]
         attempts=attempts,
         selected_action_scale=(attempts[-1].scale if selected is not None else None),
         live_state=live_state,
+        active_drive_target=active_drive_target,
     )
     session.write_direct_safety(evidence)
     return evidence.to_dict()

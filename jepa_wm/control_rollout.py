@@ -18,13 +18,17 @@ from jepa_wm.control_tracking import (
     tracking_limits_for_policy,
 )
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
-from jepa_wm.control_policy import ControlExecutionPolicy
+from jepa_wm.control_policy import (
+    ControlExecutionPolicy,
+    is_insertion_trial_execution_policy,
+)
 from jepa_wm.grasp_task import (
     GraspTaskStep,
     ReachAndGraspDecision,
     evaluate_reach_and_grasp,
 )
 from jepa_wm.grasp_contract import GRASP_TASK_ID
+from jepa_wm.insertion_contract import INSERTION_TASK_ID
 from jepa_wm.control_safety import ControlGateReason, SimulatorSafetyLimits
 from jepa_wm.insertion_trial import (
     InsertionTrialOutcomeObservation,
@@ -55,6 +59,9 @@ class OrchestrationOperation(str, Enum):
     INITIAL_STATUS = "initial_status"
     FOLLOWUP_CAPTURE = "followup_capture"
     FOLLOWUP_INFERENCE = "followup_inference"
+    FOLLOWUP_SAFETY = "followup_safety"
+    FOLLOWUP_SOURCE_PREFLIGHT = "followup_source_preflight"
+    FOLLOWUP_BINDING = "followup_binding"
     FOLLOWUP_APPLY = "followup_apply"
     FOLLOWUP_STATUS = "followup_status"
     RESET_TRIAL_SOURCE_PREFLIGHT = "reset_trial_source_preflight"
@@ -67,6 +74,9 @@ class OrchestrationOperation(str, Enum):
         return self in (
             OrchestrationOperation.FOLLOWUP_CAPTURE,
             OrchestrationOperation.FOLLOWUP_INFERENCE,
+            OrchestrationOperation.FOLLOWUP_SAFETY,
+            OrchestrationOperation.FOLLOWUP_SOURCE_PREFLIGHT,
+            OrchestrationOperation.FOLLOWUP_BINDING,
             OrchestrationOperation.FOLLOWUP_APPLY,
             OrchestrationOperation.FOLLOWUP_STATUS,
         )
@@ -200,9 +210,11 @@ class ControlStepSummary:
     def from_session(cls, session: ControlSession) -> ControlStepSummary:
         observation, state = session.load_capture()
         response = session.load_response()
+        captured_observation = observation
+        captured_response = response
         result = session.load_result()
         limits = SimulatorSafetyLimits()
-        if state.execution_policy is ControlExecutionPolicy.INSERTION_RESET_TRIAL:
+        if is_insertion_trial_execution_policy(state.execution_policy):
             binding = session.load_insertion_trial_binding(response)
             attempted_scales = tuple(
                 attempt.scale for attempt in result.projection_attempts
@@ -584,7 +596,14 @@ class ControlStepSummary:
             if session.shadow_safety_path.is_file()
             else None
         )
-        return cls(state, observation, response, result, shadow, shadow_safety)
+        return cls(
+            state,
+            captured_observation,
+            captured_response,
+            result,
+            shadow,
+            shadow_safety,
+        )
 
     @property
     def session_id(self) -> str:
@@ -604,9 +623,17 @@ class ControlStepSummary:
 
     @property
     def timing(self) -> ControlStepTiming:
+        observation = self.observation
+        response = self.response
+        if self.result.insertion_trial_refresh is not None:
+            observation, response = self.result.insertion_trial_refresh.authorize(
+                observation,
+                response,
+                self.state.require_safety_snapshot(),
+            )
         return ControlStepTiming.from_step(
-            self.observation,
-            self.response,
+            observation,
+            response,
             self.result,
         )
 
@@ -777,8 +804,17 @@ class ControlRolloutReport:
             if target_indices != tuple(
                 range(target_indices[0], target_indices[0] + len(target_indices))
             ):
-                raise ValueError("grasp control rollout target schedule is invalid")
-        elif len(set(target_frames)) != 1:
+                raise ValueError("control rollout target schedule is invalid")
+        elif (
+            not (
+                self.reference_task == INSERTION_TASK_ID
+                and all(
+                    step.state.insertion_target_policy is not None
+                    for step in complete
+                )
+            )
+            and len(set(target_frames)) != 1
+        ):
             raise ValueError("control rollout changed its target frame")
         initial_warmup = observations[0].warmup_frames
         if initial_warmup < 4 or any(
@@ -1008,7 +1044,7 @@ class ControlRolloutReport:
             None
             if not complete
             else complete[-1]
-            if reference_task == GRASP_TASK_ID
+            if reference_task in (GRASP_TASK_ID, INSERTION_TASK_ID)
             else complete[0]
         )
         target = (

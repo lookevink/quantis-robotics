@@ -25,7 +25,9 @@ from jepa_wm.direct_safety import (
 )
 from jepa_wm.insertion_trial import (
     INSERTION_TRIAL_SETTLEMENT_MAXIMUM_UPDATES,
+    InsertionTrialAuthority,
     InsertionTrialBinding,
+    InsertionTrialExecutionEvidence,
     InsertionTrialExecutionRefresh,
     InsertionTrialPolicy,
     InsertionTrialRollbackFailure,
@@ -33,6 +35,7 @@ from jepa_wm.insertion_trial import (
     InsertionTrialSourceEvidence,
     build_insertion_trial_response,
 )
+from jepa_wm.insertion_contract import INSERTION_CONTROL_TARGET_POLICY
 from jepa_wm.joint_settlement import JointSettlementAttempt
 from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.training_artifact import ArtifactIdentity
@@ -43,6 +46,7 @@ from sim.control_session import (
     ControlSession,
     ControlSessionState,
 )
+from sim.isaac_insertion_trial import build_insertion_followup_execution_capture
 
 
 _FINGERPRINT = "a" * 64
@@ -112,6 +116,7 @@ def _source() -> InsertionTrialSourceEvidence:
             False,
             True,
         ),
+        JointDriveTarget(_JOINTS, 0.04),
     )
     return InsertionTrialSourceEvidence(
         _context(9, ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION),
@@ -345,6 +350,74 @@ class InsertionTrialBindingTest(unittest.TestCase):
         self.assertEqual(
             held.allowed_projection_scales,
             ORIENTATION_HOLD_ACTION_SCALES,
+        )
+
+    def test_rebinds_a_followup_source_only_to_one_followup_execution(self) -> None:
+        predecessor = "insertion-trial-predecessor"
+        source = replace(
+            _source(),
+            context=replace(_source().context, previous_session_id=predecessor),
+        )
+        execution = replace(
+            _context(10, ControlExecutionPolicy.INSERTION_FOLLOWUP_TRIAL),
+            previous_session_id=predecessor,
+        )
+
+        binding, response = build_insertion_trial_response(
+            execution_session_id="insertion-followup-trial",
+            source_session_id="insertion-followup-safety",
+            execution=execution,
+            source=source,
+            created_at_unix_seconds=101.0,
+        )
+
+        self.assertEqual(
+            binding.authority,
+            InsertionTrialAuthority.FOLLOWUP_TRIAL_ONLY,
+        )
+        self.assertEqual(response.observation_id, execution.observation.observation_id)
+        with self.assertRaisesRegex(ValueError, "not bound"):
+            binding.validate_execution(
+                source,
+                replace(
+                    InsertionTrialExecutionEvidence(execution, response),
+                    context=replace(execution, previous_session_id="different-trial"),
+                ),
+            )
+
+    def test_clones_one_no_actuation_followup_capture_without_resetting_it(self) -> None:
+        source_observation = _observation(9)
+        source_state = ControlSessionState(
+            "insertion-followup-safety",
+            "insertion-held-00",
+            52600,
+            "control-insertion-followup-safety",
+            _JOINTS,
+            False,
+            0.0,
+            previous_session_id="insertion-trial-predecessor",
+            execution_policy=ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION,
+            plug_position=(0.4, 0.0, 0.5),
+            plug_attached=True,
+            current_gripper_width_m=0.04,
+            insertion_target_policy=INSERTION_CONTROL_TARGET_POLICY,
+            active_drive_target=JointDriveTarget(_JOINTS, 0.04),
+        )
+
+        observation, state = build_insertion_followup_execution_capture(
+            "insertion-followup-trial",
+            source_observation,
+            source_state,
+        )
+
+        self.assertNotEqual(observation.observation_id, source_observation.observation_id)
+        self.assertEqual(observation.pose, source_observation.pose)
+        self.assertEqual(observation.context_frame, source_observation.context_frame)
+        self.assertEqual(state.previous_session_id, source_state.previous_session_id)
+        self.assertEqual(state.active_drive_target, source_state.active_drive_target)
+        self.assertEqual(
+            state.execution_policy,
+            ControlExecutionPolicy.INSERTION_FOLLOWUP_TRIAL,
         )
 
     def test_rejects_reset_drift_and_non_trial_execution_policy(self) -> None:

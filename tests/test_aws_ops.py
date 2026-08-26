@@ -1234,6 +1234,53 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/run_insertion_reset_trial.sh", calls)
         self.assertIn("ops/backup_state.sh", calls)
 
+    def test_insertion_followup_forwards_the_exact_predecessor_and_backs_up(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-followup",
+            arguments=(
+                "insertion-fresh-held-00",
+                "52600",
+                "contact-insertion-v9-2600-dense-control",
+                "insertion-trial-previous",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/run_insertion_followup_trial.sh", calls)
+        self.assertIn("'insertion-trial-previous'", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+
+    def test_insertion_followup_backs_up_a_failed_execution(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-followup",
+            arguments=(
+                "insertion-fresh-held-00",
+                "52600",
+                "contact-insertion-v9-2600-dense-control",
+                "insertion-trial-previous",
+            ),
+            extra_env={"FAKE_SSH_FAIL_MATCH": "run_insertion_followup_trial.sh"},
+        )
+
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertIn("ops/run_insertion_followup_trial.sh", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+
+    def test_insertion_followup_backs_up_an_early_validation_failure(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-followup",
+            arguments=(
+                "insertion-fresh-held-00",
+                "52600",
+                "contact-insertion-v9-2600-dense-control",
+                "../invalid-predecessor",
+            ),
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("ops/run_insertion_followup_trial.sh", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+
     def test_insertion_resolution_runs_diagnostic_and_always_backs_up(self):
         result, calls = self.run_command(
             "jepa-wm-insertion-resolution",

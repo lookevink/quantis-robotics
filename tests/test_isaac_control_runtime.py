@@ -211,11 +211,12 @@ class ContactReadingTest(unittest.TestCase):
             return refreshed_runtime
 
         pose = Mock()
+        drive_target = Mock()
 
         def read(runtime):
             events.append("read")
             self.assertIs(runtime, refreshed_runtime)
-            return live, pose
+            return live, pose, drive_target
 
         def observe():
             events.append(
@@ -232,7 +233,7 @@ class ContactReadingTest(unittest.TestCase):
                 side_effect=refresh,
             ),
             patch(
-                "sim.isaac_control_runtime._control_safety_and_pose",
+                "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
                 side_effect=read,
             ),
             patch(
@@ -264,6 +265,7 @@ class ContactReadingTest(unittest.TestCase):
         self.assertIs(synchronized.runtime, refreshed_runtime)
         self.assertIs(synchronized.safety, live)
         self.assertIs(synchronized.pose, pose)
+        self.assertIs(synchronized.active_drive_target, drive_target)
         live.validate_continuity.assert_called_once_with(
             captured, SimulatorSafetyLimits()
         )

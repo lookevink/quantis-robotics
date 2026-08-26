@@ -12,6 +12,50 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ControlRolloutShellTest(unittest.TestCase):
+    def test_insertion_followup_runs_safety_before_one_non_reset_apply(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir)
+            ops = home / "quantis-robotics" / "ops"
+            ops.mkdir(parents=True)
+            shutil.copy(REPO_ROOT / "ops" / "shell_helpers.sh", ops)
+            log = home / "calls.log"
+            (ops / "jepa_wm.sh").write_text(
+                "#!/usr/bin/env bash\nprintf 'report %s\\n' \"$*\" >> \"${CALLS}\"\n"
+            )
+            runner = home / "run.sh"
+            runner.write_text(
+                """#!/usr/bin/env bash
+set -euo pipefail
+source "${HOME}/quantis-robotics/ops/shell_helpers.sh"
+isaac_server_call() { printf '%s|%s\n' "$1" "${3:-false}" >> "${CALLS}"; }
+respond_to_control_session() { printf 'respond %s %s\n' "$2" "$3" >> "${CALLS}"; }
+run_insertion_followup_trial \
+  "${HOME}/quantis-robotics" followup-safety followup-trial previous-trial \
+  insertion-held-00 52600 proposal-test
+"""
+            )
+
+            result = subprocess.run(
+                ["bash", str(runner)],
+                env={**os.environ, "HOME": str(home), "CALLS": str(log)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            calls = log.read_text().splitlines()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("capture_followup_observation", calls[0])
+            self.assertTrue(calls[0].endswith("|true"))
+            self.assertEqual(calls[1], "respond followup-safety insertion_safety_evaluation")
+            self.assertIn("evaluate_direct_insertion_candidate", calls[2])
+            self.assertIn("prepare_insertion_trial_source", calls[3])
+            self.assertIn("persist_insertion_followup_response", calls[4])
+            self.assertIn("apply_control_response", calls[5])
+            self.assertNotIn("capture_control_observation", "\n".join(calls))
+            self.assertIn("--sessions previous-trial,followup-trial", calls[6])
+            self.assertIn("--requested-steps 2", calls[6])
+
     def test_shared_reset_trial_reports_a_typed_preflight_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             home = Path(temp_dir)

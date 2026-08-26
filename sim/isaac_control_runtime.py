@@ -9,6 +9,7 @@ from typing import Any
 from jepa_wm.action import DroidPose
 from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimits
 from jepa_wm.direct_safety import ControlSafetySnapshot
+from jepa_wm.joint_drive import JointDriveTarget
 from sim.isaac_demo_runtime import Actuators, PlugAttachment, create_actuators
 from sim.isaac_demo_runtime import ContactReading
 from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH, world_pose
@@ -121,6 +122,7 @@ class SynchronizedInsertionRuntime:
     runtime: LiveControlRuntime
     safety: ControlSafetySnapshot
     pose: DroidPose | None = None
+    active_drive_target: JointDriveTarget | None = None
 
 
 @dataclass(frozen=True)
@@ -171,6 +173,21 @@ def _control_safety_and_pose(
             hand_position,
             hand_orientation,
             current.gripper_width_m,
+        ),
+    )
+
+
+def _control_safety_pose_and_drive_target(
+    runtime: LiveControlRuntime,
+) -> tuple[ControlSafetySnapshot, DroidPose, JointDriveTarget]:
+    safety, pose = _control_safety_and_pose(runtime)
+    active = runtime.actuators.current_command()
+    return (
+        safety,
+        pose,
+        JointDriveTarget(
+            tuple(float(value) for value in active.arm_positions),
+            active.gripper_width_m,
         ),
     )
 
@@ -263,7 +280,7 @@ async def _synchronized_insertion_runtime(
         interlock.observe()
 
     read = (
-        _control_safety_and_pose
+        _control_safety_pose_and_drive_target
         if include_pose
         else lambda value: (
             _control_safety_snapshot(
@@ -271,6 +288,7 @@ async def _synchronized_insertion_runtime(
                 value.attachment,
                 value.sensor,
             ),
+            None,
             None,
         )
     )
@@ -283,8 +301,13 @@ async def _synchronized_insertion_runtime(
         observe_after_advance=observe_resumed_state,
         observe_safety=observe_safety,
     )
-    safety, pose = live
-    return SynchronizedInsertionRuntime(runtime, safety, pose)
+    safety, pose, active_drive_target = live
+    return SynchronizedInsertionRuntime(
+        runtime,
+        safety,
+        pose,
+        active_drive_target,
+    )
 
 
 async def synchronized_insertion_safety_snapshot(

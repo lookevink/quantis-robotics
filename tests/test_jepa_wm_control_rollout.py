@@ -47,6 +47,7 @@ from jepa_wm.insertion_trial import (
     InsertionTrialRollbackFailure,
     InsertionTrialRollbackFailureReason,
 )
+from jepa_wm.insertion_contract import InsertionControlTargetPolicy
 from jepa_wm.planner import CEMConfig
 from jepa_wm.planner_readiness import FirstActionThresholds
 from jepa_wm.objective_calibration import (
@@ -88,9 +89,10 @@ class ControlRolloutTest(unittest.TestCase):
     def test_reconstructs_insertion_settlement_and_realized_progress(self) -> None:
         session_id = "insertion-trial-52600-c43"
         joints = (0.0, -0.5, 0.0, -1.5, 0.0, 1.0, 0.0)
-        start = DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04))
-        target = DroidPose((0.4006, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04))
-        realized = DroidPose((0.4003, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04))
+        captured = DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04))
+        start = DroidPose((0.4001, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04))
+        target = DroidPose((0.4007, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04))
+        realized = DroidPose((0.4004, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04))
         action = DroidAction((0.0003, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
         observation = ControlObservation(
             10,
@@ -98,7 +100,7 @@ class ControlRolloutTest(unittest.TestCase):
             Path("context.png"),
             ControlTarget(Path("target.png"), target),
             Path("/tmp/proposal.pth"),
-            start,
+            captured,
             DroidAction((0.0,) * 7),
             43,
         )
@@ -212,6 +214,7 @@ class ControlRolloutTest(unittest.TestCase):
             summary.result.post_action.insertion_trial.realized_target_progress,
             progress,
         )
+        self.assertEqual(summary.observation.pose, captured)
 
         session.load_result.return_value = replace(
             result,
@@ -337,7 +340,7 @@ class ControlRolloutTest(unittest.TestCase):
             ControlStepSummary.from_session(session)
 
         insufficient_pose = DroidPose(
-            (0.4001, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04)
+            (0.4002, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04)
         )
         insufficient_action = action_between(start, insufficient_pose)
         insufficient_progress = RealizedTargetProgressPolicy().evaluate(
@@ -468,6 +471,7 @@ class ControlRolloutTest(unittest.TestCase):
         captured_at: float = 100.0,
         previous_action_x: float = 0.0,
         target_pose: DroidPose | None = None,
+        insertion_target_policy: InsertionControlTargetPolicy | None = None,
     ) -> None:
         session = root / "control_sessions" / session_id
         session.mkdir(parents=True)
@@ -494,6 +498,7 @@ class ControlRolloutTest(unittest.TestCase):
             False,
             0.0,
             previous_session_id,
+            insertion_target_policy=insertion_target_policy,
         )
         raw_action = DroidAction(
             (post_x - pose_x, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
@@ -652,8 +657,67 @@ class ControlRolloutTest(unittest.TestCase):
             )
 
             self.assertTrue(report["all_steps_applied"])
+
             self.assertEqual(report["applied_steps"], 2)
             self.assertAlmostEqual(report["translation_progress_meters"], 0.02)
+
+    def test_insertion_followup_accepts_policy_selected_target_and_bounded_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reference = root / "recordings" / "reference"
+            reference.mkdir(parents=True)
+            (reference / "manifest.json").write_text(
+                json.dumps({"metadata": {"task": "reach_and_insert"}})
+            )
+            (reference / "steps.jsonl").write_text(
+                "\n".join(
+                    json.dumps(
+                        {
+                            "index": index,
+                            "end_effector_pose": [
+                                pose_x, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5
+                            ],
+                        }
+                    )
+                    for index, pose_x in ((7, 0.43), (9, 0.432))
+                )
+                + "\n"
+            )
+            self._write_step(
+                root,
+                "session-0",
+                previous_session_id=None,
+                pose_x=0.40,
+                post_x=0.41,
+                target_frame="recordings/reference/wrist/frame_000007.png",
+                insertion_target_policy=InsertionControlTargetPolicy(),
+            )
+            self._write_step(
+                root,
+                "session-1",
+                previous_session_id="session-0",
+                pose_x=0.4101,
+                post_x=0.42,
+                target_frame="recordings/reference/wrist/frame_000009.png",
+                warmup_frames=5,
+                captured_at=101.0,
+                previous_action_x=0.0101,
+                insertion_target_policy=InsertionControlTargetPolicy(),
+            )
+
+            report = self._report(
+                root, ("session-0", "session-1"), requested_steps=2
+            )
+
+            self.assertTrue(report["all_steps_applied"])
+
+            for session_id in ("session-0", "session-1"):
+                state_path = root / "control_sessions" / session_id / "state.json"
+                payload = json.loads(state_path.read_text())
+                del payload["insertion_target_policy"]
+                state_path.write_text(json.dumps(payload))
+            with self.assertRaisesRegex(ValueError, "changed its target frame"):
+                self._report(root, ("session-0", "session-1"), requested_steps=2)
 
     def test_summarizes_shadow_search_and_counterfactual_safety(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

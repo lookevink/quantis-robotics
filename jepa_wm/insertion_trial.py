@@ -47,6 +47,22 @@ INSERTION_TRIAL_SETTLEMENT_MAXIMUM_UPDATES = 48
 
 class InsertionTrialAuthority(str, Enum):
     RESET_TRIAL_ONLY = "reset_trial_only"
+    FOLLOWUP_TRIAL_ONLY = "followup_trial_only"
+
+    @classmethod
+    def for_execution_policy(
+        cls,
+        policy: ControlExecutionPolicy,
+    ) -> InsertionTrialAuthority:
+        try:
+            return {
+                ControlExecutionPolicy.INSERTION_RESET_TRIAL: cls.RESET_TRIAL_ONLY,
+                ControlExecutionPolicy.INSERTION_FOLLOWUP_TRIAL: (
+                    cls.FOLLOWUP_TRIAL_ONLY
+                ),
+            }[policy]
+        except KeyError as error:
+            raise ValueError("insertion trial execution policy is invalid") from error
 
 
 class InsertionTrialRollbackReason(str, Enum):
@@ -808,7 +824,7 @@ class InsertionTrialBinding:
             or self.source_observation_id <= 0
             or self.execution_observation_id <= 0
             or len(self.actions) != 3
-            or self.authority is not InsertionTrialAuthority.RESET_TRIAL_ONLY
+            or not isinstance(self.authority, InsertionTrialAuthority)
             or (
                 self.source_active_drive_target is not None
                 and not isinstance(
@@ -870,6 +886,12 @@ class InsertionTrialBinding:
             if source_response.proposal_fingerprint is not None
             else None
         )
+        try:
+            expected_authority = InsertionTrialAuthority.for_execution_policy(
+                execution_context.policy
+            )
+        except ValueError as error:
+            raise ValueError("insertion trial is not bound to its safety source") from error
         if (
             self.source_observation_id
             != source_context.observation.observation_id
@@ -883,12 +905,16 @@ class InsertionTrialBinding:
             or safety.proposed_actions != self.actions
             or safety.selected_action_scale != self.source_selected_action_scale
             or source.active_drive_target != self.source_active_drive_target
+            or safety.active_drive_target != source.active_drive_target
             or not safety.passed
             or not safety.live_state.plug_attached
             or source_context.policy
             is not ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION
-            or execution_context.policy
-            is not ControlExecutionPolicy.INSERTION_RESET_TRIAL
+            or self.authority is not expected_authority
+            or (
+                self.authority is InsertionTrialAuthority.FOLLOWUP_TRIAL_ONLY
+                and source_context.previous_session_id is None
+            )
             or execution_context.reference_recording
             != source_context.reference_recording
             or execution_context.seed != source_context.seed
@@ -992,6 +1018,7 @@ def build_insertion_trial_response(
         actions=source_response.actions,
         source_selected_action_scale=safety.selected_action_scale,
         source_active_drive_target=source.active_drive_target,
+        authority=InsertionTrialAuthority.for_execution_policy(execution.policy),
     )
     response = ProposedControl(
         observation_id=execution.observation.observation_id,

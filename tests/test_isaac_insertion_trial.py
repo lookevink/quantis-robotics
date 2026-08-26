@@ -37,6 +37,7 @@ class InsertionTrialServiceTest(unittest.TestCase):
         build_response: MagicMock,
     ) -> None:
         session = MagicMock()
+        session.session_id = "trial-session"
         source = MagicMock()
         session_at.side_effect = (session, source)
         observation = MagicMock()

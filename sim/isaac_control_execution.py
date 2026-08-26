@@ -12,7 +12,10 @@ import numpy as np
 from jepa.contract import ObservationStage
 from jepa_wm.action import DROID_FPS, DroidActionScale, DroidPose, action_between
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
-from jepa_wm.control_policy import ControlExecutionPolicy
+from jepa_wm.control_policy import (
+    ControlExecutionPolicy,
+    is_insertion_trial_execution_policy,
+)
 from jepa_wm.control_safety import (
     ACTION_SCALES,
     ControlInterlockEvidence,
@@ -622,13 +625,12 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         attachment = runtime.attachment
         sensor = runtime.sensor
     limits = SimulatorSafetyLimits()
-    insertion_reset_trial = (
+    insertion_trial_execution = is_insertion_trial_execution_policy(
         persisted_state.execution_policy
-        is ControlExecutionPolicy.INSERTION_RESET_TRIAL
     )
     insertion_trial_refresh = None
     insertion_trial_active_drive_target = None
-    if insertion_reset_trial:
+    if insertion_trial_execution:
         if runtime is None:
             raise RuntimeError("live insertion runtime was lost before execution")
         synchronized = await synchronized_insertion_safety_snapshot(
@@ -637,7 +639,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             omni.kit.app.get_app().next_update_async,
             persisted_state.require_safety_snapshot(),
             limits,
-            operation="insertion reset trial synchronization",
+            operation="insertion trial synchronization",
         )
         runtime = synchronized.runtime
         actuators = runtime.actuators
@@ -652,11 +654,9 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         contact_force = live_state.contact_force_newtons
         if synchronized.pose is None:
             raise RuntimeError("live insertion pose was not refreshed")
-        active_command = actuators.current_command()
-        refreshed_drive_target = JointDriveTarget(
-            tuple(float(value) for value in active_command.arm_positions),
-            active_command.gripper_width_m,
-        )
+        refreshed_drive_target = synchronized.active_drive_target
+        if refreshed_drive_target is None:
+            raise RuntimeError("live insertion drive target was not refreshed")
         if persisted_state.active_drive_target is None:
             raise RuntimeError("captured insertion drive target is missing")
         persisted_state.active_drive_target.validate_active(
@@ -685,14 +685,14 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         persisted_state.current_joint_positions, dtype=np.float64
     )
     try:
-        # Capture leaves the stage paused. Insertion reset trials resume one
+        # Capture leaves the stage paused. Insertion trials resume one
         # fully interlocked update and rebind the complete live state before
         # projection; other policies retain their historical command refresh.
         action_scales = ACTION_SCALES
         target_progress = None
         binding = None
         control_period_seconds = 1.0 / DROID_FPS
-        if insertion_reset_trial:
+        if insertion_trial_execution:
             binding = session.load_insertion_trial_binding(proposal)
             binding.require_current_execution()
             action_scales = binding.allowed_projection_scales
@@ -781,7 +781,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         if decision.passed and candidate is not None:
             try:
                 if (
-                    insertion_reset_trial
+                    insertion_trial_execution
                     and insertion_trial_active_drive_target is None
                 ):
                     raise RuntimeError("insertion active drive target is missing")
@@ -792,7 +792,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                         ),
                         insertion_trial_active_drive_target.gripper_width_m,
                     )
-                    if insertion_reset_trial
+                    if insertion_trial_execution
                     and insertion_trial_active_drive_target is not None
                     else current
                 )
@@ -800,12 +800,12 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     LiveContactInterlock(
                         sensor,
                         limits.maximum_contact_force_newtons,
-                        "insertion reset trial",
+                        "insertion trial",
                         ContactReading(collision_detected, contact_force),
                     ),
                     attachment,
                     persisted_state.plug_attached,
-                    "insertion reset trial",
+                    "insertion trial",
                 )
 
                 async def rollback_current_command() -> (
@@ -859,8 +859,9 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     sample_period_seconds=control_period_seconds,
                     observe_safety=(
                         live_interlock.observe
-                        if persisted_state.execution_policy
-                        is ControlExecutionPolicy.INSERTION_RESET_TRIAL
+                        if is_insertion_trial_execution_policy(
+                            persisted_state.execution_policy
+                        )
                         else None
                     ),
                 )
@@ -887,13 +888,13 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     session.path / "post_action.png",
                     observe_safety=(
                         live_interlock.observe
-                        if insertion_reset_trial
+                        if insertion_trial_execution
                         else None
                     ),
                 )
                 actual = captured.command
                 post_collision = captured.collision_detected or (
-                    insertion_reset_trial
+                    insertion_trial_execution
                     and live_interlock.evidence.collision_detected
                 )
                 post_force = (
@@ -901,7 +902,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                         captured.contact_force_newtons,
                         live_interlock.evidence.maximum_contact_force_newtons,
                     )
-                    if insertion_reset_trial
+                    if insertion_trial_execution
                     else captured.contact_force_newtons
                 )
                 post_snapshot = captured.snapshot
@@ -928,7 +929,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     else None
                 )
                 acquisition_passed = True
-                if not insertion_reset_trial:
+                if not insertion_trial_execution:
                     acquisition = evaluate_grasp_acquisition(
                         world_pose(attachment.hand_prim)[0],
                         solve_waypoints()[2].hand_position,
@@ -942,7 +943,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     and not post_collision
                     and post_force <= limits.maximum_contact_force_newtons
                 ):
-                    if not insertion_reset_trial:
+                    if not insertion_trial_execution:
                         attachment.attach(world_pose(attachment.hand_prim)[0])
                         post_snapshot = recording_snapshot(
                             RecordingLabel(RecordingMoment.ATTACHED, Phase.GRASP),
@@ -990,7 +991,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                         "; rollback verification failed: "
                         f"{type(rollback_error).__name__}: {rollback_error}"
                     )
-                if insertion_reset_trial:
+                if insertion_trial_execution:
                     execution_interlock = live_interlock.evidence
             if post_action is not None:
                 if binding is not None and post_action.insertion_trial is not None:
@@ -1037,7 +1038,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                             "rollback verification failed: "
                             f"{type(rollback_error).__name__}: {rollback_error}"
                         )
-                if insertion_reset_trial:
+                if insertion_trial_execution:
                     execution_interlock = live_interlock.evidence
 
         result = ControlResult(
