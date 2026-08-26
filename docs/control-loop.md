@@ -704,6 +704,16 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     after reducing handoff latency; no retry, automatic follow-up, multi-step,
     filming, or production authority is granted. Exact timing and session
     evidence remains in the linked README checkpoint.
+    Exact live-state reauthorization then cleared the unchanged freshness gate
+    in a separately authorized fresh chain. Action 1 passed settlement,
+    tracking, realized progress, attachment, and contact/collision checks, but
+    the fresh action-2 camera capture failed closed before observation or
+    inference because its render retries occurred after the synchronized
+    timeline pause. The interlocked capture lifecycle is corrected locally;
+    the terminal evidence remains `1/2` applied and does not establish a
+    two-action loop. Another live retry, any third action, multi-step insertion,
+    filming, and production remain unauthorized. Exact evidence is in the
+    linked README checkpoint.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

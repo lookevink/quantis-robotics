@@ -205,6 +205,7 @@ async def _synchronized_live_read(
     refresh: Any | None = None,
     observe_after_advance: Any | None = None,
     observe_safety: Any | None = None,
+    before_read: Any | None = None,
 ) -> tuple[Any, Any]:
     """Own the pause-sensitive resume, refresh, observe, read, pause lifecycle."""
 
@@ -219,6 +220,15 @@ async def _synchronized_live_read(
                 state = refresh(state)
         if observe_safety is not None:
             observe_safety(state)
+        if before_read is not None:
+            await before_read(
+                state,
+                (
+                    (lambda: observe_safety(state))
+                    if observe_safety is not None
+                    else None
+                ),
+            )
         return state, read(state)
     finally:
         timeline.pause()
@@ -261,14 +271,28 @@ async def _synchronized_insertion_runtime(
     operation: str,
     validate_resumed: Any | None = None,
     include_pose: bool = False,
+    expected_attachment: bool | None = None,
+    before_read: Any | None = None,
 ) -> SynchronizedInsertionRuntime:
     """Own the shared paused insertion refresh and interlock lifecycle."""
 
-    resumed_interlock = LiveContactInterlock(
-        runtime.sensor,
-        limits.maximum_contact_force_newtons,
-        operation,
-    )
+    def interlock_for(value: LiveControlRuntime) -> Any:
+        contact = LiveContactInterlock(
+            value.sensor,
+            limits.maximum_contact_force_newtons,
+            operation,
+        )
+        if expected_attachment is None:
+            return contact
+        return LiveInsertionInterlock(
+            contact,
+            value.attachment,
+            expected_attachment,
+            operation,
+        )
+
+    resumed_interlock = interlock_for(runtime)
+    refreshed_interlock: Any | None = None
 
     def observe_resumed_state(_: LiveControlRuntime) -> None:
         resumed_interlock.observe()
@@ -276,12 +300,10 @@ async def _synchronized_insertion_runtime(
             validate_resumed(resumed_interlock.evidence)
 
     def observe_safety(value: LiveControlRuntime) -> None:
-        interlock = LiveContactInterlock(
-            value.sensor,
-            limits.maximum_contact_force_newtons,
-            operation,
-        )
-        interlock.observe()
+        nonlocal refreshed_interlock
+        if refreshed_interlock is None:
+            refreshed_interlock = interlock_for(value)
+        refreshed_interlock.observe()
 
     read = (
         _control_safety_pose_and_drive_target
@@ -304,6 +326,7 @@ async def _synchronized_insertion_runtime(
         refresh=refresh_live_control_runtime,
         observe_after_advance=observe_resumed_state,
         observe_safety=observe_safety,
+        before_read=before_read,
     )
     safety, pose, active_drive_target = live
     return SynchronizedInsertionRuntime(
@@ -338,6 +361,44 @@ async def synchronized_insertion_safety_snapshot(
         synchronized.safety.validate_continuity(captured, limits)
     except ValueError as error:
         raise RuntimeError("live insertion state changed after capture") from error
+    return synchronized
+
+
+async def synchronized_insertion_frame_capture(
+    runtime: LiveControlRuntime,
+    timeline: Any,
+    advance: Any,
+    captured: ControlSafetySnapshot,
+    limits: SimulatorSafetyLimits,
+    capture: Any,
+    *,
+    operation: str,
+) -> SynchronizedInsertionRuntime:
+    """Render and read one interlocked insertion frame before pausing."""
+
+    async def capture_before_read(
+        _: LiveControlRuntime,
+        observe: Any,
+    ) -> None:
+        if observe is None:
+            raise RuntimeError("insertion frame capture has no live interlock")
+        await capture(observe)
+
+    synchronized = await _synchronized_insertion_runtime(
+        runtime,
+        timeline,
+        advance,
+        limits,
+        operation=operation,
+        validate_resumed=captured.validate_contact_continuity,
+        include_pose=True,
+        expected_attachment=captured.plug_attached,
+        before_read=capture_before_read,
+    )
+    try:
+        synchronized.safety.validate_continuity(captured, limits)
+    except ValueError as error:
+        raise RuntimeError("live insertion state changed during frame capture") from error
     return synchronized
 
 

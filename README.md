@@ -1777,6 +1777,43 @@ handoff latency under the existing freshness limits and requalify the same
 fresh boundary. No retry, automatic follow-up, multi-step insertion, filming,
 or production authority is granted.
 
+Commit `42eb5e0` closed that freshness handoff without extending either age
+limit. Direct insertion safety schema v3 now persists the exact interlocked
+live pose, full safety snapshot, active drive target, and refresh timestamp,
+then deterministically reauthorizes the already-bound observation and response
+against those live inputs. Local validation passes `554` tests with `70`
+optional skips, and independent correctness and standards reviews pass.
+
+The separately authorized fresh chain
+`insertion-two-step-20260826T163629Z-52600-c43` then cleared action-1 safety at
+full translation scale with orientation hold: the safety refresh followed its
+JEPA response by about `1.215 s`, projected a maximum `1.641 mrad` joint
+change, and retained attachment at `0 N` with no collision. Reset-bound action
+session `insertion-two-step-20260826T163629Z-52600-c43-action1` subsequently
+terminalized `applied`. It settled in 19 updates with `0.328 mrad` final joint
+tracking error, translation tracking cosine `0.9993`, and no contact,
+collision, or attachment failure. Realized target translation error fell from
+`0.7401 mm` to `0.4419 mm`, a `40.30%` reduction and `0.2983 mm` net progress;
+orientation error increased only `0.1800 mrad`, within the unchanged hold
+tolerance. The independently reconstructed action-1 rollout is exactly `1/1`
+applied with passing realized progress.
+
+The action-2 boundary nevertheless failed before producing its fresh
+observation. After the interlocked live-state refresh had paused the timeline,
+the wrist-camera helper attempted its retry updates while the timeline remained
+paused; every annotator read was empty (`wrist: (0,)`). The typed two-step
+rollout therefore records `1/2` applied and `orchestration_failed` at
+`followup_capture`. No action-2 observation, inference, execution claim, or
+motion occurred, and the 13 GB recovery backup verified. The corrected capture
+lifecycle now keeps the timeline live through wrapper refresh and every
+force/collision/attachment-observed camera update, reads telemetry only after
+the successful RGB frame, and pauses in `finally`. That repair is locally
+regression-tested, with `555` tests passing and `70` optional skips, but has not
+been requalified live. The run proves one fresh JEPA-WM action with positive
+realized progress; it does not yet prove a two-action closed loop. No retry,
+third action, multi-step insertion, filming, or production authority is
+granted.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

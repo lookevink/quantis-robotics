@@ -19,6 +19,7 @@ from sim.isaac_control_runtime import (
     read_control_contact,
     refresh_live_control_runtime,
     synchronized_control_safety_snapshot,
+    synchronized_insertion_frame_capture,
     synchronized_insertion_safety_snapshot,
     synchronized_insertion_resolution_runtime,
 )
@@ -299,6 +300,78 @@ class ContactReadingTest(unittest.TestCase):
         )
         captured.validate_contact_continuity.assert_called_once_with(
             ControlInterlockEvidence(0.0, False)
+        )
+        self.assertEqual(timeline.events, ["play", "pause"])
+
+    def test_insertion_frame_capture_stays_live_and_interlocked_until_read(self) -> None:
+        timeline = _Timeline(playing=False)
+        old_runtime = LiveControlRuntime(
+            "session", object(), Mock(), Mock(attached=True), Mock()
+        )
+        refreshed_runtime = LiveControlRuntime(
+            "session", old_runtime.stage, Mock(), Mock(attached=True), Mock()
+        )
+        captured = Mock(plug_attached=True)
+        live = Mock()
+        pose = Mock()
+        drive_target = Mock()
+        events: list[str] = []
+
+        async def advance() -> None:
+            events.append("readiness update")
+
+        async def capture(observe_safety) -> None:
+            self.assertTrue(timeline.is_playing())
+            events.append("camera update")
+            observe_safety()
+
+        def refresh(runtime: LiveControlRuntime) -> LiveControlRuntime:
+            self.assertIs(runtime, old_runtime)
+            events.append("refresh")
+            return refreshed_runtime
+
+        def read(runtime: LiveControlRuntime):
+            self.assertTrue(timeline.is_playing())
+            self.assertIs(runtime, refreshed_runtime)
+            events.append("read")
+            return live, pose, drive_target
+
+        with (
+            patch(
+                "sim.isaac_control_runtime.refresh_live_control_runtime",
+                side_effect=refresh,
+            ),
+            patch(
+                "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
+                side_effect=read,
+            ),
+            patch(
+                "sim.isaac_control_runtime.LiveContactInterlock.observe",
+                return_value=SimpleNamespace(
+                    collision_detected=False,
+                    force_newtons=0.0,
+                ),
+            ),
+        ):
+            synchronized = asyncio.run(
+                synchronized_insertion_frame_capture(
+                    old_runtime,
+                    timeline,
+                    advance,
+                    captured,
+                    SimulatorSafetyLimits(),
+                    capture,
+                    operation="test insertion follow-up frame",
+                )
+            )
+
+        self.assertEqual(
+            events,
+            ["readiness update", "refresh", "camera update", "read"],
+        )
+        self.assertIs(synchronized.safety, live)
+        live.validate_continuity.assert_called_once_with(
+            captured, SimulatorSafetyLimits()
         )
         self.assertEqual(timeline.events, ["play", "pause"])
 

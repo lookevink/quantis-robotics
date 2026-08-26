@@ -41,7 +41,7 @@ from sim.isaac_control_runtime import (
     contact_sensor,
     live_runtime_for,
     read_control_contact,
-    synchronized_insertion_safety_snapshot,
+    synchronized_insertion_frame_capture,
 )
 from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, capture_camera_frame
 from sim.isaac_demo_runtime import (
@@ -377,20 +377,28 @@ async def capture_followup_observation(
     if previous_result.post_action is None:
         raise ValueError("applied previous step has no post-action evidence")
     captured_state = previous_result.post_action.require_safety_snapshot()
-    synchronized = await synchronized_insertion_safety_snapshot(
+    context_path = session.path / "context.png"
+
+    async def capture_frame(observe_safety) -> None:
+        await capture_camera_frame(
+            JEPA_WM_CAMERA_SPECS[0],
+            context_path,
+            observe_safety=observe_safety,
+        )
+
+    synchronized = await synchronized_insertion_frame_capture(
         runtime,
         timeline,
         omni.kit.app.get_app().next_update_async,
         captured_state,
         SimulatorSafetyLimits(),
+        capture_frame,
         operation="insertion follow-up capture synchronization",
     )
     if synchronized.pose is None:
         raise RuntimeError("live insertion pose was not refreshed")
     if synchronized.active_drive_target is None:
         raise RuntimeError("live insertion drive target was not refreshed")
-    context_path = session.path / "context.png"
-    await capture_camera_frame(JEPA_WM_CAMERA_SPECS[0], context_path)
     observation, state = build_insertion_followup_capture(
         session_id,
         lineage,
