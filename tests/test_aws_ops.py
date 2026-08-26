@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import tempfile
 import textwrap
@@ -1331,6 +1332,31 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("contact-insertion-v9-2600-dense-control", calls)
         self.assertIn("'43'", calls)
         self.assertIn("ops/backup_state.sh", calls)
+
+    def test_insertion_demo_rollout_ssh_liveness_exceeds_capture_timeout(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-demo-rollout",
+            arguments=(
+                "insertion-fresh-held-00",
+                "52600",
+                "contact-insertion-v9-2600-dense-control",
+                "43",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        ssh_call = next(
+            line
+            for line in calls.splitlines()
+            if line.startswith("ssh ")
+            and "ops/run_insertion_demo_rollout.sh" in line
+        )
+        interval_match = re.search(r"ServerAliveInterval=(\d+)", ssh_call)
+        count_match = re.search(r"ServerAliveCountMax=(\d+)", ssh_call)
+        self.assertIsNotNone(interval_match, ssh_call)
+        self.assertIsNotNone(count_match, ssh_call)
+        liveness_seconds = int(interval_match.group(1)) * int(count_match.group(1))
+        self.assertGreater(liveness_seconds, 900, ssh_call)
 
     def test_insertion_resolution_runs_diagnostic_and_always_backs_up(self):
         result, calls = self.run_command(

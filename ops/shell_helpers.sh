@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+isaac_control_capture_timeout_seconds=900
+
 is_safe_identifier() {
   [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
 }
@@ -236,7 +238,7 @@ capture_and_respond_control_session() {
     || return 1
   isaac_server_call \
     "await demo.capture_control_observation('${session_id}','${reference_name}',${exploration_seed},'${proposal_name}','${policy}',${context_index},${insertion_rollout_argument})" \
-    900 true
+    "${isaac_control_capture_timeout_seconds}" true
   respond_to_control_session \
     "${repository}" "${session_id}" "${policy}" "${source_session_id}"
 }

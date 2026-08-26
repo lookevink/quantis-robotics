@@ -33,5 +33,5 @@ proposal_name="$(control_proposal_from_identity \
 run_reset_trial_control_session \
   "${repo_dir}" "${session_id}" "${reference_name}" "${exploration_seed}" \
   "${proposal_name}" "${policy}" "${source_session_id}" "${context_index}" \
-  900 prepare_insertion_trial_source persist_insertion_trial_response \
+  "${isaac_control_capture_timeout_seconds}" prepare_insertion_trial_source persist_insertion_trial_response \
   "${insertion_rollout_maximum_steps}"

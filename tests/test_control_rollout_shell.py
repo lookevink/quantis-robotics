@@ -323,6 +323,7 @@ run_reset_trial_control_session \
             log = home / "calls.log"
             (ops / "shell_helpers.sh").write_text(
                 """#!/usr/bin/env bash
+isaac_control_capture_timeout_seconds=900
 is_safe_identifier() { return 0; }
 require_nonnegative_integer() { return 0; }
 require_positive_integer() { return 0; }

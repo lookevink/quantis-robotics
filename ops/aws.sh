@@ -23,10 +23,14 @@ security_group_id="${AWS_SECURITY_GROUP_ID:-}"
 signal_port="${ISAAC_SIGNAL_PORT:-49100}"
 stream_port="${ISAAC_STREAM_PORT:-47998}"
 cloudwatch_agent_policy_arn="arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+ssh_server_alive_interval_seconds=30
+ssh_server_alive_count_max=$((
+  isaac_control_capture_timeout_seconds / ssh_server_alive_interval_seconds + 2
+))
 ssh_transport_options=(
   -o StrictHostKeyChecking=accept-new
-  -o ServerAliveInterval=15
-  -o ServerAliveCountMax=4
+  -o ServerAliveInterval="${ssh_server_alive_interval_seconds}"
+  -o ServerAliveCountMax="${ssh_server_alive_count_max}"
 )
 ssh_options=("${ssh_transport_options[@]}")
 

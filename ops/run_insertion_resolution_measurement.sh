@@ -36,7 +36,7 @@ require_positive_integer \
 cd "${repo_dir}"
 isaac_server_call \
   "await demo.capture_control_observation('${session_id}','${reference_name}',${exploration_seed},'control-resolution-measurement','insertion_resolution_measurement',${context_index})" \
-  900 true
+  "${isaac_control_capture_timeout_seconds}" true
 isaac_server_call \
   "await demo.measure_insertion_control_resolution('${session_id}','${load_mode}')" \
   "${measurement_timeout_seconds}"
