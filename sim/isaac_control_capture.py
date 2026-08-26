@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from time import time
 from typing import Any
 
@@ -79,6 +80,12 @@ from sim.recording import (
 )
 
 
+@dataclass(frozen=True)
+class StabilizedControlCapture:
+    safety: RecordingSafetyTelemetry
+    previous_action: DroidAction
+
+
 def validated_control_reference(
     name: str,
     seed: int,
@@ -119,7 +126,7 @@ async def stabilize_resolution_capture(
     timeline: Any,
     command: JointCommand,
     contract: ControlResolutionCaptureBaselineContract,
-) -> RecordingSafetyTelemetry:
+) -> StabilizedControlCapture:
     """Establish one stable drive-only state before strict-current capture."""
 
     from sim.isaac_control_resolution import (
@@ -152,13 +159,35 @@ async def stabilize_resolution_capture(
 
     actual = runtime.actuators.actual_command()
     evidence = interlock.contact.evidence
-    return recording_safety_telemetry(
-        command,
-        actual,
-        ContactReading(
-            evidence.collision_detected,
-            evidence.maximum_contact_force_newtons,
+    return StabilizedControlCapture(
+        recording_safety_telemetry(
+            command,
+            actual,
+            ContactReading(
+                evidence.collision_detected,
+                evidence.maximum_contact_force_newtons,
+            ),
         ),
+        baseline.final_interval_action,
+    )
+
+
+def requires_stable_insertion_capture(
+    policy: ControlExecutionPolicy,
+    *,
+    insertion_control: bool,
+    step_index: int,
+    context_index: int,
+) -> bool:
+    """Require a strict stable frame before insertion safety or execution."""
+
+    return (
+        insertion_control
+        and step_index == context_index
+        and (
+            policy is ControlExecutionPolicy.INSERTION_RESOLUTION_MEASUREMENT
+            or insertion_control_target_policy(policy) is not None
+        )
     )
 
 
@@ -235,6 +264,7 @@ async def capture_control_observation(
     timeline = omni.timeline.get_timeline_interface()
     original_rendering_dt = RenderingManager.get_dt()
     completed = False
+    stable_previous_action: DroidAction | None = None
     try:
         await recorder.initialize()
         RenderingManager.set_dt(plan.sample_period_seconds)
@@ -310,10 +340,11 @@ async def capture_control_observation(
                 if step.plug_attached
                 else ObservationStage.APPROACHING_CABLE
             )
-            strict_current_capture = (
-                policy
-                is ControlExecutionPolicy.INSERTION_RESOLUTION_MEASUREMENT
-                and step.index == context_index
+            strict_current_capture = requires_stable_insertion_capture(
+                policy,
+                insertion_control=insertion_control,
+                step_index=step.index,
+                context_index=context_index,
             )
             await move_joint_command(
                 actuators,
@@ -359,32 +390,36 @@ async def capture_control_observation(
                     ControlResolutionLoad.ATTACHED,
                 )
                 try:
-                    capture_safety = await stabilize_resolution_capture(
+                    stabilized_capture = await stabilize_resolution_capture(
                         capture_runtime,
                         timeline,
                         command,
                         capture_contract,
                     )
                 except UnstableControlResolutionBaseline as error:
-                    failure = ControlResolutionCaptureFailureEvidence(
-                        identity=ControlResolutionCaptureAttemptIdentity(
-                            session_id,
-                            ControlResolutionCaptureSourceIdentity(
-                                reference_recording,
-                                seed,
-                                context_index,
+                    if (
+                        policy
+                        is ControlExecutionPolicy.INSERTION_RESOLUTION_MEASUREMENT
+                    ):
+                        failure = ControlResolutionCaptureFailureEvidence(
+                            identity=ControlResolutionCaptureAttemptIdentity(
+                                session_id,
+                                ControlResolutionCaptureSourceIdentity(
+                                    reference_recording,
+                                    seed,
+                                    context_index,
+                                ),
                             ),
-                        ),
-                        failed_at_unix_seconds=time(),
-                        contract=capture_contract,
-                        baseline_attempt=error.attempt,
-                        error=f"{type(error).__name__}: {error}",
-                    )
-                    session.create()
-                    write_json_atomic(
-                        session.resolution_capture_failure_path,
-                        failure.to_dict(),
-                    )
+                            failed_at_unix_seconds=time(),
+                            contract=capture_contract,
+                            baseline_attempt=error.attempt,
+                            error=f"{type(error).__name__}: {error}",
+                        )
+                        session.create()
+                        write_json_atomic(
+                            session.resolution_capture_failure_path,
+                            failure.to_dict(),
+                        )
                     raise
                 await recorder.capture_current(
                     recording_snapshot(
@@ -392,9 +427,10 @@ async def capture_control_observation(
                         recording_stage,
                         command,
                         attachment,
-                        safety=capture_safety,
+                        safety=stabilized_capture.safety,
                     ),
                 )
+                stable_previous_action = stabilized_capture.previous_action
             current = command
         captured_state = await synchronized_control_safety_snapshot(
             timeline,
@@ -437,7 +473,11 @@ async def capture_control_observation(
         ),
         expected_proposal=control_proposal_path(proposal_name),
         pose=DroidPose(tuple(context_step["end_effector_pose"])),
-        previous_action=DroidAction(tuple(context_step["action_from_previous"])),
+        previous_action=(
+            stable_previous_action
+            if stable_previous_action is not None
+            else DroidAction(tuple(context_step["action_from_previous"]))
+        ),
         warmup_frames=context_index,
     )
     state = ControlSessionState(

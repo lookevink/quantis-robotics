@@ -10,10 +10,53 @@ from jepa_wm.action import ACTION_RECORDING_CONTRACT, DROID_FPS
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
 from sim.control_identity import observation_id_for_session
-from sim.isaac_control_capture import validated_control_reference
+from sim.isaac_control_capture import (
+    requires_stable_insertion_capture,
+    validated_control_reference,
+)
 
 
 class ControlCaptureContractTest(unittest.TestCase):
+    def test_stabilizes_every_insertion_capture_that_can_lead_to_motion(self) -> None:
+        for policy in (
+            ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION,
+            ControlExecutionPolicy.INSERTION_RESET_TRIAL,
+            ControlExecutionPolicy.INSERTION_RESOLUTION_MEASUREMENT,
+        ):
+            with self.subTest(policy=policy):
+                self.assertTrue(
+                    requires_stable_insertion_capture(
+                        policy,
+                        insertion_control=True,
+                        step_index=43,
+                        context_index=43,
+                    )
+                )
+        self.assertFalse(
+            requires_stable_insertion_capture(
+                ControlExecutionPolicy.DIRECT,
+                insertion_control=True,
+                step_index=43,
+                context_index=43,
+            )
+        )
+        self.assertFalse(
+            requires_stable_insertion_capture(
+                ControlExecutionPolicy.INSERTION_RESET_TRIAL,
+                insertion_control=False,
+                step_index=43,
+                context_index=43,
+            )
+        )
+        self.assertFalse(
+            requires_stable_insertion_capture(
+                ControlExecutionPolicy.INSERTION_RESET_TRIAL,
+                insertion_control=True,
+                step_index=42,
+                context_index=43,
+            )
+        )
+
     def _recording(
         self,
         root: Path,

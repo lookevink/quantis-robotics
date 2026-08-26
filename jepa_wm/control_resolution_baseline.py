@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from jepa_wm.action import DroidAction, action_between
 from jepa_wm.identifiers import validate_safe_identifier
 from jepa_wm.control_resolution_profile import ControlResolutionLoad
 from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimits
@@ -542,6 +543,17 @@ class ControlResolutionBaselineEvidence:
         if not self.trace.states:
             raise ValueError("control resolution baseline has no states")
         return self.trace.states[-1]
+
+    @property
+    def final_interval_action(self) -> DroidAction:
+        """Return the motion observed during the final stable interval."""
+
+        if len(self.trace.states) < 2:
+            raise ValueError("control resolution baseline has no final interval")
+        return action_between(
+            self.trace.states[-2].pose,
+            self.trace.states[-1].pose,
+        )
 
     def validate(
         self,

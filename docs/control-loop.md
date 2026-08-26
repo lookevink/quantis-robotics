@@ -650,9 +650,13 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     each preserved a bounded second-`1 mm` motion/recovery timeout. The
     attached evidence establishes the existing `0.5 mm` minimum translation
     and `1.25 mrad` orientation-hold tolerance for exactly one context-43
-    attached action. It does not cover context 74's larger target or authorize
-    a second action. Realized progress remains a terminal fail-closed gate;
-    failure stops and rolls back.
+    attached action. The earlier direct-state no-actuation sources did not
+    survive the drive-only reset-equivalence check. Stable capture then exposed
+    that action history incorrectly included the whole settling interval;
+    conditioning it on the final stable interval produced fresh current-code
+    `2/2` no-actuation passes. It does not cover context 74's larger target or
+    authorize a second action. Realized progress remains a terminal fail-closed
+    gate; failure stops and rolls back.
     Multi-step, filming, and production authority remain false; exact metrics
     and evidence are in the
     [insertion control-resolution checkpoint](../README.md#insertion-control-resolution-checkpoint).

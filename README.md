@@ -1531,12 +1531,38 @@ changing the `3 mm` task tolerance or any force, collision, attachment, joint,
 reset, or velocity gate. Its `0.5 mm` minimum translation is more than sixty
 times the worst attached zero drift, and its `1.25 mrad` orientation-hold
 tolerance exceeds the observed `0.784828 mrad` maximum with margin. At context
-43 the policy selects frame 48: a `0.513522 mm` translation with only
-`0.026835 mrad` orientation error, so rotation is held. Context 74's nearest
-target is `2.109314 mm`, outside this corrected command benchmark, and context
-106 has no future bounded-horizon target. The checkpoint therefore reopens
-only the predeclared single attached context-43 JEPA action, using the already
-fresh `2/2` no-actuation evidence and the realized-progress terminal gate. A
+43 the policy selects frame 48. Context 74's nearest target is `2.109314 mm`,
+outside this corrected command benchmark, and context 106 has no future
+bounded-horizon target.
+
+The controller checkpoint did not make the earlier no-actuation sources valid
+under the new drive-only replay. Trial
+`insertion-trial-20260826T090105Z-52600-c43` rejected its old source binding
+before persisting a response or action. The first new safety capture then
+failed live continuity before IK. After the capture path qualified the same
+stable all-pairs baseline used by resolution measurement, seed 52600 exposed a
+second conditioning bug: its final frame was stable, but `previous_action`
+spanned the last replay frame through the entire settling interval and falsely
+reported `45.922 mm` of prior translation. The frozen proposal consequently
+requested `13.518 mm`, and every scale failed target progress. Re-evaluating
+the identical image, pose, and target with stationary action history produced
+a `0.610 mm` proposal, isolating the failure without actuation.
+
+Stable captures now condition action history on the final `0.25 s` baseline
+interval. Fresh current-code sessions
+`insertion-safety-20260826T092733Z-52600-c43` and
+`insertion-safety-20260826T093844Z-52601-c43` measured only `0.00764 mm` and
+`0.00797 mm` of prior translation. Their exact frozen proposals requested
+`0.611583 mm` and `0.636877 mm`; both passed at full translation scale with
+rotation held and maximum IK changes of `1.638727 mrad` and `1.714668 mrad`.
+The target distances were `0.741350 mm` and `0.718949 mm`. Both retained
+attachment with `0 N` contact and no collision, carry
+`authority: no_actuation`, and are preserved in the checksum-verified 13 GB
+recovery copy. The full local suite passes `523` tests with `70` optional
+dependency skips.
+
+Only this corrected fresh `2/2` evidence reopens the predeclared single
+attached context-43 JEPA action with the realized-progress terminal gate. A
 failed progress decision must stop and roll back. No second action, multi-step
 insertion, filming, or production authority is granted.
 
