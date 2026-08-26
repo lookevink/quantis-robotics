@@ -1738,6 +1738,45 @@ not an automatic continuation of the preserved session, and remains
 unauthorized here. Multi-step insertion, filming, and production authority
 remain false.
 
+The authorized fresh two-action checkpoint is implemented by commit `1a2832a`.
+It derives four session identities from one run, requires action 1 to
+reconstruct with passing realized progress before capturing action 2, and
+requires the final typed rollout to reconstruct as exactly `2/2` applied.
+Blocked or rolled-back action 2 is retained as negative evidence and makes the
+workflow fail. Local validation passes `553` tests with `70` optional skips;
+both independent correctness and standards reviews pass.
+
+The first orchestration invocation,
+`insertion-two-step-20260826T152726Z-52600-c43`, used the abbreviated recording
+name `insertion-fresh-held-00`. It failed at capture preflight because that
+directory has no manifest. It stopped before observation, inference, execution
+claim, or motion and verified the 13 GB recovery backup. The preserved remote
+roster identified the exact held-out seed-52600 source as
+`contact-insertion-v9-2600-fresh-52600-held-00`.
+
+The corrected run, `insertion-two-step-20260826T153038Z-52600-c43`, captured
+fresh action-1 safety session
+`insertion-two-step-20260826T153038Z-52600-c43-safety1` at context 43 and
+targeted frame 48. The response used frozen proposal fingerprint
+`efdf848c120a2e4bba5b5e08f16093eb9b20695940e525906313e5cb1057596f`.
+It arrived `0.485050 s` after capture, but the live safety
+snapshot/evaluation timestamp was `3.129752 s` after the response and
+`3.614802 s` after capture. All six projection scales therefore failed the
+unchanged freshness gates with `stale_observation` and
+`command_time_invalid`; no scale was selected. The live state retained the
+plug at `0 N` contact with no collision, and the safety artifact remains
+`authority: no_actuation`.
+
+Action-1 source preflight then failed closed. Its rollout records `0/1`
+applied steps and `reset_trial_source_preflight` failure. No action-1 execution
+claim or motion occurred; action 2 was never captured, inferred, claimed, or
+attempted. The 13 GB recovery backup verified. This is a command-freshness
+negative, not a JEPA action-quality, IK, contact, collision, attachment, or
+two-step-control result. The next work must reduce the capture/response/safety
+handoff latency under the existing freshness limits and requalify the same
+fresh boundary. No retry, automatic follow-up, multi-step insertion, filming,
+or production authority is granted.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

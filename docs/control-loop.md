@@ -694,6 +694,16 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     therefore requires a separately authorized fresh two-action chain; no
     current multi-step, filming, or production authority is granted. Exact
     evidence remains in the linked README checkpoint.
+    The authorized fresh two-action chain was then attempted. An abbreviated
+    recording name first failed before capture; the corrected exact held-out
+    source reached fresh action-1 inference, but every scale failed the
+    unchanged observation/command freshness gates before execution authority.
+    The terminal result is `0/1` applied, action 2 was never captured or
+    attempted, attachment/contact/collision evidence remained safe, and both
+    exits verified recovery backups. The same boundary must be requalified
+    after reducing handoff latency; no retry, automatic follow-up, multi-step,
+    filming, or production authority is granted. Exact timing and session
+    evidence remains in the linked README checkpoint.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one
