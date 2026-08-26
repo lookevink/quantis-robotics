@@ -141,7 +141,9 @@ def retreat_direction(
 class TrackedErrorSettlement:
     absolute_tracking_floor_radians: float = 5e-4
     tracking_error_fraction_of_requested_motion: float = 0.25
-    rollback_tracking_error_cap_radians: float | None = 4e-4
+    rollback_tracking_error_cap_radians: float | None = (
+        CONTROL_RESOLUTION_RESET_TOLERANCES.maximum_joint_difference_radians
+    )
     required_consecutive_updates: int = 2
     maximum_updates: int = 40
 
@@ -754,6 +756,13 @@ class ControlResolutionProtocol:
             or not isinstance(
                 self.settlement,
                 (FixedUpdateSettlement, TrackedErrorSettlement),
+            )
+            or (
+                isinstance(self.settlement, TrackedErrorSettlement)
+                and self.settlement.rollback_tracking_error_cap_radians
+                is not None
+                and self.settlement.rollback_tracking_error_cap_radians
+                != self.reset_tolerances.maximum_joint_difference_radians
             )
         ):
             raise ValueError("control resolution protocol is invalid")

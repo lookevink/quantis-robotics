@@ -167,7 +167,7 @@ def _sample(index: int, magnitude: float) -> ControlResolutionSample:
             ),
             rollback=ControlResolutionSettlementEvidence(
                 requested_joint_motion_radians=2e-4,
-                required_tracking_error_radians=4e-4,
+                required_tracking_error_radians=5e-4,
                 updates_used=2,
                 passing_tracking_errors_radians=(1e-4, 0.0),
             ),
@@ -984,7 +984,7 @@ class ControlResolutionReportTest(unittest.TestCase):
                 drive_command=probe.drive_command(None),
                 settlement=ControlResolutionSettlementEvidence(
                     requested_joint_motion_radians=1e-3,
-                    required_tracking_error_radians=4e-4,
+                    required_tracking_error_radians=5e-4,
                     updates_used=2,
                     passing_tracking_errors_radians=(4e-4, 0.0),
                 ),
@@ -1056,7 +1056,7 @@ class ControlResolutionReportTest(unittest.TestCase):
                 target_joint_positions=baseline.drive_target.joint_positions,
                 attempt=ControlResolutionSettlementAttempt(
                     requested_joint_motion_radians=2e-4,
-                    required_tracking_error_radians=4e-4,
+                    required_tracking_error_radians=5e-4,
                     tracking_errors_radians=(1e-3,)
                     * CONTROL_RESOLUTION_PROTOCOL.settlement.maximum_updates,
                     final_joint_positions=(
@@ -1695,7 +1695,7 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
                 target,
                 interlock,
                 policy,
-                policy.rollback_tracking_error_cap_radians,
+                4e-4,
             )
 
         self.assertEqual(evidence.required_tracking_error_radians, 4e-4)
@@ -1795,7 +1795,7 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
         )
         attempt = ControlResolutionSettlementAttempt(
             requested_joint_motion_radians=1e-3,
-            required_tracking_error_radians=4e-4,
+            required_tracking_error_radians=5e-4,
             tracking_errors_radians=(1e-3,)
             * CONTROL_RESOLUTION_PROTOCOL.settlement.maximum_updates,
             final_joint_positions=tuple(start.arm_positions),
@@ -1852,7 +1852,7 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
             settle.await_args.args[2].arm_positions,
             np.asarray(reference_reset.joint_positions),
         )
-        self.assertEqual(settle.await_args.args[5], 4e-4)
+        self.assertEqual(settle.await_args.args[5], 5e-4)
         actuators.current_command.assert_called()
 
     async def test_fixed_settlement_dispatches_exact_update_count(self) -> None:
