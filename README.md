@@ -1708,6 +1708,36 @@ fresh observation to the post-action state and proves the same safety,
 tracking, progress, attachment, and rollback contracts across that boundary.
 Insertion filming and production authority remain false.
 
+The first post-action follow-up milestone was implemented but stopped twice
+before capture, inference, execution claim, or motion. Orchestration attempt
+`insertion-followup-safety-20260826T145452Z-52600` exposed a compatibility
+error while reconstructing the predecessor's v1 no-actuation safety artifact:
+the historical reset binding predated evaluated drive-target evidence. Commit
+`4811238` keeps that evidence readable while requiring every newly constructed
+binding, and every follow-up binding, to carry an exact fresh drive target.
+Attempt `insertion-followup-safety-20260826T145813Z-52600` then exposed the
+resident upgrade boundary: source reload had cleared the sole in-memory live
+runtime before follow-up capture. The subsequent lifecycle repair introduces
+a neutral cross-generation handoff and rebuilds the articulation, fixed-joint
+plug, collision policy, hand sensor, and connector sensor only after the
+resumed physics update, with interlocks before and after wrapper
+reconstruction.
+Local validation now passes `548` tests with `70` optional skips, and both
+independent correctness and standards reviews pass.
+
+Both failed attempts triggered and verified the 13 GB recovery backup. They do
+not provide no-actuation safety evidence because no follow-up observation was
+captured, and they consumed no action authority. The already-running Isaac
+generation nevertheless lost the pre-fix in-memory runtime handle; recreating
+it in place would require an unobserved physics update and would violate the
+per-update contact/attachment interlock. Therefore no follow-up command was
+issued. A valid retry must begin a fresh reset-bound first-action session under
+the existing one-action gate and then perform the authenticated follow-up in
+the same corrected resident generation. That is a new two-action experiment,
+not an automatic continuation of the preserved session, and remains
+unauthorized here. Multi-step insertion, filming, and production authority
+remain false.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

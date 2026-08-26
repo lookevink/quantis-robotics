@@ -685,6 +685,15 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     second action, multi-step insertion, filming, or production authority is
     granted. Exact negative and successful evidence is in the linked README
     checkpoint.
+    The bounded follow-up implementation subsequently stopped twice before a
+    fresh observation or any command: first on legacy safety reconstruction,
+    then on loss of the resident runtime across source reload. Both exits
+    verified the recovery backup. Cross-generation runtime, plug, collision,
+    and dual contact-sensor handoff is now regression-tested, but the old live
+    generation cannot be recovered without an unobserved update. A follow-up
+    therefore requires a separately authorized fresh two-action chain; no
+    current multi-step, filming, or production authority is granted. Exact
+    evidence remains in the linked README checkpoint.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one
