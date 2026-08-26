@@ -372,6 +372,7 @@ async def synchronized_insertion_frame_capture(
     limits: SimulatorSafetyLimits,
     capture: Any,
     *,
+    expected_active_drive_target: JointDriveTarget,
     operation: str,
 ) -> SynchronizedInsertionRuntime:
     """Render and read one interlocked insertion frame before pausing."""
@@ -396,7 +397,13 @@ async def synchronized_insertion_frame_capture(
         before_read=capture_before_read,
     )
     try:
-        synchronized.safety.validate_continuity(captured, limits)
+        if synchronized.active_drive_target != expected_active_drive_target:
+            raise ValueError("live insertion drive target changed during frame capture")
+        synchronized.safety.validate_followup_continuity(
+            captured,
+            expected_active_drive_target.gripper_width_m,
+            limits,
+        )
     except ValueError as error:
         raise RuntimeError("live insertion state changed during frame capture") from error
     return synchronized

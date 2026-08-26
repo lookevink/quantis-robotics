@@ -10,6 +10,8 @@ from unittest.mock import Mock, patch
 import numpy as np
 
 from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimits
+from jepa_wm.insertion_refresh import ControlSafetySnapshot
+from jepa_wm.joint_drive import JointDriveTarget
 from sim.isaac_control_runtime import (
     ControlContactSensors,
     LiveControlRuntime,
@@ -240,7 +242,7 @@ class ContactReadingTest(unittest.TestCase):
             return refreshed_runtime
 
         pose = Mock()
-        drive_target = Mock()
+        drive_target = JointDriveTarget((0.0,) * 7, 0.04)
 
         def read(runtime):
             events.append("read")
@@ -361,6 +363,7 @@ class ContactReadingTest(unittest.TestCase):
                     captured,
                     SimulatorSafetyLimits(),
                     capture,
+                    expected_active_drive_target=drive_target,
                     operation="test insertion follow-up frame",
                 )
             )
@@ -370,10 +373,122 @@ class ContactReadingTest(unittest.TestCase):
             ["readiness update", "refresh", "camera update", "read"],
         )
         self.assertIs(synchronized.safety, live)
-        live.validate_continuity.assert_called_once_with(
-            captured, SimulatorSafetyLimits()
+        live.validate_followup_continuity.assert_called_once_with(
+            captured,
+            drive_target.gripper_width_m,
+            SimulatorSafetyLimits(),
         )
         self.assertEqual(timeline.events, ["play", "pause"])
+
+    def test_insertion_frame_capture_accepts_settling_toward_active_target(self) -> None:
+        timeline = _Timeline(playing=False)
+        old_runtime = LiveControlRuntime(
+            "session", object(), Mock(), Mock(attached=True), Mock()
+        )
+        refreshed_runtime = LiveControlRuntime(
+            "session", old_runtime.stage, Mock(), Mock(attached=True), Mock()
+        )
+        captured = ControlSafetySnapshot(
+            (
+                0.8433861136436462,
+                -1.3164855241775513,
+                -1.1596380472183228,
+                -2.6030569076538086,
+                0.4332136809825897,
+                3.494144916534424,
+                -0.7353372573852539,
+            ),
+            0.01801662240177393,
+            (-0.07707861810922623, -0.24581295251846313, 1.3099448680877686),
+            0.0,
+            False,
+            True,
+        )
+        live = ControlSafetySnapshot(
+            (
+                0.84379643201828,
+                -1.3162521123886108,
+                -1.1597918272018433,
+                -2.6027512550354004,
+                0.4331771433353424,
+                3.4940218925476074,
+                -0.7353372573852539,
+            ),
+            0.01802041195333004,
+            (-0.07722251117229462, -0.24587148427963257, 1.309919834136963),
+            0.0,
+            False,
+            True,
+        )
+        active_target = JointDriveTarget(
+            (
+                0.8438659343383477,
+                -1.3155067699643368,
+                -1.1587890608769889,
+                -2.602214382216666,
+                0.43314604049138433,
+                3.493953366889305,
+                -0.735345115973845,
+            ),
+            0.01802057959139347,
+        )
+
+        async def advance() -> None:
+            return None
+
+        async def capture(_observe_safety) -> None:
+            return None
+
+        with (
+            patch(
+                "sim.isaac_control_runtime.refresh_live_control_runtime",
+                return_value=refreshed_runtime,
+            ),
+            patch(
+                "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
+                return_value=(live, Mock(), active_target),
+            ) as read,
+            patch(
+                "sim.isaac_control_runtime.LiveContactInterlock.observe",
+                return_value=SimpleNamespace(
+                    collision_detected=False,
+                    force_newtons=0.0,
+                ),
+            ),
+        ):
+            synchronized = asyncio.run(
+                synchronized_insertion_frame_capture(
+                    old_runtime,
+                    timeline,
+                    advance,
+                    captured,
+                    SimulatorSafetyLimits(),
+                    capture,
+                    expected_active_drive_target=active_target,
+                    operation="test insertion follow-up settling",
+                )
+            )
+            changed_target = JointDriveTarget(
+                active_target.joint_positions,
+                active_target.gripper_width_m + 0.0001,
+            )
+            read.return_value = (live, Mock(), changed_target)
+            with self.assertRaisesRegex(RuntimeError, "state changed"):
+                asyncio.run(
+                    synchronized_insertion_frame_capture(
+                        old_runtime,
+                        _Timeline(playing=False),
+                        advance,
+                        captured,
+                        SimulatorSafetyLimits(),
+                        capture,
+                        expected_active_drive_target=active_target,
+                        operation="test changed insertion drive target",
+                    )
+                )
+
+        self.assertEqual(synchronized.safety, live)
+        self.assertEqual(synchronized.active_drive_target, active_target)
 
     def test_resolution_refresh_defers_bounded_drift_to_stable_baseline(self) -> None:
         timeline = _Timeline(playing=False)

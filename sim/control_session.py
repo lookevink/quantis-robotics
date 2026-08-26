@@ -380,8 +380,11 @@ class PostActionEvidence:
         observation: ControlObservation,
         state: ControlSessionState,
     ) -> None:
-        self.require_safety_snapshot().validate_continuity(
-            state.require_safety_snapshot()
+        if state.active_drive_target is None:
+            raise ValueError("follow-up capture has no active drive target")
+        state.require_safety_snapshot().validate_followup_continuity(
+            self.require_safety_snapshot(),
+            state.active_drive_target.gripper_width_m,
         )
         drift = action_between(self.pose, observation.pose)
         limits = ActionTrackingLimits()

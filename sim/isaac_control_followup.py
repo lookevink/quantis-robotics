@@ -440,6 +440,7 @@ async def capture_followup_observation(
         captured_state,
         SimulatorSafetyLimits(),
         capture_frame,
+        expected_active_drive_target=lineage.active_drive_target,
         operation="insertion follow-up capture synchronization",
     )
     if synchronized.pose is None:

@@ -12,7 +12,7 @@ from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimi
 
 
 INSERTION_EVALUATION_REFRESH_SCHEMA = "quantis.jepa_wm_insertion_trial_refresh.v1"
-MAXIMUM_CAPTURED_GRIPPER_DRIFT_METERS = 1e-6
+MAXIMUM_SYNCHRONIZED_GRIPPER_ERROR_METERS = 1e-6
 MAXIMUM_CAPTURED_CONTACT_DRIFT_NEWTONS = 1e-9
 
 
@@ -58,18 +58,25 @@ class ControlSafetySnapshot:
         ):
             raise ValueError("control safety snapshot is invalid")
 
-    def validate_continuity(
+    def _matches_continuity(
         self,
         captured: ControlSafetySnapshot,
+        expected_gripper_width_meters: float,
         limits: SimulatorSafetyLimits = SimulatorSafetyLimits(),
-    ) -> None:
+    ) -> bool:
+        if (
+            isinstance(expected_gripper_width_meters, bool)
+            or not isfinite(expected_gripper_width_meters)
+            or not 0.0 <= expected_gripper_width_meters <= 0.08
+        ):
+            raise ValueError("synchronized gripper reference is invalid")
         captured.validate_contact_continuity(
             ControlInterlockEvidence(
                 self.contact_force_newtons,
                 self.collision_detected,
             )
         )
-        if (
+        return not (
             max(
                 abs(live - expected)
                 for live, expected in zip(
@@ -79,15 +86,41 @@ class ControlSafetySnapshot:
             > limits.maximum_observation_joint_drift_radians
             or not isclose(
                 self.gripper_width_m,
-                captured.gripper_width_m,
+                expected_gripper_width_meters,
                 rel_tol=0.0,
-                abs_tol=MAXIMUM_CAPTURED_GRIPPER_DRIFT_METERS,
+                abs_tol=MAXIMUM_SYNCHRONIZED_GRIPPER_ERROR_METERS,
             )
             or dist(self.plug_position, captured.plug_position)
             > limits.maximum_observation_plug_drift_meters
             or self.plug_attached is not captured.plug_attached
+        )
+
+    def validate_continuity(
+        self,
+        captured: ControlSafetySnapshot,
+        limits: SimulatorSafetyLimits = SimulatorSafetyLimits(),
+    ) -> None:
+        if not self._matches_continuity(
+            captured,
+            captured.gripper_width_m,
+            limits,
         ):
             raise ValueError("live control safety state changed after capture")
+
+    def validate_followup_continuity(
+        self,
+        captured: ControlSafetySnapshot,
+        active_gripper_target_meters: float,
+        limits: SimulatorSafetyLimits = SimulatorSafetyLimits(),
+    ) -> None:
+        """Allow bounded settling only toward the unchanged active drive target."""
+
+        if not self._matches_continuity(
+            captured,
+            active_gripper_target_meters,
+            limits,
+        ):
+            raise ValueError("live follow-up state left its active drive target")
 
     def validate_contact_continuity(
         self,
