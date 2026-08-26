@@ -913,6 +913,19 @@ class ControlResolutionReportTest(unittest.TestCase):
         self.assertEqual(
             ControlResolutionFailureEvidence.from_dict(failure.to_dict()), failure
         )
+        runtime_rounding = failure.to_dict()
+        runtime_rounding["completed_samples"][0]["actual_action"][3] += 3e-19
+        self.assertEqual(
+            ControlResolutionFailureEvidence.from_dict(runtime_rounding),
+            failure,
+        )
+        tampered_action = failure.to_dict()
+        tampered_action["completed_samples"][0]["actual_action"][3] += 1e-10
+        with self.assertRaisesRegex(
+            ValueError,
+            "failure evidence is incomplete",
+        ):
+            ControlResolutionFailureEvidence.from_dict(tampered_action)
         missing_settlement = failure.to_dict()
         del missing_settlement["completed_samples"][0]["tracked_settlement"]
         with self.assertRaisesRegex(ValueError, "failure evidence is incomplete"):
@@ -1006,6 +1019,19 @@ class ControlResolutionReportTest(unittest.TestCase):
         restored = ControlResolutionFailureEvidence.from_dict(failure.to_dict())
 
         self.assertEqual(restored, failure)
+        runtime_rounding = failure.to_dict()
+        runtime_rounding["settlement_failure"]["execution"]["target_pose"][0] += 3e-14
+        runtime_rounding["settlement_failure"]["execution"]["projection"]["gate"][
+            "next_pose"
+        ][0] += 3e-14
+        ControlResolutionFailureEvidence.from_dict(runtime_rounding)
+        tampered_pose = failure.to_dict()
+        tampered_pose["settlement_failure"]["execution"]["target_pose"][0] += 1e-10
+        tampered_pose["settlement_failure"]["execution"]["projection"]["gate"][
+            "next_pose"
+        ][0] += 1e-10
+        with self.assertRaisesRegex(ValueError, "failure evidence is incomplete"):
+            ControlResolutionFailureEvidence.from_dict(tampered_pose)
         tampered = failure.to_dict()
         tampered["settlement_failure"]["target_joint_positions"][0] += 1e-3
         with self.assertRaisesRegex(ValueError, "failure evidence is incomplete"):

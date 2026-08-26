@@ -636,6 +636,14 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     rollback missed the same limit by `0.004404 mrad`, so only the bounded
     observation cap is extended. Exact negative evidence is retained in the
     linked README checkpoint.
+    The frozen six-case pose/load roster is now terminal: attached contexts 43
+    and 106 completed all probes, while attached context 74 and all three
+    unloaded contexts failed closed at the first `0.5 mm` forward/rollback
+    cycle. The request is distinguishable from zero drift but is not repeatable
+    across pose and load, and observed orientation drift exceeds the prior hold
+    value. Controller settlement/rollback must be corrected and the same roster
+    rerun before choosing a deadband or orientation-hold tolerance. No JEPA
+    action is authorized.
     Multi-step, filming, and production authority remain false; exact metrics
     and evidence are in the
     [insertion control-resolution checkpoint](../README.md#insertion-control-resolution-checkpoint).

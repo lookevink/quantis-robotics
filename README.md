@@ -1353,6 +1353,43 @@ from 40 to 48 updates; the reset-derived tracking cap, all other reset checks,
 and every safety limit remain unchanged. Both 12 GB backups were verified, and
 the `1.0 mm` probe still has not run.
 
+The fixed 48-update roster has now reached a terminal result at all six
+predeclared pose/load cases. The current exact-code artifacts reconstruct on
+the host and are present in the checksum-verified 13 GB recovery copy:
+
+| Load | Context | Terminal result |
+| --- | ---: | --- |
+| attached | 43 | Session `insertion-resolution-attached-20260826T023754Z-52600-c43` completed all nine probes. Zero drift was `0.00188 mm` translation and `0.00416 mrad` orientation. The `0.5 mm` probes realized `0.789 mm` mean along-axis motion with `0.323 mm` maximum translation error, `1.395 mrad` maximum orientation drift, `1.608 mrad` maximum controller-tracking error, and `2.25 s` settlement. The `1.0 mm` probes realized `1.175 mm` mean with `0.226 mm`, `1.257 mrad`, `0.652 mrad`, and `2.25 s` corresponding maxima/time. |
+| attached | 74 | Session `insertion-resolution-attached-20260826T025726Z-52600-c74` completed three HOLDs, then the first `0.5 mm` forward probe timed out after `4.5 s` at `1.004 mrad` versus the unchanged `0.500 mrad` requirement. Its interlocked rollback recovered in 16 updates at `0.443 mrad`. |
+| attached | 106 | Session `insertion-resolution-attached-20260826T030823Z-52600-c106` completed all nine probes. Zero drift was `0.00140 mm` translation and `0.00290 mrad` orientation. The `0.5 mm` probes realized `0.863 mm` mean with `0.366 mm` maximum translation error, `1.240 mrad` maximum orientation drift, `1.766 mrad` maximum controller-tracking error, and `2.25 s` settlement. The `1.0 mm` probes realized `1.203 mm` mean with `0.252 mm`, `1.382 mrad`, `0.503 mrad`, and `2.083 s` mean (`2.25 s` maximum) settlement. |
+| unloaded | 43 | Session `insertion-resolution-unloaded-20260826T032622Z-52600-c43` completed three exact HOLDs. Its first `0.5 mm` forward probe settled in `2.25 s`, realizing `0.784 mm` with `0.322 mm` translation error, `1.381 mrad` orientation drift, and `1.499 mrad` controller-tracking error; rollback then timed out after `4.5 s` at `0.688 mrad`. |
+| unloaded | 74 | Session `insertion-resolution-unloaded-20260826T033559Z-52600-c74` completed three exact HOLDs, then the first `0.5 mm` forward probe timed out after `4.5 s` at `0.925 mrad`. Its interlocked rollback recovered in 13 updates at `0.498 mrad`. |
+| unloaded | 106 | Session `insertion-resolution-unloaded-20260826T034609Z-52600-c106` completed three exact HOLDs. Its first `0.5 mm` forward probe settled in `2.25 s`, realizing `0.859 mm` with `0.361 mm` translation error, `1.161 mrad` orientation drift, and `1.605 mrad` controller-tracking error; rollback then timed out after `4.5 s` at `0.718 mrad`. |
+
+All six cases recorded `0 N` peak contact and no collision; attached runs
+retained attachment and unloaded runs remained unattached. The attached HOLDs
+showed only `0.00140`-`0.00188 mm` translation drift and
+`0.00290`-`0.00416 mrad` orientation drift, while unloaded HOLDs were unchanged
+at the stored precision. Error to the unchanged active controller target was
+nevertheless about `1.0 mrad` in every HOLD case. Across the two complete
+attached reports, worst-case start/rollback repeatability remained within
+`0.267 mm` translation, `0.394 mrad` rotation, `0.498 mrad` joints, and
+`0.272 mm` plug-axis position.
+
+This separates noise from command response, but it does not close the control
+checkpoint. A `0.5 mm` request is clearly distinguishable from zero drift, yet
+only two of six pose/load cases completed its full forward-and-reset cycle; the
+settled responses also overshot to roughly `0.78`-`0.86 mm`. The `1.0 mm`
+roster was reached only in those two successful attached cases and realized
+roughly `1.17`-`1.20 mm`. Settled nonzero orientation drift reached
+`1.395 mrad`, so the earlier `1.25 mrad` hold value is not defensible across
+this roster. The next milestone remains controller-side: make drive-only
+settlement and rollback repeatable across pose and load, then rerun this frozen
+roster before selecting a command deadband or orientation-hold tolerance. The
+`3 mm` insertion tolerance and all force, collision, attachment, joint, reset,
+and velocity gates remain unchanged. No JEPA action, second receding-horizon
+step, filming, or production authority is granted.
+
 The next diagnostic measured the simulator/controller noise floor before
 authorizing another insertion action. The first exact-code run stopped before
 any probe because the provisional `20 um`/`0.1 mrad` repeat contract was

@@ -554,8 +554,14 @@ class ControlResolutionProbeExecution:
             )
         )
         if (
-            self.commanded_action != expected_action
-            or self.target_pose != expected_target
+            not _reconstructed_metric_payload_matches(
+                list(expected_action.values),
+                list(self.commanded_action.values),
+            )
+            or not _reconstructed_metric_payload_matches(
+                list(expected_target.values),
+                list(self.target_pose.values),
+            )
             or self.projection.proposed_joint_positions != expected_joint_target
             or not self.projection.gate.passed
             or self.projection.gate.observation_id != observation_id
@@ -2260,11 +2266,18 @@ class ControlResolutionSample:
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("control resolution sample is incomplete") from error
         if (
-            payload.get("actual_action") != list(sample.actual_action.values)
-            or payload.get("settled_joint_tracking_error_radians")
-            != sample.settlement_joint_error_radians
-            or payload.get("settling_time_seconds")
-            != sample.settling_time_seconds
+            not _reconstructed_metric_payload_matches(
+                list(sample.actual_action.values),
+                payload.get("actual_action"),
+            )
+            or not _reconstructed_metric_payload_matches(
+                sample.settlement_joint_error_radians,
+                payload.get("settled_joint_tracking_error_radians"),
+            )
+            or not _reconstructed_metric_payload_matches(
+                sample.settling_time_seconds,
+                payload.get("settling_time_seconds"),
+            )
         ):
             raise ValueError("control resolution sample claims are inconsistent")
         return sample
