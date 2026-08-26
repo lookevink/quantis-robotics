@@ -26,6 +26,7 @@ from jepa_wm.control_safety import (
 )
 from jepa_wm.control_tracking import evaluate_action_tracking, tracking_limits_for_policy
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
+from jepa_wm.insertion_trial import InsertionTrialExecutionRefresh
 from sim.control_session import (
     ControlResult,
     ControlResultStatus,
@@ -366,6 +367,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         persisted_state.execution_policy
         is ControlExecutionPolicy.INSERTION_RESET_TRIAL
     )
+    insertion_trial_refresh = None
     if insertion_reset_trial:
         if runtime is None:
             raise RuntimeError("live insertion runtime was lost before execution")
@@ -388,6 +390,15 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         )
         collision_detected = live_state.collision_detected
         contact_force = live_state.contact_force_newtons
+        insertion_trial_refresh = InsertionTrialExecutionRefresh(
+            time(),
+            live_state,
+        )
+        observation, proposal = insertion_trial_refresh.authorize(
+            observation,
+            proposal,
+            persisted_state.require_safety_snapshot(),
+        )
     else:
         current = await synchronized_actual_command(
             actuators,
@@ -634,6 +645,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             post_action=post_action,
             execution_error=execution_error,
             execution_interlock=execution_interlock,
+            insertion_trial_refresh=insertion_trial_refresh,
         )
         session.write_result(result)
         return result.to_dict()

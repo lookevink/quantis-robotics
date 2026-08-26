@@ -2,23 +2,28 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
+from math import isfinite
 from pathlib import Path
 from time import time
 from typing import Any, Mapping
 
 from jepa_wm.action import DroidAction, DroidActionScale
 from jepa_wm.control_policy import ControlExecutionPolicy
-from jepa_wm.control_protocol import ProposedControl
+from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.control_safety import insertion_projection_policy_for_scale
-from jepa_wm.direct_safety import DirectInsertionSafetyEvidence
+from jepa_wm.direct_safety import (
+    ControlSafetySnapshot,
+    DirectInsertionSafetyEvidence,
+)
 from jepa_wm.training_artifact import ArtifactIdentity
 from jepa_wm.trial_equivalence import ControlTrialContext, validate_reset_equivalence
 from sim.recording import validate_recording_id
 
 
 INSERTION_TRIAL_SCHEMA = "quantis.jepa_wm_insertion_trial.v1"
+INSERTION_TRIAL_REFRESH_SCHEMA = "quantis.jepa_wm_insertion_trial_refresh.v1"
 
 
 class InsertionTrialAuthority(str, Enum):
@@ -36,6 +41,65 @@ class InsertionTrialSourceEvidence:
 class InsertionTrialExecutionEvidence:
     context: ControlTrialContext
     response: ProposedControl | None
+
+
+@dataclass(frozen=True)
+class InsertionTrialExecutionRefresh:
+    """Reauthorize an exact bound action after live reset continuity passes."""
+
+    refreshed_at_unix_seconds: float
+    live_state: ControlSafetySnapshot
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.refreshed_at_unix_seconds):
+            raise ValueError("insertion trial execution refresh time is invalid")
+
+    def authorize(
+        self,
+        captured: ControlObservation,
+        response: ProposedControl,
+        captured_state: ControlSafetySnapshot,
+    ) -> tuple[ControlObservation, ProposedControl]:
+        self.live_state.validate_continuity(captured_state)
+        if self.refreshed_at_unix_seconds < max(
+            captured.captured_at_unix_seconds,
+            response.created_at_unix_seconds,
+        ):
+            raise ValueError("insertion trial execution refresh precedes its source")
+        return (
+            replace(
+                captured,
+                captured_at_unix_seconds=self.refreshed_at_unix_seconds,
+            ),
+            replace(
+                response,
+                created_at_unix_seconds=self.refreshed_at_unix_seconds,
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema": INSERTION_TRIAL_REFRESH_SCHEMA,
+            "refreshed_at_unix_seconds": self.refreshed_at_unix_seconds,
+            "live_state": self.live_state.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> InsertionTrialExecutionRefresh:
+        if (
+            not isinstance(payload, Mapping)
+            or payload.get("schema") != INSERTION_TRIAL_REFRESH_SCHEMA
+        ):
+            raise ValueError("insertion trial execution refresh schema is invalid")
+        try:
+            return cls(
+                float(payload["refreshed_at_unix_seconds"]),
+                ControlSafetySnapshot.from_dict(payload["live_state"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "insertion trial execution refresh is incomplete"
+            ) from error
 
 
 @dataclass(frozen=True)

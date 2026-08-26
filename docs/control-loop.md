@@ -654,9 +654,14 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     survive the drive-only reset-equivalence check. Stable capture then exposed
     that action history incorrectly included the whole settling interval;
     conditioning it on the final stable interval produced fresh current-code
-    `2/2` no-actuation passes. It does not cover context 74's larger target or
-    authorize a second action. Realized progress remains a terminal fail-closed
-    gate; failure stops and rolls back.
+    `2/2` no-actuation passes. Qualified stable HOLD history is now canonical
+    zero so independent resets bind exactly. The first exact-bound trial still
+    stopped before motion because live wrapper reconstruction exhausted the
+    unchanged freshness limits. Execution now requires typed live-state
+    continuity evidence before refreshing only that exact bound action's timing;
+    the limits are not extended. It does not cover context 74's larger target
+    or authorize a second action. Realized progress remains a terminal
+    fail-closed gate; failure stops and rolls back.
     Multi-step, filming, and production authority remain false; exact metrics
     and evidence are in the
     [insertion control-resolution checkpoint](../README.md#insertion-control-resolution-checkpoint).

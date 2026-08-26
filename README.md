@@ -1548,8 +1548,8 @@ requested `13.518 mm`, and every scale failed target progress. Re-evaluating
 the identical image, pose, and target with stationary action history produced
 a `0.610 mm` proposal, isolating the failure without actuation.
 
-Stable captures now condition action history on the final `0.25 s` baseline
-interval. Fresh current-code sessions
+Stable captures first conditioned action history on the final `0.25 s`
+baseline interval. Sessions
 `insertion-safety-20260826T092733Z-52600-c43` and
 `insertion-safety-20260826T093844Z-52601-c43` measured only `0.00764 mm` and
 `0.00797 mm` of prior translation. Their exact frozen proposals requested
@@ -1560,6 +1560,31 @@ attachment with `0 N` contact and no collision, carry
 `authority: no_actuation`, and are preserved in the checksum-verified 13 GB
 recovery copy. The full local suite passes `523` tests with `70` optional
 dependency skips.
+
+Reset-trial binding deliberately requires its source and execution action
+history to match exactly, while micrometer-scale stable drift varies across
+replays. A qualified terminal baseline therefore now represents its final
+command history as the canonical HOLD action (all zeros); the physical drift
+continues to be enforced by the typed reset and safety evidence. Fresh sessions
+`insertion-safety-20260826T095029Z-52600-c43` and
+`insertion-safety-20260826T095901Z-52601-c43` passed `2/2` with that exact
+history. Their frozen proposals requested `0.609921 mm` and `0.635914 mm`,
+passed at full translation scale with rotation held, and required
+`1.634619 mrad` and `1.712302 mrad` maximum IK changes. Both again retained
+attachment at `0 N` with no collision, and both 13 GB backups verified.
+
+The first exact-bound trial,
+`insertion-trial-20260826T100755Z-52600-c43`, authenticated the source,
+independent reset, target, action history, and response, then stopped before IK
+or motion. The required live resume/reconstruction/continuity snapshot made
+the original observation `7.792 s` old and its bound response `6.695 s` old,
+so all projections failed the unchanged `3.0 s` observation and `2.5 s`
+command freshness limits. A typed execution refresh now reauthorizes only the
+timing of that exact bound identity/action after the interlocked live snapshot
+passes full captured-state continuity. It persists that live state and derives
+the execution observation/response for report reconstruction; it does not
+extend either freshness limit or rerun/replace the model action. The blocked
+trial and its 13 GB recovery copy remain negative evidence.
 
 Only this corrected fresh `2/2` evidence reopens the predeclared single
 attached context-43 JEPA action with the realized-progress terminal gate. A

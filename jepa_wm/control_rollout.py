@@ -197,7 +197,6 @@ class ControlStepSummary:
         response = session.load_response()
         result = session.load_result()
         limits = SimulatorSafetyLimits()
-        timing = ControlStepTiming.from_step(observation, response, result)
         if state.execution_policy is ControlExecutionPolicy.INSERTION_RESET_TRIAL:
             binding = session.load_insertion_trial_binding(response)
             attempted_scales = tuple(
@@ -216,6 +215,17 @@ class ControlStepSummary:
                 raise ValueError(
                     f"insertion trial execution interlock is missing: {session.session_id}"
                 )
+            if result.insertion_trial_refresh is not None:
+                observation, response = result.insertion_trial_refresh.authorize(
+                    observation,
+                    response,
+                    state.require_safety_snapshot(),
+                )
+        elif result.insertion_trial_refresh is not None:
+            raise ValueError(
+                f"non-insertion result has execution refresh: {session.session_id}"
+            )
+        timing = ControlStepTiming.from_step(observation, response, result)
         if (
             response.observation_id != observation.observation_id
             or response.proposal != observation.expected_proposal

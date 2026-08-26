@@ -35,6 +35,7 @@ from jepa_wm.experimental_candidate import (
 from jepa_wm.insertion_trial import (
     InsertionTrialBinding,
     InsertionTrialExecutionEvidence,
+    InsertionTrialExecutionRefresh,
     InsertionTrialSourceEvidence,
 )
 from jepa_wm.insertion_contract import (
@@ -340,6 +341,7 @@ class ControlResult:
     post_action: PostActionEvidence | None = None
     execution_error: str | None = None
     execution_interlock: ControlInterlockEvidence | None = None
+    insertion_trial_refresh: InsertionTrialExecutionRefresh | None = None
 
     def __post_init__(self) -> None:
         blocked = self.status == ControlResultStatus.BLOCKED
@@ -415,6 +417,10 @@ class ControlResult:
             payload["execution_error"] = self.execution_error
         if self.execution_interlock is not None:
             payload["execution_interlock"] = self.execution_interlock.to_dict()
+        if self.insertion_trial_refresh is not None:
+            payload["insertion_trial_refresh"] = (
+                self.insertion_trial_refresh.to_dict()
+            )
         return payload
 
     @classmethod
@@ -432,6 +438,7 @@ class ControlResult:
             if execution_error is not None:
                 execution_error = str(execution_error)
             execution_interlock = payload.get("execution_interlock")
+            insertion_trial_refresh = payload.get("insertion_trial_refresh")
             return cls(
                 status=ControlResultStatus(payload["status"]),
                 session_id=str(payload["session"]),
@@ -469,6 +476,13 @@ class ControlResult:
                 execution_interlock=(
                     ControlInterlockEvidence.from_dict(execution_interlock)
                     if execution_interlock is not None
+                    else None
+                ),
+                insertion_trial_refresh=(
+                    InsertionTrialExecutionRefresh.from_dict(
+                        insertion_trial_refresh
+                    )
+                    if insertion_trial_refresh is not None
                     else None
                 ),
             )

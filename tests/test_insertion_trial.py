@@ -13,6 +13,7 @@ from jepa_wm.control_protocol import ControlObservation, ControlTarget, Proposed
 from jepa_wm.control_safety import (
     ACTION_SCALES,
     ControlGateDecision,
+    ControlGateReason,
     ORIENTATION_HOLD_ACTION_SCALES,
     SafetyProjectionAttempt,
 )
@@ -22,12 +23,18 @@ from jepa_wm.direct_safety import (
 )
 from jepa_wm.insertion_trial import (
     InsertionTrialBinding,
+    InsertionTrialExecutionRefresh,
     InsertionTrialSourceEvidence,
     build_insertion_trial_response,
 )
 from jepa_wm.training_artifact import ArtifactIdentity
 from jepa_wm.trial_equivalence import ControlTrialContext, TrialResetState
-from sim.control_session import ControlSession, ControlSessionState
+from sim.control_session import (
+    ControlResult,
+    ControlResultStatus,
+    ControlSession,
+    ControlSessionState,
+)
 
 
 _FINGERPRINT = "a" * 64
@@ -106,6 +113,73 @@ def _source() -> InsertionTrialSourceEvidence:
 
 
 class InsertionTrialBindingTest(unittest.TestCase):
+    def test_refreshes_only_timing_after_live_state_continuity(self) -> None:
+        captured = _observation(10)
+        response = ProposedControl(
+            10,
+            100.1,
+            _ACTIONS,
+            _PROPOSAL,
+            _FINGERPRINT,
+        )
+        captured_state = ControlSafetySnapshot(
+            _JOINTS,
+            0.04,
+            (0.4, 0.0, 0.5),
+            0.0,
+            False,
+            True,
+        )
+        refresh = InsertionTrialExecutionRefresh(107.5, captured_state)
+
+        observation, authorized = refresh.authorize(
+            captured,
+            response,
+            captured_state,
+        )
+
+        self.assertEqual(observation.captured_at_unix_seconds, 107.5)
+        self.assertEqual(authorized.created_at_unix_seconds, 107.5)
+        self.assertEqual(observation.pose, captured.pose)
+        self.assertEqual(authorized.actions, response.actions)
+        self.assertEqual(
+            InsertionTrialExecutionRefresh.from_dict(refresh.to_dict()),
+            refresh,
+        )
+        blocked_gate = ControlGateDecision(
+            captured.observation_id,
+            captured.pose,
+            (ControlGateReason.STALE_OBSERVATION,),
+        )
+        result = ControlResult(
+            ControlResultStatus.BLOCKED,
+            "insertion-trial",
+            blocked_gate,
+            (
+                SafetyProjectionAttempt(
+                    ACTION_SCALES[0],
+                    blocked_gate,
+                    0.0,
+                    _JOINTS,
+                ),
+            ),
+            None,
+            0.1,
+            None,
+            None,
+            0.0,
+            insertion_trial_refresh=refresh,
+        )
+        self.assertEqual(ControlResult.from_dict(result.to_dict()), result)
+
+        drifted = replace(captured_state, joint_positions=(0.01, *_JOINTS[1:]))
+        with self.assertRaisesRegex(ValueError, "changed after capture"):
+            InsertionTrialExecutionRefresh(107.5, drifted).authorize(
+                captured,
+                response,
+                captured_state,
+            )
+
     def test_rebinds_one_exact_passing_source_to_an_equivalent_reset(self) -> None:
         binding, response = build_insertion_trial_response(
             execution_session_id="insertion-trial",
