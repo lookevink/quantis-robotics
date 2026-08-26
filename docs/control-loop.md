@@ -622,10 +622,11 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     micrometer-scale drift, while the first `0.5 mm` probe was rejected before
     actuation by the unchanged velocity gate. A retry with the safely longer
     persisted period was also rejected before actuation because IK selected an
-    inadmissibly distant joint configuration. The remaining roster is paused
-    until local IK continuity is repaired or independently bounded. No
-    acceptance or safety limit changed. Exact negative evidence is retained in
-    the linked README checkpoint.
+    inadmissibly distant joint configuration. A bounded local-branch retry
+    admitted the forward probe, but its rollback missed the unchanged tracking
+    threshold at the 32-update cap. The next retry extends only that bounded
+    observation cap; no acceptance or safety limit changed. Exact negative
+    evidence is retained in the linked README checkpoint.
     Multi-step, filming, and production authority remain false; exact metrics
     and evidence are in the
     [insertion control-resolution checkpoint](../README.md#insertion-control-resolution-checkpoint).

@@ -1284,6 +1284,21 @@ attempted. Local IK continuity must be repaired or bounded independently before
 the drive-only roster can resume. No JEPA action, multi-step insertion,
 filming, or production authority is granted.
 
+The bounded local-branch follow-up,
+`insertion-resolution-attached-20260826T012114Z-52600-c43`, found a
+`0.006576 rad` IK solution and admitted the same `0.5 mm` request without
+changing the velocity gate. The drive-only forward interval realized
+`0.784349 mm` along the requested axis, with `0.321669 mm` translation error,
+`1.394731 mrad` orientation drift, and `1.499214 mrad` settled joint error
+after `2.25 s`. Rollback then improved monotonically from `3.591876 mrad` to
+`1.325758 mrad`, but failed closed after `3.0 s` because it had not reached the
+unchanged `1.257109 mrad` threshold. Peak contact remained `0 N`, collision
+stayed false, attachment was retained, and both 12 GB backups were verified.
+The next diagnostic retry extends only the bounded settlement observation cap
+from 32 to 40 updates; it does not change the tracking threshold, velocity
+gate, or any other safety limit. This is a measured control/rollback negative,
+not insertion authority.
+
 The next diagnostic measured the simulator/controller noise floor before
 authorizing another insertion action. The first exact-code run stopped before
 any probe because the provisional `20 um`/`0.1 mrad` repeat contract was

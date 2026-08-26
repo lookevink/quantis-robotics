@@ -935,7 +935,8 @@ class ControlResolutionReportTest(unittest.TestCase):
                 attempt=ControlResolutionSettlementAttempt(
                     requested_joint_motion_radians=0.0,
                     required_tracking_error_radians=5e-4,
-                    tracking_errors_radians=(1e-3,) * 32,
+                    tracking_errors_radians=(1e-3,)
+                    * CONTROL_RESOLUTION_PROTOCOL.settlement.maximum_updates,
                     final_joint_positions=final_positions,
                 ),
                 interlock=ControlInterlockEvidence(0.0, False),
@@ -1020,7 +1021,8 @@ class ControlResolutionReportTest(unittest.TestCase):
                 attempt=ControlResolutionSettlementAttempt(
                     requested_joint_motion_radians=2e-4,
                     required_tracking_error_radians=5e-4,
-                    tracking_errors_radians=(1e-3,) * 32,
+                    tracking_errors_radians=(1e-3,)
+                    * CONTROL_RESOLUTION_PROTOCOL.settlement.maximum_updates,
                     final_joint_positions=(
                         1e-3,
                         *baseline.drive_target.joint_positions[1:],

@@ -142,7 +142,7 @@ class TrackedErrorSettlement:
     absolute_tracking_floor_radians: float = 5e-4
     tracking_error_fraction_of_requested_motion: float = 0.25
     required_consecutive_updates: int = 2
-    maximum_updates: int = 32
+    maximum_updates: int = 40
 
     def __post_init__(self) -> None:
         if (
