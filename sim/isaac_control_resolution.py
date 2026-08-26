@@ -309,6 +309,7 @@ async def settle_resolution_target(
     target: JointCommand,
     interlock: ResolutionControlInterlock,
     policy: TrackedErrorSettlement,
+    tracking_error_cap_radians: float | None = None,
 ) -> ControlResolutionSettlementEvidence:
     """Wait for consecutive command-relative tracking passes within a bound."""
 
@@ -316,7 +317,10 @@ async def settle_resolution_target(
         tuple(float(value) for value in start.arm_positions),
         tuple(float(value) for value in target.arm_positions),
     )
-    required_error = policy.maximum_tracking_error(requested_motion)
+    required_error = policy.maximum_tracking_error(
+        requested_motion,
+        tracking_error_cap_radians,
+    )
     passing_errors: list[float] = []
     tracking_errors: list[float] = []
     for update_count in range(1, policy.maximum_updates + 1):
@@ -356,6 +360,7 @@ async def settle_resolution_motion(
     target: JointCommand,
     interlock: ResolutionControlInterlock,
     settlement: ControlResolutionSettlement,
+    tracking_error_cap_radians: float | None = None,
 ) -> ControlResolutionSettlementEvidence | None:
     if isinstance(settlement, TrackedErrorSettlement):
         return await settle_resolution_target(
@@ -364,7 +369,10 @@ async def settle_resolution_motion(
             target,
             interlock,
             settlement,
+            tracking_error_cap_radians,
         )
+    if tracking_error_cap_radians is not None:
+        raise ValueError("fixed settlement cannot carry a tracking error cap")
     await advance_physics_updates(settlement.updates, interlock.observe)
     return None
 
@@ -474,6 +482,14 @@ async def recover_resolution_drive_target(
             settlement_target,
             interlock,
             context.protocol.settlement,
+            (
+                context.protocol.settlement.rollback_tracking_error_cap_radians
+                if isinstance(
+                    context.protocol.settlement,
+                    TrackedErrorSettlement,
+                )
+                else None
+            ),
         )
         if settlement_evidence is None:
             raise RuntimeError("tracked rollback produced no settlement evidence")
@@ -940,6 +956,14 @@ async def measure_insertion_control_resolution(
                     rollback_target,
                     rollback_interlock,
                     protocol.settlement,
+                    (
+                        protocol.settlement.rollback_tracking_error_cap_radians
+                        if isinstance(
+                            protocol.settlement,
+                            TrackedErrorSettlement,
+                        )
+                        else None
+                    ),
                 )
             except UnsettledControlResolutionTarget as error:
                 rollback_failed_at_sim_seconds = timeline.get_current_time()

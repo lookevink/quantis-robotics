@@ -624,9 +624,11 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     persisted period was also rejected before actuation because IK selected an
     inadmissibly distant joint configuration. A bounded local-branch retry
     admitted the forward probe, but its rollback missed the unchanged tracking
-    threshold at the 32-update cap. The next retry extends only that bounded
-    observation cap; no acceptance or safety limit changed. Exact negative
-    evidence is retained in the linked README checkpoint.
+    threshold at the 32-update cap. A longer bounded observation then reached
+    command-relative settlement but missed exact reset equivalence by a small
+    joint margin. Rollback now has a stricter persisted tracking cap before the
+    unchanged full reset check; no acceptance or safety limit changed. Exact
+    negative evidence is retained in the linked README checkpoint.
     Multi-step, filming, and production authority remain false; exact metrics
     and evidence are in the
     [insertion control-resolution checkpoint](../README.md#insertion-control-resolution-checkpoint).

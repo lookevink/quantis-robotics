@@ -167,7 +167,7 @@ def _sample(index: int, magnitude: float) -> ControlResolutionSample:
             ),
             rollback=ControlResolutionSettlementEvidence(
                 requested_joint_motion_radians=2e-4,
-                required_tracking_error_radians=5e-4,
+                required_tracking_error_radians=4e-4,
                 updates_used=2,
                 passing_tracking_errors_radians=(1e-4, 0.0),
             ),
@@ -188,6 +188,22 @@ def _sample(index: int, magnitude: float) -> ControlResolutionSample:
 
 
 class ControlResolutionReportTest(unittest.TestCase):
+    def test_legacy_settlement_protocol_omits_rollback_tracking_cap(self) -> None:
+        payload = CONTROL_RESOLUTION_PROTOCOL.to_dict()
+        payload["tracked_error_settlement"].pop(
+            "rollback_tracking_error_cap_radians"
+        )
+
+        restored = ControlResolutionProtocol.from_dict(payload)
+
+        self.assertIsNone(
+            restored.settlement.rollback_tracking_error_cap_radians
+        )
+        self.assertNotIn(
+            "rollback_tracking_error_cap_radians",
+            restored.to_dict()["tracked_error_settlement"],
+        )
+
     def test_corrected_protocol_uses_drive_safe_periods_for_zero_half_and_one_mm(self) -> None:
         self.assertEqual(
             CONTROL_RESOLUTION_PROTOCOL.translation_magnitudes_meters,
@@ -948,7 +964,7 @@ class ControlResolutionReportTest(unittest.TestCase):
                 drive_command=probe.drive_command(None),
                 settlement=ControlResolutionSettlementEvidence(
                     requested_joint_motion_radians=1e-3,
-                    required_tracking_error_radians=5e-4,
+                    required_tracking_error_radians=4e-4,
                     updates_used=2,
                     passing_tracking_errors_radians=(4e-4, 0.0),
                 ),
@@ -1020,7 +1036,7 @@ class ControlResolutionReportTest(unittest.TestCase):
                 target_joint_positions=baseline.drive_target.joint_positions,
                 attempt=ControlResolutionSettlementAttempt(
                     requested_joint_motion_radians=2e-4,
-                    required_tracking_error_radians=5e-4,
+                    required_tracking_error_radians=4e-4,
                     tracking_errors_radians=(1e-3,)
                     * CONTROL_RESOLUTION_PROTOCOL.settlement.maximum_updates,
                     final_joint_positions=(
@@ -1634,6 +1650,41 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
             [call(1, interlock.observe) for _ in range(4)],
         )
 
+    async def test_rollback_tracking_cap_is_stricter_than_motion_floor(self) -> None:
+        target = JointCommand(np.zeros(7), 0.04)
+        actual_commands = (
+            JointCommand(np.asarray((4.5e-4, *([0.0] * 6))), 0.04),
+            JointCommand(np.asarray((3.5e-4, *([0.0] * 6))), 0.04),
+            JointCommand(np.asarray((3e-4, *([0.0] * 6))), 0.04),
+        )
+        runtime = SimpleNamespace(
+            actuators=SimpleNamespace(
+                actual_command=Mock(side_effect=actual_commands)
+            )
+        )
+        interlock = SimpleNamespace(observe=Mock())
+        policy = TrackedErrorSettlement()
+
+        with patch(
+            "sim.isaac_control_resolution.advance_physics_updates",
+            new=AsyncMock(),
+        ):
+            evidence = await settle_resolution_motion(
+                runtime,
+                target,
+                target,
+                interlock,
+                policy,
+                policy.rollback_tracking_error_cap_radians,
+            )
+
+        self.assertEqual(evidence.required_tracking_error_radians, 4e-4)
+        self.assertEqual(evidence.updates_used, 3)
+        self.assertEqual(
+            evidence.passing_tracking_errors_radians,
+            (3.5e-4, 3e-4),
+        )
+
     async def test_settlement_fails_after_bounded_update_timeout(self) -> None:
         target = JointCommand(np.zeros(7), 0.04)
         runtime = SimpleNamespace(
@@ -1724,8 +1775,9 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
         )
         attempt = ControlResolutionSettlementAttempt(
             requested_joint_motion_radians=1e-3,
-            required_tracking_error_radians=5e-4,
-            tracking_errors_radians=(1e-3,) * 32,
+            required_tracking_error_radians=4e-4,
+            tracking_errors_radians=(1e-3,)
+            * CONTROL_RESOLUTION_PROTOCOL.settlement.maximum_updates,
             final_joint_positions=tuple(start.arm_positions),
         )
         interlock = SimpleNamespace(
@@ -1780,6 +1832,7 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
             settle.await_args.args[2].arm_positions,
             np.asarray(reference_reset.joint_positions),
         )
+        self.assertEqual(settle.await_args.args[5], 4e-4)
         actuators.current_command.assert_called()
 
     async def test_fixed_settlement_dispatches_exact_update_count(self) -> None:

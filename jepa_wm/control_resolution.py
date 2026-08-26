@@ -141,6 +141,7 @@ def retreat_direction(
 class TrackedErrorSettlement:
     absolute_tracking_floor_radians: float = 5e-4
     tracking_error_fraction_of_requested_motion: float = 0.25
+    rollback_tracking_error_cap_radians: float | None = 4e-4
     required_consecutive_updates: int = 2
     maximum_updates: int = 40
 
@@ -150,6 +151,13 @@ class TrackedErrorSettlement:
             or self.absolute_tracking_floor_radians <= 0.0
             or not isfinite(self.tracking_error_fraction_of_requested_motion)
             or not 0.0 < self.tracking_error_fraction_of_requested_motion < 1.0
+            or (
+                self.rollback_tracking_error_cap_radians is not None
+                and (
+                    not isfinite(self.rollback_tracking_error_cap_radians)
+                    or self.rollback_tracking_error_cap_radians <= 0.0
+                )
+            )
             or isinstance(self.required_consecutive_updates, bool)
             or not isinstance(self.required_consecutive_updates, int)
             or self.required_consecutive_updates <= 0
@@ -159,17 +167,26 @@ class TrackedErrorSettlement:
         ):
             raise ValueError("control resolution settlement policy is invalid")
 
-    def maximum_tracking_error(self, requested_joint_motion_radians: float) -> float:
+    def maximum_tracking_error(
+        self,
+        requested_joint_motion_radians: float,
+        cap_radians: float | None = None,
+    ) -> float:
         if (
             not isfinite(requested_joint_motion_radians)
             or requested_joint_motion_radians < 0.0
         ):
             raise ValueError("requested joint motion is invalid")
-        return max(
+        maximum_error = max(
             self.absolute_tracking_floor_radians,
             requested_joint_motion_radians
             * self.tracking_error_fraction_of_requested_motion,
         )
+        if cap_radians is None:
+            return maximum_error
+        if not isfinite(cap_radians) or cap_radians <= 0.0:
+            raise ValueError("tracking error cap is invalid")
+        return min(maximum_error, cap_radians)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -178,6 +195,15 @@ class TrackedErrorSettlement:
             ),
             "tracking_error_fraction_of_requested_motion": (
                 self.tracking_error_fraction_of_requested_motion
+            ),
+            **(
+                {
+                    "rollback_tracking_error_cap_radians": (
+                        self.rollback_tracking_error_cap_radians
+                    )
+                }
+                if self.rollback_tracking_error_cap_radians is not None
+                else {}
             ),
             "required_consecutive_updates": self.required_consecutive_updates,
             "maximum_updates": self.maximum_updates,
@@ -201,6 +227,11 @@ class TrackedErrorSettlement:
                 ),
                 tracking_error_fraction_of_requested_motion=float(
                     payload["tracking_error_fraction_of_requested_motion"]
+                ),
+                rollback_tracking_error_cap_radians=(
+                    float(payload["rollback_tracking_error_cap_radians"])
+                    if "rollback_tracking_error_cap_radians" in payload
+                    else None
                 ),
                 required_consecutive_updates=required_updates,
                 maximum_updates=maximum_updates,
@@ -1032,12 +1063,17 @@ class ControlResolutionSettlementEvidence:
     def final_tracking_error_radians(self) -> float:
         return self.passing_tracking_errors_radians[-1]
 
-    def validate(self, policy: TrackedErrorSettlement) -> None:
+    def validate(
+        self,
+        policy: TrackedErrorSettlement,
+        cap_radians: float | None = None,
+    ) -> None:
         if (
             not isclose(
                 self.required_tracking_error_radians,
                 policy.maximum_tracking_error(
-                    self.requested_joint_motion_radians
+                    self.requested_joint_motion_radians,
+                    cap_radians,
                 ),
                 rel_tol=0.0,
                 abs_tol=1e-12,
@@ -1117,7 +1153,11 @@ class ControlResolutionSettlementAttempt:
         ):
             raise ValueError("control resolution settlement attempt is invalid")
 
-    def validate(self, policy: TrackedErrorSettlement) -> None:
+    def validate(
+        self,
+        policy: TrackedErrorSettlement,
+        cap_radians: float | None = None,
+    ) -> None:
         passing = tuple(
             error <= self.required_tracking_error_radians
             for error in self.tracking_errors_radians
@@ -1127,7 +1167,8 @@ class ControlResolutionSettlementAttempt:
             or not isclose(
                 self.required_tracking_error_radians,
                 policy.maximum_tracking_error(
-                    self.requested_joint_motion_radians
+                    self.requested_joint_motion_radians,
+                    cap_radians,
                 ),
                 rel_tol=0.0,
                 abs_tol=1e-12,
@@ -1241,10 +1282,11 @@ class ControlResolutionSettlementTimeoutTrace:
         drive_target: ControlResolutionDriveTarget,
         observation_id: int,
         reference_reset: TrialResetState,
+        tracking_error_cap_radians: float | None = None,
     ) -> None:
         if not isinstance(protocol.settlement, TrackedErrorSettlement):
             raise ValueError("fixed settlement cannot carry a timeout attempt")
-        self.attempt.validate(protocol.settlement)
+        self.attempt.validate(protocol.settlement, tracking_error_cap_radians)
         self.execution.validate(protocol, observation_id)
         validate_reset_equivalence(
             reference_reset,
@@ -1393,6 +1435,11 @@ class ControlResolutionRollbackTimeout:
             drive_target,
             observation_id,
             reference_reset,
+            (
+                protocol.settlement.rollback_tracking_error_cap_radians
+                if isinstance(protocol.settlement, TrackedErrorSettlement)
+                else None
+            ),
         )
         self.forward.validate(protocol, self.execution, expected_attachment)
         expected_command = self._expected_drive_command(protocol, drive_target)
@@ -1484,15 +1531,17 @@ class TrackedSettlementEvidence:
                 self.motion,
                 motion_requested_joint_motion_radians,
                 motion_final_tracking_error_radians,
+                None,
             ),
             (
                 self.rollback,
                 rollback_requested_joint_motion_radians,
                 rollback_final_tracking_error_radians,
+                policy.rollback_tracking_error_cap_radians,
             ),
         )
-        for evidence, requested_motion, final_error in comparisons:
-            evidence.validate(policy)
+        for evidence, requested_motion, final_error, cap_radians in comparisons:
+            evidence.validate(policy, cap_radians)
             if (
                 not isclose(
                     evidence.requested_joint_motion_radians,
@@ -1872,7 +1921,10 @@ class ControlResolutionRollbackSuccess:
             self.reset.joint_positions,
             rollback_target,
         )
-        self.settlement.validate(protocol.settlement)
+        self.settlement.validate(
+            protocol.settlement,
+            protocol.settlement.rollback_tracking_error_cap_radians,
+        )
         expected_command = probe.drive_command(
             protocol.safe_joint_motion_period(
                 self.start_joint_positions,

@@ -1299,6 +1299,20 @@ from 32 to 40 updates; it does not change the tracking threshold, velocity
 gate, or any other safety limit. This is a measured control/rollback negative,
 not insertion authority.
 
+That retry, `insertion-resolution-attached-20260826T013600Z-52600-c43`, let
+rollback finish its command-relative settlement but then rejected the exact
+reset. Every other repeatability component passed: `0.074179 mm` translation,
+`0.174079 mrad` rotation, `0.001199` normalized gripper difference, and
+`0.063896 mm` plug-axis difference, with `0 N`, no collision, and retained
+attachment. Maximum joint difference was `0.508428 mrad`, just above the
+unchanged `0.500000 mrad` reset limit. The mismatch exposed a policy gap: the
+rollback command-relative threshold could be looser than the reset criterion
+that immediately followed it. The current protocol therefore adds a persisted
+`0.400000 mrad` rollback tracking cap, requiring two consecutive passing
+updates within the existing 40-update bound before checking the unchanged
+full reset contract. Both 12 GB backups were verified. No second translation
+probe ran, and no authority was granted.
+
 The next diagnostic measured the simulator/controller noise floor before
 authorizing another insertion action. The first exact-code run stopped before
 any probe because the provisional `20 um`/`0.1 mrad` repeat contract was
