@@ -88,7 +88,7 @@ class ControlResolutionBaselinePolicy:
     observation_period_seconds: float = 0.25
     maximum_interval_overrun_seconds: float = 0.05
     required_consecutive_intervals: int = 8
-    maximum_intervals: int = 40
+    maximum_intervals: int = 80
     tolerances: ResetEquivalenceTolerances = (
         CONTROL_RESOLUTION_BASELINE_TOLERANCES
     )

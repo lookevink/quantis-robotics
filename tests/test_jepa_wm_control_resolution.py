@@ -229,12 +229,12 @@ class ControlResolutionReportTest(unittest.TestCase):
                 baseline=_baseline(),
             )
 
-    def test_baseline_requires_two_stable_observation_intervals(self) -> None:
+    def test_baseline_requires_one_global_window_with_a_bounded_timeout(self) -> None:
         policy = ControlResolutionBaselinePolicy(required_consecutive_intervals=2)
         self.assertEqual(
             ControlResolutionBaselinePolicy().maximum_intervals
             * ControlResolutionBaselinePolicy().observation_period_seconds,
-            10.0,
+            20.0,
         )
         self.assertEqual(
             ControlResolutionBaselinePolicy().required_consecutive_intervals,
@@ -584,12 +584,15 @@ class ControlResolutionReportTest(unittest.TestCase):
                     DroidAction((index * 2e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
                 ),
             )
-            for index in range(41)
+            for index in range(
+                ControlResolutionBaselinePolicy().maximum_intervals + 1
+            )
         )
         attempt = ControlResolutionBaselineAttempt(
             ControlResolutionBaselineTrace(
                 states,
-                (0.25,) * 40,
+                (0.25,)
+                * ControlResolutionBaselinePolicy().maximum_intervals,
                 ControlInterlockEvidence(0.0, False),
             )
         )
@@ -606,7 +609,10 @@ class ControlResolutionReportTest(unittest.TestCase):
         restored = ControlResolutionFailureEvidence.from_dict(failure.to_dict())
 
         self.assertEqual(restored, failure)
-        self.assertEqual(len(restored.baseline_attempt.trace.states), 41)
+        self.assertEqual(
+            len(restored.baseline_attempt.trace.states),
+            ControlResolutionBaselinePolicy().maximum_intervals + 1,
+        )
 
         runtime_failure = resolution_failure_evidence(
             "resolution-attached-52600-c43",

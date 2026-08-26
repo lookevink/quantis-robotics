@@ -1215,6 +1215,26 @@ measured from its exact live start while its separately reported steady-state
 tracking error remains bound to the unchanged active drive target. This is a
 preserved diagnostic negative, not control authority.
 
+The first global-window retry then exposed that baseline qualification was
+duplicated inside capture, before an authenticated session existed. It stopped
+without a probe but could not preserve its trace. Capture now records one
+strict current RGB/telemetry frame with no fallback physics update, while the
+authenticated measurement boundary solely owns baseline qualification and
+typed failure persistence. Exact-code session
+`insertion-resolution-attached-20260825T235817Z-52600-c43` subsequently
+preserved a schema-v4 failure with all 41 states from the bounded `10 s`
+attempt. The arm moved `33.538 mm` and `129.945 mrad` over the full attempt as
+it approached the unchanged drive target. Its best window was the final
+`2 s`: translation drift was `0.117 mm`, orientation drift `0.091 mrad`, and
+plug-axis drift `0.117 mm`, all within their unchanged limits, with `0 N`
+contact, no collision, and retained attachment. Maximum joint drift was still
+`0.461 mrad`, above the unchanged `0.250 mrad` baseline limit. Because the
+best window was the final one and was still improving, the next retry extends
+only the bounded observation cap from `10 s` to `20 s`; it does not loosen a
+tolerance, force/collision/attachment limit, settlement rule, or velocity
+gate. Both backup layers again verified the 12 GB recovery copy. No HOLD or
+translation probe executed, and no control authority was granted.
+
 The next diagnostic measured the simulator/controller noise floor before
 authorizing another insertion action. The first exact-code run stopped before
 any probe because the provisional `20 um`/`0.1 mrad` repeat contract was
