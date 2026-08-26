@@ -49,7 +49,7 @@ class InsertionControlTargetPolicy:
     minimum_translation_meters: float = 5e-4
     orientation_hold_tolerance_radians: float | None = 1.25e-3
     minimum_action_horizon: int = 3
-    maximum_action_horizon: int = 8
+    maximum_action_horizon: int = 12
     camera: str = "wrist"
     action_bounds: ActionSelectionBounds = ActionSelectionBounds(
         minimum_action_norm=0.0

@@ -211,6 +211,35 @@ class InsertionControlTargetPolicyTest(unittest.TestCase):
         self.assertEqual(selected.target.index, 50)
         self.assertEqual(len(load.call_args_list), 5)
 
+    def test_followup_searches_past_horizon_eight_for_first_resolvable_target(
+        self,
+    ) -> None:
+        policy = InsertionControlTargetPolicy().for_followup()
+        live_pose = DroidPose((0.4015, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+        with patch(
+            "jepa_wm.insertion_contract.load_rollout_at",
+            side_effect=(
+                _rollout(3, 4e-4),
+                _rollout(4, 6e-4),
+                _rollout(5, 9e-4),
+                _rollout(6, 1.2e-3),
+                _rollout(7, 1.55e-3),
+                _rollout(8, 1.78e-3),
+                _rollout(9, 2.16e-3),
+            ),
+        ) as load:
+            selected = policy.select(
+                Path("recording"),
+                context_index=45,
+                current_pose=live_pose,
+            )
+
+        self.assertEqual(selected.target.index, 52)
+        self.assertEqual(
+            [item.kwargs["protocol"].action_horizon for item in load.call_args_list],
+            [3, 4, 5, 6, 7, 8, 9],
+        )
+
     def test_legacy_followup_preserves_euclidean_target_selection(self) -> None:
         payload = InsertionControlTargetPolicy().to_dict()
         del payload["live_target_metric"]
