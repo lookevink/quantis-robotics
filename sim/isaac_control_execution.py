@@ -605,6 +605,20 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
 
     session = ControlSession.at(CONTROL_ROOT, session_id)
     observation, proposal, persisted_state = session.load()
+    insertion_trial_execution = is_insertion_trial_execution_policy(
+        persisted_state.execution_policy
+    )
+    binding = None
+    trial_policy = None
+    action_scales = ACTION_SCALES
+    target_progress = None
+    control_period_seconds = 1.0 / DROID_FPS
+    if insertion_trial_execution:
+        binding = session.load_insertion_trial_binding(proposal)
+        trial_policy = binding.require_current_execution()
+        action_scales = binding.allowed_projection_scales
+        target_progress = trial_policy.projected_progress
+        control_period_seconds = trial_policy.control_period_seconds
     session.claim_execution()
     stage = omni.usd.get_context().get_stage()
     if SimulationManager.get_physics_sim_view() is None:
@@ -625,9 +639,6 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         attachment = runtime.attachment
         sensor = runtime.sensor
     limits = SimulatorSafetyLimits()
-    insertion_trial_execution = is_insertion_trial_execution_policy(
-        persisted_state.execution_policy
-    )
     insertion_trial_refresh = None
     insertion_trial_active_drive_target = None
     if insertion_trial_execution:
@@ -688,16 +699,6 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         # Capture leaves the stage paused. Insertion trials resume one
         # fully interlocked update and rebind the complete live state before
         # projection; other policies retain their historical command refresh.
-        action_scales = ACTION_SCALES
-        target_progress = None
-        binding = None
-        control_period_seconds = 1.0 / DROID_FPS
-        if insertion_trial_execution:
-            binding = session.load_insertion_trial_binding(proposal)
-            binding.require_current_execution()
-            action_scales = binding.allowed_projection_scales
-            target_progress = binding.trial_policy.projected_progress
-            control_period_seconds = binding.trial_policy.control_period_seconds
         safety = ExecutionSafetyContext(
             observation,
             current,
@@ -742,12 +743,11 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         if (
             candidate is not None
             and decision.passed
-            and binding is not None
-            and binding.trial_policy is not None
+            and trial_policy is not None
             and insertion_trial_active_drive_target is not None
         ):
             try:
-                insertion_drive_target = binding.trial_policy.forward_drive_target(
+                insertion_drive_target = trial_policy.forward_drive_target(
                     tuple(float(value) for value in solved.arm_positions),
                     solved.gripper_width_m,
                     insertion_trial_active_drive_target,
@@ -811,13 +811,13 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                 async def rollback_current_command() -> (
                     InsertionTrialRollbackOutcome | None
                 ):
-                    if binding is not None and binding.trial_policy is not None:
+                    if trial_policy is not None:
                         return await rollback_insertion_trial_command(
                             actuators,
                             active_drive_target,
                             attachment,
                             omni.kit.app.get_app().next_update_async,
-                            binding.trial_policy.joint_settlement,
+                            trial_policy.joint_settlement,
                             settlement_target=current,
                             expected_attachment=persisted_state.plug_attached,
                             observe_safety=live_interlock.observe,
@@ -826,7 +826,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                                 limits.maximum_contact_force_newtons
                             ),
                             maximum_gripper_error_meters=(
-                                binding.trial_policy.rollback_gripper_error_meters
+                                trial_policy.rollback_gripper_error_meters
                             ),
                         )
                     await rollback_control_command(
@@ -865,13 +865,13 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                         else None
                     ),
                 )
-                if binding is not None and binding.trial_policy is not None:
+                if trial_policy is not None:
                     settlement = await settle_tracked_joint_command(
                         actuators,
                         current.arm_positions,
                         solved.arm_positions,
                         omni.kit.app.get_app().next_update_async,
-                        binding.trial_policy.joint_settlement,
+                        trial_policy.joint_settlement,
                         observe_safety=live_interlock.observe,
                     )
                 else:
@@ -918,13 +918,12 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     np.max(np.abs(actual.arm_positions - solved.arm_positions))
                 )
                 realized_progress = (
-                    binding.trial_policy.realized_progress.evaluate(
+                    trial_policy.realized_progress.evaluate(
                         observation.pose,
                         observation.target_pose,
                         post_snapshot.end_effector_pose,
                     )
-                    if binding is not None
-                    and binding.trial_policy is not None
+                    if trial_policy is not None
                     and observation.target_pose is not None
                     else None
                 )
@@ -994,8 +993,11 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                 if insertion_trial_execution:
                     execution_interlock = live_interlock.evidence
             if post_action is not None:
-                if binding is not None and post_action.insertion_trial is not None:
-                    rollback_reason = binding.trial_policy.rollback_reason(
+                if (
+                    trial_policy is not None
+                    and post_action.insertion_trial is not None
+                ):
+                    rollback_reason = trial_policy.rollback_reason(
                         post_action.insertion_trial,
                         InsertionTrialOutcomeObservation(
                             joint_tracking_error,

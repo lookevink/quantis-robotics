@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+import sys
 import unittest
+from dataclasses import replace
 from pathlib import Path
-from unittest.mock import Mock, patch
+from types import ModuleType, SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
 import numpy as np
 
@@ -29,6 +31,7 @@ from sim.isaac_control_execution import (
     ExecutionSafetyContext,
     InsertionTrialRollbackFailed,
     UnsettledJointCommand,
+    apply_control_response,
     capture_synchronized_post_action,
     select_safe_projection,
     rollback_control_command,
@@ -39,6 +42,81 @@ from sim.isaac_control_execution import (
 )
 from sim.isaac_demo_kinematics import SolvedPose
 from sim.isaac_demo_runtime import JointCommand
+
+
+class ControlExecutionLifecycleTest(unittest.TestCase):
+    def test_rejects_invalid_insertion_binding_before_live_synchronization(self) -> None:
+        session = Mock()
+        persisted_state = SimpleNamespace(execution_policy=object())
+        session.load.return_value = (object(), object(), persisted_state)
+        session.load_insertion_trial_binding.side_effect = RuntimeError(
+            "invalid insertion binding"
+        )
+        runtime = SimpleNamespace(
+            actuators=object(),
+            attachment=object(),
+            sensor=object(),
+        )
+        stage = object()
+
+        omni = ModuleType("omni")
+        kit = ModuleType("omni.kit")
+        app = ModuleType("omni.kit.app")
+        app.get_app = lambda: SimpleNamespace(next_update_async=AsyncMock())
+        kit.app = app
+        timeline = ModuleType("omni.timeline")
+        timeline.get_timeline_interface = lambda: object()
+        usd = ModuleType("omni.usd")
+        usd.get_context = lambda: SimpleNamespace(get_stage=lambda: stage)
+        omni.kit = kit
+        omni.timeline = timeline
+        omni.usd = usd
+
+        prims = ModuleType("isaacsim.core.experimental.prims")
+        prims.Articulation = Mock()
+        simulation_manager = ModuleType("isaacsim.core.simulation_manager")
+        simulation_manager.SimulationManager = SimpleNamespace(
+            get_physics_sim_view=lambda: object(),
+            initialize_physics=Mock(),
+        )
+
+        synchronize = AsyncMock(
+            side_effect=RuntimeError("live synchronization should not run")
+        )
+        with (
+            patch.dict(
+                sys.modules,
+                {
+                    "omni": omni,
+                    "omni.kit": kit,
+                    "omni.kit.app": app,
+                    "omni.timeline": timeline,
+                    "omni.usd": usd,
+                    "isaacsim.core.experimental.prims": prims,
+                    "isaacsim.core.simulation_manager": simulation_manager,
+                },
+            ),
+            patch(
+                "sim.isaac_control_execution.ControlSession.at",
+                return_value=session,
+            ),
+            patch(
+                "sim.isaac_control_execution.is_insertion_trial_execution_policy",
+                return_value=True,
+            ),
+            patch(
+                "sim.isaac_control_execution.live_runtime_for",
+                return_value=runtime,
+            ),
+            patch(
+                "sim.isaac_control_execution.synchronized_insertion_safety_snapshot",
+                synchronize,
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "invalid insertion binding"):
+                asyncio.run(apply_control_response("insertion-session"))
+
+        synchronize.assert_not_awaited()
 
 
 class ControlProjectionTest(unittest.TestCase):
