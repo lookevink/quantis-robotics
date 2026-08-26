@@ -28,6 +28,7 @@ from jepa_wm.insertion_contract import (
     INSERTION_TASK_ID,
     insertion_control_target_policy,
 )
+from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.insertion_recording import ContactInsertionEvidence
 from jepa_wm.persistence import write_json_atomic
 from jepa_wm.control_safety import SimulatorSafetyLimits
@@ -484,6 +485,7 @@ async def capture_control_observation(
         ),
         warmup_frames=context_index,
     )
+    active_command = actuators.current_command() if insertion_control else None
     state = ControlSessionState(
         session_id=session_id,
         reference_recording=reference_recording,
@@ -497,6 +499,17 @@ async def capture_control_observation(
         plug_attached=captured_state.plug_attached,
         current_gripper_width_m=captured_state.gripper_width_m,
         insertion_target_policy=target_policy,
+        active_drive_target=(
+            JointDriveTarget(
+                tuple(
+                    float(value)
+                    for value in active_command.arm_positions
+                ),
+                active_command.gripper_width_m,
+            )
+            if active_command is not None
+            else None
+        ),
     )
     session.write_capture(observation, state)
     bind_live_runtime(session_id, stage, actuators, attachment, sensor)

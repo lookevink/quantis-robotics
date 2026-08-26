@@ -7,6 +7,7 @@ from unittest.mock import patch
 from jepa_wm.action import ActionSelectionBounds, DroidAction, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
 from jepa_wm.insertion_contract import InsertionControlTargetPolicy
+from jepa_wm.joint_drive import JointDriveTarget
 from sim.control_session import (
     ControlExecutionPolicy,
     ControlSession,
@@ -51,6 +52,7 @@ class ControlSessionTest(unittest.TestCase):
                 0.0,
                 execution_policy=ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION,
                 insertion_target_policy=target_policy,
+                active_drive_target=JointDriveTarget((0.001,) * 7, 0.04),
             )
             session.write_capture(observation, state)
 

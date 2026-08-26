@@ -23,6 +23,7 @@ from jepa_wm.control_safety import (
 )
 from jepa_wm.control_tracking import ActionTrackingDecision
 from jepa_wm.joint_settlement import JointSettlementAttempt
+from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.direct_safety import (
     ControlSafetySnapshot,
     DirectInsertionSafetyEvidence,
@@ -34,6 +35,7 @@ from jepa_wm.experimental_candidate import (
     ExperimentalCandidateBinding,
 )
 from jepa_wm.insertion_trial import (
+    InsertionTrialDriveEvidence,
     InsertionTrialBinding,
     InsertionTrialExecutionEvidence,
     InsertionTrialExecutionRefresh,
@@ -107,6 +109,7 @@ class ControlSessionState:
     plug_attached: bool = False
     current_gripper_width_m: float | None = None
     insertion_target_policy: InsertionControlTargetPolicy | None = None
+    active_drive_target: JointDriveTarget | None = None
 
     @classmethod
     def from_dict(cls, payload: Any) -> ControlSessionState:
@@ -149,6 +152,11 @@ class ControlSessionState:
                     if payload.get("insertion_target_policy") is not None
                     else None
                 ),
+                active_drive_target=(
+                    JointDriveTarget.from_dict(payload["active_drive_target"])
+                    if payload.get("active_drive_target") is not None
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("control session state is incomplete") from error
@@ -179,6 +187,10 @@ class ControlSessionState:
                     or not 0.0 <= state.current_gripper_width_m <= 0.08
                 )
             )
+            or (
+                state.active_drive_target is not None
+                and not isinstance(state.active_drive_target, JointDriveTarget)
+            )
         ):
             raise ValueError("control session state is invalid")
         return state
@@ -204,6 +216,8 @@ class ControlSessionState:
             payload["insertion_target_policy"] = (
                 self.insertion_target_policy.to_dict()
             )
+        if self.active_drive_target is not None:
+            payload["active_drive_target"] = self.active_drive_target.to_dict()
         return payload
 
     def require_safety_snapshot(self) -> ControlSafetySnapshot:
@@ -374,6 +388,7 @@ class ControlResult:
     execution_error: str | None = None
     execution_interlock: ControlInterlockEvidence | None = None
     insertion_trial_refresh: InsertionTrialExecutionRefresh | None = None
+    insertion_trial_drive: InsertionTrialDriveEvidence | None = None
     insertion_trial_rollback: InsertionTrialRollbackOutcome | None = None
     insertion_trial_settlement_failure: JointSettlementAttempt | None = None
 
@@ -412,6 +427,9 @@ class ControlResult:
             self.execution_error is not None and not self.execution_error
         ) or (
             self.execution_interlock is not None and blocked
+        ) or (
+            self.insertion_trial_drive is not None
+            and (blocked or self.insertion_trial_refresh is None)
         ) or (
             isinstance(self.insertion_trial_rollback, InsertionTrialRollbackEvidence)
             and self.status
@@ -477,6 +495,8 @@ class ControlResult:
             payload["insertion_trial_refresh"] = (
                 self.insertion_trial_refresh.to_dict()
             )
+        if self.insertion_trial_drive is not None:
+            payload["insertion_trial_drive"] = self.insertion_trial_drive.to_dict()
         if self.insertion_trial_rollback is not None:
             payload["insertion_trial_rollback"] = (
                 self.insertion_trial_rollback.to_dict()
@@ -503,6 +523,7 @@ class ControlResult:
                 execution_error = str(execution_error)
             execution_interlock = payload.get("execution_interlock")
             insertion_trial_refresh = payload.get("insertion_trial_refresh")
+            insertion_trial_drive = payload.get("insertion_trial_drive")
             insertion_trial_rollback = payload.get("insertion_trial_rollback")
             insertion_trial_settlement_failure = payload.get(
                 "insertion_trial_settlement_failure"
@@ -551,6 +572,11 @@ class ControlResult:
                         insertion_trial_refresh
                     )
                     if insertion_trial_refresh is not None
+                    else None
+                ),
+                insertion_trial_drive=(
+                    InsertionTrialDriveEvidence.from_dict(insertion_trial_drive)
+                    if insertion_trial_drive is not None
                     else None
                 ),
                 insertion_trial_rollback=(
@@ -849,6 +875,7 @@ class ControlSession:
             self.trial_context(observation, state),
             self.load_response(),
             self.load_direct_safety(),
+            state.active_drive_target,
         )
 
     def _validate_insertion_trial_binding(
@@ -1138,6 +1165,8 @@ class ControlSession:
             raise ValueError(
                 "restricted insertion diagnostic sessions cannot be executed"
             )
+        if state.execution_policy is ControlExecutionPolicy.INSERTION_RESET_TRIAL:
+            self.load_insertion_trial_binding().require_current_execution()
         try:
             with self.execution_path.open("x", encoding="utf-8") as output:
                 json.dump({"session": self.session_id}, output)

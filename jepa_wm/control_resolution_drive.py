@@ -8,16 +8,15 @@ from typing import Any, Mapping, Sequence
 
 from jepa_wm.control_resolution_baseline import ControlResolutionDriveTarget
 from jepa_wm.control_safety import SimulatorSafetyLimits
-def _joint_positions(values: Sequence[float]) -> tuple[float, ...]:
-    positions = tuple(float(value) for value in values)
-    if len(positions) != 7 or not all(isfinite(value) for value in positions):
-        raise ValueError("drive compensation requires finite seven-axis positions")
-    return positions
+from jepa_wm.joint_drive import (
+    JointDriveBiasCompensation,
+    validate_joint_positions,
+)
 
 
 @dataclass(frozen=True)
 class ControlResolutionDriveBiasCompensation:
-    """Pre-compensate a desired joint target by one measured stable drive bias."""
+    """Add resolution-only rollback feedback to shared forward compensation."""
 
     maximum_bias_radians: float = 0.002
     maximum_feedback_correction_radians: float = 0.002
@@ -25,13 +24,12 @@ class ControlResolutionDriveBiasCompensation:
 
     def __post_init__(self) -> None:
         if (
-            not isfinite(self.maximum_bias_radians)
-            or self.maximum_bias_radians <= 0.0
-            or not isfinite(self.maximum_feedback_correction_radians)
+            not isfinite(self.maximum_feedback_correction_radians)
             or self.maximum_feedback_correction_radians <= 0.0
             or not isinstance(self.path_dependent_rollback, bool)
         ):
             raise ValueError("drive bias compensation bound is invalid")
+        JointDriveBiasCompensation(self.maximum_bias_radians)
 
     def compensated_joint_target(
         self,
@@ -40,31 +38,14 @@ class ControlResolutionDriveBiasCompensation:
         realized_joint_positions: Sequence[float],
         safety_limits: SimulatorSafetyLimits,
     ) -> tuple[float, ...]:
-        desired = _joint_positions(desired_joint_positions)
-        realized = _joint_positions(realized_joint_positions)
-        bias = tuple(
-            drive - realized
-            for drive, realized in zip(
-                measured_drive_target.joint_positions,
-                realized,
-            )
+        return JointDriveBiasCompensation(
+            self.maximum_bias_radians
+        ).compensated_joint_target(
+            desired_joint_positions,
+            measured_drive_target,
+            realized_joint_positions,
+            safety_limits,
         )
-        if max(abs(value) for value in bias) > self.maximum_bias_radians:
-            raise ValueError("measured drive bias exceeds its compensation bound")
-        applied = tuple(
-            desired_value + bias_value
-            for desired_value, bias_value in zip(desired, bias)
-        )
-        if any(
-            value < lower or value > upper
-            for value, lower, upper in zip(
-                applied,
-                safety_limits.lower_joint_limits,
-                safety_limits.upper_joint_limits,
-            )
-        ):
-            raise ValueError("compensated drive target exceeds joint limits")
-        return applied
 
     def feedback_corrected_joint_target(
         self,
@@ -73,13 +54,10 @@ class ControlResolutionDriveBiasCompensation:
         realized_joint_positions: Sequence[float],
         safety_limits: SimulatorSafetyLimits,
     ) -> tuple[float, ...]:
-        """Apply one bounded observed rollback residual to its drive target."""
-
-        desired = _joint_positions(desired_joint_positions)
-        realized = _joint_positions(realized_joint_positions)
+        desired = validate_joint_positions(desired_joint_positions)
+        realized = validate_joint_positions(realized_joint_positions)
         correction = tuple(
-            target - actual
-            for target, actual in zip(desired, realized)
+            target - actual for target, actual in zip(desired, realized)
         )
         if max(abs(value) for value in correction) > (
             self.maximum_feedback_correction_radians

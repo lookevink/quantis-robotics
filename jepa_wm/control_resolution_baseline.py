@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isclose, isfinite
+from math import isfinite
 from typing import Any, Mapping
 
-import numpy as np
-
 from jepa_wm.identifiers import validate_safe_identifier
+from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.control_resolution_profile import ControlResolutionLoad
 from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimits
 from jepa_wm.trial_equivalence import (
@@ -31,79 +30,7 @@ CONTROL_RESOLUTION_CAPTURE_FAILURE_SCHEMA = (
 )
 
 
-@dataclass(frozen=True)
-class ControlResolutionDriveTarget:
-    joint_positions: tuple[float, ...]
-    gripper_width_m: float
-
-    def __post_init__(self) -> None:
-        if (
-            len(self.joint_positions) != 7
-            or not all(isfinite(value) for value in self.joint_positions)
-            or not isfinite(self.gripper_width_m)
-            or not 0.0 <= self.gripper_width_m <= 0.08
-        ):
-            raise ValueError("control resolution drive target is invalid")
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "joint_positions": list(self.joint_positions),
-            "gripper_width_m": self.gripper_width_m,
-        }
-
-    @classmethod
-    def for_command(
-        cls,
-        joint_positions: tuple[float, ...],
-        gripper_width_m: float,
-    ) -> ControlResolutionDriveTarget:
-        """Canonicalize one command to Isaac's USD float drive attributes."""
-
-        stored_degrees = np.asarray(
-            np.rad2deg(np.asarray(joint_positions, dtype=np.float64)),
-            dtype=np.float32,
-        ).astype(np.float64)
-        return cls(
-            tuple(float(value) for value in np.deg2rad(stored_degrees)),
-            float(np.float32(gripper_width_m / 2.0)) * 2.0,
-        )
-
-    def validate_active(
-        self,
-        joint_positions: tuple[float, ...],
-        gripper_width_m: float,
-    ) -> None:
-        if (
-            len(joint_positions) != 7
-            or not all(
-                isclose(actual, expected, rel_tol=0.0, abs_tol=1e-12)
-                for actual, expected in zip(
-                    joint_positions,
-                    self.joint_positions,
-                )
-            )
-            or not isclose(
-                gripper_width_m,
-                self.gripper_width_m,
-                rel_tol=0.0,
-                abs_tol=1e-12,
-            )
-        ):
-            raise ValueError("control resolution active drive target changed")
-
-    @classmethod
-    def from_dict(cls, payload: Any) -> ControlResolutionDriveTarget:
-        if not isinstance(payload, Mapping):
-            raise ValueError("control resolution drive target must be an object")
-        try:
-            return cls(
-                tuple(float(value) for value in payload["joint_positions"]),
-                float(payload["gripper_width_m"]),
-            )
-        except (KeyError, TypeError, ValueError) as error:
-            raise ValueError(
-                "control resolution drive target is incomplete"
-            ) from error
+ControlResolutionDriveTarget = JointDriveTarget
 
 
 @dataclass(frozen=True)

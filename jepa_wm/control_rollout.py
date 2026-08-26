@@ -12,7 +12,7 @@ from typing import Any, Sequence, Union
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from jepa_wm.action import DroidPose, action_between
+from jepa_wm.action import MAX_GRIPPER_WIDTH_M, DroidPose, action_between
 from jepa_wm.control_tracking import (
     evaluate_action_tracking,
     tracking_limits_for_policy,
@@ -25,7 +25,7 @@ from jepa_wm.grasp_task import (
     evaluate_reach_and_grasp,
 )
 from jepa_wm.grasp_contract import GRASP_TASK_ID
-from jepa_wm.control_safety import SimulatorSafetyLimits
+from jepa_wm.control_safety import ControlGateReason, SimulatorSafetyLimits
 from jepa_wm.insertion_trial import (
     InsertionTrialOutcomeObservation,
     InsertionTrialRollbackEvidence,
@@ -239,6 +239,100 @@ class ControlStepSummary:
                     response,
                     state.require_safety_snapshot(),
                 )
+            drive_rejected = result.gate.reasons == (
+                ControlGateReason.DRIVE_TARGET_INVALID,
+            )
+            if (
+                ControlGateReason.DRIVE_TARGET_INVALID in result.gate.reasons
+                and not drive_rejected
+            ):
+                raise ValueError(
+                    f"insertion drive rejection is inconsistent: {session.session_id}"
+                )
+            if drive_rejected:
+                rejected_attempt = next(
+                    (
+                        attempt
+                        for attempt in reversed(result.projection_attempts)
+                        if attempt.gate.passed
+                    ),
+                    None,
+                )
+                if (
+                    result.status is not ControlResultStatus.BLOCKED
+                    or binding.trial_policy is None
+                    or binding.trial_policy.drive_bias_compensation is None
+                    or state.active_drive_target is None
+                    or result.insertion_trial_refresh is None
+                    or rejected_attempt is None
+                ):
+                    raise ValueError(
+                        f"insertion drive rejection is incomplete: {session.session_id}"
+                    )
+                try:
+                    binding.trial_policy.forward_drive_target(
+                        rejected_attempt.proposed_joint_positions,
+                        (
+                            (1.0 - rejected_attempt.gate.next_pose.values[-1])
+                            * MAX_GRIPPER_WIDTH_M
+                        ),
+                        state.active_drive_target,
+                        tuple(
+                            result.insertion_trial_refresh.live_state.joint_positions
+                        ),
+                        limits,
+                    )
+                except ValueError:
+                    pass
+                else:
+                    raise ValueError(
+                        f"insertion drive rejection is inconsistent: {session.session_id}"
+                    )
+            selected_attempt = next(
+                (
+                    attempt
+                    for attempt in result.projection_attempts
+                    if attempt.scale == result.selected_action_scale
+                    and attempt.gate.passed
+                ),
+                None,
+            )
+            if (
+                binding.trial_policy is not None
+                and binding.trial_policy.drive_bias_compensation is not None
+                and result.status is not ControlResultStatus.BLOCKED
+            ):
+                if (
+                    state.active_drive_target is None
+                    or result.insertion_trial_drive is None
+                    or selected_attempt is None
+                ):
+                    raise ValueError(
+                        f"insertion trial drive evidence is missing: {session.session_id}"
+                    )
+                if (
+                    result.insertion_trial_drive.active_target
+                    != state.active_drive_target
+                ):
+                    raise ValueError(
+                        f"insertion trial active drive target is inconsistent: {session.session_id}"
+                    )
+                result.insertion_trial_drive.validate(
+                    binding.trial_policy,
+                    desired_joint_positions=selected_attempt.proposed_joint_positions,
+                    desired_gripper_width_meters=(
+                        (1.0 - selected_attempt.gate.next_pose.values[-1])
+                        * MAX_GRIPPER_WIDTH_M
+                    ),
+                    stable_joint_positions=tuple(
+                        result.insertion_trial_refresh.live_state.joint_positions
+                    ),
+                    safety_limits=limits,
+                )
+            elif result.insertion_trial_drive is not None:
+                raise ValueError(
+                    f"legacy insertion trial has unexpected drive evidence: {session.session_id}"
+                )
             if result.post_action is not None:
                 trial_evidence = result.post_action.insertion_trial
                 if binding.trial_policy is None:
@@ -357,6 +451,11 @@ class ControlStepSummary:
                     expected_target_joint_positions=tuple(
                         result.insertion_trial_refresh.live_state.joint_positions
                     ),
+                    expected_drive_target=(
+                        result.insertion_trial_drive.active_target
+                        if result.insertion_trial_drive is not None
+                        else None
+                    ),
                     expected_attachment=state.plug_attached,
                     expected_target_gripper_width_meters=(
                         result.insertion_trial_refresh.live_state.gripper_width_m
@@ -377,6 +476,11 @@ class ControlStepSummary:
                     binding.trial_policy.joint_settlement,
                     expected_target_joint_positions=tuple(
                         result.insertion_trial_refresh.live_state.joint_positions
+                    ),
+                    expected_drive_target=(
+                        result.insertion_trial_drive.active_target
+                        if result.insertion_trial_drive is not None
+                        else None
                     ),
                     expected_attachment=state.plug_attached,
                     maximum_contact_force_newtons=(
@@ -402,6 +506,7 @@ class ControlStepSummary:
                 )
         elif (
             result.insertion_trial_refresh is not None
+            or result.insertion_trial_drive is not None
             or result.insertion_trial_rollback is not None
             or result.insertion_trial_settlement_failure is not None
             or (

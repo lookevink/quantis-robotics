@@ -9,12 +9,13 @@ from pathlib import Path
 from time import time
 from typing import Any, Mapping, Union
 
-from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
+from jepa_wm.action import DROID_FPS, DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.control_safety import (
     ControlInterlockEvidence,
     ProjectedTargetProgressPolicy,
+    SimulatorSafetyLimits,
     insertion_projection_policy_for_scale,
 )
 from jepa_wm.target_progress import (
@@ -31,6 +32,7 @@ from jepa_wm.joint_settlement import (
     JointSettlementEvidence,
     TrackedJointSettlementPolicy,
 )
+from jepa_wm.joint_drive import JointDriveBiasCompensation, JointDriveTarget
 from jepa_wm.training_artifact import ArtifactIdentity
 from jepa_wm.trial_equivalence import ControlTrialContext, validate_reset_equivalence
 from sim.recording import validate_recording_id
@@ -39,6 +41,7 @@ from sim.recording import validate_recording_id
 INSERTION_TRIAL_SCHEMA = "quantis.jepa_wm_insertion_trial.v1"
 INSERTION_TRIAL_REFRESH_SCHEMA = "quantis.jepa_wm_insertion_trial_refresh.v1"
 INSERTION_ROLLBACK_GRIPPER_ERROR_METERS = 1e-3
+INSERTION_MAXIMUM_DRIVE_BIAS_RADIANS = 0.002
 INSERTION_TRIAL_SETTLEMENT_MAXIMUM_UPDATES = 48
 
 
@@ -92,6 +95,7 @@ class InsertionTrialSourceEvidence:
     context: ControlTrialContext
     response: ProposedControl
     safety: DirectInsertionSafetyEvidence
+    active_drive_target: JointDriveTarget | None = None
 
 
 @dataclass(frozen=True)
@@ -178,6 +182,10 @@ class InsertionTrialPolicy:
     rollback_gripper_error_meters: float = (
         INSERTION_ROLLBACK_GRIPPER_ERROR_METERS
     )
+    drive_bias_compensation: JointDriveBiasCompensation | None = (
+        JointDriveBiasCompensation(INSERTION_MAXIMUM_DRIVE_BIAS_RADIANS)
+    )
+    control_period_seconds: float = 1.0 / DROID_FPS
 
     def __post_init__(self) -> None:
         if (
@@ -190,12 +198,68 @@ class InsertionTrialPolicy:
             )
         ):
             raise ValueError("insertion rollback gripper error is invalid")
+        if self.drive_bias_compensation is not None and not isinstance(
+            self.drive_bias_compensation,
+            JointDriveBiasCompensation,
+        ):
+            raise ValueError("insertion drive bias compensation is invalid")
+        if self.drive_bias_compensation is not None and not isclose(
+            self.drive_bias_compensation.maximum_bias_radians,
+            INSERTION_MAXIMUM_DRIVE_BIAS_RADIANS,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            raise ValueError("insertion drive bias compensation is invalid")
+        if not isclose(
+            self.control_period_seconds,
+            1.0 / DROID_FPS,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            raise ValueError("insertion control period is invalid")
 
     @property
     def projected_progress(self) -> ProjectedTargetProgressPolicy:
         return ProjectedTargetProgressPolicy(
             self.realized_progress.minimum_translation_error_reduction_fraction
         )
+
+    def forward_drive_target(
+        self,
+        desired_joint_positions: tuple[float, ...],
+        desired_gripper_width_meters: float,
+        active_drive_target: JointDriveTarget,
+        stable_joint_positions: tuple[float, ...],
+        safety_limits: SimulatorSafetyLimits,
+    ) -> JointDriveTarget:
+        if self.drive_bias_compensation is None:
+            target = JointDriveTarget.for_command(
+                desired_joint_positions,
+                desired_gripper_width_meters,
+            )
+        else:
+            target = JointDriveTarget.for_command(
+                self.drive_bias_compensation.compensated_joint_target(
+                    desired_joint_positions,
+                    active_drive_target,
+                    stable_joint_positions,
+                    safety_limits,
+                ),
+                desired_gripper_width_meters,
+            )
+        maximum_motion = (
+            safety_limits.maximum_joint_velocity_radians_per_second
+            * self.control_period_seconds
+        )
+        if max(
+            abs(target_value - start_value)
+            for target_value, start_value in zip(
+                target.joint_positions,
+                stable_joint_positions,
+            )
+        ) > maximum_motion:
+            raise ValueError("compensated insertion target exceeds velocity gate")
+        return target
 
     def rollback_reason(
         self,
@@ -228,6 +292,16 @@ class InsertionTrialPolicy:
             "joint_settlement": self.joint_settlement.to_dict(),
             "realized_progress": self.realized_progress.to_dict(),
             "rollback_gripper_error_meters": self.rollback_gripper_error_meters,
+            **(
+                {
+                    "drive_bias_compensation": (
+                        self.drive_bias_compensation.to_dict()
+                    )
+                }
+                if self.drive_bias_compensation is not None
+                else {}
+            ),
+            "control_period_seconds": self.control_period_seconds,
         }
 
     @classmethod
@@ -251,9 +325,67 @@ class InsertionTrialPolicy:
                     payload["realized_progress"]
                 ),
                 float(gripper_error),
+                (
+                    JointDriveBiasCompensation.from_dict(
+                        payload["drive_bias_compensation"]
+                    )
+                    if "drive_bias_compensation" in payload
+                    else None
+                ),
+                float(payload.get("control_period_seconds", 1.0 / DROID_FPS)),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("insertion trial policy is incomplete") from error
+
+
+@dataclass(frozen=True)
+class InsertionTrialDriveEvidence:
+    active_target: JointDriveTarget
+    forward_target: JointDriveTarget
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.active_target, JointDriveTarget) or not isinstance(
+            self.forward_target,
+            JointDriveTarget,
+        ):
+            raise ValueError("insertion trial drive evidence is invalid")
+
+    def validate(
+        self,
+        policy: InsertionTrialPolicy,
+        *,
+        desired_joint_positions: tuple[float, ...],
+        desired_gripper_width_meters: float,
+        stable_joint_positions: tuple[float, ...],
+        safety_limits: SimulatorSafetyLimits,
+    ) -> None:
+        expected = policy.forward_drive_target(
+            desired_joint_positions,
+            desired_gripper_width_meters,
+            self.active_target,
+            stable_joint_positions,
+            safety_limits,
+        )
+        if self.forward_target != expected:
+            raise ValueError("insertion trial forward drive target is inconsistent")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "active_target": self.active_target.to_dict(),
+            "forward_target": self.forward_target.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> InsertionTrialDriveEvidence:
+        if not isinstance(payload, Mapping):
+            raise ValueError("insertion trial drive evidence must be an object")
+        try:
+            return cls(
+                JointDriveTarget.from_dict(payload["active_target"]),
+                JointDriveTarget.from_dict(payload["forward_target"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("insertion trial drive evidence is incomplete") from error
 
 
 @dataclass(frozen=True)
@@ -330,6 +462,7 @@ class InsertionTrialRollbackEvidence:
     end_joint_positions: tuple[float, ...]
     settlement: GripperTrackedJointSettlementEvidence
     plug_attached: bool
+    drive_target: JointDriveTarget | None = None
 
     def __post_init__(self) -> None:
         positions = (
@@ -345,6 +478,10 @@ class InsertionTrialRollbackEvidence:
                 self.settlement,
                 GripperTrackedJointSettlementEvidence,
             )
+            or (
+                self.drive_target is not None
+                and not isinstance(self.drive_target, JointDriveTarget)
+            )
         ):
             raise ValueError("insertion trial rollback evidence is invalid")
 
@@ -353,6 +490,7 @@ class InsertionTrialRollbackEvidence:
         policy: TrackedJointSettlementPolicy,
         *,
         expected_target_joint_positions: tuple[float, ...],
+        expected_drive_target: JointDriveTarget | None = None,
         expected_attachment: bool,
         expected_target_gripper_width_meters: float,
         expected_gripper_error_meters: float,
@@ -381,6 +519,7 @@ class InsertionTrialRollbackEvidence:
         )
         if (
             self.target_joint_positions != expected_target_joint_positions
+            or self.drive_target != expected_drive_target
             or self.plug_attached is not expected_attachment
             or final_error
             > self.settlement.joint.required_tracking_error_radians
@@ -392,7 +531,7 @@ class InsertionTrialRollbackEvidence:
         return self.settlement.joint
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "status": "settled",
             "start_joint_positions": list(self.start_joint_positions),
             "target_joint_positions": list(self.target_joint_positions),
@@ -400,6 +539,9 @@ class InsertionTrialRollbackEvidence:
             **self.settlement.to_dict(),
             "plug_attached": self.plug_attached,
         }
+        if self.drive_target is not None:
+            payload["drive_target"] = self.drive_target.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, payload: Any) -> InsertionTrialRollbackEvidence:
@@ -412,6 +554,11 @@ class InsertionTrialRollbackEvidence:
                 tuple(float(value) for value in payload["end_joint_positions"]),
                 GripperTrackedJointSettlementEvidence.from_dict(payload),
                 payload["plug_attached"],
+                (
+                    JointDriveTarget.from_dict(payload["drive_target"])
+                    if "drive_target" in payload
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("insertion trial rollback evidence is incomplete") from error
@@ -464,6 +611,7 @@ class InsertionTrialRollbackFailure:
     drive_command_accepted: bool
     error: str
     settlement_attempt: GripperTrackedJointSettlementAttempt | None = None
+    drive_target: JointDriveTarget | None = None
 
     def __post_init__(self) -> None:
         positions = (
@@ -479,6 +627,10 @@ class InsertionTrialRollbackFailure:
             or not isinstance(self.interlock, ControlInterlockEvidence)
             or not isinstance(self.drive_command_accepted, bool)
             or not self.error
+            or (
+                self.drive_target is not None
+                and not isinstance(self.drive_target, JointDriveTarget)
+            )
         ):
             raise ValueError("insertion trial rollback failure is invalid")
 
@@ -487,6 +639,7 @@ class InsertionTrialRollbackFailure:
         policy: TrackedJointSettlementPolicy,
         *,
         expected_target_joint_positions: tuple[float, ...],
+        expected_drive_target: JointDriveTarget | None = None,
         expected_attachment: bool,
         maximum_contact_force_newtons: float,
         expected_target_gripper_width_meters: float,
@@ -511,6 +664,8 @@ class InsertionTrialRollbackFailure:
         )
         if self.target_joint_positions != expected_target_joint_positions:
             raise ValueError("rollback failure target is inconsistent")
+        if self.drive_target != expected_drive_target:
+            raise ValueError("rollback failure drive target is inconsistent")
         if self.settlement_attempt is not None:
             if not self.drive_command_accepted:
                 raise ValueError("rollback timeout evidence is incomplete")
@@ -550,6 +705,8 @@ class InsertionTrialRollbackFailure:
         }
         if self.settlement_attempt is not None:
             payload["settlement_attempt"] = self.settlement_attempt.to_dict()
+        if self.drive_target is not None:
+            payload["drive_target"] = self.drive_target.to_dict()
         return payload
 
     @classmethod
@@ -571,6 +728,11 @@ class InsertionTrialRollbackFailure:
                         payload["settlement_attempt"]
                     )
                     if "settlement_attempt" in payload
+                    else None
+                ),
+                (
+                    JointDriveTarget.from_dict(payload["drive_target"])
+                    if "drive_target" in payload
                     else None
                 ),
             )
@@ -601,6 +763,7 @@ def insertion_trial_rollback_outcome_from_dict(
             "drive_command_accepted",
             "error",
             "settlement_attempt",
+            "drive_target",
         }:
             raise ValueError("rollback failure has contradictory fields")
         return InsertionTrialRollbackFailure.from_dict(payload)
@@ -614,6 +777,7 @@ def insertion_trial_rollback_outcome_from_dict(
         "joint_settlement",
         "gripper_settlement",
         "plug_attached",
+        "drive_target",
     }:
         raise ValueError("settled rollback has contradictory fields")
     return InsertionTrialRollbackEvidence.from_dict(payload)
@@ -628,6 +792,7 @@ class InsertionTrialBinding:
     proposal: ArtifactIdentity
     actions: tuple[DroidAction, ...]
     source_selected_action_scale: DroidActionScale
+    source_active_drive_target: JointDriveTarget | None = None
     trial_policy: InsertionTrialPolicy | None = InsertionTrialPolicy()
     authority: InsertionTrialAuthority = InsertionTrialAuthority.RESET_TRIAL_ONLY
 
@@ -644,12 +809,33 @@ class InsertionTrialBinding:
             or self.execution_observation_id <= 0
             or len(self.actions) != 3
             or self.authority is not InsertionTrialAuthority.RESET_TRIAL_ONLY
+            or (
+                self.source_active_drive_target is not None
+                and not isinstance(
+                    self.source_active_drive_target,
+                    JointDriveTarget,
+                )
+            )
+            or (
+                self.trial_policy is not None
+                and self.trial_policy.drive_bias_compensation is not None
+                and self.source_active_drive_target is None
+            )
         ):
             raise ValueError("insertion trial binding is invalid")
 
     @property
     def production_authority_granted(self) -> bool:
         return False
+
+    def require_current_execution(self) -> InsertionTrialPolicy:
+        if (
+            self.trial_policy is None
+            or self.trial_policy.drive_bias_compensation is None
+            or self.source_active_drive_target is None
+        ):
+            raise ValueError("legacy insertion trial cannot be executed")
+        return self.trial_policy
 
     @property
     def allowed_projection_scales(self) -> tuple[DroidActionScale, ...]:
@@ -696,6 +882,7 @@ class InsertionTrialBinding:
             or source_response.actions != self.actions
             or safety.proposed_actions != self.actions
             or safety.selected_action_scale != self.source_selected_action_scale
+            or source.active_drive_target != self.source_active_drive_target
             or not safety.passed
             or not safety.live_state.plug_attached
             or source_context.policy
@@ -737,6 +924,10 @@ class InsertionTrialBinding:
             "authority": self.authority.value,
             "production_authority_granted": self.production_authority_granted,
         }
+        if self.source_active_drive_target is not None:
+            payload["source_active_drive_target"] = (
+                self.source_active_drive_target.to_dict()
+            )
         if self.trial_policy is not None:
             payload["trial_policy"] = self.trial_policy.to_dict()
         return payload
@@ -759,6 +950,11 @@ class InsertionTrialBinding:
                 ),
                 source_selected_action_scale=DroidActionScale.from_payload(
                     payload["source_selected_action_scale"]
+                ),
+                source_active_drive_target=(
+                    JointDriveTarget.from_dict(payload["source_active_drive_target"])
+                    if "source_active_drive_target" in payload
+                    else None
                 ),
                 trial_policy=(
                     InsertionTrialPolicy.from_dict(payload["trial_policy"])
@@ -795,6 +991,7 @@ def build_insertion_trial_response(
         ),
         actions=source_response.actions,
         source_selected_action_scale=safety.selected_action_scale,
+        source_active_drive_target=source.active_drive_target,
     )
     response = ProposedControl(
         observation_id=execution.observation.observation_id,

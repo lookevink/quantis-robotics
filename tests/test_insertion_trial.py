@@ -17,6 +17,7 @@ from jepa_wm.control_safety import (
     ControlGateReason,
     ORIENTATION_HOLD_ACTION_SCALES,
     SafetyProjectionAttempt,
+    SimulatorSafetyLimits,
 )
 from jepa_wm.direct_safety import (
     ControlSafetySnapshot,
@@ -26,12 +27,14 @@ from jepa_wm.insertion_trial import (
     INSERTION_TRIAL_SETTLEMENT_MAXIMUM_UPDATES,
     InsertionTrialBinding,
     InsertionTrialExecutionRefresh,
+    InsertionTrialPolicy,
     InsertionTrialRollbackFailure,
     InsertionTrialRollbackFailureReason,
     InsertionTrialSourceEvidence,
     build_insertion_trial_response,
 )
 from jepa_wm.joint_settlement import JointSettlementAttempt
+from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.training_artifact import ArtifactIdentity
 from jepa_wm.trial_equivalence import ControlTrialContext, TrialResetState
 from sim.control_session import (
@@ -114,10 +117,43 @@ def _source() -> InsertionTrialSourceEvidence:
         _context(9, ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION),
         response,
         safety,
+        JointDriveTarget(_JOINTS, 0.04),
     )
 
 
 class InsertionTrialBindingTest(unittest.TestCase):
+    def test_policy_compensates_one_bounded_loaded_drive_bias(self) -> None:
+        policy = InsertionTrialPolicy()
+        desired = tuple(value + 0.01 for value in _JOINTS)
+        target = policy.forward_drive_target(
+            desired,
+            0.04,
+            JointDriveTarget(_JOINTS, 0.04),
+            tuple(value + 0.001 for value in _JOINTS),
+            SimulatorSafetyLimits(),
+        )
+
+        for actual, expected in zip(target.joint_positions, desired):
+            self.assertAlmostEqual(actual, expected - 0.001, places=7)
+
+        with self.assertRaisesRegex(ValueError, "bias exceeds"):
+            policy.forward_drive_target(
+                desired,
+                0.04,
+                JointDriveTarget(_JOINTS, 0.04),
+                tuple(value + 0.003 for value in _JOINTS),
+                SimulatorSafetyLimits(),
+            )
+
+        with self.assertRaisesRegex(ValueError, "velocity gate"):
+            policy.forward_drive_target(
+                tuple(value + 0.2 for value in _JOINTS),
+                0.04,
+                JointDriveTarget(_JOINTS, 0.04),
+                _JOINTS,
+                SimulatorSafetyLimits(),
+            )
+
     def test_control_result_round_trips_typed_settlement_and_rollback_failures(self) -> None:
         gate = ControlGateDecision(10, _observation(10).pose.applied(_ACTIONS[0]), ())
         attempt = SafetyProjectionAttempt(ACTION_SCALES[0], gate, 0.002, _JOINTS)
@@ -137,6 +173,7 @@ class InsertionTrialBindingTest(unittest.TestCase):
             False,
             "RuntimeError: rollback did not settle",
             None,
+            JointDriveTarget(_JOINTS, 0.04),
         )
         result = ControlResult(
             ControlResultStatus.ROLLBACK_FAILED,
@@ -228,6 +265,18 @@ class InsertionTrialBindingTest(unittest.TestCase):
             )
 
     def test_rebinds_one_exact_passing_source_to_an_equivalent_reset(self) -> None:
+        with self.assertRaisesRegex(ValueError, "binding is invalid"):
+            build_insertion_trial_response(
+                execution_session_id="insertion-trial",
+                source_session_id="insertion-safety",
+                execution=_context(
+                    10,
+                    ControlExecutionPolicy.INSERTION_RESET_TRIAL,
+                ),
+                source=replace(_source(), active_drive_target=None),
+                created_at_unix_seconds=101.0,
+            )
+
         binding, response = build_insertion_trial_response(
             execution_session_id="insertion-trial",
             source_session_id="insertion-safety",
@@ -242,16 +291,35 @@ class InsertionTrialBindingTest(unittest.TestCase):
         self.assertEqual(InsertionTrialBinding.from_dict(binding.to_dict()), binding)
         self.assertFalse(binding.production_authority_granted)
         self.assertIsNotNone(binding.trial_policy)
+        self.assertIs(binding.require_current_execution(), binding.trial_policy)
         self.assertEqual(
             binding.trial_policy.joint_settlement.maximum_updates,
             INSERTION_TRIAL_SETTLEMENT_MAXIMUM_UPDATES,
         )
+        self.assertEqual(binding.trial_policy.control_period_seconds, 0.25)
+        with self.assertRaisesRegex(ValueError, "control period"):
+            replace(binding.trial_policy, control_period_seconds=0.5)
+
+        prior_policy_payload = binding.to_dict()
+        del prior_policy_payload["trial_policy"]["drive_bias_compensation"]
+        prior_binding = InsertionTrialBinding.from_dict(prior_policy_payload)
+        self.assertIsNone(prior_binding.trial_policy.drive_bias_compensation)
+        with self.assertRaisesRegex(ValueError, "legacy insertion trial"):
+            prior_binding.require_current_execution()
 
         for invalid_gripper_limit in (True, 0.1):
             invalid_policy = binding.to_dict()
             invalid_policy["trial_policy"][
                 "rollback_gripper_error_meters"
             ] = invalid_gripper_limit
+            with self.assertRaises(ValueError):
+                InsertionTrialBinding.from_dict(invalid_policy)
+
+        for invalid_bias_bound in (True, 0.003):
+            invalid_policy = binding.to_dict()
+            invalid_policy["trial_policy"]["drive_bias_compensation"][
+                "maximum_bias_radians"
+            ] = invalid_bias_bound
             with self.assertRaises(ValueError):
                 InsertionTrialBinding.from_dict(invalid_policy)
 
@@ -340,6 +408,7 @@ class InsertionTrialBindingTest(unittest.TestCase):
                 plug_position=(0.4, 0.0, 0.5),
                 plug_attached=True,
                 current_gripper_width_m=0.04,
+                active_drive_target=JointDriveTarget(_JOINTS, 0.04),
             )
             source_evidence = _source()
             source.write_capture(source_observation, source_state)

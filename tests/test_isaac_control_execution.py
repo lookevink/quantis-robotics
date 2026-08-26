@@ -20,6 +20,7 @@ from jepa_wm.joint_settlement import (
     JointSettlementAttempt,
     TrackedJointSettlementPolicy,
 )
+from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.insertion_trial import (
     InsertionTrialRollbackFailure,
     InsertionTrialRollbackFailureReason,
@@ -537,6 +538,7 @@ class IsaacControlExecutionTest(unittest.TestCase):
                 attachment,
                 advance,
                 TrackedJointSettlementPolicy(),
+                settlement_target=target,
                 expected_attachment=True,
                 observe_safety=observe_safety,
                 interlock_evidence=lambda: ControlInterlockEvidence(0.0, False),
@@ -562,6 +564,58 @@ class IsaacControlExecutionTest(unittest.TestCase):
         self.assertEqual(updates, 2)
         self.assertEqual(observations, 2)
 
+    def test_insertion_rollback_separates_loaded_reset_from_active_drive_target(self) -> None:
+        active_drive_target = JointCommand(np.zeros(7), 0.04)
+        stable_loaded_reset = JointCommand(np.full(7, 0.001), 0.04)
+        actuators = FakeActuators(valid=True)
+        actual = JointCommand(np.full(7, 0.003), 0.04)
+        applied = []
+
+        def actual_command() -> JointCommand:
+            return actual
+
+        def apply_drive_command(command: JointCommand) -> None:
+            applied.append(command)
+
+        async def advance() -> None:
+            nonlocal actual
+            actual = JointCommand(
+                applied[-1].arm_positions + 0.001,
+                applied[-1].gripper_width_m,
+            )
+
+        actuators.actual_command = actual_command
+        actuators.apply_drive_command = apply_drive_command
+        evidence = asyncio.run(
+            rollback_insertion_trial_command(
+                actuators,
+                active_drive_target,
+                type("Attachment", (), {"attached": True})(),
+                advance,
+                TrackedJointSettlementPolicy(),
+                settlement_target=stable_loaded_reset,
+                expected_attachment=True,
+                observe_safety=lambda: object(),
+                interlock_evidence=lambda: ControlInterlockEvidence(0.0, False),
+                maximum_contact_force_newtons=2.0,
+                maximum_gripper_error_meters=1e-3,
+            )
+        )
+
+        self.assertEqual(applied, [active_drive_target])
+        self.assertEqual(
+            evidence.drive_target,
+            JointDriveTarget(
+                tuple(active_drive_target.arm_positions),
+                active_drive_target.gripper_width_m,
+            ),
+        )
+        self.assertEqual(
+            evidence.target_joint_positions,
+            tuple(stable_loaded_reset.arm_positions),
+        )
+        self.assertEqual(evidence.end_joint_positions, (0.001,) * 7)
+
     def test_insertion_rollback_failure_preserves_raw_terminal_state(self) -> None:
         target = JointCommand(np.zeros(7), 0.04)
         actuators = FakeActuators(valid=True)
@@ -582,6 +636,7 @@ class IsaacControlExecutionTest(unittest.TestCase):
                         required_consecutive_updates=2,
                         maximum_updates=3,
                     ),
+                    settlement_target=target,
                     expected_attachment=True,
                     observe_safety=lambda: object(),
                     interlock_evidence=lambda: ControlInterlockEvidence(0.0, False),
@@ -606,6 +661,7 @@ class IsaacControlExecutionTest(unittest.TestCase):
                 maximum_updates=3,
             ),
             expected_target_joint_positions=(0.0,) * 7,
+            expected_drive_target=JointDriveTarget((0.0,) * 7, 0.04),
             expected_attachment=True,
             maximum_contact_force_newtons=2.0,
             expected_target_gripper_width_meters=0.04,
@@ -626,6 +682,7 @@ class IsaacControlExecutionTest(unittest.TestCase):
                     maximum_updates=3,
                 ),
                 expected_target_joint_positions=(0.0,) * 7,
+                expected_drive_target=JointDriveTarget((0.0,) * 7, 0.04),
                 expected_attachment=True,
                 maximum_contact_force_newtons=2.0,
                 expected_target_gripper_width_meters=0.04,

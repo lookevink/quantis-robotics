@@ -25,6 +25,7 @@ from jepa_wm.control_safety import (
     SafetyProjectionAttempt,
 )
 from jepa_wm.control_tracking import evaluate_action_tracking, tracking_limits_for_policy
+from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.joint_settlement import (
     GripperSettlementCriterion,
     GripperSettlementMeasurement,
@@ -37,6 +38,7 @@ from jepa_wm.joint_settlement import (
 )
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
 from jepa_wm.insertion_trial import (
+    InsertionTrialDriveEvidence,
     InsertionTrialExecutionRefresh,
     InsertionTrialOutcomeObservation,
     InsertionTrialPostActionEvidence,
@@ -406,35 +408,36 @@ async def rollback_control_command(
 
 async def rollback_insertion_trial_command(
     actuators: Actuators,
-    target: JointCommand,
+    drive_target: JointCommand,
     attachment: PlugAttachment,
     advance: Callable[[], Any],
     policy: TrackedJointSettlementPolicy,
     *,
+    settlement_target: JointCommand,
     expected_attachment: bool,
     observe_safety: Callable[[], ContactReading],
     interlock_evidence: Callable[[], ControlInterlockEvidence],
     maximum_contact_force_newtons: float,
     maximum_gripper_error_meters: float,
 ) -> InsertionTrialRollbackEvidence:
-    """Drive to the refreshed reset and preserve exact tracked rollback evidence."""
+    """Restore one stable loaded reset through its distinct controller target."""
 
     start = actuators.actual_command()
     requested_motion = float(
-        np.max(np.abs(start.arm_positions - target.arm_positions))
+        np.max(np.abs(start.arm_positions - settlement_target.arm_positions))
     )
     drive_command_accepted = False
     try:
-        actuators.apply_drive_command(target)
+        actuators.apply_drive_command(drive_target)
         drive_command_accepted = True
         evidence = await _settle_tracked_joint_and_gripper_command(
             actuators,
-            target,
+            settlement_target,
             requested_motion,
             advance,
             policy,
             GripperSettlementCriterion(
-                target.gripper_width_m,
+                settlement_target.gripper_width_m,
                 maximum_gripper_error_meters,
             ),
             observe_safety=observe_safety,
@@ -460,7 +463,7 @@ async def rollback_insertion_trial_command(
         )
         failure = InsertionTrialRollbackFailure(
             tuple(float(value) for value in start.arm_positions),
-            tuple(float(value) for value in target.arm_positions),
+            tuple(float(value) for value in settlement_target.arm_positions),
             tuple(float(value) for value in actual.arm_positions),
             attachment.attached,
             reason,
@@ -468,14 +471,22 @@ async def rollback_insertion_trial_command(
             drive_command_accepted,
             f"{type(error).__name__}: {error}",
             settlement_attempt,
+            JointDriveTarget(
+                tuple(float(value) for value in drive_target.arm_positions),
+                drive_target.gripper_width_m,
+            ),
         )
         raise InsertionTrialRollbackFailed(failure) from error
     return InsertionTrialRollbackEvidence(
         tuple(float(value) for value in start.arm_positions),
-        tuple(float(value) for value in target.arm_positions),
+        tuple(float(value) for value in settlement_target.arm_positions),
         tuple(float(value) for value in actual.arm_positions),
         evidence,
         attachment.attached,
+        JointDriveTarget(
+            tuple(float(value) for value in drive_target.arm_positions),
+            drive_target.gripper_width_m,
+        ),
     )
 
 
@@ -616,6 +627,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         is ControlExecutionPolicy.INSERTION_RESET_TRIAL
     )
     insertion_trial_refresh = None
+    insertion_trial_active_drive_target = None
     if insertion_reset_trial:
         if runtime is None:
             raise RuntimeError("live insertion runtime was lost before execution")
@@ -640,6 +652,18 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         contact_force = live_state.contact_force_newtons
         if synchronized.pose is None:
             raise RuntimeError("live insertion pose was not refreshed")
+        active_command = actuators.current_command()
+        refreshed_drive_target = JointDriveTarget(
+            tuple(float(value) for value in active_command.arm_positions),
+            active_command.gripper_width_m,
+        )
+        if persisted_state.active_drive_target is None:
+            raise RuntimeError("captured insertion drive target is missing")
+        persisted_state.active_drive_target.validate_active(
+            refreshed_drive_target.joint_positions,
+            refreshed_drive_target.gripper_width_m,
+        )
+        insertion_trial_active_drive_target = persisted_state.active_drive_target
         insertion_trial_refresh = InsertionTrialExecutionRefresh(
             time(),
             live_state,
@@ -664,6 +688,16 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         # Capture leaves the stage paused. Insertion reset trials resume one
         # fully interlocked update and rebind the complete live state before
         # projection; other policies retain their historical command refresh.
+        action_scales = ACTION_SCALES
+        target_progress = None
+        binding = None
+        control_period_seconds = 1.0 / DROID_FPS
+        if insertion_reset_trial:
+            binding = session.load_insertion_trial_binding(proposal)
+            binding.require_current_execution()
+            action_scales = binding.allowed_projection_scales
+            target_progress = binding.trial_policy.projected_progress
+            control_period_seconds = binding.trial_policy.control_period_seconds
         safety = ExecutionSafetyContext(
             observation,
             current,
@@ -671,18 +705,8 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             contact_force,
             collision_detected,
             limits,
+            control_period_seconds,
         )
-        action_scales = ACTION_SCALES
-        target_progress = None
-        binding = None
-        if insertion_reset_trial:
-            binding = session.load_insertion_trial_binding(proposal)
-            if binding.trial_policy is None:
-                raise RuntimeError(
-                    "legacy insertion trial has no current execution policy"
-                )
-            action_scales = binding.allowed_projection_scales
-            target_progress = binding.trial_policy.projected_progress
         attempts, selected = select_safe_projection(
             safety,
             proposal,
@@ -714,14 +738,64 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             if not decision.passed:
                 selected_scale = None
 
+        insertion_drive_target = None
+        if (
+            candidate is not None
+            and decision.passed
+            and binding is not None
+            and binding.trial_policy is not None
+            and insertion_trial_active_drive_target is not None
+        ):
+            try:
+                insertion_drive_target = binding.trial_policy.forward_drive_target(
+                    tuple(float(value) for value in solved.arm_positions),
+                    solved.gripper_width_m,
+                    insertion_trial_active_drive_target,
+                    tuple(float(value) for value in current.arm_positions),
+                    limits,
+                )
+            except ValueError:
+                decision = ControlGateDecision(
+                    decision.observation_id,
+                    decision.next_pose,
+                    (ControlGateReason.DRIVE_TARGET_INVALID,),
+                )
+                selected_scale = None
+                candidate = None
+
         status = ControlResultStatus.BLOCKED
         post_action = None
         execution_error = None
         execution_interlock = None
         insertion_trial_rollback = None
+        insertion_trial_drive = (
+            InsertionTrialDriveEvidence(
+                insertion_trial_active_drive_target,
+                insertion_drive_target,
+            )
+            if insertion_trial_active_drive_target is not None
+            and insertion_drive_target is not None
+            else None
+        )
         insertion_trial_settlement_failure = None
         if decision.passed and candidate is not None:
             try:
+                if (
+                    insertion_reset_trial
+                    and insertion_trial_active_drive_target is None
+                ):
+                    raise RuntimeError("insertion active drive target is missing")
+                active_drive_target = (
+                    JointCommand(
+                        np.asarray(
+                            insertion_trial_active_drive_target.joint_positions
+                        ),
+                        insertion_trial_active_drive_target.gripper_width_m,
+                    )
+                    if insertion_reset_trial
+                    and insertion_trial_active_drive_target is not None
+                    else current
+                )
                 live_interlock = LiveInsertionInterlock(
                     LiveContactInterlock(
                         sensor,
@@ -740,10 +814,11 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     if binding is not None and binding.trial_policy is not None:
                         return await rollback_insertion_trial_command(
                             actuators,
-                            current,
+                            active_drive_target,
                             attachment,
                             omni.kit.app.get_app().next_update_async,
                             binding.trial_policy.joint_settlement,
+                            settlement_target=current,
                             expected_attachment=persisted_state.plug_attached,
                             observe_safety=live_interlock.observe,
                             interlock_evidence=lambda: live_interlock.evidence,
@@ -764,7 +839,14 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     return None
 
                 timeline.play()
-                target = JointCommand(solved.arm_positions, solved.gripper_width_m)
+                target = (
+                    JointCommand(
+                        np.asarray(insertion_drive_target.joint_positions),
+                        insertion_drive_target.gripper_width_m,
+                    )
+                    if insertion_drive_target is not None
+                    else JointCommand(solved.arm_positions, solved.gripper_width_m)
+                )
                 await move_joint_command(
                     actuators,
                     current,
@@ -774,7 +856,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     phase=RecordingLabel(RecordingMoment.MOTION, Phase.READY),
                     stage=ObservationStage.APPROACHING_CABLE,
                     recorder=None,
-                    sample_period_seconds=1.0 / DROID_FPS,
+                    sample_period_seconds=control_period_seconds,
                     observe_safety=(
                         live_interlock.observe
                         if persisted_state.execution_policy
@@ -974,6 +1056,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             execution_error=execution_error,
             execution_interlock=execution_interlock,
             insertion_trial_refresh=insertion_trial_refresh,
+            insertion_trial_drive=insertion_trial_drive,
             insertion_trial_rollback=insertion_trial_rollback,
             insertion_trial_settlement_failure=(
                 insertion_trial_settlement_failure

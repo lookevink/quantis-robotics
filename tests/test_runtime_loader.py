@@ -61,7 +61,7 @@ from jepa_wm import control_resolution_baseline, control_resolution_profile
 del control_resolution_baseline.ControlResolutionBaselineAttempt
 del control_resolution_profile.ControlResolutionLoad
 reload_demo_runtime()
-from jepa_wm import action, control_resolution, control_resolution_baseline, control_resolution_profile, control_safety, direct_safety, experimental_candidate, insertion_contract, insertion_recording, insertion_trial, objective_calibration, shadow_planning, shadow_safety
+from jepa_wm import action, control_resolution, control_resolution_baseline, control_resolution_profile, control_safety, direct_safety, experimental_candidate, insertion_contract, insertion_recording, insertion_trial, joint_drive, objective_calibration, shadow_planning, shadow_safety
 from sim import control_identity, control_session, demo_sequence, isaac_demo_kinematics, isaac_exploration, isaac_insertion_trial, recording, trial_source_cache
 assert control_resolution_baseline.ControlResolutionLoad is control_resolution_profile.ControlResolutionLoad
 assert control_resolution.ControlResolutionLoad is control_resolution_profile.ControlResolutionLoad
@@ -72,6 +72,7 @@ assert direct_safety.SafetyProjectionAttempt is control_safety.SafetyProjectionA
 assert experimental_candidate.validate_recording_id is recording.validate_recording_id
 assert control_identity.validate_recording_id is recording.validate_recording_id
 assert control_session.InsertionTrialBinding is insertion_trial.InsertionTrialBinding
+assert control_session.JointDriveTarget is joint_drive.JointDriveTarget
 assert isaac_insertion_trial.InsertionTrialSourceEvidence is insertion_trial.InsertionTrialSourceEvidence
 assert trial_source_cache.ControlSession is control_session.ControlSession
 assert shadow_planning.TaskProgressObjective is objective_calibration.TaskProgressObjective

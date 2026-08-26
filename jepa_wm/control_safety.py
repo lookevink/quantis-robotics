@@ -265,6 +265,7 @@ class ControlGateReason(str, Enum):
     FORCE_LIMIT_EXCEEDED = "force_limit_exceeded"
     TARGET_POSE_MISSING = "target_pose_missing"
     TARGET_PROGRESS_INSUFFICIENT = "target_progress_insufficient"
+    DRIVE_TARGET_INVALID = "drive_target_invalid"
 
 
 @dataclass(frozen=True)

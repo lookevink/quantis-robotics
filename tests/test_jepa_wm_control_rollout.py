@@ -22,6 +22,7 @@ from jepa_wm.control_rollout import (
 from jepa_wm.control_safety import (
     ACTION_SCALES,
     ControlGateDecision,
+    ControlGateReason,
     ControlInterlockEvidence,
     SafetyProjectionAttempt,
 )
@@ -36,8 +37,10 @@ from jepa_wm.joint_settlement import (
     GripperTrackedJointSettlementEvidence,
     JointSettlementEvidence,
 )
+from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.insertion_trial import (
     InsertionTrialBinding,
+    InsertionTrialDriveEvidence,
     InsertionTrialExecutionRefresh,
     InsertionTrialPostActionEvidence,
     InsertionTrialRollbackEvidence,
@@ -118,6 +121,7 @@ class ControlRolloutTest(unittest.TestCase):
             plug_position=(0.4, 0.0, 0.5),
             plug_attached=True,
             current_gripper_width_m=0.04,
+            active_drive_target=JointDriveTarget(joints, 0.04),
         )
         scale = ACTION_SCALES[0]
         gate = ControlGateDecision(10, start.applied(action), ())
@@ -172,6 +176,13 @@ class ControlRolloutTest(unittest.TestCase):
                 state.require_safety_snapshot(),
                 start,
             ),
+            insertion_trial_drive=InsertionTrialDriveEvidence(
+                state.active_drive_target,
+                JointDriveTarget.for_command(
+                    proposed_joints,
+                    (1.0 - gate.next_pose.values[-1]) * 0.08,
+                ),
+            ),
         )
         binding = InsertionTrialBinding(
             session_id,
@@ -181,6 +192,7 @@ class ControlRolloutTest(unittest.TestCase):
             ArtifactIdentity(Path("/tmp/proposal.pth"), "a" * 64),
             response.actions,
             scale,
+            source_active_drive_target=state.active_drive_target,
         )
         session = Mock(session_id=session_id)
         session.load_capture.return_value = (observation, state)
@@ -200,6 +212,72 @@ class ControlRolloutTest(unittest.TestCase):
             summary.result.post_action.insertion_trial.realized_target_progress,
             progress,
         )
+
+        session.load_result.return_value = replace(
+            result,
+            insertion_trial_drive=None,
+        )
+        with self.assertRaisesRegex(ValueError, "drive evidence is missing"):
+            ControlStepSummary.from_session(session)
+
+        drive_rejected_gate = ControlGateDecision(
+            gate.observation_id,
+            gate.next_pose,
+            (ControlGateReason.DRIVE_TARGET_INVALID,),
+        )
+        session.load_result.return_value = replace(
+            result,
+            status=ControlResultStatus.BLOCKED,
+            gate=drive_rejected_gate,
+            selected_action_scale=None,
+            post_action=None,
+            execution_interlock=None,
+            insertion_trial_drive=None,
+        )
+        with self.assertRaisesRegex(ValueError, "drive rejection is inconsistent"):
+            ControlStepSummary.from_session(session)
+
+        rejected_state = replace(
+            state,
+            active_drive_target=JointDriveTarget(
+                tuple(value - 0.003 for value in joints),
+                0.04,
+            ),
+        )
+        session.load_capture.return_value = (observation, rejected_state)
+        self.assertEqual(
+            ControlStepSummary.from_session(session).result.gate.reasons,
+            (ControlGateReason.DRIVE_TARGET_INVALID,),
+        )
+        session.load_capture.return_value = (observation, state)
+
+        session.load_result.return_value = replace(
+            result,
+            insertion_trial_drive=replace(
+                result.insertion_trial_drive,
+                active_target=replace(
+                    result.insertion_trial_drive.active_target,
+                    joint_positions=(0.0001, *joints[1:]),
+                ),
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "active drive target is inconsistent"):
+            ControlStepSummary.from_session(session)
+
+        session.load_result.return_value = replace(
+            result,
+            insertion_trial_drive=replace(
+                result.insertion_trial_drive,
+                forward_target=replace(
+                    result.insertion_trial_drive.forward_target,
+                    joint_positions=(0.0019, *joints[1:]),
+                ),
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "forward drive target is inconsistent"):
+            ControlStepSummary.from_session(session)
+
+        session.load_result.return_value = result
 
         for unsafe_post_action in (
             replace(post_action, collision_detected=True),
@@ -280,6 +358,7 @@ class ControlRolloutTest(unittest.TestCase):
             ControlInterlockEvidence(0.0, False),
             False,
             "RuntimeError: drive command rejected",
+            drive_target=state.active_drive_target,
         )
         session.load_result.return_value = replace(
             result,
@@ -325,9 +404,15 @@ class ControlRolloutTest(unittest.TestCase):
                     ),
                 ),
                 True,
+                state.active_drive_target,
             ),
         )
         session.load_result.return_value = rolled_back_result
+
+        self.assertEqual(
+            ControlResult.from_dict(rolled_back_result.to_dict()),
+            rolled_back_result,
+        )
 
         rolled_back = ControlStepSummary.from_session(session)
 
@@ -339,6 +424,19 @@ class ControlRolloutTest(unittest.TestCase):
             rollback_settlement,
         )
         rollback = rolled_back_result.insertion_trial_rollback
+        session.load_result.return_value = replace(
+            rolled_back_result,
+            insertion_trial_rollback=replace(
+                rollback,
+                drive_target=replace(
+                    state.active_drive_target,
+                    joint_positions=(0.0001, *joints[1:]),
+                ),
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "rollback evidence is inconsistent"):
+            ControlStepSummary.from_session(session)
+
         session.load_result.return_value = replace(
             rolled_back_result,
             insertion_trial_rollback=replace(
