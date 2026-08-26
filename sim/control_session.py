@@ -693,7 +693,8 @@ class InsertionFollowupLineage:
             or observation.expected_proposal != self.observation.expected_proposal
             or state.reference_recording != self.state.reference_recording
             or state.seed != self.state.seed
-            or state.insertion_target_policy != self.state.insertion_target_policy
+            or state.insertion_target_policy
+            != self.state.insertion_target_policy.for_followup()
             or state.active_drive_target != self.active_drive_target
             or observation.previous_action
             != action_between(self.observation.pose, observation.pose)

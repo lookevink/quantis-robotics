@@ -16,7 +16,10 @@ from jepa_wm.control_policy import (
     ControlExecutionPolicy,
     is_insertion_trial_execution_policy,
 )
-from jepa_wm.insertion_contract import INSERTION_TASK_ID
+from jepa_wm.insertion_contract import (
+    INSERTION_TASK_ID,
+    InsertionControlTargetPolicy,
+)
 from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.grasp_contract import GRASP_TASK_ID
 from jepa_wm.trajectory import load_rollout_at
@@ -67,6 +70,7 @@ def build_insertion_followup_capture(
     current: ControlSafetySnapshot,
     current_pose: DroidPose,
     active_drive_target: JointDriveTarget,
+    target_policy: InsertionControlTargetPolicy,
 ) -> tuple[ControlObservation, ControlSessionState]:
     """Bind one no-actuation observation to an exact applied insertion result."""
 
@@ -101,7 +105,7 @@ def build_insertion_followup_capture(
         plug_position=current.plug_position,
         plug_attached=current.plug_attached,
         current_gripper_width_m=current.gripper_width_m,
-        insertion_target_policy=lineage.state.insertion_target_policy,
+        insertion_target_policy=target_policy,
         active_drive_target=active_drive_target,
     )
     lineage.validate_source(observation, state)
@@ -358,15 +362,6 @@ async def capture_followup_observation(
     target_policy = previous_state.insertion_target_policy
     if target_policy is None:
         raise ValueError("insertion follow-up requires its persisted target policy")
-    reference_rollout = target_policy.select(
-        reference_path,
-        context_index=next_context_index,
-    )
-    target = ControlTarget(
-        reference_rollout.target.path.relative_to(QUANTIS_DATA_ROOT),
-        reference_rollout.target_pose,
-    )
-
     if session.path.exists():
         raise ValueError(f"control session already exists: {session_id}")
     timeline = omni.timeline.get_timeline_interface()
@@ -399,6 +394,16 @@ async def capture_followup_observation(
         raise RuntimeError("live insertion pose was not refreshed")
     if synchronized.active_drive_target is None:
         raise RuntimeError("live insertion drive target was not refreshed")
+    followup_target_policy = target_policy.for_followup()
+    reference_rollout = followup_target_policy.select(
+        reference_path,
+        context_index=next_context_index,
+        current_pose=synchronized.pose,
+    )
+    target = ControlTarget(
+        reference_rollout.target.path.relative_to(QUANTIS_DATA_ROOT),
+        reference_rollout.target_pose,
+    )
     observation, state = build_insertion_followup_capture(
         session_id,
         lineage,
@@ -408,6 +413,7 @@ async def capture_followup_observation(
         current=synchronized.safety,
         current_pose=synchronized.pose,
         active_drive_target=synchronized.active_drive_target,
+        target_policy=followup_target_policy,
     )
     session.write_capture(observation, state)
     bind_live_runtime(

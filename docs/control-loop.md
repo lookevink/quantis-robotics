@@ -714,6 +714,16 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     two-action loop. Another live retry, any third action, multi-step insertion,
     filming, and production remain unauthorized. Exact evidence is in the
     linked README checkpoint.
+    The next explicitly authorized chain requalified the interlocked camera
+    capture and again applied action 1 with verified progress. It produced a
+    genuine fresh action-2 observation and inference, but the fixed recorded
+    target horizon made every scale fail the unchanged progress gate before
+    IK or motion. Follow-up target selection now derives and persists its
+    bounded horizon from the synchronized live pose; initial target semantics
+    and every control/safety threshold are unchanged. The terminal result
+    remains `1/2`, and the live-pose correction still requires requalification
+    before claiming a two-action loop. Exact evidence is in the linked README
+    checkpoint.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

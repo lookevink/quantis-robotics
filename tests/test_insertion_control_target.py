@@ -59,6 +59,9 @@ class InsertionControlTargetPolicyTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     InsertionControlTargetPolicy(camera=camera)
 
+        with self.assertRaisesRegex(ValueError, "policy is invalid"):
+            InsertionControlTargetPolicy(target_origin="live_observation")
+
     def test_nondefault_policy_round_trips_and_validates_exact_observation(self) -> None:
         policy = InsertionControlTargetPolicy(
             minimum_translation_meters=4e-4,
@@ -153,6 +156,33 @@ class InsertionControlTargetPolicyTest(unittest.TestCase):
             [item.kwargs["bounds"] for item in load.call_args_list],
             [policy.action_bounds] * 3,
         )
+
+    def test_followup_selects_resolution_horizon_from_live_pose(self) -> None:
+        policy = InsertionControlTargetPolicy().for_followup()
+        live_pose = DroidPose((0.40035, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+        with patch(
+            "jepa_wm.insertion_contract.load_rollout_at",
+            side_effect=(
+                _rollout(3, 4e-4),
+                _rollout(4, 6e-4),
+                _rollout(5, 9e-4),
+            ),
+        ) as load:
+            selected = policy.select(
+                Path("recording"),
+                context_index=44,
+                current_pose=live_pose,
+            )
+
+        self.assertEqual(selected.target.index, 48)
+        self.assertEqual(len(load.call_args_list), 3)
+        self.assertEqual(
+            InsertionControlTargetPolicy.from_dict(policy.to_dict()),
+            policy,
+        )
+
+        with self.assertRaisesRegex(ValueError, "observation pose"):
+            policy.select(Path("recording"), context_index=44)
 
     def test_fails_when_no_bounded_horizon_is_resolvable(self) -> None:
         policy = InsertionControlTargetPolicy(maximum_action_horizon=4)

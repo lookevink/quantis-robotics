@@ -244,6 +244,7 @@ class FollowupContinuityTest(unittest.TestCase):
             current=current,
             current_pose=previous.pose,
             active_drive_target=drive.forward_target,
+            target_policy=INSERTION_CONTROL_TARGET_POLICY.for_followup(),
         )
 
         self.assertEqual(observation.previous_action, previous.actual_action)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from math import dist, isfinite, sqrt
 from pathlib import Path
@@ -34,6 +34,11 @@ CONNECTOR_CONTACT_SENSOR_ID = "connector_tip"
 COMPLIANT_COLLISION_PARTS = ("latch",)
 
 
+class InsertionTargetOrigin(str, Enum):
+    REFERENCE_CONTEXT = "reference_context"
+    LIVE_OBSERVATION = "live_observation"
+
+
 @dataclass(frozen=True)
 class InsertionControlTargetPolicy:
     minimum_translation_meters: float = 5e-4
@@ -44,6 +49,7 @@ class InsertionControlTargetPolicy:
     action_bounds: ActionSelectionBounds = ActionSelectionBounds(
         minimum_action_norm=0.0
     )
+    target_origin: InsertionTargetOrigin = InsertionTargetOrigin.REFERENCE_CONTEXT
 
     def __post_init__(self) -> None:
         validate_safe_identifier(self.camera)
@@ -63,8 +69,17 @@ class InsertionControlTargetPolicy:
             or isinstance(self.maximum_action_horizon, bool)
             or not isinstance(self.maximum_action_horizon, int)
             or self.maximum_action_horizon < self.minimum_action_horizon
+            or not isinstance(self.target_origin, InsertionTargetOrigin)
         ):
             raise ValueError("insertion control target policy is invalid")
+
+    def for_followup(self) -> InsertionControlTargetPolicy:
+        """Select follow-up targets from the exact synchronized live pose."""
+
+        return replace(
+            self,
+            target_origin=InsertionTargetOrigin.LIVE_OBSERVATION,
+        )
 
     def projection_scales(
         self,
@@ -88,9 +103,17 @@ class InsertionControlTargetPolicy:
         recording: Path,
         *,
         context_index: int,
+        current_pose: DroidPose | None = None,
     ) -> RecordedRollout:
         """Select the nearest bounded-horizon target above control resolution."""
 
+        if (
+            self.target_origin is InsertionTargetOrigin.LIVE_OBSERVATION
+            and current_pose is None
+        ):
+            raise ValueError(
+                "live insertion target selection requires its observation pose"
+            )
         for horizon in range(
             self.minimum_action_horizon,
             self.maximum_action_horizon + 1,
@@ -102,12 +125,13 @@ class InsertionControlTargetPolicy:
                 protocol=RolloutProtocol(action_horizon=horizon),
                 bounds=self.action_bounds,
             )
-            if (
-                dist(
-                    rollout.context_pose.values[:3],
-                    rollout.target_pose.values[:3],
-                )
-                >= self.minimum_translation_meters
+            if self.target_origin is InsertionTargetOrigin.LIVE_OBSERVATION:
+                assert current_pose is not None
+                origin = current_pose
+            else:
+                origin = rollout.context_pose
+            if dist(origin.values[:3], rollout.target_pose.values[:3]) >= (
+                self.minimum_translation_meters
             ):
                 return rollout
         raise ValueError(
@@ -124,6 +148,7 @@ class InsertionControlTargetPolicy:
         rollout = self.select(
             recording,
             context_index=observation.warmup_frames,
+            current_pose=observation.pose,
         )
         expected = ControlTarget(
             rollout.target.path.relative_to(frame_root.resolve()),
@@ -139,6 +164,7 @@ class InsertionControlTargetPolicy:
             "maximum_action_horizon": self.maximum_action_horizon,
             "camera": self.camera,
             "action_bounds": self.action_bounds.to_dict(),
+            "target_origin": self.target_origin.value,
         }
         if self.orientation_hold_tolerance_radians is not None:
             payload["orientation_hold_tolerance_radians"] = (
@@ -173,6 +199,12 @@ class InsertionControlTargetPolicy:
                 camera=camera,
                 action_bounds=ActionSelectionBounds.from_dict(
                     payload["action_bounds"]
+                ),
+                target_origin=InsertionTargetOrigin(
+                    payload.get(
+                        "target_origin",
+                        InsertionTargetOrigin.REFERENCE_CONTEXT.value,
+                    )
                 ),
             )
         except (KeyError, TypeError, ValueError) as error:

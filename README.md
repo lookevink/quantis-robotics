@@ -1814,6 +1814,41 @@ realized progress; it does not yet prove a two-action closed loop. No retry,
 third action, multi-step insertion, filming, or production authority is
 granted.
 
+The explicitly authorized retry
+`insertion-two-step-20260826T170137Z-52600-c43` requalified that capture repair.
+Action-1 safety refreshed about `1.624 s` after its JEPA response and passed at
+full translation scale with a `1.640 mrad` projected joint change. Session
+`insertion-two-step-20260826T170137Z-52600-c43-action1` then applied the action
+in 19 settlement updates with `0.328 mrad` final tracking error, translation
+cosine `0.9993`, retained attachment, `0 N`, and no collision. Its realized
+target error fell from `0.7401 mm` to `0.4417 mm`, a `40.32%` reduction.
+
+The corrected interlocked follow-up capture successfully persisted safety-2
+observation `6187058072559216615` and its frame-49 target. JEPA inference also
+completed, but all six projection scales failed before IK with
+`target_progress_insufficient`; no action-2 execution claim or motion occurred.
+The typed rollout therefore remains `1/2` applied with
+`followup_source_preflight` failure, and the 13 GB recovery backup verified.
+Raw reconstruction shows why the gate was correct: frame 49 was about
+`0.492 mm` from the refreshed live pose, outside the `0.1 mm` deadband, while
+no scaled proposal reduced that distance by the required `25%`.
+
+The mismatch came from target ownership, not from the safety threshold. The
+follow-up selector had measured its `0.5 mm` resolution floor from the recorded
+context pose even though action 1 ended off that exact reference trajectory.
+From the synchronized live pose, frame 50 is about `0.656 mm` away and the same
+half-scale proposal predicts about `37.4%` progress; frame 51 is about
+`0.894 mm` away and the full-scale proposal predicts about `49.4%`. Follow-up
+target policy now persists a typed `live_observation` origin, selects only after
+the interlocked pose is captured, and reconstructs the identical 3–8-frame
+horizon search. Initial reset targets keep their established recorded-context
+origin. The `0.5 mm` floor, `0.1 mm` deadband, `25%` progress requirement,
+orientation hold, projection roster, action bounds, and every safety limit are
+unchanged. Local validation passes `556` tests with `70` optional skips and
+both independent reviews pass, but this correction has not yet been
+requalified live. The result proves repeatable action-1 control and a genuine
+fresh second observation; it does not yet prove a second applied action.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded
