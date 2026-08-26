@@ -4,9 +4,37 @@ from __future__ import annotations
 
 import importlib.util
 import importlib
+from dataclasses import dataclass
 from pathlib import Path
 import sys
 from types import ModuleType
+from typing import Any
+
+
+@dataclass(frozen=True)
+class _LiveRuntimeHandoff:
+    session_id: str
+    stage: Any
+    actuators: Any
+    attachment: Any
+    sensor: Any
+
+
+def _resident_live_runtime_handoff(module: ModuleType | None) -> _LiveRuntimeHandoff | None:
+    """Read both current and pre-handoff resident runtime generations."""
+
+    if module is None:
+        return None
+    runtime = getattr(module, "_live_runtime", None)
+    if runtime is None:
+        return None
+    return _LiveRuntimeHandoff(
+        runtime.session_id,
+        runtime.stage,
+        runtime.actuators,
+        runtime.attachment,
+        runtime.sensor,
+    )
 
 
 def _reload_project_module_from_source(module_name: str) -> ModuleType:
@@ -51,6 +79,8 @@ def _reload_project_module_from_source(module_name: str) -> ModuleType:
 def reload_demo_runtime() -> ModuleType:
     """Refresh a persistent Python server without mixing class generations."""
 
+    control_runtime = sys.modules.get("sim.isaac_control_runtime")
+    runtime_handoff = _resident_live_runtime_handoff(control_runtime)
     # The Isaac Python server retains sys.modules across repository syncs.
     # Every owner must be refreshed before modules that import its classes.
     for module_name in (
@@ -126,5 +156,10 @@ def reload_demo_runtime() -> ModuleType:
         "sim.isaac_grasp_demo",
         "sim.isaac_control_bridge",
     ):
-        _reload_project_module_from_source(module_name)
+        reloaded = _reload_project_module_from_source(module_name)
+        if (
+            module_name == "sim.isaac_control_runtime"
+            and runtime_handoff is not None
+        ):
+            reloaded.restore_live_runtime_handoff(runtime_handoff)
     return _reload_project_module_from_source("sim.isaac_demo")

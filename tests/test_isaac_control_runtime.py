@@ -7,6 +7,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+import numpy as np
+
 from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimits
 from sim.isaac_control_runtime import (
     ControlContactSensors,
@@ -20,6 +22,7 @@ from sim.isaac_control_runtime import (
     synchronized_insertion_safety_snapshot,
     synchronized_insertion_resolution_runtime,
 )
+from sim.isaac_demo_runtime import FixedJointPlugMotion, PlugAttachment
 
 
 class _Timeline:
@@ -80,15 +83,28 @@ class ContactReadingTest(unittest.TestCase):
         core.experimental = experimental
         experimental.prims = prims
         stage = object()
-        attachment = Mock()
-        refreshed_attachment = Mock()
-        attachment.with_refreshed_physics.return_value = refreshed_attachment
+        old_offset = np.asarray((0.1, 0.2, 0.3))
+        old_motion = SimpleNamespace(
+            prim=object(),
+            hand_prim=object(),
+            rigid_prim=object(),
+            fixed_joint=object(),
+            hand_to_plug_offset=old_offset,
+        )
+        collision_attributes = [object()]
+        attachment = SimpleNamespace(
+            motion=old_motion,
+            collisions=SimpleNamespace(
+                collision_attributes=collision_attributes,
+                excluded_collision_paths=frozenset({"/World/RJ45_Plug/Body"}),
+            ),
+        )
         old_runtime = LiveControlRuntime(
             "session",
             stage,
             Mock(),
             attachment,
-            ControlContactSensors(Mock(), Mock()),
+            SimpleNamespace(hand=Mock(), connector=Mock()),
         )
         refreshed_actuators = Mock()
         refreshed_sensors = Mock()
@@ -115,14 +131,26 @@ class ContactReadingTest(unittest.TestCase):
             refreshed = refresh_live_control_runtime(old_runtime)
 
         create.assert_called_once_with(stage, (articulation_token, "/World/Franka_R"))
-        attachment.with_refreshed_physics.assert_called_once_with(
-            (rigid_token, "/World/RJ45_Plug")
-        )
         sensors.assert_called_once_with(
             stage, create=False, include_connector=True
         )
         self.assertIs(refreshed.actuators, refreshed_actuators)
-        self.assertIs(refreshed.attachment, refreshed_attachment)
+        self.assertIsInstance(refreshed.attachment, PlugAttachment)
+        self.assertIsInstance(refreshed.attachment.motion, FixedJointPlugMotion)
+        self.assertEqual(
+            refreshed.attachment.motion.rigid_prim,
+            (rigid_token, "/World/RJ45_Plug"),
+        )
+        self.assertIsNot(refreshed.attachment.motion.hand_to_plug_offset, old_offset)
+        np.testing.assert_array_equal(
+            refreshed.attachment.motion.hand_to_plug_offset,
+            old_offset,
+        )
+        self.assertIsNot(refreshed.attachment.collisions, attachment.collisions)
+        self.assertEqual(
+            refreshed.attachment.collisions.collision_attributes,
+            collision_attributes,
+        )
         self.assertIs(refreshed.sensor, refreshed_sensors)
 
     def test_pauses_when_resuming_the_timeline_fails(self) -> None:
@@ -382,6 +410,17 @@ class ContactReadingTest(unittest.TestCase):
             ControlContactSensors(
                 _Sensor(0.2),
                 _Sensor(1.5, in_contact=True),
+            )
+        )
+
+        self.assertFalse(collision)
+        self.assertEqual(force, 1.5)
+
+    def test_uses_cross_generation_connector_sensor_structure(self) -> None:
+        collision, force = read_control_contact(
+            SimpleNamespace(
+                hand=_Sensor(0.2),
+                connector=_Sensor(1.5, in_contact=True),
             )
         )
 

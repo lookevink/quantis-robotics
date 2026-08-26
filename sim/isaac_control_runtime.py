@@ -10,7 +10,11 @@ from jepa_wm.action import DroidPose
 from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimits
 from jepa_wm.direct_safety import ControlSafetySnapshot
 from jepa_wm.joint_drive import JointDriveTarget
-from sim.isaac_demo_runtime import Actuators, PlugAttachment, create_actuators
+from sim.isaac_demo_runtime import (
+    Actuators,
+    PlugAttachment,
+    create_actuators,
+)
 from sim.isaac_demo_runtime import ContactReading
 from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH, world_pose
 
@@ -379,20 +383,55 @@ def bind_live_runtime(
     return _live_runtime
 
 
+def restore_live_runtime_handoff(
+    handoff: Any,
+) -> LiveControlRuntime:
+    """Rebind retained collaborators to the current module generation."""
+
+    return bind_live_runtime(
+        handoff.session_id,
+        handoff.stage,
+        handoff.actuators,
+        handoff.attachment,
+        handoff.sensor,
+    )
+
+
+def _contact_sensor_components(sensors: Any) -> tuple[Any, Any | None]:
+    """Read raw or cross-generation composite sensor structure fail-closed."""
+
+    if hasattr(sensors, "hand") or hasattr(sensors, "connector"):
+        try:
+            hand = sensors.hand
+            connector = sensors.connector
+        except AttributeError as error:
+            raise RuntimeError("control contact sensor set is malformed") from error
+        if not callable(getattr(hand, "get_sensor_reading", None)) or (
+            connector is not None
+            and not callable(getattr(connector, "get_sensor_reading", None))
+        ):
+            raise RuntimeError("control contact sensor set is malformed")
+        return hand, connector
+    if not callable(getattr(sensors, "get_sensor_reading", None)):
+        raise RuntimeError("control contact sensor is malformed")
+    return sensors, None
+
+
 def refresh_live_control_runtime(runtime: LiveControlRuntime) -> LiveControlRuntime:
     """Recreate experimental physics wrappers invalidated by a timeline pause."""
 
     from isaacsim.core.experimental.prims import Articulation, RigidPrim
 
     actuators = create_actuators(runtime.stage, Articulation(ROBOT_PATH))
-    attachment = runtime.attachment.with_refreshed_physics(RigidPrim(PLUG_PATH))
+    attachment = PlugAttachment.from_prior_generation(
+        runtime.attachment,
+        RigidPrim(PLUG_PATH),
+    )
+    _, retained_connector = _contact_sensor_components(runtime.sensor)
     sensor = control_contact_sensors(
         runtime.stage,
         create=False,
-        include_connector=(
-            isinstance(runtime.sensor, ControlContactSensors)
-            and runtime.sensor.connector is not None
-        ),
+        include_connector=retained_connector is not None,
     )
     return bind_live_runtime(
         runtime.session_id,
@@ -465,10 +504,9 @@ def read_contact(sensor: Any) -> tuple[bool, float]:
 
 
 def read_control_contact(sensors: ControlContactSensors | Any) -> tuple[bool, float]:
-    if not isinstance(sensors, ControlContactSensors):
-        return read_contact(sensors)
-    hand_collision, hand_force = read_contact(sensors.hand)
-    if sensors.connector is None:
+    hand, connector = _contact_sensor_components(sensors)
+    hand_collision, hand_force = read_contact(hand)
+    if connector is None:
         return hand_collision, hand_force
-    _, connector_force = read_contact(sensors.connector)
+    _, connector_force = read_contact(connector)
     return hand_collision, max(hand_force, connector_force)

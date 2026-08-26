@@ -357,17 +357,37 @@ class PlugAttachment:
 
         if not isinstance(self.motion, FixedJointPlugMotion):
             return self
-        offset = self.motion.hand_to_plug_offset
-        return PlugAttachment(
-            FixedJointPlugMotion(
-                self.motion.prim,
-                self.motion.hand_prim,
-                rigid_prim,
-                self.motion.fixed_joint,
-                None if offset is None else offset.copy(),
-            ),
-            self.collisions,
-        )
+        return type(self).from_prior_generation(self, rigid_prim)
+
+    @classmethod
+    def from_prior_generation(
+        cls,
+        prior: Any,
+        rigid_prim: Any,
+    ) -> PlugAttachment:
+        """Rebuild a fixed-joint attachment without stale class dispatch."""
+
+        try:
+            motion = prior.motion
+            collisions = prior.collisions
+            offset = motion.hand_to_plug_offset
+            return cls(
+                FixedJointPlugMotion(
+                    motion.prim,
+                    motion.hand_prim,
+                    rigid_prim,
+                    motion.fixed_joint,
+                    None if offset is None else offset.copy(),
+                ),
+                PlugCollisionPolicy(
+                    list(collisions.collision_attributes),
+                    frozenset(collisions.excluded_collision_paths),
+                ),
+            )
+        except (AttributeError, TypeError, ValueError) as error:
+            raise RuntimeError(
+                "live insertion attachment cannot be refreshed"
+            ) from error
 
 
 @dataclass(frozen=True)

@@ -58,11 +58,19 @@ class RuntimeLoaderTest(unittest.TestCase):
         source = """
 from sim.runtime_loader import reload_demo_runtime
 from jepa_wm import control_resolution_baseline, control_resolution_profile
+from sim import isaac_control_runtime as old_control_runtime
+stage = object()
+actuators = object()
+attachment = object()
+sensor = object()
+old_control_runtime.bind_live_runtime(
+    "live-session", stage, actuators, attachment, sensor
+)
 del control_resolution_baseline.ControlResolutionBaselineAttempt
 del control_resolution_profile.ControlResolutionLoad
 reload_demo_runtime()
 from jepa_wm import action, control_resolution, control_resolution_baseline, control_resolution_profile, control_safety, direct_safety, experimental_candidate, insertion_contract, insertion_recording, insertion_trial, joint_drive, objective_calibration, shadow_planning, shadow_safety
-from sim import control_identity, control_session, demo_sequence, isaac_demo_kinematics, isaac_exploration, isaac_insertion_trial, recording, trial_source_cache
+from sim import control_identity, control_session, demo_sequence, isaac_control_runtime, isaac_demo_kinematics, isaac_exploration, isaac_insertion_trial, recording, trial_source_cache
 assert control_resolution_baseline.ControlResolutionLoad is control_resolution_profile.ControlResolutionLoad
 assert control_resolution.ControlResolutionLoad is control_resolution_profile.ControlResolutionLoad
 assert control_resolution.ControlResolutionBaselineAttempt is control_resolution_baseline.ControlResolutionBaselineAttempt
@@ -79,6 +87,11 @@ assert shadow_planning.TaskProgressObjective is objective_calibration.TaskProgre
 assert isaac_demo_kinematics.build_demo_sequence is demo_sequence.build_demo_sequence
 assert isaac_exploration.INSERTION_TASK_ID == insertion_contract.INSERTION_TASK_ID
 assert insertion_recording.RECORDING_SCHEMA == recording.RECORDING_SCHEMA
+restored_runtime = isaac_control_runtime.live_runtime_for("live-session", stage)
+assert isinstance(restored_runtime, isaac_control_runtime.LiveControlRuntime)
+assert restored_runtime.actuators is actuators
+assert restored_runtime.attachment is attachment
+assert restored_runtime.sensor is sensor
 scale = control_safety.ACTION_SCALES[0]
 evidence = shadow_safety.ShadowSafetyEvidence(
     observation_id=1,
