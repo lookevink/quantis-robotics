@@ -64,6 +64,8 @@ def reload_demo_runtime() -> ModuleType:
         "jepa_wm.planner_readiness",
         "jepa_wm.control_protocol",
         "jepa_wm.control_safety",
+        "jepa_wm.joint_settlement",
+        "jepa_wm.target_progress",
         "jepa_wm.control_tracking",
         "jepa_wm.grasp_task",
         "jepa_wm.replay_verification",

@@ -140,8 +140,9 @@ async def stabilize_resolution_capture(
             contract.safety_limits.maximum_contact_force_newtons,
             "insertion control resolution capture stabilization",
         ),
-        runtime,
+        runtime.attachment,
         expected_attachment=contract.load.plug_attached,
+        operation="insertion control resolution capture stabilization",
     )
     _, baseline = await stabilize_resolution_baseline(
         runtime,

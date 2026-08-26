@@ -11,16 +11,29 @@ import numpy as np
 from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
 from jepa_wm.control_safety import (
+    ControlInterlockEvidence,
     ControlGateReason,
     INSERTION_TARGET_PROGRESS,
     SimulatorSafetyLimits,
 )
+from jepa_wm.joint_settlement import (
+    JointSettlementAttempt,
+    TrackedJointSettlementPolicy,
+)
+from jepa_wm.insertion_trial import (
+    InsertionTrialRollbackFailure,
+    InsertionTrialRollbackFailureReason,
+)
 from sim.isaac_control_execution import (
     ExecutionSafetyContext,
+    InsertionTrialRollbackFailed,
+    UnsettledJointCommand,
     capture_synchronized_post_action,
     select_safe_projection,
     rollback_control_command,
+    rollback_insertion_trial_command,
     settle_joint_command,
+    settle_tracked_joint_command,
     synchronized_actual_command,
 )
 from sim.isaac_demo_kinematics import SolvedPose
@@ -372,6 +385,75 @@ class IsaacControlExecutionTest(unittest.TestCase):
         self.assertEqual(updates, 2)
         self.assertEqual(observations, 2)
 
+    def test_insertion_settlement_requires_consecutive_command_relative_updates(self) -> None:
+        actuators = FakeActuators(valid=True)
+        readings = iter((4e-4, 8e-4, 4e-4, 3e-4))
+        target = np.zeros(7)
+        updates = 0
+
+        async def advance() -> None:
+            nonlocal updates
+            updates += 1
+            error = next(readings)
+            actuators.command = JointCommand(
+                np.asarray((error, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+                0.04,
+            )
+
+        evidence = asyncio.run(
+            settle_tracked_joint_command(
+                actuators,
+                np.asarray((0.002,) + (0.0,) * 6),
+                target,
+                advance,
+                TrackedJointSettlementPolicy(),
+            )
+        )
+
+        self.assertIsNotNone(evidence)
+        self.assertEqual(evidence.updates_used, 4)
+        self.assertEqual(evidence.required_tracking_error_radians, 5e-4)
+        self.assertEqual(evidence.passing_tracking_errors_radians, (4e-4, 3e-4))
+
+    def test_insertion_settlement_timeout_preserves_every_tracking_update(self) -> None:
+        actuators = FakeActuators(valid=True)
+        actuators.command = JointCommand(np.ones(7), 0.04)
+
+        async def advance() -> None:
+            return None
+
+        with self.assertRaises(UnsettledJointCommand) as raised:
+            asyncio.run(
+                settle_tracked_joint_command(
+                    actuators,
+                    np.ones(7),
+                    np.zeros(7),
+                    advance,
+                    TrackedJointSettlementPolicy(
+                        required_consecutive_updates=2,
+                        maximum_updates=3,
+                    ),
+                )
+            )
+
+        self.assertEqual(raised.exception.attempt.tracking_errors_radians, (1.0,) * 3)
+        self.assertEqual(raised.exception.attempt.final_joint_positions, (1.0,) * 7)
+        impossible = JointSettlementAttempt(
+            raised.exception.attempt.requested_joint_motion_radians,
+            raised.exception.attempt.required_tracking_error_radians,
+            (4e-4, 3e-4, 1.0),
+            raised.exception.attempt.final_joint_positions,
+        )
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            impossible.validate(
+                TrackedJointSettlementPolicy(
+                    required_consecutive_updates=2,
+                    maximum_updates=3,
+                ),
+                expected_requested_motion_radians=1.0,
+                expected_target_joint_positions=(0.0,) * 7,
+            )
+
     def test_rollback_is_observed_and_verified_after_its_physics_update(self) -> None:
         target = JointCommand(np.zeros(7), 0.04)
         actuators = FakeActuators(valid=True)
@@ -427,6 +509,132 @@ class IsaacControlExecutionTest(unittest.TestCase):
         )
 
         self.assertEqual(updates, 3)
+
+    def test_insertion_rollback_uses_the_same_tracked_settlement_policy(self) -> None:
+        target = JointCommand(np.zeros(7), 0.04)
+        actuators = FakeActuators(valid=True)
+        actuators.command = JointCommand(
+            np.asarray((0.002,) + (0.0,) * 6),
+            0.04,
+        )
+        updates = 0
+        observations = 0
+
+        async def advance() -> None:
+            nonlocal updates
+            updates += 1
+
+        def observe_safety() -> object:
+            nonlocal observations
+            observations += 1
+            return object()
+
+        attachment = type("Attachment", (), {"attached": True})()
+        evidence = asyncio.run(
+            rollback_insertion_trial_command(
+                actuators,
+                target,
+                attachment,
+                advance,
+                TrackedJointSettlementPolicy(),
+                expected_attachment=True,
+                observe_safety=observe_safety,
+                interlock_evidence=lambda: ControlInterlockEvidence(0.0, False),
+                maximum_contact_force_newtons=2.0,
+                maximum_gripper_error_meters=1e-3,
+            )
+        )
+
+        self.assertIsNotNone(evidence)
+        self.assertEqual(
+            evidence.joint_settlement.requested_joint_motion_radians,
+            0.002,
+        )
+        self.assertEqual(
+            evidence.joint_settlement.passing_tracking_errors_radians,
+            (0.0, 0.0),
+        )
+        self.assertEqual(
+            evidence.settlement.gripper.trace.errors_meters,
+            (0.0, 0.0),
+        )
+        self.assertEqual(evidence.settlement.gripper.end_width_meters, 0.04)
+        self.assertEqual(updates, 2)
+        self.assertEqual(observations, 2)
+
+    def test_insertion_rollback_failure_preserves_raw_terminal_state(self) -> None:
+        target = JointCommand(np.zeros(7), 0.04)
+        actuators = FakeActuators(valid=True)
+        actuators.command = JointCommand(np.ones(7), 0.04)
+        actuators.apply_drive_command = Mock()
+
+        async def advance() -> None:
+            return None
+
+        with self.assertRaises(InsertionTrialRollbackFailed) as raised:
+            asyncio.run(
+                rollback_insertion_trial_command(
+                    actuators,
+                    target,
+                    type("Attachment", (), {"attached": True})(),
+                    advance,
+                    TrackedJointSettlementPolicy(
+                        required_consecutive_updates=2,
+                        maximum_updates=3,
+                    ),
+                    expected_attachment=True,
+                    observe_safety=lambda: object(),
+                    interlock_evidence=lambda: ControlInterlockEvidence(0.0, False),
+                    maximum_contact_force_newtons=2.0,
+                    maximum_gripper_error_meters=1e-3,
+                )
+            )
+
+        evidence = raised.exception.evidence
+        self.assertEqual(evidence.start_joint_positions, (1.0,) * 7)
+        self.assertEqual(evidence.target_joint_positions, (0.0,) * 7)
+        self.assertEqual(evidence.end_joint_positions, (1.0,) * 7)
+        self.assertTrue(evidence.plug_attached)
+        self.assertEqual(evidence.settlement_attempt.tracking_errors_radians, (1.0,) * 3)
+        self.assertEqual(
+            evidence.settlement_attempt.gripper.trace.errors_meters,
+            (0.0,) * 3,
+        )
+        evidence.validate(
+            TrackedJointSettlementPolicy(
+                required_consecutive_updates=2,
+                maximum_updates=3,
+            ),
+            expected_target_joint_positions=(0.0,) * 7,
+            expected_attachment=True,
+            maximum_contact_force_newtons=2.0,
+            expected_target_gripper_width_meters=0.04,
+            expected_gripper_error_meters=1e-3,
+        )
+        without_gripper = evidence.to_dict()
+        del without_gripper["settlement_attempt"]["gripper_settlement"]
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            InsertionTrialRollbackFailure.from_dict(without_gripper)
+        lower_priority_reason = replace(
+            evidence,
+            reason=InsertionTrialRollbackFailureReason.DRIVE_COMMAND_REJECTED,
+        )
+        with self.assertRaisesRegex(ValueError, "reason"):
+            lower_priority_reason.validate(
+                TrackedJointSettlementPolicy(
+                    required_consecutive_updates=2,
+                    maximum_updates=3,
+                ),
+                expected_target_joint_positions=(0.0,) * 7,
+                expected_attachment=True,
+                maximum_contact_force_newtons=2.0,
+                expected_target_gripper_width_meters=0.04,
+                expected_gripper_error_meters=1e-3,
+            )
+        self.assertEqual(
+            InsertionTrialRollbackFailure.from_dict(evidence.to_dict()),
+            evidence,
+        )
 
 
 if __name__ == "__main__":

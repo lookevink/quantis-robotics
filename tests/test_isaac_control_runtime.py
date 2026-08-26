@@ -12,6 +12,7 @@ from sim.isaac_control_runtime import (
     ControlContactSensors,
     LiveControlRuntime,
     LiveContactInterlock,
+    LiveInsertionInterlock,
     read_contact,
     read_control_contact,
     refresh_live_control_runtime,
@@ -54,6 +55,18 @@ class _Sensor:
 
 
 class ContactReadingTest(unittest.TestCase):
+    def test_insertion_interlock_aborts_immediately_on_attachment_loss(self) -> None:
+        attachment = SimpleNamespace(attached=False)
+        interlock = LiveInsertionInterlock(
+            LiveContactInterlock(_Sensor(0.0), 2.0, "test motion"),
+            attachment,
+            True,
+            "test motion",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "attachment state changed"):
+            interlock.observe()
+
     def test_recreates_every_tensor_backed_runtime_wrapper(self) -> None:
         prims = ModuleType("isaacsim.core.experimental.prims")
         articulation_token = object()
@@ -197,12 +210,12 @@ class ContactReadingTest(unittest.TestCase):
             self.assertIs(runtime, old_runtime)
             return refreshed_runtime
 
-        def read(actuators, attachment, sensor):
+        pose = Mock()
+
+        def read(runtime):
             events.append("read")
-            self.assertIs(actuators, refreshed_runtime.actuators)
-            self.assertIs(attachment, refreshed_runtime.attachment)
-            self.assertIs(sensor, refreshed_runtime.sensor)
-            return live
+            self.assertIs(runtime, refreshed_runtime)
+            return live, pose
 
         def observe():
             events.append(
@@ -219,7 +232,7 @@ class ContactReadingTest(unittest.TestCase):
                 side_effect=refresh,
             ),
             patch(
-                "sim.isaac_control_runtime._control_safety_snapshot",
+                "sim.isaac_control_runtime._control_safety_and_pose",
                 side_effect=read,
             ),
             patch(
@@ -250,6 +263,7 @@ class ContactReadingTest(unittest.TestCase):
         )
         self.assertIs(synchronized.runtime, refreshed_runtime)
         self.assertIs(synchronized.safety, live)
+        self.assertIs(synchronized.pose, pose)
         live.validate_continuity.assert_called_once_with(
             captured, SimulatorSafetyLimits()
         )

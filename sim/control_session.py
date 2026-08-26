@@ -22,6 +22,7 @@ from jepa_wm.control_safety import (
     SimulatorSafetyState,
 )
 from jepa_wm.control_tracking import ActionTrackingDecision
+from jepa_wm.joint_settlement import JointSettlementAttempt
 from jepa_wm.direct_safety import (
     ControlSafetySnapshot,
     DirectInsertionSafetyEvidence,
@@ -36,7 +37,13 @@ from jepa_wm.insertion_trial import (
     InsertionTrialBinding,
     InsertionTrialExecutionEvidence,
     InsertionTrialExecutionRefresh,
+    InsertionTrialPostActionEvidence,
+    InsertionTrialRollbackEvidence,
+    InsertionTrialRollbackFailure,
+    InsertionTrialRollbackOutcome,
+    InsertionTrialRollbackReason,
     InsertionTrialSourceEvidence,
+    insertion_trial_rollback_outcome_from_dict,
 )
 from jepa_wm.insertion_contract import (
     INSERTION_TASK_ID,
@@ -67,8 +74,22 @@ class ControlResultStatus(str, Enum):
     ROLLED_BACK_TRACKING = "rolled_back_after_tracking_failure"
     ROLLED_BACK_CONTACT = "rolled_back_after_contact"
     ROLLED_BACK_ATTACHMENT = "rolled_back_after_attachment_loss"
+    ROLLED_BACK_PROGRESS = "rolled_back_after_insufficient_target_progress"
     ROLLED_BACK_EXECUTION = "rolled_back_after_execution_failure"
     ROLLBACK_FAILED = "rollback_failed"
+
+    @classmethod
+    def from_insertion_rollback_reason(
+        cls,
+        reason: InsertionTrialRollbackReason | None,
+    ) -> ControlResultStatus:
+        return {
+            None: cls.APPLIED,
+            InsertionTrialRollbackReason.TRACKING: cls.ROLLED_BACK_TRACKING,
+            InsertionTrialRollbackReason.CONTACT: cls.ROLLED_BACK_CONTACT,
+            InsertionTrialRollbackReason.ATTACHMENT: cls.ROLLED_BACK_ATTACHMENT,
+            InsertionTrialRollbackReason.PROGRESS: cls.ROLLED_BACK_PROGRESS,
+        }[reason]
 
 
 @dataclass(frozen=True)
@@ -250,6 +271,7 @@ class PostActionEvidence:
     frame: dict[str, Any]
     plug_position: tuple[float, ...] | None = None
     plug_attached: bool = False
+    insertion_trial: InsertionTrialPostActionEvidence | None = None
 
     def __post_init__(self) -> None:
         if len(self.joint_positions) != 7 or not all(
@@ -271,7 +293,7 @@ class PostActionEvidence:
             raise ValueError("post-action safety evidence is invalid")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "raw_proposed_action": list(self.raw_proposed_action.values),
             "commanded_action": list(self.commanded_action.values),
             "actual_action": list(self.actual_action.values),
@@ -287,6 +309,9 @@ class PostActionEvidence:
             ),
             "post_action_plug_attached": self.plug_attached,
         }
+        if self.insertion_trial is not None:
+            payload["insertion_trial_post_action"] = self.insertion_trial.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, payload: Any) -> PostActionEvidence:
@@ -319,6 +344,13 @@ class PostActionEvidence:
                     else None
                 ),
                 plug_attached=payload.get("post_action_plug_attached", False),
+                insertion_trial=(
+                    InsertionTrialPostActionEvidence.from_dict(
+                        payload["insertion_trial_post_action"]
+                    )
+                    if "insertion_trial_post_action" in payload
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("post-action evidence is incomplete") from error
@@ -342,6 +374,8 @@ class ControlResult:
     execution_error: str | None = None
     execution_interlock: ControlInterlockEvidence | None = None
     insertion_trial_refresh: InsertionTrialExecutionRefresh | None = None
+    insertion_trial_rollback: InsertionTrialRollbackOutcome | None = None
+    insertion_trial_settlement_failure: JointSettlementAttempt | None = None
 
     def __post_init__(self) -> None:
         blocked = self.status == ControlResultStatus.BLOCKED
@@ -378,6 +412,28 @@ class ControlResult:
             self.execution_error is not None and not self.execution_error
         ) or (
             self.execution_interlock is not None and blocked
+        ) or (
+            isinstance(self.insertion_trial_rollback, InsertionTrialRollbackEvidence)
+            and self.status
+            not in (
+                ControlResultStatus.ROLLED_BACK_TRACKING,
+                ControlResultStatus.ROLLED_BACK_CONTACT,
+                ControlResultStatus.ROLLED_BACK_ATTACHMENT,
+                ControlResultStatus.ROLLED_BACK_PROGRESS,
+                ControlResultStatus.ROLLED_BACK_EXECUTION,
+            )
+        ) or (
+            isinstance(self.insertion_trial_rollback, InsertionTrialRollbackFailure)
+            and not rollback_failed
+        ) or (
+            self.insertion_trial_settlement_failure is not None
+            and (
+                has_post_action
+                or self.status not in (
+                    ControlResultStatus.ROLLED_BACK_EXECUTION,
+                    ControlResultStatus.ROLLBACK_FAILED,
+                )
+            )
         ):
             raise ValueError("control result status and evidence are inconsistent")
         scalars = tuple(
@@ -421,6 +477,14 @@ class ControlResult:
             payload["insertion_trial_refresh"] = (
                 self.insertion_trial_refresh.to_dict()
             )
+        if self.insertion_trial_rollback is not None:
+            payload["insertion_trial_rollback"] = (
+                self.insertion_trial_rollback.to_dict()
+            )
+        if self.insertion_trial_settlement_failure is not None:
+            payload["insertion_trial_settlement_failure"] = (
+                self.insertion_trial_settlement_failure.to_dict()
+            )
         return payload
 
     @classmethod
@@ -439,6 +503,10 @@ class ControlResult:
                 execution_error = str(execution_error)
             execution_interlock = payload.get("execution_interlock")
             insertion_trial_refresh = payload.get("insertion_trial_refresh")
+            insertion_trial_rollback = payload.get("insertion_trial_rollback")
+            insertion_trial_settlement_failure = payload.get(
+                "insertion_trial_settlement_failure"
+            )
             return cls(
                 status=ControlResultStatus(payload["status"]),
                 session_id=str(payload["session"]),
@@ -483,6 +551,20 @@ class ControlResult:
                         insertion_trial_refresh
                     )
                     if insertion_trial_refresh is not None
+                    else None
+                ),
+                insertion_trial_rollback=(
+                    insertion_trial_rollback_outcome_from_dict(
+                        insertion_trial_rollback
+                    )
+                    if insertion_trial_rollback is not None
+                    else None
+                ),
+                insertion_trial_settlement_failure=(
+                    JointSettlementAttempt.from_dict(
+                        insertion_trial_settlement_failure
+                    )
+                    if insertion_trial_settlement_failure is not None
                     else None
                 ),
             )

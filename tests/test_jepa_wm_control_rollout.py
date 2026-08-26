@@ -5,12 +5,14 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import Mock
 
 import numpy as np
 
-from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
+from jepa_wm.action import DroidAction, DroidActionScale, DroidPose, action_between
 from jepa_wm.action_prior import ActionPriorConfig
 from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
+from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_rollout import (
     ControlRolloutReport,
     ControlStepSummary,
@@ -18,11 +20,30 @@ from jepa_wm.control_rollout import (
     OrchestrationOperation,
 )
 from jepa_wm.control_safety import (
+    ACTION_SCALES,
     ControlGateDecision,
     ControlInterlockEvidence,
     SafetyProjectionAttempt,
 )
-from jepa_wm.control_tracking import ActionTrackingDecision
+from jepa_wm.control_tracking import (
+    ActionTrackingDecision,
+    evaluate_action_tracking,
+    tracking_limits_for_policy,
+)
+from jepa_wm.joint_settlement import (
+    GripperSettlementMeasurement,
+    GripperSettlementTrace,
+    GripperTrackedJointSettlementEvidence,
+    JointSettlementEvidence,
+)
+from jepa_wm.insertion_trial import (
+    InsertionTrialBinding,
+    InsertionTrialExecutionRefresh,
+    InsertionTrialPostActionEvidence,
+    InsertionTrialRollbackEvidence,
+    InsertionTrialRollbackFailure,
+    InsertionTrialRollbackFailureReason,
+)
 from jepa_wm.planner import CEMConfig
 from jepa_wm.planner_readiness import FirstActionThresholds
 from jepa_wm.objective_calibration import (
@@ -37,6 +58,8 @@ from jepa_wm.shadow_planning import (
     plan_shadow_candidates,
 )
 from jepa_wm.shadow_safety import ShadowSafetyEvidence
+from jepa_wm.training_artifact import ArtifactIdentity
+from jepa_wm.target_progress import RealizedTargetProgressPolicy
 from sim.control_session import (
     ControlResult,
     ControlResultStatus,
@@ -58,6 +81,280 @@ class ControlRolloutTest(unittest.TestCase):
         )
         self.assertEqual(failure.exit_code, 7)
         self.assertIsNone(failure.step_index)
+
+    def test_reconstructs_insertion_settlement_and_realized_progress(self) -> None:
+        session_id = "insertion-trial-52600-c43"
+        joints = (0.0, -0.5, 0.0, -1.5, 0.0, 1.0, 0.0)
+        start = DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04))
+        target = DroidPose((0.4006, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04))
+        realized = DroidPose((0.4003, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04))
+        action = DroidAction((0.0003, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+        observation = ControlObservation(
+            10,
+            100.0,
+            Path("context.png"),
+            ControlTarget(Path("target.png"), target),
+            Path("/tmp/proposal.pth"),
+            start,
+            DroidAction((0.0,) * 7),
+            43,
+        )
+        response = ProposedControl(
+            10,
+            100.2,
+            (action,) * 3,
+            Path("/tmp/proposal.pth"),
+            "a" * 64,
+        )
+        state = ControlSessionState(
+            session_id,
+            "insertion-held-00",
+            52600,
+            "control-insertion-trial",
+            joints,
+            False,
+            0.0,
+            execution_policy=ControlExecutionPolicy.INSERTION_RESET_TRIAL,
+            plug_position=(0.4, 0.0, 0.5),
+            plug_attached=True,
+            current_gripper_width_m=0.04,
+        )
+        scale = ACTION_SCALES[0]
+        gate = ControlGateDecision(10, start.applied(action), ())
+        proposed_joints = (0.002, *joints[1:])
+        attempt = SafetyProjectionAttempt(scale, gate, 0.002, proposed_joints)
+        settlement = JointSettlementEvidence(
+            0.002,
+            0.0005,
+            2,
+            (0.0004, 0.0003),
+        )
+        actual_action = action_between(start, realized)
+        progress = RealizedTargetProgressPolicy().evaluate(start, target, realized)
+        post_action = PostActionEvidence(
+            action,
+            action,
+            actual_action,
+            evaluate_action_tracking(
+                action,
+                actual_action,
+                tracking_limits_for_policy(
+                    ControlExecutionPolicy.INSERTION_RESET_TRIAL
+                ),
+            ),
+            realized,
+            proposed_joints,
+            0.0,
+            0.0,
+            False,
+            {"path": "/tmp/post.png", "shape": [512, 512, 4]},
+            plug_position=(0.4, 0.0, 0.5),
+            plug_attached=True,
+            insertion_trial=InsertionTrialPostActionEvidence(
+                settlement,
+                progress,
+            ),
+        )
+        result = ControlResult(
+            ControlResultStatus.APPLIED,
+            session_id,
+            gate,
+            (attempt,),
+            scale,
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            post_action,
+            execution_interlock=ControlInterlockEvidence(0.0, False),
+            insertion_trial_refresh=InsertionTrialExecutionRefresh(
+                100.3,
+                state.require_safety_snapshot(),
+                start,
+            ),
+        )
+        binding = InsertionTrialBinding(
+            session_id,
+            "insertion-safety-52600-c43",
+            9,
+            10,
+            ArtifactIdentity(Path("/tmp/proposal.pth"), "a" * 64),
+            response.actions,
+            scale,
+        )
+        session = Mock(session_id=session_id)
+        session.load_capture.return_value = (observation, state)
+        session.load_response.return_value = response
+        session.load_result.return_value = result
+        session.load_insertion_trial_binding.return_value = binding
+        session.shadow_path = Path("/tmp/no-shadow")
+        session.shadow_safety_path = Path("/tmp/no-shadow-safety")
+
+        summary = ControlStepSummary.from_session(session)
+
+        self.assertEqual(
+            summary.result.post_action.insertion_trial.joint_settlement,
+            settlement,
+        )
+        self.assertEqual(
+            summary.result.post_action.insertion_trial.realized_target_progress,
+            progress,
+        )
+
+        for unsafe_post_action in (
+            replace(post_action, collision_detected=True),
+            replace(post_action, contact_force_newtons=2.1),
+            replace(post_action, plug_attached=False),
+        ):
+            with self.subTest(unsafe=unsafe_post_action):
+                session.load_result.return_value = replace(
+                    result,
+                    post_action=unsafe_post_action,
+                )
+                with self.assertRaisesRegex(ValueError, "status is inconsistent"):
+                    ControlStepSummary.from_session(session)
+
+        drifted_joints = (0.0026, *proposed_joints[1:])
+        session.load_result.return_value = replace(
+            result,
+            post_action=replace(
+                post_action,
+                joint_positions=drifted_joints,
+                maximum_joint_tracking_error_rad=0.0006,
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "status is inconsistent"):
+            ControlStepSummary.from_session(session)
+
+        session.load_result.return_value = replace(
+            result,
+            post_action=replace(
+                post_action,
+                insertion_trial=replace(
+                    post_action.insertion_trial,
+                    joint_settlement=replace(
+                        settlement,
+                        requested_joint_motion_radians=0.0019,
+                    ),
+                ),
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "post-action evidence is inconsistent"):
+            ControlStepSummary.from_session(session)
+
+        session.load_result.return_value = replace(
+            result,
+            post_action=replace(
+                post_action,
+                insertion_trial=replace(
+                    post_action.insertion_trial,
+                    realized_target_progress=replace(
+                        progress,
+                        realized_translation_error_meters=0.0004,
+                    ),
+                ),
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "post-action evidence is inconsistent"):
+            ControlStepSummary.from_session(session)
+
+        insufficient_pose = DroidPose(
+            (0.4001, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04)
+        )
+        insufficient_action = action_between(start, insufficient_pose)
+        insufficient_progress = RealizedTargetProgressPolicy().evaluate(
+            start, target, insufficient_pose
+        )
+        rollback_settlement = JointSettlementEvidence(
+            0.002,
+            0.0005,
+            2,
+            (0.0002, 0.0001),
+        )
+        rollback_failure = InsertionTrialRollbackFailure(
+            proposed_joints,
+            joints,
+            proposed_joints,
+            True,
+            InsertionTrialRollbackFailureReason.DRIVE_COMMAND_REJECTED,
+            ControlInterlockEvidence(0.0, False),
+            False,
+            "RuntimeError: drive command rejected",
+        )
+        session.load_result.return_value = replace(
+            result,
+            status=ControlResultStatus.ROLLBACK_FAILED,
+            post_action=replace(post_action, collision_detected=True),
+            execution_error="RuntimeError: rollback failed",
+            insertion_trial_rollback=rollback_failure,
+        )
+        self.assertEqual(
+            ControlStepSummary.from_session(session).result.status,
+            ControlResultStatus.ROLLBACK_FAILED,
+        )
+        rolled_back_post = replace(
+            post_action,
+            actual_action=insufficient_action,
+            tracking=evaluate_action_tracking(
+                action,
+                insufficient_action,
+                tracking_limits_for_policy(
+                    ControlExecutionPolicy.INSERTION_RESET_TRIAL
+                ),
+            ),
+            pose=insufficient_pose,
+            insertion_trial=InsertionTrialPostActionEvidence(
+                settlement,
+                insufficient_progress,
+            ),
+        )
+        rolled_back_result = replace(
+            result,
+            status=ControlResultStatus.ROLLED_BACK_PROGRESS,
+            post_action=rolled_back_post,
+            insertion_trial_rollback=InsertionTrialRollbackEvidence(
+                proposed_joints,
+                joints,
+                (0.0001, *joints[1:]),
+                GripperTrackedJointSettlementEvidence(
+                    rollback_settlement,
+                    GripperSettlementMeasurement(
+                        0.04,
+                        0.04,
+                        GripperSettlementTrace((0.0, 0.0), 1e-3),
+                    ),
+                ),
+                True,
+            ),
+        )
+        session.load_result.return_value = rolled_back_result
+
+        rolled_back = ControlStepSummary.from_session(session)
+
+        self.assertFalse(
+            rolled_back.result.post_action.insertion_trial.realized_target_progress.passed
+        )
+        self.assertEqual(
+            rolled_back.result.insertion_trial_rollback.joint_settlement,
+            rollback_settlement,
+        )
+        rollback = rolled_back_result.insertion_trial_rollback
+        session.load_result.return_value = replace(
+            rolled_back_result,
+            insertion_trial_rollback=replace(
+                rollback,
+                settlement=replace(
+                    rollback.settlement,
+                    gripper=replace(
+                        rollback.settlement.gripper,
+                        target_width_meters=0.05,
+                        end_width_meters=0.05,
+                    ),
+                ),
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "gripper settlement"):
+            ControlStepSummary.from_session(session)
 
     def _write_step(
         self,

@@ -26,6 +26,11 @@ from jepa_wm.grasp_task import (
 )
 from jepa_wm.grasp_contract import GRASP_TASK_ID
 from jepa_wm.control_safety import SimulatorSafetyLimits
+from jepa_wm.insertion_trial import (
+    InsertionTrialOutcomeObservation,
+    InsertionTrialRollbackEvidence,
+    InsertionTrialRollbackFailure,
+)
 from jepa_wm.shadow_planning import ShadowSearchEvidence
 from sim.control_session import (
     ControlResult,
@@ -215,15 +220,197 @@ class ControlStepSummary:
                 raise ValueError(
                     f"insertion trial execution interlock is missing: {session.session_id}"
                 )
-            if result.insertion_trial_refresh is not None:
+            if binding.trial_policy is not None:
+                if (
+                    result.insertion_trial_refresh is None
+                    or result.insertion_trial_refresh.live_pose is None
+                ):
+                    raise ValueError(
+                        f"insertion trial live-pose refresh is missing: {session.session_id}"
+                    )
                 observation, response = result.insertion_trial_refresh.authorize(
                     observation,
                     response,
                     state.require_safety_snapshot(),
                 )
-        elif result.insertion_trial_refresh is not None:
+            elif result.insertion_trial_refresh is not None:
+                observation, response = result.insertion_trial_refresh.authorize(
+                    observation,
+                    response,
+                    state.require_safety_snapshot(),
+                )
+            if result.post_action is not None:
+                trial_evidence = result.post_action.insertion_trial
+                if binding.trial_policy is None:
+                    if trial_evidence is not None:
+                        raise ValueError(
+                            f"legacy insertion trial has unexpected current evidence: {session.session_id}"
+                        )
+                elif observation.target_pose is None or trial_evidence is None:
+                    raise ValueError(
+                        f"insertion trial post-action evidence is missing: {session.session_id}"
+                    )
+                else:
+                    selected_attempt = next(
+                        attempt
+                        for attempt in result.projection_attempts
+                        if attempt.scale == result.selected_action_scale
+                        and attempt.gate.passed
+                    )
+                    final_joint_error = float(
+                        np.max(
+                            np.abs(
+                                np.asarray(result.post_action.joint_positions)
+                                - np.asarray(selected_attempt.proposed_joint_positions)
+                            )
+                        )
+                    )
+                    try:
+                        trial_evidence.validate(
+                            binding.trial_policy,
+                            expected_requested_motion_radians=(
+                                selected_attempt.maximum_joint_delta_rad
+                            ),
+                            initial_pose=observation.pose,
+                            target_pose=observation.target_pose,
+                            realized_pose=result.post_action.pose,
+                            final_joint_tracking_error_radians=final_joint_error,
+                        )
+                    except ValueError as error:
+                        raise ValueError(
+                            f"insertion trial post-action evidence is inconsistent: {session.session_id}"
+                        ) from error
+                    if not np.isclose(
+                        result.post_action.maximum_joint_tracking_error_rad,
+                        final_joint_error,
+                        rtol=0.0,
+                        atol=1e-12,
+                    ):
+                        raise ValueError(
+                            f"insertion trial final joint tracking is inconsistent: {session.session_id}"
+                        )
+                    expected_outcome = (
+                        ControlResultStatus.from_insertion_rollback_reason(
+                            binding.trial_policy.rollback_reason(
+                                trial_evidence,
+                                InsertionTrialOutcomeObservation(
+                                    final_joint_error,
+                                    result.post_action.tracking.passed,
+                                    max(
+                                        result.post_action.contact_force_newtons,
+                                        result.execution_interlock.maximum_contact_force_newtons,
+                                    ),
+                                    result.post_action.collision_detected
+                                    or result.execution_interlock.collision_detected,
+                                    result.post_action.plug_attached,
+                                    limits.maximum_contact_force_newtons,
+                                    state.plug_attached,
+                                ),
+                            )
+                        )
+                    )
+                    if (
+                        result.status is not expected_outcome
+                        and not (
+                            expected_outcome is not ControlResultStatus.APPLIED
+                            and result.status is ControlResultStatus.ROLLBACK_FAILED
+                            and isinstance(
+                                result.insertion_trial_rollback,
+                                InsertionTrialRollbackFailure,
+                            )
+                        )
+                    ):
+                        raise ValueError(
+                            f"insertion trial status is inconsistent: {session.session_id}"
+                        )
+            if result.insertion_trial_settlement_failure is not None:
+                if binding.trial_policy is None:
+                    raise ValueError(
+                        f"legacy insertion trial has unexpected settlement failure: {session.session_id}"
+                    )
+                selected_attempt = next(
+                    attempt
+                    for attempt in result.projection_attempts
+                    if attempt.scale == result.selected_action_scale
+                    and attempt.gate.passed
+                )
+                result.insertion_trial_settlement_failure.validate(
+                    binding.trial_policy.joint_settlement,
+                    expected_requested_motion_radians=(
+                        selected_attempt.maximum_joint_delta_rad
+                    ),
+                    expected_target_joint_positions=(
+                        selected_attempt.proposed_joint_positions
+                    ),
+                )
+            if binding.trial_policy is None:
+                if result.insertion_trial_rollback is not None:
+                    raise ValueError(
+                        f"legacy insertion trial has unexpected rollback evidence: {session.session_id}"
+                    )
+            elif isinstance(
+                result.insertion_trial_rollback,
+                InsertionTrialRollbackEvidence,
+            ):
+                result.insertion_trial_rollback.validate(
+                    binding.trial_policy.joint_settlement,
+                    expected_target_joint_positions=tuple(
+                        result.insertion_trial_refresh.live_state.joint_positions
+                    ),
+                    expected_attachment=state.plug_attached,
+                    expected_target_gripper_width_meters=(
+                        result.insertion_trial_refresh.live_state.gripper_width_m
+                    ),
+                    expected_gripper_error_meters=(
+                        binding.trial_policy.rollback_gripper_error_meters
+                    ),
+                )
+            elif isinstance(
+                result.insertion_trial_rollback,
+                InsertionTrialRollbackFailure,
+            ):
+                if result.status is not ControlResultStatus.ROLLBACK_FAILED:
+                    raise ValueError(
+                        f"insertion trial rollback failure status is invalid: {session.session_id}"
+                    )
+                result.insertion_trial_rollback.validate(
+                    binding.trial_policy.joint_settlement,
+                    expected_target_joint_positions=tuple(
+                        result.insertion_trial_refresh.live_state.joint_positions
+                    ),
+                    expected_attachment=state.plug_attached,
+                    maximum_contact_force_newtons=(
+                        limits.maximum_contact_force_newtons
+                    ),
+                    expected_target_gripper_width_meters=(
+                        result.insertion_trial_refresh.live_state.gripper_width_m
+                    ),
+                    expected_gripper_error_meters=(
+                        binding.trial_policy.rollback_gripper_error_meters
+                    ),
+                )
+            elif result.status in (
+                ControlResultStatus.ROLLED_BACK_TRACKING,
+                ControlResultStatus.ROLLED_BACK_CONTACT,
+                ControlResultStatus.ROLLED_BACK_ATTACHMENT,
+                ControlResultStatus.ROLLED_BACK_PROGRESS,
+                ControlResultStatus.ROLLED_BACK_EXECUTION,
+                ControlResultStatus.ROLLBACK_FAILED,
+            ):
+                raise ValueError(
+                    f"insertion trial rollback settlement is missing: {session.session_id}"
+                )
+        elif (
+            result.insertion_trial_refresh is not None
+            or result.insertion_trial_rollback is not None
+            or result.insertion_trial_settlement_failure is not None
+            or (
+                result.post_action is not None
+                and result.post_action.insertion_trial is not None
+            )
+        ):
             raise ValueError(
-                f"non-insertion result has execution refresh: {session.session_id}"
+                f"non-insertion result has insertion evidence: {session.session_id}"
             )
         timing = ControlStepTiming.from_step(observation, response, result)
         if (

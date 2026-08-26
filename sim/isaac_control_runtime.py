@@ -6,11 +6,12 @@ from dataclasses import dataclass, field
 from math import isfinite
 from typing import Any
 
+from jepa_wm.action import DroidPose
 from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimits
 from jepa_wm.direct_safety import ControlSafetySnapshot
 from sim.isaac_demo_runtime import Actuators, PlugAttachment, create_actuators
 from sim.isaac_demo_runtime import ContactReading
-from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH
+from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH, world_pose
 
 
 CONTACT_SENSOR_NAME = "QuantisControlContact"
@@ -84,6 +85,26 @@ class LiveContactInterlock:
         )
 
 
+@dataclass
+class LiveInsertionInterlock:
+    """Poll contact and fail immediately if the expected load detaches."""
+
+    contact: LiveContactInterlock
+    attachment: PlugAttachment
+    expected_attachment: bool
+    operation: str
+
+    def observe(self) -> ContactReading:
+        reading = self.contact.observe()
+        if self.attachment.attached is not self.expected_attachment:
+            raise RuntimeError(f"{self.operation} attachment state changed")
+        return reading
+
+    @property
+    def evidence(self) -> ControlInterlockEvidence:
+        return self.contact.evidence
+
+
 @dataclass(frozen=True)
 class LiveControlRuntime:
     """Session-bound Isaac objects whose tensor handles can be refreshed."""
@@ -99,6 +120,7 @@ class LiveControlRuntime:
 class SynchronizedInsertionRuntime:
     runtime: LiveControlRuntime
     safety: ControlSafetySnapshot
+    pose: DroidPose | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +144,34 @@ def _control_safety_snapshot(
         contact_force_newtons=contact_force,
         collision_detected=collision_detected,
         plug_attached=attachment.attached,
+    )
+
+
+def _control_safety_and_pose(
+    runtime: LiveControlRuntime,
+) -> tuple[ControlSafetySnapshot, DroidPose]:
+    current = runtime.actuators.actual_command()
+    collision_detected, contact_force = read_control_contact(runtime.sensor)
+    plug_position, _ = runtime.attachment.world_pose()
+    hand_position, hand_orientation = world_pose(runtime.attachment.hand_prim)
+    robot = runtime.stage.GetPrimAtPath(ROBOT_PATH)
+    base_position, base_orientation = world_pose(robot)
+    return (
+        ControlSafetySnapshot(
+            joint_positions=tuple(float(value) for value in current.arm_positions),
+            gripper_width_m=current.gripper_width_m,
+            plug_position=tuple(float(value) for value in plug_position),
+            contact_force_newtons=contact_force,
+            collision_detected=collision_detected,
+            plug_attached=runtime.attachment.attached,
+        ),
+        DroidPose.from_world_poses(
+            base_position,
+            base_orientation,
+            hand_position,
+            hand_orientation,
+            current.gripper_width_m,
+        ),
     )
 
 
@@ -189,6 +239,7 @@ async def _synchronized_insertion_runtime(
     *,
     operation: str,
     validate_resumed: Any | None = None,
+    include_pose: bool = False,
 ) -> SynchronizedInsertionRuntime:
     """Own the shared paused insertion refresh and interlock lifecycle."""
 
@@ -211,18 +262,29 @@ async def _synchronized_insertion_runtime(
         )
         interlock.observe()
 
+    read = (
+        _control_safety_and_pose
+        if include_pose
+        else lambda value: (
+            _control_safety_snapshot(
+                value.actuators,
+                value.attachment,
+                value.sensor,
+            ),
+            None,
+        )
+    )
     runtime, live = await _synchronized_live_read(
         timeline,
         advance,
         runtime,
-        lambda value: _control_safety_snapshot(
-            value.actuators, value.attachment, value.sensor
-        ),
+        read,
         refresh=refresh_live_control_runtime,
         observe_after_advance=observe_resumed_state,
         observe_safety=observe_safety,
     )
-    return SynchronizedInsertionRuntime(runtime, live)
+    safety, pose = live
+    return SynchronizedInsertionRuntime(runtime, safety, pose)
 
 
 async def synchronized_insertion_safety_snapshot(
@@ -243,6 +305,7 @@ async def synchronized_insertion_safety_snapshot(
         limits,
         operation=operation,
         validate_resumed=captured.validate_contact_continuity,
+        include_pose=True,
     )
     try:
         synchronized.safety.validate_continuity(captured, limits)

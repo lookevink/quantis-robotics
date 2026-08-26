@@ -12,6 +12,7 @@ from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
 from jepa_wm.control_safety import (
     ACTION_SCALES,
+    ControlInterlockEvidence,
     ControlGateDecision,
     ControlGateReason,
     ORIENTATION_HOLD_ACTION_SCALES,
@@ -24,9 +25,12 @@ from jepa_wm.direct_safety import (
 from jepa_wm.insertion_trial import (
     InsertionTrialBinding,
     InsertionTrialExecutionRefresh,
+    InsertionTrialRollbackFailure,
+    InsertionTrialRollbackFailureReason,
     InsertionTrialSourceEvidence,
     build_insertion_trial_response,
 )
+from jepa_wm.joint_settlement import JointSettlementAttempt
 from jepa_wm.training_artifact import ArtifactIdentity
 from jepa_wm.trial_equivalence import ControlTrialContext, TrialResetState
 from sim.control_session import (
@@ -113,6 +117,47 @@ def _source() -> InsertionTrialSourceEvidence:
 
 
 class InsertionTrialBindingTest(unittest.TestCase):
+    def test_control_result_round_trips_typed_settlement_and_rollback_failures(self) -> None:
+        gate = ControlGateDecision(10, _observation(10).pose.applied(_ACTIONS[0]), ())
+        attempt = SafetyProjectionAttempt(ACTION_SCALES[0], gate, 0.002, _JOINTS)
+        settlement_failure = JointSettlementAttempt(
+            0.002,
+            0.0005,
+            (0.001,) * 32,
+            _JOINTS,
+        )
+        rollback_failure = InsertionTrialRollbackFailure(
+            _JOINTS,
+            _JOINTS,
+            _JOINTS,
+            True,
+            InsertionTrialRollbackFailureReason.DRIVE_COMMAND_REJECTED,
+            ControlInterlockEvidence(0.0, False),
+            False,
+            "RuntimeError: rollback did not settle",
+            None,
+        )
+        result = ControlResult(
+            ControlResultStatus.ROLLBACK_FAILED,
+            "insertion-trial",
+            gate,
+            (attempt,),
+            ACTION_SCALES[0],
+            0.1,
+            0.0,
+            0.0,
+            0.0,
+            execution_error="RuntimeError: motion and rollback failed",
+            insertion_trial_rollback=rollback_failure,
+            insertion_trial_settlement_failure=settlement_failure,
+        )
+
+        self.assertEqual(ControlResult.from_dict(result.to_dict()), result)
+        contradictory = result.to_dict()
+        contradictory["insertion_trial_rollback"]["joint_settlement"] = {}
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            ControlResult.from_dict(contradictory)
+
     def test_refreshes_only_timing_after_live_state_continuity(self) -> None:
         captured = _observation(10)
         response = ProposedControl(
@@ -130,7 +175,8 @@ class InsertionTrialBindingTest(unittest.TestCase):
             False,
             True,
         )
-        refresh = InsertionTrialExecutionRefresh(107.5, captured_state)
+        live_pose = DroidPose((0.4001, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04))
+        refresh = InsertionTrialExecutionRefresh(107.5, captured_state, live_pose)
 
         observation, authorized = refresh.authorize(
             captured,
@@ -140,7 +186,7 @@ class InsertionTrialBindingTest(unittest.TestCase):
 
         self.assertEqual(observation.captured_at_unix_seconds, 107.5)
         self.assertEqual(authorized.created_at_unix_seconds, 107.5)
-        self.assertEqual(observation.pose, captured.pose)
+        self.assertEqual(observation.pose, live_pose)
         self.assertEqual(authorized.actions, response.actions)
         self.assertEqual(
             InsertionTrialExecutionRefresh.from_dict(refresh.to_dict()),
@@ -194,6 +240,21 @@ class InsertionTrialBindingTest(unittest.TestCase):
         self.assertEqual(response.actions, _ACTIONS)
         self.assertEqual(InsertionTrialBinding.from_dict(binding.to_dict()), binding)
         self.assertFalse(binding.production_authority_granted)
+        self.assertIsNotNone(binding.trial_policy)
+
+        for invalid_gripper_limit in (True, 0.1):
+            invalid_policy = binding.to_dict()
+            invalid_policy["trial_policy"][
+                "rollback_gripper_error_meters"
+            ] = invalid_gripper_limit
+            with self.assertRaises(ValueError):
+                InsertionTrialBinding.from_dict(invalid_policy)
+
+        legacy_payload = binding.to_dict()
+        del legacy_payload["trial_policy"]
+        self.assertIsNone(
+            InsertionTrialBinding.from_dict(legacy_payload).trial_policy
+        )
 
         capped = replace(
             binding,

@@ -4,18 +4,32 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum
-from math import isfinite
+from math import isclose, isfinite
 from pathlib import Path
 from time import time
-from typing import Any, Mapping
+from typing import Any, Mapping, Union
 
-from jepa_wm.action import DroidAction, DroidActionScale
+from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
-from jepa_wm.control_safety import insertion_projection_policy_for_scale
+from jepa_wm.control_safety import (
+    ControlInterlockEvidence,
+    ProjectedTargetProgressPolicy,
+    insertion_projection_policy_for_scale,
+)
+from jepa_wm.target_progress import (
+    RealizedTargetProgressDecision,
+    RealizedTargetProgressPolicy,
+)
 from jepa_wm.direct_safety import (
     ControlSafetySnapshot,
     DirectInsertionSafetyEvidence,
+)
+from jepa_wm.joint_settlement import (
+    GripperTrackedJointSettlementAttempt,
+    GripperTrackedJointSettlementEvidence,
+    JointSettlementEvidence,
+    TrackedJointSettlementPolicy,
 )
 from jepa_wm.training_artifact import ArtifactIdentity
 from jepa_wm.trial_equivalence import ControlTrialContext, validate_reset_equivalence
@@ -24,10 +38,52 @@ from sim.recording import validate_recording_id
 
 INSERTION_TRIAL_SCHEMA = "quantis.jepa_wm_insertion_trial.v1"
 INSERTION_TRIAL_REFRESH_SCHEMA = "quantis.jepa_wm_insertion_trial_refresh.v1"
+INSERTION_ROLLBACK_GRIPPER_ERROR_METERS = 1e-3
 
 
 class InsertionTrialAuthority(str, Enum):
     RESET_TRIAL_ONLY = "reset_trial_only"
+
+
+class InsertionTrialRollbackReason(str, Enum):
+    TRACKING = "tracking"
+    CONTACT = "contact"
+    ATTACHMENT = "attachment"
+    PROGRESS = "progress"
+
+
+@dataclass(frozen=True)
+class InsertionTrialOutcomeObservation:
+    final_joint_tracking_error_radians: float
+    action_tracking_passed: bool
+    maximum_contact_force_newtons: float
+    collision_detected: bool
+    plug_attached: bool
+    contact_force_limit_newtons: float
+    expected_attachment: bool
+
+    def __post_init__(self) -> None:
+        if (
+            not all(
+                isfinite(value) and value >= 0.0
+                for value in (
+                    self.final_joint_tracking_error_radians,
+                    self.maximum_contact_force_newtons,
+                    self.contact_force_limit_newtons,
+                )
+            )
+            or self.contact_force_limit_newtons <= 0.0
+            or not all(
+                isinstance(value, bool)
+                for value in (
+                    self.action_tracking_passed,
+                    self.collision_detected,
+                    self.plug_attached,
+                    self.expected_attachment,
+                )
+            )
+        ):
+            raise ValueError("insertion trial outcome observation is invalid")
 
 
 @dataclass(frozen=True)
@@ -49,6 +105,7 @@ class InsertionTrialExecutionRefresh:
 
     refreshed_at_unix_seconds: float
     live_state: ControlSafetySnapshot
+    live_pose: DroidPose | None = None
 
     def __post_init__(self) -> None:
         if not isfinite(self.refreshed_at_unix_seconds):
@@ -70,6 +127,7 @@ class InsertionTrialExecutionRefresh:
             replace(
                 captured,
                 captured_at_unix_seconds=self.refreshed_at_unix_seconds,
+                pose=(self.live_pose if self.live_pose is not None else captured.pose),
             ),
             replace(
                 response,
@@ -78,11 +136,14 @@ class InsertionTrialExecutionRefresh:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema": INSERTION_TRIAL_REFRESH_SCHEMA,
             "refreshed_at_unix_seconds": self.refreshed_at_unix_seconds,
             "live_state": self.live_state.to_dict(),
         }
+        if self.live_pose is not None:
+            payload["live_pose"] = list(self.live_pose.values)
+        return payload
 
     @classmethod
     def from_dict(cls, payload: Any) -> InsertionTrialExecutionRefresh:
@@ -95,11 +156,464 @@ class InsertionTrialExecutionRefresh:
             return cls(
                 float(payload["refreshed_at_unix_seconds"]),
                 ControlSafetySnapshot.from_dict(payload["live_state"]),
+                (
+                    DroidPose(tuple(payload["live_pose"]))
+                    if "live_pose" in payload
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(
                 "insertion trial execution refresh is incomplete"
             ) from error
+
+
+@dataclass(frozen=True)
+class InsertionTrialPolicy:
+    joint_settlement: TrackedJointSettlementPolicy = TrackedJointSettlementPolicy()
+    realized_progress: RealizedTargetProgressPolicy = RealizedTargetProgressPolicy()
+    rollback_gripper_error_meters: float = (
+        INSERTION_ROLLBACK_GRIPPER_ERROR_METERS
+    )
+
+    def __post_init__(self) -> None:
+        if (
+            not isfinite(self.rollback_gripper_error_meters)
+            or not isclose(
+                self.rollback_gripper_error_meters,
+                INSERTION_ROLLBACK_GRIPPER_ERROR_METERS,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+        ):
+            raise ValueError("insertion rollback gripper error is invalid")
+
+    @property
+    def projected_progress(self) -> ProjectedTargetProgressPolicy:
+        return ProjectedTargetProgressPolicy(
+            self.realized_progress.minimum_translation_error_reduction_fraction
+        )
+
+    def rollback_reason(
+        self,
+        evidence: InsertionTrialPostActionEvidence,
+        observation: InsertionTrialOutcomeObservation,
+    ) -> InsertionTrialRollbackReason | None:
+        """Apply the one canonical fail-closed insertion outcome priority."""
+
+        if (
+            not evidence.final_joint_tracking_passed(
+                observation.final_joint_tracking_error_radians
+            )
+            or not observation.action_tracking_passed
+        ):
+            return InsertionTrialRollbackReason.TRACKING
+        if (
+            observation.collision_detected
+            or observation.maximum_contact_force_newtons
+            > observation.contact_force_limit_newtons
+        ):
+            return InsertionTrialRollbackReason.CONTACT
+        if observation.plug_attached is not observation.expected_attachment:
+            return InsertionTrialRollbackReason.ATTACHMENT
+        if not evidence.realized_target_progress.passed:
+            return InsertionTrialRollbackReason.PROGRESS
+        return None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "joint_settlement": self.joint_settlement.to_dict(),
+            "realized_progress": self.realized_progress.to_dict(),
+            "rollback_gripper_error_meters": self.rollback_gripper_error_meters,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> InsertionTrialPolicy:
+        if not isinstance(payload, Mapping):
+            raise ValueError("insertion trial policy must be an object")
+        gripper_error = payload.get(
+            "rollback_gripper_error_meters",
+            INSERTION_ROLLBACK_GRIPPER_ERROR_METERS,
+        )
+        if isinstance(gripper_error, bool) or not isinstance(
+            gripper_error, (int, float)
+        ):
+            raise ValueError("insertion rollback gripper error must be numeric")
+        try:
+            return cls(
+                TrackedJointSettlementPolicy.from_dict(
+                    payload["joint_settlement"]
+                ),
+                RealizedTargetProgressPolicy.from_dict(
+                    payload["realized_progress"]
+                ),
+                float(gripper_error),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("insertion trial policy is incomplete") from error
+
+
+@dataclass(frozen=True)
+class InsertionTrialPostActionEvidence:
+    joint_settlement: JointSettlementEvidence
+    realized_target_progress: RealizedTargetProgressDecision
+
+    def validate(
+        self,
+        policy: InsertionTrialPolicy,
+        *,
+        expected_requested_motion_radians: float,
+        initial_pose: DroidPose,
+        target_pose: DroidPose,
+        realized_pose: DroidPose,
+        final_joint_tracking_error_radians: float,
+    ) -> None:
+        self.joint_settlement.validate(
+            policy.joint_settlement,
+            expected_requested_motion_radians=expected_requested_motion_radians,
+        )
+        if (
+            self.realized_target_progress
+            != policy.realized_progress.evaluate(
+                initial_pose,
+                target_pose,
+                realized_pose,
+            )
+            or not isfinite(final_joint_tracking_error_radians)
+        ):
+            raise ValueError("insertion trial post-action evidence is inconsistent")
+
+    def final_joint_tracking_passed(
+        self,
+        final_joint_tracking_error_radians: float,
+    ) -> bool:
+        if (
+            not isfinite(final_joint_tracking_error_radians)
+            or final_joint_tracking_error_radians < 0.0
+        ):
+            raise ValueError("final joint tracking error is invalid")
+        return (
+            final_joint_tracking_error_radians
+            <= self.joint_settlement.required_tracking_error_radians
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "joint_settlement": self.joint_settlement.to_dict(),
+            "realized_target_progress": self.realized_target_progress.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> InsertionTrialPostActionEvidence:
+        if not isinstance(payload, Mapping):
+            raise ValueError("insertion trial post-action evidence must be an object")
+        try:
+            return cls(
+                JointSettlementEvidence.from_dict(payload["joint_settlement"]),
+                RealizedTargetProgressDecision.from_dict(
+                    payload["realized_target_progress"]
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "insertion trial post-action evidence is incomplete"
+            ) from error
+
+
+@dataclass(frozen=True)
+class InsertionTrialRollbackEvidence:
+    start_joint_positions: tuple[float, ...]
+    target_joint_positions: tuple[float, ...]
+    end_joint_positions: tuple[float, ...]
+    settlement: GripperTrackedJointSettlementEvidence
+    plug_attached: bool
+
+    def __post_init__(self) -> None:
+        positions = (
+            self.start_joint_positions,
+            self.target_joint_positions,
+            self.end_joint_positions,
+        )
+        if (
+            any(len(values) != 7 for values in positions)
+            or not all(isfinite(value) for values in positions for value in values)
+            or not isinstance(self.plug_attached, bool)
+            or not isinstance(
+                self.settlement,
+                GripperTrackedJointSettlementEvidence,
+            )
+        ):
+            raise ValueError("insertion trial rollback evidence is invalid")
+
+    def validate(
+        self,
+        policy: TrackedJointSettlementPolicy,
+        *,
+        expected_target_joint_positions: tuple[float, ...],
+        expected_attachment: bool,
+        expected_target_gripper_width_meters: float,
+        expected_gripper_error_meters: float,
+    ) -> None:
+        requested_motion = max(
+            abs(start - target)
+            for start, target in zip(
+                self.start_joint_positions,
+                self.target_joint_positions,
+            )
+        )
+        final_error = max(
+            abs(end - target)
+            for end, target in zip(
+                self.end_joint_positions,
+                self.target_joint_positions,
+            )
+        )
+        self.settlement.validate(
+            policy,
+            expected_requested_motion_radians=requested_motion,
+            expected_target_gripper_width_meters=(
+                expected_target_gripper_width_meters
+            ),
+            expected_gripper_error_meters=expected_gripper_error_meters,
+        )
+        if (
+            self.target_joint_positions != expected_target_joint_positions
+            or self.plug_attached is not expected_attachment
+            or final_error
+            > self.settlement.joint.required_tracking_error_radians
+        ):
+            raise ValueError("insertion trial rollback evidence is inconsistent")
+
+    @property
+    def joint_settlement(self) -> JointSettlementEvidence:
+        return self.settlement.joint
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": "settled",
+            "start_joint_positions": list(self.start_joint_positions),
+            "target_joint_positions": list(self.target_joint_positions),
+            "end_joint_positions": list(self.end_joint_positions),
+            **self.settlement.to_dict(),
+            "plug_attached": self.plug_attached,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> InsertionTrialRollbackEvidence:
+        if not isinstance(payload, Mapping):
+            raise ValueError("insertion trial rollback evidence must be an object")
+        try:
+            return cls(
+                tuple(float(value) for value in payload["start_joint_positions"]),
+                tuple(float(value) for value in payload["target_joint_positions"]),
+                tuple(float(value) for value in payload["end_joint_positions"]),
+                GripperTrackedJointSettlementEvidence.from_dict(payload),
+                payload["plug_attached"],
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("insertion trial rollback evidence is incomplete") from error
+
+
+class InsertionTrialRollbackFailureReason(str, Enum):
+    DRIVE_COMMAND_REJECTED = "drive_command_rejected"
+    SETTLEMENT_TIMEOUT = "settlement_timeout"
+    SAFETY_INTERLOCK = "safety_interlock"
+    ATTACHMENT_CHANGED = "attachment_changed"
+
+    @classmethod
+    def from_evidence(
+        cls,
+        *,
+        settlement_attempt: GripperTrackedJointSettlementAttempt | None,
+        plug_attached: bool,
+        expected_attachment: bool,
+        interlock: ControlInterlockEvidence,
+        maximum_contact_force_newtons: float,
+        drive_command_accepted: bool,
+    ) -> InsertionTrialRollbackFailureReason:
+        """Select the sole fail-closed rollback-failure priority."""
+
+        if plug_attached is not expected_attachment:
+            return cls.ATTACHMENT_CHANGED
+        if (
+            interlock.collision_detected
+            or interlock.maximum_contact_force_newtons
+            > maximum_contact_force_newtons
+        ):
+            return cls.SAFETY_INTERLOCK
+        if settlement_attempt is not None:
+            return cls.SETTLEMENT_TIMEOUT
+        if not drive_command_accepted:
+            return cls.DRIVE_COMMAND_REJECTED
+        raise ValueError("rollback failure has no supported typed reason")
+
+
+@dataclass(frozen=True)
+class InsertionTrialRollbackFailure:
+    """Raw terminal rollback state when reset verification could not complete."""
+
+    start_joint_positions: tuple[float, ...]
+    target_joint_positions: tuple[float, ...]
+    end_joint_positions: tuple[float, ...]
+    plug_attached: bool
+    reason: InsertionTrialRollbackFailureReason
+    interlock: ControlInterlockEvidence
+    drive_command_accepted: bool
+    error: str
+    settlement_attempt: GripperTrackedJointSettlementAttempt | None = None
+
+    def __post_init__(self) -> None:
+        positions = (
+            self.start_joint_positions,
+            self.target_joint_positions,
+            self.end_joint_positions,
+        )
+        if (
+            any(len(values) != 7 for values in positions)
+            or not all(isfinite(value) for values in positions for value in values)
+            or not isinstance(self.plug_attached, bool)
+            or not isinstance(self.reason, InsertionTrialRollbackFailureReason)
+            or not isinstance(self.interlock, ControlInterlockEvidence)
+            or not isinstance(self.drive_command_accepted, bool)
+            or not self.error
+        ):
+            raise ValueError("insertion trial rollback failure is invalid")
+
+    def validate(
+        self,
+        policy: TrackedJointSettlementPolicy,
+        *,
+        expected_target_joint_positions: tuple[float, ...],
+        expected_attachment: bool,
+        maximum_contact_force_newtons: float,
+        expected_target_gripper_width_meters: float,
+        expected_gripper_error_meters: float,
+    ) -> None:
+        if (
+            not isfinite(maximum_contact_force_newtons)
+            or maximum_contact_force_newtons <= 0.0
+        ):
+            raise ValueError("rollback failure force limit is invalid")
+        if (
+            not isfinite(expected_gripper_error_meters)
+            or expected_gripper_error_meters <= 0.0
+        ):
+            raise ValueError("rollback failure gripper limit is invalid")
+        requested_motion = max(
+            abs(start - target)
+            for start, target in zip(
+                self.start_joint_positions,
+                self.target_joint_positions,
+            )
+        )
+        if self.target_joint_positions != expected_target_joint_positions:
+            raise ValueError("rollback failure target is inconsistent")
+        if self.settlement_attempt is not None:
+            if not self.drive_command_accepted:
+                raise ValueError("rollback timeout evidence is incomplete")
+            self.settlement_attempt.validate(
+                policy,
+                expected_requested_motion_radians=requested_motion,
+                expected_target_joint_positions=self.target_joint_positions,
+                expected_target_gripper_width_meters=(
+                    expected_target_gripper_width_meters
+                ),
+                expected_gripper_error_meters=expected_gripper_error_meters,
+            )
+            if self.settlement_attempt.final_joint_positions != self.end_joint_positions:
+                raise ValueError("rollback failure endpoint is inconsistent")
+        expected_reason = InsertionTrialRollbackFailureReason.from_evidence(
+            settlement_attempt=self.settlement_attempt,
+            plug_attached=self.plug_attached,
+            expected_attachment=expected_attachment,
+            interlock=self.interlock,
+            maximum_contact_force_newtons=maximum_contact_force_newtons,
+            drive_command_accepted=self.drive_command_accepted,
+        )
+        if self.reason is not expected_reason:
+            raise ValueError("rollback failure reason is not supported by its evidence")
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "status": "failed",
+            "start_joint_positions": list(self.start_joint_positions),
+            "target_joint_positions": list(self.target_joint_positions),
+            "end_joint_positions": list(self.end_joint_positions),
+            "plug_attached": self.plug_attached,
+            "reason": self.reason.value,
+            "interlock": self.interlock.to_dict(),
+            "drive_command_accepted": self.drive_command_accepted,
+            "error": self.error,
+        }
+        if self.settlement_attempt is not None:
+            payload["settlement_attempt"] = self.settlement_attempt.to_dict()
+        return payload
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> InsertionTrialRollbackFailure:
+        if not isinstance(payload, Mapping) or payload.get("status") != "failed":
+            raise ValueError("insertion trial rollback failure is invalid")
+        try:
+            return cls(
+                tuple(float(value) for value in payload["start_joint_positions"]),
+                tuple(float(value) for value in payload["target_joint_positions"]),
+                tuple(float(value) for value in payload["end_joint_positions"]),
+                payload["plug_attached"],
+                InsertionTrialRollbackFailureReason(payload["reason"]),
+                ControlInterlockEvidence.from_dict(payload["interlock"]),
+                payload["drive_command_accepted"],
+                str(payload["error"]),
+                (
+                    GripperTrackedJointSettlementAttempt.from_dict(
+                        payload["settlement_attempt"]
+                    )
+                    if "settlement_attempt" in payload
+                    else None
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("insertion trial rollback failure is incomplete") from error
+
+
+InsertionTrialRollbackOutcome = Union[
+    InsertionTrialRollbackEvidence,
+    InsertionTrialRollbackFailure,
+]
+
+
+def insertion_trial_rollback_outcome_from_dict(
+    payload: Any,
+) -> InsertionTrialRollbackOutcome:
+    if not isinstance(payload, Mapping):
+        raise ValueError("insertion trial rollback outcome must be an object")
+    if payload.get("status") == "failed":
+        if set(payload) - {
+            "status",
+            "start_joint_positions",
+            "target_joint_positions",
+            "end_joint_positions",
+            "plug_attached",
+            "reason",
+            "interlock",
+            "drive_command_accepted",
+            "error",
+            "settlement_attempt",
+        }:
+            raise ValueError("rollback failure has contradictory fields")
+        return InsertionTrialRollbackFailure.from_dict(payload)
+    if payload.get("status") not in (None, "settled"):
+        raise ValueError("insertion trial rollback outcome status is invalid")
+    if set(payload) - {
+        "status",
+        "start_joint_positions",
+        "target_joint_positions",
+        "end_joint_positions",
+        "joint_settlement",
+        "gripper_settlement",
+        "plug_attached",
+    }:
+        raise ValueError("settled rollback has contradictory fields")
+    return InsertionTrialRollbackEvidence.from_dict(payload)
 
 
 @dataclass(frozen=True)
@@ -111,6 +625,7 @@ class InsertionTrialBinding:
     proposal: ArtifactIdentity
     actions: tuple[DroidAction, ...]
     source_selected_action_scale: DroidActionScale
+    trial_policy: InsertionTrialPolicy | None = InsertionTrialPolicy()
     authority: InsertionTrialAuthority = InsertionTrialAuthority.RESET_TRIAL_ONLY
 
     def __post_init__(self) -> None:
@@ -207,7 +722,7 @@ class InsertionTrialBinding:
             raise ValueError("insertion trial response does not match its binding")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema": INSERTION_TRIAL_SCHEMA,
             "execution_session_id": self.execution_session_id,
             "source_session_id": self.source_session_id,
@@ -219,6 +734,9 @@ class InsertionTrialBinding:
             "authority": self.authority.value,
             "production_authority_granted": self.production_authority_granted,
         }
+        if self.trial_policy is not None:
+            payload["trial_policy"] = self.trial_policy.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> InsertionTrialBinding:
@@ -238,6 +756,11 @@ class InsertionTrialBinding:
                 ),
                 source_selected_action_scale=DroidActionScale.from_payload(
                     payload["source_selected_action_scale"]
+                ),
+                trial_policy=(
+                    InsertionTrialPolicy.from_dict(payload["trial_policy"])
+                    if "trial_policy" in payload
+                    else None
                 ),
                 authority=InsertionTrialAuthority(payload["authority"]),
             )

@@ -40,6 +40,11 @@ from jepa_wm.control_resolution_baseline import (
 from jepa_wm.control_resolution_profile import ControlResolutionLoad
 from jepa_wm.control_resolution_drive import ControlResolutionDriveBiasCompensation
 from jepa_wm.direct_safety import ControlSafetySnapshot
+from jepa_wm.joint_settlement import (
+    JointSettlementAttempt,
+    JointSettlementEvidence,
+    TrackedJointSettlementPolicy,
+)
 from jepa_wm.trial_equivalence import (
     ResetEquivalenceMeasurement,
     ResetEquivalenceTolerances,
@@ -170,66 +175,23 @@ def retreat_direction(
 
 
 @dataclass(frozen=True)
-class TrackedErrorSettlement:
-    absolute_tracking_floor_radians: float = 5e-4
-    tracking_error_fraction_of_requested_motion: float = 0.25
+class TrackedErrorSettlement(TrackedJointSettlementPolicy):
     rollback_tracking_error_cap_radians: float | None = (
         CONTROL_RESOLUTION_RESET_TOLERANCES.maximum_joint_difference_radians
     )
-    required_consecutive_updates: int = 2
     maximum_updates: int = 48
 
     def __post_init__(self) -> None:
-        if (
-            not isfinite(self.absolute_tracking_floor_radians)
-            or self.absolute_tracking_floor_radians <= 0.0
-            or not isfinite(self.tracking_error_fraction_of_requested_motion)
-            or not 0.0 < self.tracking_error_fraction_of_requested_motion < 1.0
-            or (
-                self.rollback_tracking_error_cap_radians is not None
-                and (
-                    not isfinite(self.rollback_tracking_error_cap_radians)
-                    or self.rollback_tracking_error_cap_radians <= 0.0
-                )
-            )
-            or isinstance(self.required_consecutive_updates, bool)
-            or not isinstance(self.required_consecutive_updates, int)
-            or self.required_consecutive_updates <= 0
-            or isinstance(self.maximum_updates, bool)
-            or not isinstance(self.maximum_updates, int)
-            or self.maximum_updates < self.required_consecutive_updates
+        super().__post_init__()
+        if self.rollback_tracking_error_cap_radians is not None and (
+            not isfinite(self.rollback_tracking_error_cap_radians)
+            or self.rollback_tracking_error_cap_radians <= 0.0
         ):
             raise ValueError("control resolution settlement policy is invalid")
 
-    def maximum_tracking_error(
-        self,
-        requested_joint_motion_radians: float,
-        cap_radians: float | None = None,
-    ) -> float:
-        if (
-            not isfinite(requested_joint_motion_radians)
-            or requested_joint_motion_radians < 0.0
-        ):
-            raise ValueError("requested joint motion is invalid")
-        maximum_error = max(
-            self.absolute_tracking_floor_radians,
-            requested_joint_motion_radians
-            * self.tracking_error_fraction_of_requested_motion,
-        )
-        if cap_radians is None:
-            return maximum_error
-        if not isfinite(cap_radians) or cap_radians <= 0.0:
-            raise ValueError("tracking error cap is invalid")
-        return min(maximum_error, cap_radians)
-
     def to_dict(self) -> dict[str, Any]:
         return {
-            "absolute_tracking_floor_radians": (
-                self.absolute_tracking_floor_radians
-            ),
-            "tracking_error_fraction_of_requested_motion": (
-                self.tracking_error_fraction_of_requested_motion
-            ),
+            **super().to_dict(),
             **(
                 {
                     "rollback_tracking_error_cap_radians": (
@@ -239,8 +201,6 @@ class TrackedErrorSettlement:
                 if self.rollback_tracking_error_cap_radians is not None
                 else {}
             ),
-            "required_consecutive_updates": self.required_consecutive_updates,
-            "maximum_updates": self.maximum_updates,
         }
 
     @classmethod
@@ -1397,190 +1357,12 @@ class ControlResolutionProtocol:
 CONTROL_RESOLUTION_PROTOCOL = ControlResolutionProtocol()
 
 
-@dataclass(frozen=True)
-class ControlResolutionSettlementEvidence:
-    requested_joint_motion_radians: float
-    required_tracking_error_radians: float
-    updates_used: int
-    passing_tracking_errors_radians: tuple[float, ...]
-
-    def __post_init__(self) -> None:
-        scalars = (
-            self.requested_joint_motion_radians,
-            self.required_tracking_error_radians,
-            *self.passing_tracking_errors_radians,
-        )
-        if (
-            not all(isfinite(value) and value >= 0.0 for value in scalars)
-            or self.required_tracking_error_radians <= 0.0
-            or not self.passing_tracking_errors_radians
-            or isinstance(self.updates_used, bool)
-            or not isinstance(self.updates_used, int)
-            or self.updates_used <= 0
-            or any(
-                error > self.required_tracking_error_radians
-                for error in self.passing_tracking_errors_radians
-            )
-        ):
-            raise ValueError("control resolution settlement evidence is invalid")
-
-    @property
-    def final_tracking_error_radians(self) -> float:
-        return self.passing_tracking_errors_radians[-1]
-
-    def validate(
-        self,
-        policy: TrackedErrorSettlement,
-        cap_radians: float | None = None,
-    ) -> None:
-        if (
-            not isclose(
-                self.required_tracking_error_radians,
-                policy.maximum_tracking_error(
-                    self.requested_joint_motion_radians,
-                    cap_radians,
-                ),
-                rel_tol=0.0,
-                abs_tol=1e-12,
-            )
-            or len(self.passing_tracking_errors_radians)
-            != policy.required_consecutive_updates
-            or not policy.required_consecutive_updates
-            <= self.updates_used
-            <= policy.maximum_updates
-        ):
-            raise ValueError(
-                "control resolution settlement does not match its policy"
-            )
-
-    def to_dict(self) -> dict[str, float | int]:
-        return {
-            "requested_joint_motion_radians": (
-                self.requested_joint_motion_radians
-            ),
-            "required_tracking_error_radians": (
-                self.required_tracking_error_radians
-            ),
-            "updates_used": self.updates_used,
-            "passing_tracking_errors_radians": list(
-                self.passing_tracking_errors_radians
-            ),
-        }
-
-    @classmethod
-    def from_dict(cls, payload: Any) -> ControlResolutionSettlementEvidence:
-        if not isinstance(payload, dict):
-            raise ValueError("control resolution settlement must be an object")
-        updates_used = payload.get("updates_used")
-        if isinstance(updates_used, bool) or not isinstance(updates_used, int):
-            raise ValueError("control resolution settlement updates must be an integer")
-        try:
-            return cls(
-                requested_joint_motion_radians=float(
-                    payload["requested_joint_motion_radians"]
-                ),
-                required_tracking_error_radians=float(
-                    payload["required_tracking_error_radians"]
-                ),
-                updates_used=updates_used,
-                passing_tracking_errors_radians=tuple(
-                    float(value)
-                    for value in payload["passing_tracking_errors_radians"]
-                ),
-            )
-        except (KeyError, TypeError, ValueError) as error:
-            raise ValueError(
-                "control resolution settlement is incomplete"
-            ) from error
+class ControlResolutionSettlementEvidence(JointSettlementEvidence):
+    """Compatibility name for shared joint-settlement evidence."""
 
 
-@dataclass(frozen=True)
-class ControlResolutionSettlementAttempt:
-    """Complete tracking-error trace for one exhausted settlement window."""
-
-    requested_joint_motion_radians: float
-    required_tracking_error_radians: float
-    tracking_errors_radians: tuple[float, ...]
-    final_joint_positions: tuple[float, ...]
-
-    def __post_init__(self) -> None:
-        values = (
-            self.requested_joint_motion_radians,
-            self.required_tracking_error_radians,
-            *self.tracking_errors_radians,
-        )
-        if (
-            not all(isfinite(value) and value >= 0.0 for value in values)
-            or not all(isfinite(value) for value in self.final_joint_positions)
-            or self.required_tracking_error_radians <= 0.0
-            or not self.tracking_errors_radians
-            or len(self.final_joint_positions) != 7
-        ):
-            raise ValueError("control resolution settlement attempt is invalid")
-
-    def validate(
-        self,
-        policy: TrackedErrorSettlement,
-        cap_radians: float | None = None,
-    ) -> None:
-        passing = tuple(
-            error <= self.required_tracking_error_radians
-            for error in self.tracking_errors_radians
-        )
-        if (
-            len(self.tracking_errors_radians) != policy.maximum_updates
-            or not isclose(
-                self.required_tracking_error_radians,
-                policy.maximum_tracking_error(
-                    self.requested_joint_motion_radians,
-                    cap_radians,
-                ),
-                rel_tol=0.0,
-                abs_tol=1e-12,
-            )
-            or any(
-                all(
-                    passing[
-                        end - policy.required_consecutive_updates + 1 : end + 1
-                    ]
-                )
-                for end in range(
-                    policy.required_consecutive_updates - 1,
-                    len(passing),
-                )
-            )
-        ):
-            raise ValueError(
-                "control resolution settlement attempt does not match its policy"
-            )
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "requested_joint_motion_radians": (
-                self.requested_joint_motion_radians
-            ),
-            "required_tracking_error_radians": (
-                self.required_tracking_error_radians
-            ),
-            "tracking_errors_radians": list(self.tracking_errors_radians),
-            "final_joint_positions": list(self.final_joint_positions),
-        }
-
-    @classmethod
-    def from_dict(cls, payload: Any) -> ControlResolutionSettlementAttempt:
-        if not isinstance(payload, Mapping):
-            raise ValueError("control resolution settlement attempt must be an object")
-        try:
-            return cls(
-                float(payload["requested_joint_motion_radians"]),
-                float(payload["required_tracking_error_radians"]),
-                tuple(float(value) for value in payload["tracking_errors_radians"]),
-                tuple(float(value) for value in payload["final_joint_positions"]),
-            )
-        except (KeyError, TypeError, ValueError) as error:
-            raise ValueError(
-                "control resolution settlement attempt is incomplete"
-            ) from error
+class ControlResolutionSettlementAttempt(JointSettlementAttempt):
+    """Compatibility name for shared exhausted joint-settlement evidence."""
 
 
 @dataclass(frozen=True)

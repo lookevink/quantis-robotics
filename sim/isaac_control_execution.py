@@ -15,9 +15,9 @@ from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_safety import (
     ACTION_SCALES,
+    ControlInterlockEvidence,
     ControlGateDecision,
     ControlGateReason,
-    INSERTION_TARGET_PROGRESS,
     ProjectedTargetProgressPolicy,
     SimulatorControlGate,
     SimulatorSafetyLimits,
@@ -25,8 +25,26 @@ from jepa_wm.control_safety import (
     SafetyProjectionAttempt,
 )
 from jepa_wm.control_tracking import evaluate_action_tracking, tracking_limits_for_policy
+from jepa_wm.joint_settlement import (
+    GripperSettlementCriterion,
+    GripperSettlementMeasurement,
+    GripperSettlementTrace,
+    GripperTrackedJointSettlementAttempt,
+    GripperTrackedJointSettlementEvidence,
+    JointSettlementAttempt,
+    JointSettlementEvidence,
+    TrackedJointSettlementPolicy,
+)
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
-from jepa_wm.insertion_trial import InsertionTrialExecutionRefresh
+from jepa_wm.insertion_trial import (
+    InsertionTrialExecutionRefresh,
+    InsertionTrialOutcomeObservation,
+    InsertionTrialPostActionEvidence,
+    InsertionTrialRollbackEvidence,
+    InsertionTrialRollbackFailure,
+    InsertionTrialRollbackFailureReason,
+    InsertionTrialRollbackOutcome,
+)
 from sim.control_session import (
     ControlResult,
     ControlResultStatus,
@@ -38,6 +56,7 @@ from sim.demo_sequence import Phase
 from sim.control_context import recording_task
 from sim.isaac_control_runtime import (
     LiveContactInterlock,
+    LiveInsertionInterlock,
     bind_live_runtime,
     contact_sensor,
     live_runtime_for,
@@ -116,6 +135,21 @@ class CapturedPostActionState:
     snapshot: RecordingSnapshot
 
 
+class UnsettledJointCommand(RuntimeError):
+    def __init__(
+        self,
+        attempt: JointSettlementAttempt | GripperTrackedJointSettlementAttempt,
+    ) -> None:
+        super().__init__("joint command did not settle within its bounded timeout")
+        self.attempt = attempt
+
+
+class InsertionTrialRollbackFailed(RuntimeError):
+    def __init__(self, evidence: InsertionTrialRollbackFailure) -> None:
+        super().__init__(evidence.error)
+        self.evidence = evidence
+
+
 async def capture_synchronized_post_action(
     actuators: Actuators,
     attachment: PlugAttachment,
@@ -169,6 +203,142 @@ async def settle_joint_command(
             observe_safety()
 
 
+async def settle_tracked_joint_command(
+    actuators: Actuators,
+    start_arm_positions: np.ndarray,
+    target_arm_positions: np.ndarray,
+    advance: Callable[[], Any],
+    policy: TrackedJointSettlementPolicy,
+    *,
+    observe_safety: Callable[[], ContactReading] | None = None,
+) -> JointSettlementEvidence:
+    """Settle one tracked command relative to its exact live start."""
+
+    requested_motion = float(
+        np.max(np.abs(target_arm_positions - start_arm_positions))
+    )
+    return await _settle_tracked_joint_command(
+        actuators,
+        target_arm_positions,
+        requested_motion,
+        advance,
+        policy,
+        observe_safety=observe_safety,
+    )
+
+
+async def _settle_tracked_joint_command(
+    actuators: Actuators,
+    target_arm_positions: np.ndarray,
+    requested_motion_radians: float,
+    advance: Callable[[], Any],
+    policy: TrackedJointSettlementPolicy,
+    *,
+    observe_safety: Callable[[], ContactReading] | None = None,
+    gripper: GripperSettlementCriterion | None = None,
+) -> JointSettlementEvidence | GripperTrackedJointSettlementEvidence:
+    """Own bounded consecutive tracking for forward and rollback motion."""
+
+    required_error = policy.maximum_tracking_error(requested_motion_radians)
+    passing_errors: list[float] = []
+    tracking_errors: list[float] = []
+    gripper_errors: list[float] | None = [] if gripper is not None else None
+    passing_gripper_errors: list[float] | None = (
+        [] if gripper is not None else None
+    )
+    for update_count in range(1, policy.maximum_updates + 1):
+        await advance()
+        if observe_safety is not None:
+            observe_safety()
+        actual = actuators.actual_command()
+        tracking_error = float(
+            np.max(np.abs(actual.arm_positions - target_arm_positions))
+        )
+        tracking_errors.append(tracking_error)
+        gripper_error = (
+            gripper.error(actual.gripper_width_m) if gripper is not None else None
+        )
+        if gripper_errors is not None:
+            gripper_errors.append(gripper_error)
+        if tracking_error <= required_error and (
+            gripper_error is None
+            or gripper_error <= gripper.maximum_error_meters
+        ):
+            passing_errors.append(tracking_error)
+            if passing_gripper_errors is not None:
+                passing_gripper_errors.append(gripper_error)
+        else:
+            passing_errors.clear()
+            if passing_gripper_errors is not None:
+                passing_gripper_errors.clear()
+        if len(passing_errors) >= policy.required_consecutive_updates:
+            joint_evidence = JointSettlementEvidence(
+                requested_motion_radians,
+                required_error,
+                update_count,
+                tuple(passing_errors),
+            )
+            if gripper is None or passing_gripper_errors is None:
+                return joint_evidence
+            return GripperTrackedJointSettlementEvidence(
+                joint_evidence,
+                GripperSettlementMeasurement(
+                    gripper.target_width_meters,
+                    actual.gripper_width_m,
+                    GripperSettlementTrace(
+                        tuple(passing_gripper_errors),
+                        gripper.maximum_error_meters,
+                    ),
+                ),
+            )
+    final = actuators.actual_command()
+    attempt_arguments = (
+        requested_motion_radians,
+        required_error,
+        tuple(tracking_errors),
+        tuple(float(value) for value in final.arm_positions),
+    )
+    if gripper_errors is not None and gripper is not None:
+        attempt = GripperTrackedJointSettlementAttempt(
+            *attempt_arguments,
+            GripperSettlementMeasurement(
+                gripper.target_width_meters,
+                final.gripper_width_m,
+                GripperSettlementTrace(
+                    tuple(gripper_errors),
+                    gripper.maximum_error_meters,
+                ),
+            ),
+        )
+    else:
+        attempt = JointSettlementAttempt(*attempt_arguments)
+    raise UnsettledJointCommand(attempt)
+
+
+async def _settle_tracked_joint_and_gripper_command(
+    actuators: Actuators,
+    target: JointCommand,
+    requested_motion_radians: float,
+    advance: Callable[[], Any],
+    policy: TrackedJointSettlementPolicy,
+    gripper: GripperSettlementCriterion,
+    *,
+    observe_safety: Callable[[], ContactReading],
+) -> GripperTrackedJointSettlementEvidence:
+    evidence = await _settle_tracked_joint_command(
+        actuators,
+        target.arm_positions,
+        requested_motion_radians,
+        advance,
+        policy,
+        observe_safety=observe_safety,
+        gripper=gripper,
+    )
+    if not isinstance(evidence, GripperTrackedJointSettlementEvidence):
+        raise RuntimeError("rollback gripper settlement evidence is missing")
+    return evidence
+
+
 @dataclass(frozen=True)
 class RollbackSettlementPolicy:
     maximum_arm_error_radians: float = 1e-3
@@ -199,10 +369,13 @@ async def rollback_control_command(
     """Drive back to reset and require bounded consecutive tracking passes."""
 
     actuators.apply_drive_command(target)
+    arm_limit = settlement.maximum_arm_error_radians
+    required_updates = settlement.required_consecutive_updates
+    maximum_updates = settlement.maximum_updates
     consecutive = 0
     arm_error = float("inf")
     gripper_error = float("inf")
-    for _ in range(settlement.maximum_updates):
+    for _ in range(maximum_updates):
         await advance()
         if observe_safety is not None:
             observe_safety()
@@ -216,11 +389,11 @@ async def rollback_control_command(
         )
         gripper_error = abs(actual.gripper_width_m - target.gripper_width_m)
         if (
-            arm_error <= settlement.maximum_arm_error_radians
+            arm_error <= arm_limit
             and gripper_error <= settlement.maximum_gripper_error_meters
         ):
             consecutive += 1
-            if consecutive >= settlement.required_consecutive_updates:
+            if consecutive >= required_updates:
                 return
         else:
             consecutive = 0
@@ -228,6 +401,81 @@ async def rollback_control_command(
         "rollback command did not settle: "
         f"arm_error={arm_error:.6f} rad, "
         f"gripper_error={gripper_error:.6f} m"
+    )
+
+
+async def rollback_insertion_trial_command(
+    actuators: Actuators,
+    target: JointCommand,
+    attachment: PlugAttachment,
+    advance: Callable[[], Any],
+    policy: TrackedJointSettlementPolicy,
+    *,
+    expected_attachment: bool,
+    observe_safety: Callable[[], ContactReading],
+    interlock_evidence: Callable[[], ControlInterlockEvidence],
+    maximum_contact_force_newtons: float,
+    maximum_gripper_error_meters: float,
+) -> InsertionTrialRollbackEvidence:
+    """Drive to the refreshed reset and preserve exact tracked rollback evidence."""
+
+    start = actuators.actual_command()
+    requested_motion = float(
+        np.max(np.abs(start.arm_positions - target.arm_positions))
+    )
+    drive_command_accepted = False
+    try:
+        actuators.apply_drive_command(target)
+        drive_command_accepted = True
+        evidence = await _settle_tracked_joint_and_gripper_command(
+            actuators,
+            target,
+            requested_motion,
+            advance,
+            policy,
+            GripperSettlementCriterion(
+                target.gripper_width_m,
+                maximum_gripper_error_meters,
+            ),
+            observe_safety=observe_safety,
+        )
+        actual = actuators.actual_command()
+        if attachment.attached is not expected_attachment:
+            raise RuntimeError(
+                "rollback attachment state did not match its captured reset"
+            )
+    except Exception as error:
+        actual = actuators.actual_command()
+        interlock = interlock_evidence()
+        settlement_attempt = (
+            error.attempt if isinstance(error, UnsettledJointCommand) else None
+        )
+        reason = InsertionTrialRollbackFailureReason.from_evidence(
+            settlement_attempt=settlement_attempt,
+            plug_attached=attachment.attached,
+            expected_attachment=expected_attachment,
+            interlock=interlock,
+            maximum_contact_force_newtons=maximum_contact_force_newtons,
+            drive_command_accepted=drive_command_accepted,
+        )
+        failure = InsertionTrialRollbackFailure(
+            tuple(float(value) for value in start.arm_positions),
+            tuple(float(value) for value in target.arm_positions),
+            tuple(float(value) for value in actual.arm_positions),
+            attachment.attached,
+            reason,
+            interlock,
+            drive_command_accepted,
+            f"{type(error).__name__}: {error}",
+            settlement_attempt,
+        )
+        raise InsertionTrialRollbackFailed(failure) from error
+    return InsertionTrialRollbackEvidence(
+        tuple(float(value) for value in start.arm_positions),
+        tuple(float(value) for value in target.arm_positions),
+        tuple(float(value) for value in actual.arm_positions),
+        evidence,
+        attachment.attached,
     )
 
 
@@ -390,9 +638,12 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         )
         collision_detected = live_state.collision_detected
         contact_force = live_state.contact_force_newtons
+        if synchronized.pose is None:
+            raise RuntimeError("live insertion pose was not refreshed")
         insertion_trial_refresh = InsertionTrialExecutionRefresh(
             time(),
             live_state,
+            synchronized.pose,
         )
         observation, proposal = insertion_trial_refresh.authorize(
             observation,
@@ -423,10 +674,15 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         )
         action_scales = ACTION_SCALES
         target_progress = None
+        binding = None
         if insertion_reset_trial:
             binding = session.load_insertion_trial_binding(proposal)
+            if binding.trial_policy is None:
+                raise RuntimeError(
+                    "legacy insertion trial has no current execution policy"
+                )
             action_scales = binding.allowed_projection_scales
-            target_progress = INSERTION_TARGET_PROGRESS
+            target_progress = binding.trial_policy.projected_progress
         attempts, selected = select_safe_projection(
             safety,
             proposal,
@@ -462,14 +718,50 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         post_action = None
         execution_error = None
         execution_interlock = None
+        insertion_trial_rollback = None
+        insertion_trial_settlement_failure = None
         if decision.passed and candidate is not None:
             try:
-                live_interlock = LiveContactInterlock(
-                    sensor,
-                    limits.maximum_contact_force_newtons,
+                live_interlock = LiveInsertionInterlock(
+                    LiveContactInterlock(
+                        sensor,
+                        limits.maximum_contact_force_newtons,
+                        "insertion reset trial",
+                        ContactReading(collision_detected, contact_force),
+                    ),
+                    attachment,
+                    persisted_state.plug_attached,
                     "insertion reset trial",
-                    ContactReading(collision_detected, contact_force),
                 )
+
+                async def rollback_current_command() -> (
+                    InsertionTrialRollbackOutcome | None
+                ):
+                    if binding is not None and binding.trial_policy is not None:
+                        return await rollback_insertion_trial_command(
+                            actuators,
+                            current,
+                            attachment,
+                            omni.kit.app.get_app().next_update_async,
+                            binding.trial_policy.joint_settlement,
+                            expected_attachment=persisted_state.plug_attached,
+                            observe_safety=live_interlock.observe,
+                            interlock_evidence=lambda: live_interlock.evidence,
+                            maximum_contact_force_newtons=(
+                                limits.maximum_contact_force_newtons
+                            ),
+                            maximum_gripper_error_meters=(
+                                binding.trial_policy.rollback_gripper_error_meters
+                            ),
+                        )
+                    await rollback_control_command(
+                        actuators,
+                        current,
+                        attachment,
+                        omni.kit.app.get_app().next_update_async,
+                        expected_attachment=persisted_state.plug_attached,
+                    )
+                    return None
 
                 timeline.play()
                 target = JointCommand(solved.arm_positions, solved.gripper_width_m)
@@ -490,16 +782,22 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                         else None
                     ),
                 )
-                await settle_joint_command(
-                    actuators,
-                    solved.arm_positions,
-                    omni.kit.app.get_app().next_update_async,
-                    observe_safety=(
-                        live_interlock.observe
-                        if insertion_reset_trial
-                        else None
-                    ),
-                )
+                if binding is not None and binding.trial_policy is not None:
+                    settlement = await settle_tracked_joint_command(
+                        actuators,
+                        current.arm_positions,
+                        solved.arm_positions,
+                        omni.kit.app.get_app().next_update_async,
+                        binding.trial_policy.joint_settlement,
+                        observe_safety=live_interlock.observe,
+                    )
+                else:
+                    await settle_joint_command(
+                        actuators,
+                        solved.arm_positions,
+                        omni.kit.app.get_app().next_update_async,
+                    )
+                    settlement = None
                 captured = await capture_synchronized_post_action(
                     actuators,
                     attachment,
@@ -536,58 +834,76 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                 joint_tracking_error = float(
                     np.max(np.abs(actual.arm_positions - solved.arm_positions))
                 )
-                acquisition = evaluate_grasp_acquisition(
-                    world_pose(attachment.hand_prim)[0],
-                    solve_waypoints()[2].hand_position,
-                    actual.gripper_width_m,
+                realized_progress = (
+                    binding.trial_policy.realized_progress.evaluate(
+                        observation.pose,
+                        observation.target_pose,
+                        post_snapshot.end_effector_pose,
+                    )
+                    if binding is not None
+                    and binding.trial_policy is not None
+                    and observation.target_pose is not None
+                    else None
                 )
+                acquisition_passed = True
+                if not insertion_reset_trial:
+                    acquisition = evaluate_grasp_acquisition(
+                        world_pose(attachment.hand_prim)[0],
+                        solve_waypoints()[2].hand_position,
+                        actual.gripper_width_m,
+                    )
+                    acquisition_passed = acquisition.passed
                 if (
-                    acquisition.passed
+                    acquisition_passed
                     and joint_tracking_error <= 0.01
                     and tracking.passed
                     and not post_collision
                     and post_force <= limits.maximum_contact_force_newtons
                 ):
-                    attachment.attach(world_pose(attachment.hand_prim)[0])
-                    post_snapshot = recording_snapshot(
-                        RecordingLabel(RecordingMoment.ATTACHED, Phase.GRASP),
-                        ObservationStage.CABLE_GRASPED,
-                        actual,
-                        attachment,
-                    )
+                    if not insertion_reset_trial:
+                        attachment.attach(world_pose(attachment.hand_prim)[0])
+                        post_snapshot = recording_snapshot(
+                            RecordingLabel(RecordingMoment.ATTACHED, Phase.GRASP),
+                            ObservationStage.CABLE_GRASPED,
+                            actual,
+                            attachment,
+                        )
                 post_action = PostActionEvidence(
-                    proposal.first_action,
-                    candidate.first_action,
-                    actual_action,
-                    tracking,
-                    post_snapshot.end_effector_pose,
-                    tuple(actual.arm_positions),
-                    joint_tracking_error,
-                    post_force,
-                    post_collision,
-                    captured.frame,
-                    tuple(float(value) for value in post_snapshot.plug_position),
-                    post_snapshot.plug_attached,
+                    raw_proposed_action=proposal.first_action,
+                    commanded_action=candidate.first_action,
+                    actual_action=actual_action,
+                    tracking=tracking,
+                    pose=post_snapshot.end_effector_pose,
+                    joint_positions=tuple(actual.arm_positions),
+                    maximum_joint_tracking_error_rad=joint_tracking_error,
+                    contact_force_newtons=post_force,
+                    collision_detected=post_collision,
+                    frame=captured.frame,
+                    plug_position=tuple(
+                        float(value) for value in post_snapshot.plug_position
+                    ),
+                    plug_attached=post_snapshot.plug_attached,
+                    insertion_trial=(
+                        InsertionTrialPostActionEvidence(
+                            settlement,
+                            realized_progress,
+                        )
+                        if settlement is not None and realized_progress is not None
+                        else None
+                    ),
                 )
                 status = ControlResultStatus.APPLIED
             except Exception as error:
                 execution_error = f"{type(error).__name__}: {error}"
+                if isinstance(error, UnsettledJointCommand):
+                    insertion_trial_settlement_failure = error.attempt
                 try:
-                    await rollback_control_command(
-                        actuators,
-                        current,
-                        attachment,
-                        omni.kit.app.get_app().next_update_async,
-                        expected_attachment=persisted_state.plug_attached,
-                        observe_safety=(
-                            live_interlock.observe
-                            if insertion_reset_trial
-                            else None
-                        ),
-                    )
+                    insertion_trial_rollback = await rollback_current_command()
                     status = ControlResultStatus.ROLLED_BACK_EXECUTION
                 except Exception as rollback_error:
                     status = ControlResultStatus.ROLLBACK_FAILED
+                    if isinstance(rollback_error, InsertionTrialRollbackFailed):
+                        insertion_trial_rollback = rollback_error.evidence
                     execution_error += (
                         "; rollback verification failed: "
                         f"{type(rollback_error).__name__}: {rollback_error}"
@@ -595,34 +911,46 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                 if insertion_reset_trial:
                     execution_interlock = live_interlock.evidence
             if post_action is not None:
-                rollback_status = None
-                if joint_tracking_error > 0.01 or not tracking.passed:
-                    rollback_status = ControlResultStatus.ROLLED_BACK_TRACKING
-                elif post_collision or post_force > limits.maximum_contact_force_newtons:
-                    rollback_status = ControlResultStatus.ROLLED_BACK_CONTACT
-                elif (
-                    persisted_state.execution_policy
-                    is ControlExecutionPolicy.INSERTION_RESET_TRIAL
-                    and not post_snapshot.plug_attached
-                ):
-                    rollback_status = ControlResultStatus.ROLLED_BACK_ATTACHMENT
+                if binding is not None and post_action.insertion_trial is not None:
+                    rollback_reason = binding.trial_policy.rollback_reason(
+                        post_action.insertion_trial,
+                        InsertionTrialOutcomeObservation(
+                            joint_tracking_error,
+                            tracking.passed,
+                            post_force,
+                            post_collision,
+                            post_snapshot.plug_attached,
+                            limits.maximum_contact_force_newtons,
+                            persisted_state.plug_attached,
+                        ),
+                    )
+                    outcome_status = (
+                        ControlResultStatus.from_insertion_rollback_reason(
+                            rollback_reason
+                        )
+                    )
+                    rollback_status = (
+                        None
+                        if outcome_status is ControlResultStatus.APPLIED
+                        else outcome_status
+                    )
+                else:
+                    rollback_status = None
+                    if joint_tracking_error > 0.01 or not tracking.passed:
+                        rollback_status = ControlResultStatus.ROLLED_BACK_TRACKING
+                    elif (
+                        post_collision
+                        or post_force > limits.maximum_contact_force_newtons
+                    ):
+                        rollback_status = ControlResultStatus.ROLLED_BACK_CONTACT
                 if rollback_status is not None:
                     try:
-                        await rollback_control_command(
-                            actuators,
-                            current,
-                            attachment,
-                            omni.kit.app.get_app().next_update_async,
-                            expected_attachment=persisted_state.plug_attached,
-                            observe_safety=(
-                                live_interlock.observe
-                                if insertion_reset_trial
-                                else None
-                            ),
-                        )
+                        insertion_trial_rollback = await rollback_current_command()
                         status = rollback_status
                     except Exception as rollback_error:
                         status = ControlResultStatus.ROLLBACK_FAILED
+                        if isinstance(rollback_error, InsertionTrialRollbackFailed):
+                            insertion_trial_rollback = rollback_error.evidence
                         execution_error = (
                             "rollback verification failed: "
                             f"{type(rollback_error).__name__}: {rollback_error}"
@@ -646,6 +974,10 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             execution_error=execution_error,
             execution_interlock=execution_interlock,
             insertion_trial_refresh=insertion_trial_refresh,
+            insertion_trial_rollback=insertion_trial_rollback,
+            insertion_trial_settlement_failure=(
+                insertion_trial_settlement_failure
+            ),
         )
         session.write_result(result)
         return result.to_dict()

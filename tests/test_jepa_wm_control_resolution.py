@@ -47,6 +47,7 @@ from jepa_wm.control_resolution import (
     retreat_direction,
 )
 from jepa_wm.control_safety import ControlInterlockEvidence
+from jepa_wm.joint_settlement import GripperSettlementTrace
 from jepa_wm.control_safety import (
     ControlGateDecision,
     ControlGateReason,
@@ -1419,15 +1420,12 @@ class ControlResolutionReportTest(unittest.TestCase):
         contact.observe.return_value = object()
         observer = ResolutionControlInterlock(
             contact,
-            type(
-                "Runtime",
-                (),
-                {"attachment": type("Attachment", (), {"attached": False})()},
-            )(),
+            type("Attachment", (), {"attached": False})(),
             True,
+            "insertion control resolution",
         )
 
-        with self.assertRaisesRegex(RuntimeError, "load state changed"):
+        with self.assertRaisesRegex(RuntimeError, "attachment state changed"):
             observer.observe()
 
         contact.observe.assert_called_once_with()
@@ -2095,6 +2093,13 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
             * CONTROL_RESOLUTION_PROTOCOL.settlement.maximum_updates,
             final_joint_positions=tuple(start.arm_positions),
         )
+        forged_gripper_gate = attempt.to_dict()
+        forged_gripper_gate["gripper_settlement"] = GripperSettlementTrace(
+            (1.0,) * CONTROL_RESOLUTION_PROTOCOL.settlement.maximum_updates,
+            1e-3,
+        ).to_dict()
+        with self.assertRaisesRegex(ValueError, "unexpected gripper"):
+            ControlResolutionSettlementAttempt.from_dict(forged_gripper_gate)
         interlock = SimpleNamespace(
             observe=Mock(),
             contact=SimpleNamespace(

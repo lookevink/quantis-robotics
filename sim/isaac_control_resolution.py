@@ -67,6 +67,7 @@ from sim.demo_sequence import Phase
 from sim.isaac_control_runtime import (
     LiveContactInterlock,
     LiveControlRuntime,
+    LiveInsertionInterlock,
     live_runtime_for,
     read_control_contact,
     synchronized_insertion_resolution_runtime,
@@ -154,19 +155,7 @@ def _require_resolution_reset(
         ) from error
 
 
-@dataclass
-class ResolutionControlInterlock:
-    """Abort if contact is unsafe or the configured load state changes."""
-
-    contact: LiveContactInterlock
-    runtime: LiveControlRuntime
-    expected_attachment: bool
-
-    def observe(self) -> Any:
-        reading = self.contact.observe()
-        if self.runtime.attachment.attached is not self.expected_attachment:
-            raise RuntimeError("insertion control resolution load state changed")
-        return reading
+ResolutionControlInterlock = LiveInsertionInterlock
 
 
 class UnstableControlResolutionBaseline(RuntimeError):
@@ -686,8 +675,9 @@ async def measure_insertion_control_resolution(
                 limits.maximum_contact_force_newtons,
                 "insertion control resolution baseline",
             ),
-            runtime,
+            runtime.attachment,
             load.plug_attached,
+            "insertion control resolution baseline",
         )
         _, baseline = await stabilize_resolution_baseline(
             runtime,
@@ -839,8 +829,9 @@ async def measure_insertion_control_resolution(
                     limits.maximum_contact_force_newtons,
                     f"insertion control resolution sample {index}",
                 ),
-                runtime,
+                runtime.attachment,
                 load.plug_attached,
+                f"insertion control resolution sample {index}",
             )
             motion_started_at_sim_seconds = timeline.get_current_time()
             await execute_resolution_probe_motion(
@@ -868,8 +859,9 @@ async def measure_insertion_control_resolution(
                         limits.maximum_contact_force_newtons,
                         f"insertion control resolution recovery {index}",
                     ),
-                    runtime,
+                    runtime.attachment,
                     load.plug_attached,
+                    f"insertion control resolution recovery {index}",
                 )
                 recovery_drive_target = protocol.rollback_drive_target(
                     probe,
@@ -944,8 +936,9 @@ async def measure_insertion_control_resolution(
                     limits.maximum_contact_force_newtons,
                     f"insertion control resolution rollback {index}",
                 ),
-                runtime,
+                runtime.attachment,
                 load.plug_attached,
+                f"insertion control resolution rollback {index}",
             )
             rollback_target = JointCommand(
                 np.asarray(
