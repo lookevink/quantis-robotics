@@ -29,6 +29,7 @@ from jepa_wm.control_resolution import (
     ControlResolutionRollbackTimeout,
     ControlResolutionRollbackSuccess,
     ControlResolutionRollbackFailure,
+    ControlResolutionRollbackCorrection,
     ControlResolutionForwardEvidence,
     FixedUpdateSettlement,
     ControlResolutionBaselineEvidence,
@@ -37,6 +38,7 @@ from jepa_wm.control_resolution import (
     ControlResolutionBaselineTrace,
     ControlResolutionCaptureIdentity,
     ControlResolutionDriveTarget,
+    DriveCommandApplied,
     ControlResolutionLoad,
     ControlResolutionMotionTiming,
     RejectedControlResolutionReset,
@@ -57,6 +59,7 @@ from jepa_wm.control_resolution_baseline import (
     ControlResolutionCaptureFailureEvidence,
     ControlResolutionCaptureSourceIdentity,
 )
+from jepa_wm.control_resolution_drive import ControlResolutionDriveBiasCompensation
 from jepa_wm.action import DroidActionScale
 from jepa_wm.direct_safety import ControlSafetySnapshot
 from jepa_wm.control_policy import ControlExecutionPolicy
@@ -108,7 +111,10 @@ def _baseline(
             (state,) * 9,
             (0.25,) * 8,
             ControlInterlockEvidence(0.0, False),
-            ControlResolutionDriveTarget(state.joint_positions, 0.04),
+            ControlResolutionDriveTarget.for_command(
+                state.joint_positions,
+                0.04,
+            ),
         )
     )
 
@@ -132,7 +138,11 @@ def _sample(index: int, magnitude: float) -> ControlResolutionSample:
     actual_pose = start.pose.applied(
         DroidAction((-realized, 0.0, 0.0, 1e-5, 0.0, 0.0, 0.0))
     )
-    actual_joints = (2e-4, *start.joint_positions[1:])
+    actual_joints = start.joint_positions
+    rollback_drive_target = ControlResolutionDriveTarget.for_command(
+        start.joint_positions,
+        0.04,
+    )
     return ControlResolutionSample(
         index=index,
         requested_translation_meters=magnitude,
@@ -163,13 +173,13 @@ def _sample(index: int, magnitude: float) -> ControlResolutionSample:
                 requested_joint_motion_radians=0.0,
                 required_tracking_error_radians=5e-4,
                 updates_used=2,
-                passing_tracking_errors_radians=(3e-4, 2e-4),
+                passing_tracking_errors_radians=(1e-4, 0.0),
             ),
             rollback=ControlResolutionSettlementEvidence(
-                requested_joint_motion_radians=2e-4,
+                requested_joint_motion_radians=0.0,
                 required_tracking_error_radians=5e-4,
                 updates_used=2,
-                passing_tracking_errors_radians=(1e-4, 0.0),
+                passing_tracking_errors_radians=(0.0, 0.0),
             ),
             rollback_interlock=ControlInterlockEvidence(0.0, False),
             rollback_drive_command=ControlResolutionProbePlan.for_request(
@@ -177,17 +187,230 @@ def _sample(index: int, magnitude: float) -> ControlResolutionSample:
             ).drive_command(
                 None
                 if magnitude == 0.0
-                else 0.5
+                else 0.5,
+                rollback_drive_target if magnitude > 0.0 else None,
             ),
         ),
         motion_timing=ControlResolutionMotionTiming(
             1.0,
             1.3 if magnitude == 0.0 else 1.55,
         ),
+        drive_target_joint_positions=(
+            rollback_drive_target.joint_positions
+            if magnitude > 0.0
+            else None
+        ),
     )
 
 
 class ControlResolutionReportTest(unittest.TestCase):
+    def test_drive_target_canonicalizes_usd_float_storage(self) -> None:
+        raw_joints = tuple(0.123456789 + index for index in range(7))
+        raw_gripper = 0.017999999225139618
+
+        target = ControlResolutionDriveTarget.for_command(
+            raw_joints,
+            raw_gripper,
+        )
+        active_joints = tuple(
+            float(
+                np.deg2rad(
+                    np.float64(np.float32(np.rad2deg(value)))
+                )
+            )
+            for value in raw_joints
+        )
+        active_gripper = float(np.float32(raw_gripper / 2.0)) * 2.0
+
+        target.validate_active(active_joints, active_gripper)
+        self.assertNotEqual(target.joint_positions, raw_joints)
+
+    def test_drive_bias_compensation_is_bounded_and_velocity_safe(self) -> None:
+        policy = ControlResolutionDriveBiasCompensation(0.002)
+        reference = _reset()
+        baseline_target = ControlResolutionDriveTarget(
+            tuple(value + 0.001 for value in reference.joint_positions),
+            0.04,
+        )
+        desired = tuple(value + 0.002 for value in reference.joint_positions)
+
+        compensated = policy.compensated_joint_target(
+            desired,
+            baseline_target,
+            reference.joint_positions,
+            CONTROL_RESOLUTION_PROTOCOL.safety_limits,
+        )
+
+        np.testing.assert_allclose(
+            compensated,
+            tuple(value + 0.003 for value in reference.joint_positions),
+        )
+        self.assertEqual(
+            ControlResolutionDriveBiasCompensation.from_dict(policy.to_dict()),
+            policy,
+        )
+        with self.assertRaisesRegex(ValueError, "bias exceeds"):
+            policy.compensated_joint_target(
+                desired,
+                ControlResolutionDriveTarget(
+                    tuple(value + 0.003 for value in reference.joint_positions),
+                    0.04,
+                ),
+                reference.joint_positions,
+                CONTROL_RESOLUTION_PROTOCOL.safety_limits,
+            )
+        with self.assertRaisesRegex(ValueError, "velocity"):
+            CONTROL_RESOLUTION_PROTOCOL.drive_joint_target(
+                CONTROL_RESOLUTION_PROTOCOL.probe_plan(3),
+                tuple(value + 0.3 for value in reference.joint_positions),
+                ControlResolutionDriveTarget.for_command(
+                    reference.joint_positions,
+                    0.04,
+                ),
+                reference,
+                reference.joint_positions,
+            )
+
+    def test_rollback_compensation_uses_the_observed_forward_equilibrium(self) -> None:
+        reference = replace(
+            _reset(),
+            joint_positions=(
+                0.8406665325164795,
+                -1.3180197477340698,
+                -1.1586148738861084,
+                -2.6056032180786133,
+                0.4334414601325989,
+                3.4952261447906494,
+                -0.7353371977806091,
+            ),
+        )
+        active = ControlResolutionDriveTarget(
+            (
+                0.8408090914601275,
+                -1.3172312999282176,
+                -1.1576152726265365,
+                -2.6050660951119227,
+                0.43336481917493436,
+                3.4953805549174786,
+                -0.735293850122861,
+            ),
+            0.04,
+        )
+        forward_drive = (
+            0.8394091725017465,
+            -1.316645444949954,
+            -1.159615478151655,
+            -2.606631485873575,
+            0.4267988150487443,
+            3.495227201846615,
+            -0.7293138671692664,
+        )
+        forward_actual = (
+            0.8395864367485046,
+            -1.3175078630447388,
+            -1.1602394580841064,
+            -2.606823205947876,
+            0.42809009552001953,
+            3.4952261447906494,
+            -0.7304517030715942,
+        )
+
+        target, command = CONTROL_RESOLUTION_PROTOCOL.rollback_drive_command(
+            CONTROL_RESOLUTION_PROTOCOL.probe_plan(3),
+            active,
+            reference,
+            forward_drive,
+            forward_actual,
+            0.5,
+        )
+
+        np.testing.assert_allclose(
+            target.joint_positions,
+            tuple(
+                desired + drive - realized
+                for desired, drive, realized in zip(
+                    reference.joint_positions,
+                    forward_drive,
+                    forward_actual,
+                )
+            ),
+        )
+        self.assertIsInstance(command, DriveCommandApplied)
+        self.assertEqual(command.target, target)
+        self.assertGreaterEqual(command.period_seconds, 0.5)
+        stalled = (
+            0.8403059244155884,
+            -1.3178406953811646,
+            -1.1591547727584839,
+            -2.605978012084961,
+            0.4316602051258087,
+            3.4952261447906494,
+            -0.7337121367454529,
+        )
+        corrected = CONTROL_RESOLUTION_PROTOCOL.rollback_feedback_command(
+            CONTROL_RESOLUTION_PROTOCOL.probe_plan(3),
+            reference.joint_positions,
+            command,
+            stalled,
+            0.5,
+        )
+        np.testing.assert_allclose(
+            corrected.target.joint_positions,
+            tuple(
+                drive + desired - actual
+                for drive, desired, actual in zip(
+                    target.joint_positions,
+                    reference.joint_positions,
+                    stalled,
+                )
+            ),
+        )
+        self.assertLessEqual(
+            max(
+                abs(desired - actual)
+                for desired, actual in zip(
+                    reference.joint_positions,
+                    stalled,
+                )
+            ),
+            0.002,
+        )
+        correction = ControlResolutionRollbackCorrection(
+            ControlResolutionSettlementAttempt(
+                requested_joint_motion_radians=max(
+                    abs(start - desired)
+                    for start, desired in zip(
+                        forward_actual,
+                        reference.joint_positions,
+                    )
+                ),
+                required_tracking_error_radians=0.0005,
+                tracking_errors_radians=(0.0017812550067901611,)
+                * CONTROL_RESOLUTION_PROTOCOL.settlement.maximum_updates,
+                final_joint_positions=stalled,
+            ),
+            corrected,
+            ControlResolutionMotionTiming(34.5, 47.0),
+        )
+        correction.validate(
+            CONTROL_RESOLUTION_PROTOCOL,
+            CONTROL_RESOLUTION_PROTOCOL.probe_plan(3),
+            forward_actual,
+            reference.joint_positions,
+            command,
+            0.5,
+        )
+        self.assertEqual(
+            ControlResolutionRollbackCorrection.from_dict(
+                correction.to_dict()
+            ),
+            correction,
+        )
+        legacy = ControlResolutionDriveBiasCompensation.from_dict(
+            {"maximum_bias_radians": 0.002}
+        )
+        self.assertFalse(legacy.path_dependent_rollback)
+
     def test_translation_rollback_settles_against_stable_reference(self) -> None:
         reference = _reset()
         drive_target = ControlResolutionDriveTarget(
@@ -389,12 +612,14 @@ class ControlResolutionReportTest(unittest.TestCase):
             motion_period_overrides=(),
             baseline_policy=None,
             settlement=FixedUpdateSettlement(8),
+            drive_bias_compensation=None,
         )
         samples = tuple(
             replace(
                 _sample(index, magnitude),
                 tracked_settlement=None,
                 motion_timing=None,
+                drive_target_joint_positions=None,
             )
             for index, magnitude in enumerate(protocol.requested_translations)
         )
@@ -623,6 +848,7 @@ class ControlResolutionReportTest(unittest.TestCase):
             CONTROL_RESOLUTION_PROTOCOL,
             baseline_policy=None,
             settlement=FixedUpdateSettlement(8),
+            drive_bias_compensation=None,
         )
         with self.assertRaisesRegex(ValueError, "legacy.*capture identity"):
             replace(failure, protocol=legacy_protocol)
@@ -685,6 +911,19 @@ class ControlResolutionReportTest(unittest.TestCase):
             / restored.protocol.safety_limits.maximum_joint_velocity_radians_per_second,
             0.6,
         )
+        runtime_rounding = failure.to_dict()
+        runtime_rounding["projection_failure"]["target_pose"][0] += 2e-13
+        runtime_rounding["projection_failure"]["projection"]["gate"][
+            "next_pose"
+        ][0] += 2e-13
+        ControlResolutionFailureEvidence.from_dict(runtime_rounding)
+        tampered_target = failure.to_dict()
+        tampered_target["projection_failure"]["target_pose"][0] += 1e-10
+        tampered_target["projection_failure"]["projection"]["gate"][
+            "next_pose"
+        ][0] += 1e-10
+        with self.assertRaisesRegex(ValueError, "failure evidence is incomplete"):
+            ControlResolutionFailureEvidence.from_dict(tampered_target)
         malformed = failure.to_dict()
         malformed["projection_failure"]["projection"][
             "maximum_joint_delta_rad"
@@ -963,8 +1202,8 @@ class ControlResolutionReportTest(unittest.TestCase):
     def test_settlement_timeout_round_trip_retains_the_complete_tracking_trace(self) -> None:
         baseline = _baseline()
         final_positions = (
-            baseline.drive_target.joint_positions[0] + 1e-3,
-            *baseline.drive_target.joint_positions[1:],
+            baseline.reference_reset.joint_positions[0] + 1e-3,
+            *baseline.reference_reset.joint_positions[1:],
         )
         probe = CONTROL_RESOLUTION_PROTOCOL.probe_plan(0)
         sample = _sample(0, 0.0)
@@ -979,8 +1218,8 @@ class ControlResolutionReportTest(unittest.TestCase):
         settlement_failure = ControlResolutionMotionTimeout(
             trace=ControlResolutionSettlementTimeoutTrace(
                 execution=execution,
-                start_joint_positions=baseline.drive_target.joint_positions,
-                target_joint_positions=baseline.drive_target.joint_positions,
+                start_joint_positions=sample.start_reset.joint_positions,
+                target_joint_positions=sample.start_reset.joint_positions,
                 attempt=ControlResolutionSettlementAttempt(
                     requested_joint_motion_radians=0.0,
                     required_tracking_error_radians=5e-4,
@@ -1079,15 +1318,15 @@ class ControlResolutionReportTest(unittest.TestCase):
             trace=ControlResolutionSettlementTimeoutTrace(
                 execution=execution,
                 start_joint_positions=sample.endpoint.safety.joint_positions,
-                target_joint_positions=baseline.drive_target.joint_positions,
+                target_joint_positions=baseline.reference_reset.joint_positions,
                 attempt=ControlResolutionSettlementAttempt(
-                    requested_joint_motion_radians=2e-4,
+                    requested_joint_motion_radians=0.0,
                     required_tracking_error_radians=5e-4,
                     tracking_errors_radians=(1e-3,)
                     * CONTROL_RESOLUTION_PROTOCOL.settlement.maximum_updates,
                     final_joint_positions=(
                         1e-3,
-                        *baseline.drive_target.joint_positions[1:],
+                        *baseline.reference_reset.joint_positions[1:],
                     ),
                 ),
                 interlock=ControlInterlockEvidence(0.0, False),
@@ -1254,6 +1493,18 @@ class ControlResolutionReportTest(unittest.TestCase):
         ] = 0.25
         with self.assertRaisesRegex(ValueError, "report is incomplete"):
             ControlResolutionReport.from_dict(contradictory_drive_command)
+        missing_probe_drive_target = report.to_dict()
+        del missing_probe_drive_target["samples"][3][
+            "drive_target_joint_positions"
+        ]
+        with self.assertRaisesRegex(ValueError, "report is incomplete"):
+            ControlResolutionReport.from_dict(missing_probe_drive_target)
+        tampered_probe_drive_target = report.to_dict()
+        tampered_probe_drive_target["samples"][3][
+            "drive_target_joint_positions"
+        ][0] += 1e-6
+        with self.assertRaisesRegex(ValueError, "report is incomplete"):
+            ControlResolutionReport.from_dict(tampered_probe_drive_target)
         summary = restored.summary
         self.assertAlmostEqual(summary.zero_translation_drift_meters, 2e-5)
         self.assertAlmostEqual(summary.zero_orientation_drift_radians, 1e-5)
@@ -1354,6 +1605,10 @@ class ControlResolutionReportTest(unittest.TestCase):
                 (captured, *(reference,) * 9),
                 (0.25,) * 9,
                 ControlInterlockEvidence(0.0, False),
+                ControlResolutionDriveTarget.for_command(
+                    reference.joint_positions,
+                    0.04,
+                ),
             )
         )
         report = ControlResolutionReport(
@@ -1894,6 +2149,56 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(settle.await_args.args[5], 5e-4)
         actuators.current_command.assert_called()
+
+    def test_rollback_failure_validates_with_the_rollback_error_cap(self) -> None:
+        protocol = CONTROL_RESOLUTION_PROTOCOL
+        probe = protocol.probe_plan(protocol.repeats_per_magnitude)
+        baseline = _baseline()
+        drive_target = baseline.drive_target
+        reference_reset = baseline.reference_reset
+        rollback_target = probe.rollback_joint_target(
+            drive_target,
+            reference_reset,
+        )
+        start = (
+            rollback_target[0] + 3e-3,
+            *rollback_target[1:],
+        )
+        drive_command = probe.drive_command(
+            protocol.safe_joint_motion_period(
+                start,
+                drive_target.joint_positions,
+                protocol.motion_period_for(probe.requested_translation_meters),
+            ),
+            drive_target,
+        )
+        attempt = ControlResolutionSettlementAttempt(
+            requested_joint_motion_radians=3e-3,
+            required_tracking_error_radians=(
+                protocol.settlement.rollback_tracking_error_cap_radians
+            ),
+            tracking_errors_radians=(3e-3,)
+            * protocol.settlement.maximum_updates,
+            final_joint_positions=start,
+        )
+        failure = ControlResolutionRollbackFailure(
+            start_joint_positions=start,
+            drive_command=drive_command,
+            attempt=attempt,
+            interlock=ControlInterlockEvidence(0.0, False),
+            error="UnsettledControlResolutionTarget: bounded timeout",
+        )
+
+        failure.validate(
+            protocol,
+            probe,
+            drive_target,
+            reference_reset,
+            expected_attachment=True,
+            minimum_period_seconds=protocol.motion_period_for(
+                probe.requested_translation_meters
+            ),
+        )
 
     async def test_fixed_settlement_dispatches_exact_update_count(self) -> None:
         runtime = SimpleNamespace()

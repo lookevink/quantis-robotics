@@ -129,6 +129,34 @@ class SafetyInterlockTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(app.updates, 2)
 
+    async def test_one_physics_update_waits_for_simulation_time_to_advance(self) -> None:
+        class _Timeline:
+            current = 0.0
+
+            def get_current_time(self) -> float:
+                return self.current
+
+        timeline = _Timeline()
+
+        class _App:
+            updates = 0
+
+            async def next_update_async(self) -> None:
+                self.updates += 1
+                if self.updates == 3:
+                    timeline.current = 0.25
+
+        app = _App()
+
+        def observe() -> ContactReading:
+            return ContactReading(False, 1.0 if app.updates == 2 else 0.0)
+
+        with patch.dict("sys.modules", self._omni_modules(app, timeline)):
+            reading = await _advance_sample(None, observe)
+
+        self.assertEqual(app.updates, 3)
+        self.assertEqual(reading.force_newtons, 1.0)
+
     def test_rejects_invalid_contact_reading_before_peak_aggregation(self) -> None:
         for value in (float("nan"), -0.1):
             with self.subTest(value=value):
@@ -217,6 +245,22 @@ class DriveOnlyMotionTest(unittest.IsolatedAsyncioTestCase):
             )
 
         articulation.set_dof_positions.assert_not_called()
+        self.assertEqual(articulation.set_dof_position_targets.call_count, 2)
+        arm_target = articulation.set_dof_position_targets.call_args_list[0]
+        np.testing.assert_allclose(
+            arm_target.args[0],
+            np.full(7, 0.001),
+        )
+        np.testing.assert_array_equal(
+            arm_target.kwargs["dof_indices"],
+            np.arange(7),
+        )
+        finger_target = articulation.set_dof_position_targets.call_args_list[1]
+        np.testing.assert_allclose(finger_target.args[0], np.asarray([0.02]))
+        np.testing.assert_array_equal(
+            finger_target.kwargs["dof_indices"],
+            np.asarray([7]),
+        )
         for attribute in (*arm_attributes, *finger_attributes):
             attribute.Set.assert_called_once()
 

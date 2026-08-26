@@ -33,6 +33,7 @@ from jepa_wm.control_resolution import (
     ControlResolutionForwardEvidence,
     ControlResolutionRollbackFailure,
     ControlResolutionRollbackSuccess,
+    ControlResolutionRollbackCorrection,
     TrackedErrorSettlement,
     ControlResolutionEndpoint,
     ControlResolutionBaselineEvidence,
@@ -444,7 +445,8 @@ class ResolutionDriveTargetRecovery:
                 ),
             )
             if self.probe.applies_drive_command
-            else None
+            else None,
+            self.drive_target if self.probe.applies_drive_command else None,
         )
 
 
@@ -698,10 +700,7 @@ async def measure_insertion_control_resolution(
         baseline.validate(protocol.baseline_policy, load, limits)
         if baseline.drive_target is None:
             raise RuntimeError("control resolution baseline lost its drive target")
-        baseline_command = JointCommand(
-            np.asarray(baseline.drive_target.joint_positions, dtype=np.float64),
-            baseline.drive_target.gripper_width_m,
-        )
+        active_drive_target = baseline.drive_target
         reference_reset = baseline.reference_reset
         captured_reset = ControlSession.trial_context(observation, state).reset
         if load is ControlResolutionLoad.UNLOADED:
@@ -716,7 +715,7 @@ async def measure_insertion_control_resolution(
         for probe in protocol.probe_plans:
             index = probe.sample_index
             magnitude = probe.requested_translation_meters
-            require_resolution_drive_target(runtime, baseline.drive_target)
+            require_resolution_drive_target(runtime, active_drive_target)
             motion_period_seconds = protocol.motion_period_for(magnitude)
             start_command, start_reset = _capture_reset_state(
                 runtime,
@@ -803,6 +802,21 @@ async def measure_insertion_control_resolution(
                 selected,
                 start_command,
             )
+            drive_target_joint_positions = protocol.drive_joint_target(
+                probe,
+                tuple(float(value) for value in target.arm_positions),
+                active_drive_target,
+                start_reset,
+                start_reset.joint_positions,
+            )
+            applied_drive_target = (
+                JointCommand(
+                    np.asarray(drive_target_joint_positions, dtype=np.float64),
+                    active_drive_target.gripper_width_m,
+                )
+                if drive_target_joint_positions is not None
+                else target
+            )
             execution = ControlResolutionProbeExecution(
                 probe=probe,
                 recorded_target_pose=observation.target_pose,
@@ -810,10 +824,13 @@ async def measure_insertion_control_resolution(
                 commanded_action=commanded,
                 target_pose=start_reset.pose.applied(commanded),
                 projection=projection,
+                drive_target_joint_positions=drive_target_joint_positions,
             )
             execution.validate(
                 protocol,
                 observation.observation_id,
+                active_drive_target,
+                start_reset,
             )
 
             sample_interlock = ResolutionControlInterlock(
@@ -829,7 +846,7 @@ async def measure_insertion_control_resolution(
             await execute_resolution_probe_motion(
                 runtime,
                 start_command,
-                target,
+                applied_drive_target,
                 probe,
                 motion_period_seconds,
                 sample_interlock,
@@ -854,6 +871,13 @@ async def measure_insertion_control_resolution(
                     runtime,
                     load.plug_attached,
                 )
+                recovery_drive_target = protocol.rollback_drive_target(
+                    probe,
+                    active_drive_target,
+                    reference_reset,
+                    drive_target_joint_positions,
+                    tuple(float(value) for value in failed_actual.arm_positions),
+                )
                 rollback_outcome = await recover_resolution_drive_target(
                     runtime,
                     failed_actual,
@@ -861,7 +885,7 @@ async def measure_insertion_control_resolution(
                     ResolutionDriveTargetRecovery(
                         protocol,
                         probe,
-                        baseline.drive_target,
+                        recovery_drive_target,
                         reference_reset,
                     ),
                 )
@@ -880,8 +904,15 @@ async def measure_insertion_control_resolution(
                             interlock=sample_interlock.contact.evidence,
                             drive_command=probe.drive_command(
                                 motion_period_seconds
-                                if probe.applies_drive_command
-                                else None
+                                if probe.applies_drive_command else None,
+                                (
+                                    ControlResolutionDriveTarget(
+                                        drive_target_joint_positions,
+                                        active_drive_target.gripper_width_m,
+                                    )
+                                    if drive_target_joint_positions is not None
+                                    else None
+                                ),
                             ),
                             timing=ControlResolutionMotionTiming(
                                 motion_started_at_sim_seconds,
@@ -926,21 +957,30 @@ async def measure_insertion_control_resolution(
                 ),
                 baseline.drive_target.gripper_width_m,
             )
-            rollback_drive_command = probe.drive_command(
-                protocol.safe_joint_motion_period(
-                    tuple(float(value) for value in actual.arm_positions),
-                    baseline.drive_target.joint_positions,
-                    motion_period_seconds,
-                )
-                if probe.applies_drive_command
-                else None
+            (
+                applied_rollback_drive_target,
+                rollback_drive_command,
+            ) = protocol.rollback_drive_command(
+                probe,
+                active_drive_target,
+                reference_reset,
+                drive_target_joint_positions,
+                tuple(float(value) for value in actual.arm_positions),
+                motion_period_seconds,
+            )
+            applied_rollback_command = JointCommand(
+                np.asarray(
+                    applied_rollback_drive_target.joint_positions,
+                    dtype=np.float64,
+                ),
+                applied_rollback_drive_target.gripper_width_m,
             )
             rollback_started_at_sim_seconds = timeline.get_current_time()
             if isinstance(rollback_drive_command, DriveCommandApplied):
                 await move_joint_command(
                     runtime.actuators,
                     actual,
-                    baseline_command,
+                    applied_rollback_command,
                     runtime.attachment,
                     frame_count=1,
                     phase=RecordingLabel(RecordingMoment.SETTLE, Phase.READY),
@@ -966,32 +1006,110 @@ async def measure_insertion_control_resolution(
                     ),
                 )
             except UnsettledControlResolutionTarget as error:
-                rollback_failed_at_sim_seconds = timeline.get_current_time()
-                raise ControlResolutionSettlementTimeout(
-                    ControlResolutionRollbackTimeout(
-                        ControlResolutionSettlementTimeoutTrace(
-                            execution=execution,
-                            start_joint_positions=tuple(
-                                float(value) for value in actual.arm_positions
-                            ),
-                            target_joint_positions=tuple(
-                                float(value)
-                                for value in rollback_target.arm_positions
-                            ),
-                            attempt=error.attempt,
-                            interlock=rollback_interlock.contact.evidence,
-                            drive_command=rollback_drive_command,
-                            timing=ControlResolutionMotionTiming(
-                                rollback_started_at_sim_seconds,
-                                rollback_failed_at_sim_seconds,
-                            ),
+                initial_failed_at_sim_seconds = timeline.get_current_time()
+                try:
+                    correction_command = protocol.rollback_feedback_command(
+                        probe,
+                        tuple(
+                            float(value) for value in rollback_target.arm_positions
                         ),
-                        forward,
+                        rollback_drive_command,
+                        error.attempt.final_joint_positions,
+                        motion_period_seconds,
                     )
-                ) from error
+                except ValueError:
+                    raise ControlResolutionSettlementTimeout(
+                        ControlResolutionRollbackTimeout(
+                            ControlResolutionSettlementTimeoutTrace(
+                                execution=execution,
+                                start_joint_positions=tuple(
+                                    float(value) for value in actual.arm_positions
+                                ),
+                                target_joint_positions=tuple(
+                                    float(value)
+                                    for value in rollback_target.arm_positions
+                                ),
+                                attempt=error.attempt,
+                                interlock=rollback_interlock.contact.evidence,
+                                drive_command=rollback_drive_command,
+                                timing=ControlResolutionMotionTiming(
+                                    rollback_started_at_sim_seconds,
+                                    initial_failed_at_sim_seconds,
+                                ),
+                            ),
+                            forward,
+                        )
+                    ) from error
+                rollback_correction = ControlResolutionRollbackCorrection(
+                    error.attempt,
+                    correction_command,
+                    ControlResolutionMotionTiming(
+                        rollback_started_at_sim_seconds,
+                        initial_failed_at_sim_seconds,
+                    ),
+                )
+                correction_start = runtime.actuators.actual_command()
+                correction_target = JointCommand(
+                    np.asarray(
+                        correction_command.target.joint_positions,
+                        dtype=np.float64,
+                    ),
+                    correction_command.target.gripper_width_m,
+                )
+                correction_started_at_sim_seconds = timeline.get_current_time()
+                await move_joint_command(
+                    runtime.actuators,
+                    correction_start,
+                    correction_target,
+                    runtime.attachment,
+                    frame_count=1,
+                    phase=RecordingLabel(RecordingMoment.SETTLE, Phase.READY),
+                    stage=ObservationStage.CABLE_GRASPED,
+                    recorder=None,
+                    sample_period_seconds=correction_command.period_seconds,
+                    observe_safety=rollback_interlock.observe,
+                )
+                try:
+                    rollback_settlement = await settle_resolution_motion(
+                        runtime,
+                        correction_start,
+                        rollback_target,
+                        rollback_interlock,
+                        protocol.settlement,
+                        protocol.settlement.rollback_tracking_error_cap_radians,
+                    )
+                except UnsettledControlResolutionTarget as correction_error:
+                    correction_failed_at_sim_seconds = timeline.get_current_time()
+                    raise ControlResolutionSettlementTimeout(
+                        ControlResolutionRollbackTimeout(
+                            ControlResolutionSettlementTimeoutTrace(
+                                execution=execution,
+                                start_joint_positions=tuple(
+                                    float(value)
+                                    for value in correction_start.arm_positions
+                                ),
+                                target_joint_positions=tuple(
+                                    float(value)
+                                    for value in rollback_target.arm_positions
+                                ),
+                                attempt=correction_error.attempt,
+                                interlock=rollback_interlock.contact.evidence,
+                                drive_command=correction_command,
+                                timing=ControlResolutionMotionTiming(
+                                    correction_started_at_sim_seconds,
+                                    correction_failed_at_sim_seconds,
+                                ),
+                            ),
+                            forward,
+                            rollback_correction,
+                        )
+                    ) from correction_error
+                applied_rollback_drive_target = correction_command.target
+            else:
+                rollback_correction = None
             if rollback_settlement is None:
                 raise RuntimeError("tracked rollback produced no settlement evidence")
-            require_resolution_drive_target(runtime, baseline.drive_target)
+            require_resolution_drive_target(runtime, applied_rollback_drive_target)
             _, rollback_reset = _capture_reset_state(
                 runtime,
             )
@@ -1011,7 +1129,9 @@ async def measure_insertion_control_resolution(
                 tracked_settlement = replace(
                     tracked_settlement,
                     rollback_drive_command=rollback_drive_command,
+                    rollback_correction=rollback_correction,
                 )
+            active_drive_target = applied_rollback_drive_target
             samples.append(
                 ControlResolutionSample(
                     index=index,
@@ -1025,6 +1145,7 @@ async def measure_insertion_control_resolution(
                     rollback_reset=rollback_reset,
                     tracked_settlement=tracked_settlement,
                     motion_timing=forward.timing,
+                    drive_target_joint_positions=drive_target_joint_positions,
                 )
             )
 

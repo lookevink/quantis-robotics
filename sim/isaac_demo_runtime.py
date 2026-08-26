@@ -116,7 +116,15 @@ class Actuators:
     def apply_drive_command(self, command: JointCommand) -> None:
         """Set drive targets without directly changing articulation state."""
 
-        self._set_drive_targets(command)
+        finger_position = self._set_drive_targets(command)
+        self.articulation.set_dof_position_targets(
+            np.asarray(command.arm_positions, dtype=np.float64),
+            dof_indices=np.arange(7),
+        )
+        self.articulation.set_dof_position_targets(
+            np.asarray([finger_position], dtype=np.float64),
+            dof_indices=np.asarray([7]),
+        )
 
     def set_reset_state(self, command: JointCommand) -> None:
         """Set targets and DOF state for explicit reset or initialization only."""
@@ -563,12 +571,17 @@ async def _advance_sample(
     import omni.timeline
 
     app = omni.kit.app.get_app()
-    latest_safety = ContactReading()
-    if sample_period_seconds is None:
-        await app.next_update_async()
-        return observe_safety() if observe_safety is not None else latest_safety
     timeline = omni.timeline.get_timeline_interface()
     started_at = timeline.get_current_time()
+    latest_safety = ContactReading()
+    if sample_period_seconds is None:
+        for _ in range(120):
+            await app.next_update_async()
+            if observe_safety is not None:
+                latest_safety = latest_safety.peak(observe_safety())
+            if timeline.get_current_time() > started_at:
+                return latest_safety
+        raise RuntimeError("simulation did not advance within 120 updates")
     maximum_updates = max(120, ceil(sample_period_seconds * 1000))
     for _ in range(maximum_updates):
         await app.next_update_async()

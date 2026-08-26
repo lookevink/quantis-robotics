@@ -78,6 +78,7 @@ def reload_demo_runtime() -> ModuleType:
         "jepa_wm.trial_equivalence",
         "jepa_wm.control_resolution_profile",
         "jepa_wm.control_resolution_baseline",
+        "jepa_wm.control_resolution_drive",
         "sim.demo_sequence",
         "sim.recording",
         "sim.control_identity",

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from math import isclose, isfinite
 from typing import Any, Mapping
 
+import numpy as np
+
 from jepa_wm.identifiers import validate_safe_identifier
 from jepa_wm.control_resolution_profile import ControlResolutionLoad
 from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimits
@@ -48,6 +50,23 @@ class ControlResolutionDriveTarget:
             "joint_positions": list(self.joint_positions),
             "gripper_width_m": self.gripper_width_m,
         }
+
+    @classmethod
+    def for_command(
+        cls,
+        joint_positions: tuple[float, ...],
+        gripper_width_m: float,
+    ) -> ControlResolutionDriveTarget:
+        """Canonicalize one command to Isaac's USD float drive attributes."""
+
+        stored_degrees = np.asarray(
+            np.rad2deg(np.asarray(joint_positions, dtype=np.float64)),
+            dtype=np.float32,
+        ).astype(np.float64)
+        return cls(
+            tuple(float(value) for value in np.deg2rad(stored_degrees)),
+            float(np.float32(gripper_width_m / 2.0)) * 2.0,
+        )
 
     def validate_active(
         self,

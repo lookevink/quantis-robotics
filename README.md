@@ -1483,6 +1483,63 @@ must also persist a realized target-progress decision; a failed decision must
 terminate and roll back rather than opening another action. No second
 receding-horizon action, insertion filming, or production authority is granted.
 
+The corrected drive-only checkpoint is now terminal on the frozen six-case
+pose/load roster. Runtime motion uses only drive targets; direct articulation
+state-setting remains reset/initialization-only. Every physics advance is
+interlocked, every run independently qualifies its stable baseline, and the
+report reconstructs the exact active drive target, forward projection,
+settlement trace, rollback target, and at most one bounded feedback correction.
+The canonical artifacts are in the checksum-verified 13 GB recovery copy:
+
+| Load | Context | Terminal result |
+| --- | ---: | --- |
+| attached | 43 | Session `insertion-resolution-attached-20260826T070513Z-52600-c43` completed `9/9`. Its report appeared after the original 900-second client bound; the runtime remained bounded and finished normally, the transport bound was corrected to 1800 seconds, and a second backup taken after Isaac was idle verified the report copy. |
+| attached | 74 | Session `insertion-resolution-attached-20260826T064625Z-52600-c74` completed `9/9`. |
+| attached | 106 | Session `insertion-resolution-attached-20260826T073301Z-52600-c106` completed `9/9` under the corrected transport lifecycle. |
+| unloaded | 43 | Session `insertion-resolution-unloaded-20260826T062829Z-52600-c43` completed `8/9`; the final `1.0 mm` probe was rejected before actuation because IK jumped to a branch `1.612791 rad` away. The unchanged velocity gate was not weakened. |
+| unloaded | 74 | Session `insertion-resolution-unloaded-20260826T081635Z-52600-c74` completed `7/9`; the second `1.0 mm` motion plateaued at `0.853741 mrad` versus its `0.784999 mrad` threshold, and interlocked recovery plateaued at `0.623346 mrad` versus the unchanged `0.500000 mrad` rollback cap. |
+| unloaded | 106 | Session `insertion-resolution-unloaded-20260826T083236Z-52600-c106` completed `7/9`; the second `1.0 mm` motion plateaued at `0.840743 mrad` versus `0.776817 mrad`, and recovery plateaued at `0.630200 mrad` versus `0.500000 mrad`. |
+
+All `27/27` attached probes completed with `0 N` contact, no collision, and
+retained attachment. Maximum attached zero-command drift was `0.005516 mm`
+translation and `0.012655 mrad` orientation. Across the three poses, the nine
+`0.5 mm` requests realized `0.382719 mm` mean along-axis motion; the lowest
+per-session mean was `0.349062 mm`, maximum translation error was
+`0.173489 mm`, maximum orientation drift was `0.784174 mrad`, maximum
+controller-target error was `1.468461 mrad`, and maximum settlement time was
+`2.75 s`. The nine `1.0 mm` requests realized `0.746263 mm` mean; corresponding
+maxima were `0.341800 mm` translation error, `0.784828 mrad` orientation drift,
+`1.704818 mrad` controller-target error, and `3.5 s` settlement. Maximum
+attached start/rollback translation repeatability was `0.188904 mm`.
+`12/18` translating rollbacks required the sole bounded correction, so this is
+controller evidence for one action, not autonomous repeated-control evidence.
+
+The unloaded negatives are deliberately retained. They show that the same
+controller is pose/load sensitive: context 43 encounters a discontinuous IK
+branch on its third `1.0 mm` attempt, while contexts 74 and 106 reproducibly
+exhaust the bounded motion and recovery windows on their second `1.0 mm`
+attempts. Both current-schema settlement failures now persist and authenticate
+their exact 48-update motion and rollback traces. A validator fix applies the
+same persisted rollback cap used at runtime; projection-failure reconstruction
+allows only the existing cross-runtime floating-point tolerance (the context-43
+Euler recomputation differed by about `1.6e-13 rad`) and still rejects
+`1e-10` tampering. All three unloaded sessions remained at `0 N` with no
+collision and the plug intentionally absent.
+
+This establishes the existing attached insertion-control target policy without
+changing the `3 mm` task tolerance or any force, collision, attachment, joint,
+reset, or velocity gate. Its `0.5 mm` minimum translation is more than sixty
+times the worst attached zero drift, and its `1.25 mrad` orientation-hold
+tolerance exceeds the observed `0.784828 mrad` maximum with margin. At context
+43 the policy selects frame 48: a `0.513522 mm` translation with only
+`0.026835 mrad` orientation error, so rotation is held. Context 74's nearest
+target is `2.109314 mm`, outside this corrected command benchmark, and context
+106 has no future bounded-horizon target. The checkpoint therefore reopens
+only the predeclared single attached context-43 JEPA action, using the already
+fresh `2/2` no-actuation evidence and the realized-progress terminal gate. A
+failed progress decision must stop and roll back. No second action, multi-step
+insertion, filming, or production authority is granted.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

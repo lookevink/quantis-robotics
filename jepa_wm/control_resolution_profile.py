@@ -17,13 +17,17 @@ class ControlResolutionLoad(str, Enum):
 
 CONTROL_RESOLUTION_CONTEXTS = (43, 74, 106)
 CONTROL_RESOLUTION_LOADS = tuple(ControlResolutionLoad)
+CONTROL_RESOLUTION_MEASUREMENT_TIMEOUT_SECONDS = 1800
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Print the canonical insertion resolution benchmark profile."
     )
-    parser.add_argument("field", choices=("contexts", "loads", "roster", "load"))
+    parser.add_argument(
+        "field",
+        choices=("contexts", "loads", "roster", "load", "measurement-timeout"),
+    )
     parser.add_argument(
         "--load",
         choices=tuple(load.value for load in ControlResolutionLoad),
@@ -41,6 +45,8 @@ def main() -> None:
                 for context in CONTROL_RESOLUTION_CONTEXTS
             )
         )
+    elif args.field == "measurement-timeout":
+        print(CONTROL_RESOLUTION_MEASUREMENT_TIMEOUT_SECONDS)
     elif args.load is None:
         parser.error("load field requires --load")
     else:

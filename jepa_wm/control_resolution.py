@@ -38,6 +38,7 @@ from jepa_wm.control_resolution_baseline import (
     ControlResolutionDriveTarget,
 )
 from jepa_wm.control_resolution_profile import ControlResolutionLoad
+from jepa_wm.control_resolution_drive import ControlResolutionDriveBiasCompensation
 from jepa_wm.direct_safety import ControlSafetySnapshot
 from jepa_wm.trial_equivalence import (
     ResetEquivalenceMeasurement,
@@ -370,13 +371,29 @@ class DriveCommandSkipped:
 @dataclass(frozen=True)
 class DriveCommandApplied:
     period_seconds: float
+    target: ControlResolutionDriveTarget | None = None
 
     def __post_init__(self) -> None:
-        if not isfinite(self.period_seconds) or self.period_seconds <= 0.0:
+        if (
+            not isfinite(self.period_seconds)
+            or self.period_seconds <= 0.0
+            or (
+                self.target is not None
+                and not isinstance(self.target, ControlResolutionDriveTarget)
+            )
+        ):
             raise ValueError("control resolution drive command period is invalid")
 
-    def to_dict(self) -> dict[str, float | str]:
-        return {"status": "applied", "period_seconds": self.period_seconds}
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": "applied",
+            "period_seconds": self.period_seconds,
+            **(
+                {"target": self.target.to_dict()}
+                if self.target is not None
+                else {}
+            ),
+        }
 
 
 ControlResolutionDriveCommand = Union[DriveCommandSkipped, DriveCommandApplied]
@@ -387,12 +404,19 @@ def _drive_command_from_dict(payload: Any) -> ControlResolutionDriveCommand:
         raise ValueError("control resolution drive command must be an object")
     status = payload.get("status")
     if status == "skipped":
-        if "period_seconds" in payload:
-            raise ValueError("skipped drive command carries a period")
+        if "period_seconds" in payload or "target" in payload:
+            raise ValueError("skipped drive command carries applied fields")
         return DriveCommandSkipped()
     if status == "applied":
         try:
-            return DriveCommandApplied(float(payload["period_seconds"]))
+            return DriveCommandApplied(
+                float(payload["period_seconds"]),
+                (
+                    ControlResolutionDriveTarget.from_dict(payload["target"])
+                    if "target" in payload
+                    else None
+                ),
+            )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("applied drive command is incomplete") from error
     raise ValueError("control resolution drive command status is invalid")
@@ -443,14 +467,15 @@ class ControlResolutionProbePlan:
     def drive_command(
         self,
         period_seconds: float | None,
+        target: ControlResolutionDriveTarget | None = None,
     ) -> ControlResolutionDriveCommand:
         if not self.applies_drive_command:
-            if period_seconds is not None:
-                raise ValueError("hold probe cannot carry a drive command period")
+            if period_seconds is not None or target is not None:
+                raise ValueError("hold probe cannot carry a drive command")
             return DriveCommandSkipped()
         if period_seconds is None:
             raise ValueError("translation probe requires a drive command period")
-        return DriveCommandApplied(period_seconds)
+        return DriveCommandApplied(period_seconds, target)
 
     def settlement_joint_target(
         self,
@@ -515,11 +540,14 @@ class ControlResolutionProbeExecution:
     commanded_action: DroidAction
     target_pose: DroidPose
     projection: SafetyProjectionAttempt
+    drive_target_joint_positions: tuple[float, ...] | None = None
 
     def validate(
         self,
         protocol: ControlResolutionProtocol,
         observation_id: int,
+        active_drive_target: ControlResolutionDriveTarget | None = None,
+        stable_reference: TrialResetState | None = None,
     ) -> None:
         expected_action = protocol.probe_action(
             self.start_reset.pose,
@@ -540,6 +568,30 @@ class ControlResolutionProbeExecution:
             self.start_reset.joint_positions,
             projected_positions,
         )
+        if self.probe.applies_drive_command:
+            if active_drive_target is None or stable_reference is None:
+                if protocol.drive_bias_compensation is not None:
+                    raise ValueError(
+                        "drive compensation requires one stable baseline"
+                    )
+                expected_drive_target = expected_joint_target
+            else:
+                expected_drive_target = protocol.drive_joint_target(
+                    self.probe,
+                    expected_joint_target,
+                    active_drive_target,
+                    stable_reference,
+                    self.start_reset.joint_positions,
+                )
+        else:
+            expected_drive_target = None
+        recorded_drive_target = self.drive_target_joint_positions
+        if (
+            recorded_drive_target is None
+            and self.probe.applies_drive_command
+            and protocol.drive_bias_compensation is None
+        ):
+            recorded_drive_target = expected_drive_target
         limits = protocol.safety_limits
         start_target_distance = float(
             np.linalg.norm(
@@ -563,6 +615,18 @@ class ControlResolutionProbeExecution:
                 list(self.target_pose.values),
             )
             or self.projection.proposed_joint_positions != expected_joint_target
+            or not _reconstructed_metric_payload_matches(
+                (
+                    list(expected_drive_target)
+                    if expected_drive_target is not None
+                    else None
+                ),
+                (
+                    list(recorded_drive_target)
+                    if recorded_drive_target is not None
+                    else None
+                ),
+            )
             or not self.projection.gate.passed
             or self.projection.gate.observation_id != observation_id
             or self.projection.gate.next_pose != self.target_pose
@@ -612,6 +676,15 @@ class ControlResolutionProbeExecution:
             "commanded_action": list(self.commanded_action.values),
             "target_pose": list(self.target_pose.values),
             "projection": self.projection.to_dict(),
+            **(
+                {
+                    "drive_target_joint_positions": list(
+                        self.drive_target_joint_positions
+                    )
+                }
+                if self.drive_target_joint_positions is not None
+                else {}
+            ),
         }
 
     @classmethod
@@ -626,6 +699,14 @@ class ControlResolutionProbeExecution:
                 DroidAction(tuple(payload["commanded_action"])),
                 DroidPose(tuple(payload["target_pose"])),
                 SafetyProjectionAttempt.from_dict(payload["projection"]),
+                (
+                    tuple(
+                        float(value)
+                        for value in payload["drive_target_joint_positions"]
+                    )
+                    if "drive_target_joint_positions" in payload
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(
@@ -667,8 +748,14 @@ class ControlResolutionProjectionFailure:
         if (
             protocol.probe_plan(self.probe.sample_index) != self.probe
             or self.probe.kind is not ControlResolutionProbeKind.TRANSLATION
-            or self.commanded_action != expected_action
-            or self.target_pose != expected_target
+            or not _reconstructed_metric_payload_matches(
+                list(expected_action.values),
+                list(self.commanded_action.values),
+            )
+            or not _reconstructed_metric_payload_matches(
+                list(expected_target.values),
+                list(self.target_pose.values),
+            )
             or self.projection.gate.passed
             or not self.projection.gate.reasons
             or self.projection.gate.observation_id != observation_id
@@ -763,6 +850,9 @@ class ControlResolutionProtocol:
     reset_tolerances: ResetEquivalenceTolerances = (
         CONTROL_RESOLUTION_RESET_TOLERANCES
     )
+    drive_bias_compensation: ControlResolutionDriveBiasCompensation | None = (
+        ControlResolutionDriveBiasCompensation()
+    )
 
     def __post_init__(self) -> None:
         if (
@@ -793,6 +883,17 @@ class ControlResolutionProtocol:
             or not isinstance(
                 self.settlement,
                 (FixedUpdateSettlement, TrackedErrorSettlement),
+            )
+            or (
+                self.drive_bias_compensation is not None
+                and not isinstance(
+                    self.drive_bias_compensation,
+                    ControlResolutionDriveBiasCompensation,
+                )
+            )
+            or (
+                self.drive_bias_compensation is not None
+                and self.baseline_policy is None
             )
             or (
                 isinstance(self.settlement, TrackedErrorSettlement)
@@ -888,6 +989,149 @@ class ControlResolutionProtocol:
             )
         )
 
+    def drive_joint_target(
+        self,
+        probe: ControlResolutionProbePlan,
+        desired_joint_positions: tuple[float, ...],
+        active_drive_target: ControlResolutionDriveTarget,
+        stable_reference: TrialResetState,
+        start_joint_positions: tuple[float, ...],
+    ) -> tuple[float, ...] | None:
+        """Return the exact pre-actuation drive target for one probe."""
+
+        if not probe.applies_drive_command:
+            return None
+        if self.drive_bias_compensation is None:
+            return desired_joint_positions
+        compensated = self.drive_bias_compensation.compensated_joint_target(
+            desired_joint_positions,
+            active_drive_target,
+            stable_reference.joint_positions,
+            self.safety_limits,
+        )
+        applied = (
+            ControlResolutionDriveTarget.for_command(
+                compensated,
+                active_drive_target.gripper_width_m,
+            ).joint_positions
+            if self.drive_bias_compensation.path_dependent_rollback
+            else compensated
+        )
+        maximum_motion = (
+            self.safety_limits.maximum_joint_velocity_radians_per_second
+            * self.motion_period_for(probe.requested_translation_meters)
+        )
+        if maximum_joint_position_delta(
+            applied,
+            start_joint_positions,
+        ) > (
+            maximum_motion
+        ):
+            raise ValueError("compensated drive target exceeds the velocity gate")
+        return applied
+
+    def rollback_drive_target(
+        self,
+        probe: ControlResolutionProbePlan,
+        baseline_drive_target: ControlResolutionDriveTarget,
+        stable_reference: TrialResetState,
+        forward_drive_joint_positions: tuple[float, ...] | None,
+        forward_actual_joint_positions: tuple[float, ...],
+    ) -> ControlResolutionDriveTarget:
+        """Return the exact drive target that should restore one stable reset."""
+
+        compensation = self.drive_bias_compensation
+        if (
+            not probe.applies_drive_command
+            or compensation is None
+            or not compensation.path_dependent_rollback
+        ):
+            return baseline_drive_target
+        if forward_drive_joint_positions is None:
+            raise ValueError("rollback compensation lost its forward drive target")
+        return ControlResolutionDriveTarget.for_command(
+            compensation.compensated_joint_target(
+                stable_reference.joint_positions,
+                ControlResolutionDriveTarget(
+                    forward_drive_joint_positions,
+                    baseline_drive_target.gripper_width_m,
+                ),
+                forward_actual_joint_positions,
+                self.safety_limits,
+            ),
+            baseline_drive_target.gripper_width_m,
+        )
+
+    def rollback_drive_command(
+        self,
+        probe: ControlResolutionProbePlan,
+        active_drive_target: ControlResolutionDriveTarget,
+        stable_reference: TrialResetState,
+        forward_drive_joint_positions: tuple[float, ...] | None,
+        forward_actual_joint_positions: tuple[float, ...],
+        minimum_period_seconds: float,
+    ) -> tuple[ControlResolutionDriveTarget, ControlResolutionDriveCommand]:
+        """Resolve one velocity-safe return target and its exact wire evidence."""
+
+        target = self.rollback_drive_target(
+            probe,
+            active_drive_target,
+            stable_reference,
+            forward_drive_joint_positions,
+            forward_actual_joint_positions,
+        )
+        return target, probe.drive_command(
+            self.safe_joint_motion_period(
+                forward_actual_joint_positions,
+                target.joint_positions,
+                minimum_period_seconds,
+            ) if probe.applies_drive_command else None,
+            (
+                target
+                if probe.applies_drive_command
+                and self.drive_bias_compensation is not None
+                and self.drive_bias_compensation.path_dependent_rollback
+                else None
+            ),
+        )
+
+    def rollback_feedback_command(
+        self,
+        probe: ControlResolutionProbePlan,
+        desired_joint_positions: tuple[float, ...],
+        applied_command: ControlResolutionDriveCommand,
+        realized_joint_positions: tuple[float, ...],
+        minimum_period_seconds: float,
+    ) -> DriveCommandApplied:
+        """Resolve the sole bounded feedback correction after rollback stalls."""
+
+        compensation = self.drive_bias_compensation
+        if (
+            not probe.applies_drive_command
+            or compensation is None
+            or not compensation.path_dependent_rollback
+            or not isinstance(applied_command, DriveCommandApplied)
+            or applied_command.target is None
+        ):
+            raise ValueError("rollback feedback correction is unavailable")
+        target = ControlResolutionDriveTarget.for_command(
+            compensation.feedback_corrected_joint_target(
+                desired_joint_positions,
+                applied_command.target,
+                realized_joint_positions,
+                self.safety_limits,
+            ),
+            applied_command.target.gripper_width_m,
+        )
+        return DriveCommandApplied(
+            self.safe_joint_motion_period(
+                realized_joint_positions,
+                target.joint_positions,
+                minimum_period_seconds,
+            ),
+            target,
+        )
+
     def validate_samples(
         self,
         reference_reset: TrialResetState,
@@ -925,23 +1169,102 @@ class ControlResolutionProtocol:
         sample: ControlResolutionSample,
         *,
         expected_attachment: bool = True,
-        rollback_drive_target: ControlResolutionDriveTarget | None = None,
-    ) -> None:
+        active_drive_target: ControlResolutionDriveTarget | None = None,
+    ) -> ControlResolutionDriveTarget | None:
         expected_joint_delta = maximum_joint_position_delta(
             sample.projection.proposed_joint_positions,
             sample.start_reset.joint_positions,
         )
         probe = self.probe_plan(sample.index)
-        rollback_target_positions = (
-            probe.rollback_joint_target(
-                rollback_drive_target,
-                reference_reset,
+        expected_drive_target = (
+            self.drive_joint_target(
+                probe,
+                sample.projection.proposed_joint_positions,
+                active_drive_target,
+                (
+                    sample.start_reset
+                    if self.drive_bias_compensation is not None
+                    and self.drive_bias_compensation.path_dependent_rollback
+                    else reference_reset
+                ),
+                sample.start_reset.joint_positions,
             )
-            if rollback_drive_target is not None
-            else reference_reset.joint_positions
+            if active_drive_target is not None
+            else (
+                sample.projection.proposed_joint_positions
+                if probe.applies_drive_command
+                else None
+            )
         )
+        recorded_drive_target = sample.drive_target_joint_positions
+        if (
+            recorded_drive_target is None
+            and probe.applies_drive_command
+            and self.drive_bias_compensation is None
+        ):
+            recorded_drive_target = expected_drive_target
+        if not _reconstructed_metric_payload_matches(
+            (
+                list(expected_drive_target)
+                if expected_drive_target is not None
+                else None
+            ),
+            (
+                list(recorded_drive_target)
+                if recorded_drive_target is not None
+                else None
+            ),
+        ):
+            raise ValueError("control resolution sample drive target is invalid")
+        rollback_target_positions = probe.rollback_joint_target(
+            active_drive_target,
+            reference_reset,
+        ) if active_drive_target is not None else reference_reset.joint_positions
+        expected_rollback = (
+            self.rollback_drive_command(
+                probe,
+                active_drive_target,
+                reference_reset,
+                sample.drive_target_joint_positions,
+                sample.endpoint.safety.joint_positions,
+                self.motion_period_for(sample.requested_translation_meters),
+            )
+            if active_drive_target is not None
+            else None
+        )
+        expected_initial_drive_target = (
+            expected_rollback[0] if expected_rollback is not None else None
+        )
+        expected_initial_command = (
+            expected_rollback[1] if expected_rollback is not None else None
+        )
+        correction = (
+            sample.tracked_settlement.rollback_correction
+            if sample.tracked_settlement is not None
+            else None
+        )
+        if correction is not None:
+            if expected_initial_command is None:
+                raise ValueError("rollback correction has no initial command")
+            correction.validate(
+                self,
+                probe,
+                sample.endpoint.safety.joint_positions,
+                rollback_target_positions,
+                expected_initial_command,
+                self.motion_period_for(sample.requested_translation_meters),
+            )
+            settlement_start_joint_positions = (
+                correction.initial_attempt.final_joint_positions
+            )
+            expected_active_drive_target = correction.command.target
+        else:
+            settlement_start_joint_positions = (
+                sample.endpoint.safety.joint_positions
+            )
+            expected_active_drive_target = expected_initial_drive_target
         rollback_requested_joint_motion = maximum_joint_position_delta(
-            sample.endpoint.safety.joint_positions,
+            settlement_start_joint_positions,
             rollback_target_positions,
         )
         rollback_final_tracking_error = maximum_joint_position_delta(
@@ -960,21 +1283,9 @@ class ControlResolutionProtocol:
             if sample.tracked_settlement is not None
             else None
         )
-        expected_rollback_command = (
-            probe.drive_command(
-                self.safe_joint_motion_period(
-                    sample.endpoint.safety.joint_positions,
-                    rollback_target_positions,
-                    self.motion_period_for(sample.requested_translation_meters),
-                )
-                if probe.applies_drive_command
-                else None
-            )
-            if rollback_drive_target is not None
-            else None
-        )
+        expected_rollback_command = expected_initial_command
         rollback_period_valid = True
-        if rollback_drive_target is not None and isinstance(
+        if expected_active_drive_target is not None and isinstance(
             self.settlement, TrackedErrorSettlement
         ):
             if sample.tracked_settlement is None:
@@ -1001,6 +1312,7 @@ class ControlResolutionProtocol:
             or not rollback_period_valid
         ):
             raise ValueError("control resolution sample failed safety")
+        return expected_active_drive_target
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -1022,6 +1334,10 @@ class ControlResolutionProtocol:
             ]
         if self.baseline_policy is not None:
             payload["baseline_policy"] = self.baseline_policy.to_dict()
+        if self.drive_bias_compensation is not None:
+            payload["drive_bias_compensation"] = (
+                self.drive_bias_compensation.to_dict()
+            )
         payload.update(self.settlement.protocol_fields())
         return payload
 
@@ -1057,6 +1373,13 @@ class ControlResolutionProtocol:
                 ),
                 reset_tolerances=ResetEquivalenceTolerances.from_dict(
                     payload["reset_tolerances"]
+                ),
+                drive_bias_compensation=(
+                    ControlResolutionDriveBiasCompensation.from_dict(
+                        payload["drive_bias_compensation"]
+                    )
+                    if "drive_bias_compensation" in payload
+                    else None
                 ),
             )
         except (KeyError, TypeError, ValueError) as error:
@@ -1260,6 +1583,93 @@ class ControlResolutionSettlementAttempt:
             ) from error
 
 
+@dataclass(frozen=True)
+class ControlResolutionRollbackCorrection:
+    """One exhausted rollback trace and its sole bounded feedback command."""
+
+    initial_attempt: ControlResolutionSettlementAttempt
+    command: DriveCommandApplied
+    initial_timing: ControlResolutionMotionTiming
+
+    def validate(
+        self,
+        protocol: ControlResolutionProtocol,
+        probe: ControlResolutionProbePlan,
+        initial_start_joint_positions: tuple[float, ...],
+        desired_joint_positions: tuple[float, ...],
+        initial_command: ControlResolutionDriveCommand,
+        minimum_period_seconds: float,
+    ) -> None:
+        if not isinstance(protocol.settlement, TrackedErrorSettlement):
+            raise ValueError("fixed settlement cannot carry rollback correction")
+        self.initial_attempt.validate(
+            protocol.settlement,
+            protocol.settlement.rollback_tracking_error_cap_radians,
+        )
+        expected_command = protocol.rollback_feedback_command(
+            probe,
+            desired_joint_positions,
+            initial_command,
+            self.initial_attempt.final_joint_positions,
+            minimum_period_seconds,
+        )
+        if (
+            not isclose(
+                self.initial_attempt.requested_joint_motion_radians,
+                maximum_joint_position_delta(
+                    initial_start_joint_positions,
+                    desired_joint_positions,
+                ),
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+            or not isclose(
+                self.initial_attempt.tracking_errors_radians[-1],
+                maximum_joint_position_delta(
+                    self.initial_attempt.final_joint_positions,
+                    desired_joint_positions,
+                ),
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+            or self.command != expected_command
+            or self.initial_timing.duration_seconds
+            < (
+                initial_command.period_seconds
+                if isinstance(initial_command, DriveCommandApplied)
+                else minimum_period_seconds
+            )
+        ):
+            raise ValueError("rollback correction evidence is inconsistent")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "initial_attempt": self.initial_attempt.to_dict(),
+            "command": self.command.to_dict(),
+            "initial_timing": self.initial_timing.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ControlResolutionRollbackCorrection:
+        if not isinstance(payload, Mapping):
+            raise ValueError("rollback correction must be an object")
+        try:
+            command = _drive_command_from_dict(payload["command"])
+            if not isinstance(command, DriveCommandApplied):
+                raise ValueError("rollback correction command was skipped")
+            return cls(
+                ControlResolutionSettlementAttempt.from_dict(
+                    payload["initial_attempt"]
+                ),
+                command,
+                ControlResolutionMotionTiming.from_dict(
+                    payload["initial_timing"]
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("rollback correction is incomplete") from error
+
+
 class ControlResolutionSettlementPhase(str, Enum):
     MOTION = "motion"
     ROLLBACK = "rollback"
@@ -1329,7 +1739,17 @@ class ControlResolutionSettlementTimeoutTrace:
         if not isinstance(protocol.settlement, TrackedErrorSettlement):
             raise ValueError("fixed settlement cannot carry a timeout attempt")
         self.attempt.validate(protocol.settlement, tracking_error_cap_radians)
-        self.execution.validate(protocol, observation_id)
+        self.execution.validate(
+            protocol,
+            observation_id,
+            drive_target,
+            (
+                self.execution.start_reset
+                if protocol.drive_bias_compensation is not None
+                and protocol.drive_bias_compensation.path_dependent_rollback
+                else reference_reset
+            ),
+        )
         validate_reset_equivalence(
             reference_reset,
             self.execution.start_reset,
@@ -1409,6 +1829,26 @@ class ControlResolutionMotionTimeout:
             observation_id,
             reference_reset,
         )
+        forward_command_target = (
+            ControlResolutionDriveTarget(
+                self.execution.drive_target_joint_positions,
+                drive_target.gripper_width_m,
+            )
+            if self.execution.drive_target_joint_positions is not None
+            and protocol.drive_bias_compensation is not None
+            and protocol.drive_bias_compensation.path_dependent_rollback
+            else None
+        )
+        recovery_drive_target, _ = protocol.rollback_drive_command(
+            self.probe,
+            drive_target,
+            reference_reset,
+            self.execution.drive_target_joint_positions,
+            self.rollback_outcome.start_joint_positions,
+            protocol.motion_period_for(
+                self.probe.requested_translation_meters
+            ),
+        )
         if (
             self.trace.start_joint_positions
             != self.execution.start_reset.joint_positions
@@ -1422,7 +1862,8 @@ class ControlResolutionMotionTimeout:
                     self.probe.requested_translation_meters
                 )
                 if self.probe.applies_drive_command
-                else None
+                else None,
+                forward_command_target,
             )
             or self.trace.timing.duration_seconds
             < protocol.motion_period_for(
@@ -1433,7 +1874,7 @@ class ControlResolutionMotionTimeout:
         self.rollback_outcome.validate(
             protocol,
             self.probe,
-            drive_target,
+            recovery_drive_target,
             reference_reset,
             expected_attachment,
             protocol.motion_period_for(
@@ -1453,6 +1894,7 @@ class ControlResolutionMotionTimeout:
 class ControlResolutionRollbackTimeout:
     trace: ControlResolutionSettlementTimeoutTrace
     forward: ControlResolutionForwardEvidence
+    correction: ControlResolutionRollbackCorrection | None = None
 
     @property
     def probe(self) -> ControlResolutionProbePlan:
@@ -1484,41 +1926,54 @@ class ControlResolutionRollbackTimeout:
             ),
         )
         self.forward.validate(protocol, self.execution, expected_attachment)
-        expected_command = self._expected_drive_command(protocol, drive_target)
+        _, initial_command = protocol.rollback_drive_command(
+            self.probe,
+            drive_target,
+            reference_reset,
+            self.execution.drive_target_joint_positions,
+            self.forward.endpoint.safety.joint_positions,
+            protocol.motion_period_for(
+                self.probe.requested_translation_meters
+            ),
+        )
         expected_target = self.probe.rollback_joint_target(
             drive_target,
             reference_reset,
         )
-        if (
-            self.trace.start_joint_positions
-            != self.forward.endpoint.safety.joint_positions
-            or self.trace.target_joint_positions != expected_target
-            or self.trace.drive_command != expected_command
-        ):
-            raise ValueError("rollback timeout evidence is inconsistent")
-
-    def _expected_drive_command(
-        self,
-        protocol: ControlResolutionProtocol,
-        drive_target: ControlResolutionDriveTarget,
-    ) -> ControlResolutionDriveCommand:
-        if not self.probe.applies_drive_command:
-            return self.probe.drive_command(None)
-        return self.probe.drive_command(
-            protocol.safe_joint_motion_period(
-                self.trace.start_joint_positions,
-                drive_target.joint_positions,
+        if self.correction is not None:
+            self.correction.validate(
+                protocol,
+                self.probe,
+                self.forward.endpoint.safety.joint_positions,
+                expected_target,
+                initial_command,
                 protocol.motion_period_for(
                     self.probe.requested_translation_meters
                 ),
             )
-        )
+            expected_start = self.correction.initial_attempt.final_joint_positions
+            expected_command = self.correction.command
+        else:
+            expected_start = self.forward.endpoint.safety.joint_positions
+            expected_command = initial_command
+        if (
+            self.trace.start_joint_positions
+            != expected_start
+            or self.trace.target_joint_positions != expected_target
+            or self.trace.drive_command != expected_command
+        ):
+            raise ValueError("rollback timeout evidence is inconsistent")
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "phase": ControlResolutionSettlementPhase.ROLLBACK.value,
             **self.trace.to_dict(),
             "forward": self.forward.to_dict(),
+            **(
+                {"correction": self.correction.to_dict()}
+                if self.correction is not None
+                else {}
+            ),
         }
 
 
@@ -1535,8 +1990,8 @@ def _settlement_failure_from_dict(payload: Any) -> ControlResolutionSettlementFa
         phase = ControlResolutionSettlementPhase(payload["phase"])
         trace = ControlResolutionSettlementTimeoutTrace.from_dict(payload)
         if phase is ControlResolutionSettlementPhase.MOTION:
-            if "forward" in payload:
-                raise ValueError("motion timeout cannot carry forward evidence")
+            if "forward" in payload or "correction" in payload:
+                raise ValueError("motion timeout carries rollback evidence")
             return ControlResolutionMotionTimeout(
                 trace,
                 _rollback_outcome_from_dict(payload["rollback_outcome"]),
@@ -1546,6 +2001,13 @@ def _settlement_failure_from_dict(payload: Any) -> ControlResolutionSettlementFa
         return ControlResolutionRollbackTimeout(
             trace,
             ControlResolutionForwardEvidence.from_dict(payload["forward"]),
+            (
+                ControlResolutionRollbackCorrection.from_dict(
+                    payload["correction"]
+                )
+                if "correction" in payload
+                else None
+            ),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError(
@@ -1559,6 +2021,7 @@ class TrackedSettlementEvidence:
     rollback: ControlResolutionSettlementEvidence
     rollback_interlock: ControlInterlockEvidence
     rollback_drive_command: ControlResolutionDriveCommand = DriveCommandSkipped()
+    rollback_correction: ControlResolutionRollbackCorrection | None = None
 
     def validate(
         self,
@@ -1608,6 +2071,11 @@ class TrackedSettlementEvidence:
             "rollback": self.rollback.to_dict(),
             "rollback_interlock": self.rollback_interlock.to_dict(),
             "rollback_drive_command": self.rollback_drive_command.to_dict(),
+            **(
+                {"rollback_correction": self.rollback_correction.to_dict()}
+                if self.rollback_correction is not None
+                else {}
+            ),
         }
 
     @classmethod
@@ -1648,6 +2116,13 @@ class TrackedSettlementEvidence:
                         if has_legacy_period
                         else DriveCommandSkipped()
                     )
+                ),
+                rollback_correction=(
+                    ControlResolutionRollbackCorrection.from_dict(
+                        payload["rollback_correction"]
+                    )
+                    if "rollback_correction" in payload
+                    else None
                 ),
             )
         except (KeyError, TypeError, ValueError) as error:
@@ -1974,7 +2449,14 @@ class ControlResolutionRollbackSuccess:
                 minimum_period_seconds,
             )
             if probe.applies_drive_command
-            else None
+            else None,
+            (
+                drive_target
+                if probe.applies_drive_command
+                and protocol.drive_bias_compensation is not None
+                and protocol.drive_bias_compensation.path_dependent_rollback
+                else None
+            ),
         )
         validate_reset_equivalence(
             reference_reset,
@@ -2051,14 +2533,24 @@ class ControlResolutionRollbackFailure:
                 minimum_period_seconds,
             )
             if probe.applies_drive_command
-            else None
+            else None,
+            (
+                drive_target
+                if probe.applies_drive_command
+                and protocol.drive_bias_compensation is not None
+                and protocol.drive_bias_compensation.path_dependent_rollback
+                else None
+            ),
         )
         if self.drive_command != expected_command:
             raise ValueError("rollback recovery period is inconsistent")
         if self.attempt is not None:
             if not isinstance(protocol.settlement, TrackedErrorSettlement):
                 raise ValueError("fixed settlement cannot carry rollback attempt")
-            self.attempt.validate(protocol.settlement)
+            self.attempt.validate(
+                protocol.settlement,
+                protocol.settlement.rollback_tracking_error_cap_radians,
+            )
             requested_motion = maximum_joint_position_delta(
                 self.start_joint_positions,
                 rollback_target,
@@ -2156,6 +2648,7 @@ class ControlResolutionSample:
     rollback_reset: TrialResetState
     tracked_settlement: TrackedSettlementEvidence | None = None
     motion_timing: ControlResolutionMotionTiming | None = None
+    drive_target_joint_positions: tuple[float, ...] | None = None
 
     def __post_init__(self) -> None:
         scalars = (
@@ -2185,12 +2678,18 @@ class ControlResolutionSample:
         probe: ControlResolutionProbePlan,
         drive_target: ControlResolutionDriveTarget,
     ) -> float:
-        return maximum_joint_position_delta(
-            self.endpoint.safety.joint_positions,
-            probe.controller_tracking_joint_target(
+        active_target = (
+            self.drive_target_joint_positions
+            if probe.applies_drive_command
+            and self.drive_target_joint_positions is not None
+            else probe.controller_tracking_joint_target(
                 drive_target,
                 self.projection.proposed_joint_positions,
-            ),
+            )
+        )
+        return maximum_joint_position_delta(
+            self.endpoint.safety.joint_positions,
+            active_target,
         )
 
     @property
@@ -2223,6 +2722,10 @@ class ControlResolutionSample:
             "interlock": self.interlock.to_dict(),
             "rollback_reset": self.rollback_reset.to_dict(),
         }
+        if self.drive_target_joint_positions is not None:
+            payload["drive_target_joint_positions"] = list(
+                self.drive_target_joint_positions
+            )
         if self.tracked_settlement is not None:
             payload["tracked_settlement"] = self.tracked_settlement.to_dict()
         if self.motion_timing is not None:
@@ -2261,6 +2764,14 @@ class ControlResolutionSample:
                 ),
                 motion_timing=ControlResolutionMotionTiming.optional_from_sample_dict(
                     payload
+                ),
+                drive_target_joint_positions=(
+                    tuple(
+                        float(value)
+                        for value in payload["drive_target_joint_positions"]
+                    )
+                    if "drive_target_joint_positions" in payload
+                    else None
                 ),
             )
         except (KeyError, TypeError, ValueError) as error:
@@ -2377,6 +2888,24 @@ class ControlResolutionFailureEvidence:
                 raise ValueError(
                     "failed baseline attempt cannot carry probe evidence"
                 )
+        active_drive_target = (
+            self.baseline.drive_target
+            if self.baseline is not None
+            else None
+        )
+        if self.reference_reset is not None:
+            self.protocol.validate_samples(
+                self.reference_reset,
+                self.completed_samples,
+                require_complete=False,
+            )
+            for sample in self.completed_samples:
+                active_drive_target = self.protocol.validate_sample_execution(
+                    self.reference_reset,
+                    sample,
+                    expected_attachment=self.load.plug_attached,
+                    active_drive_target=active_drive_target,
+                )
         if self.settlement_failure is not None:
             if (
                 self.baseline is None
@@ -2392,7 +2921,7 @@ class ControlResolutionFailureEvidence:
             self.settlement_failure.validate(
                 self.protocol,
                 len(self.completed_samples),
-                self.baseline.drive_target,
+                active_drive_target,
                 self.capture_identity.observation_id,
                 self.reference_reset,
                 self.load.plug_attached,
@@ -2426,22 +2955,6 @@ class ControlResolutionFailureEvidence:
                     "rejected resolution reset requires an acquired reference reset"
                 )
             return
-        self.protocol.validate_samples(
-            self.reference_reset,
-            self.completed_samples,
-            require_complete=False,
-        )
-        for sample in self.completed_samples:
-            self.protocol.validate_sample_execution(
-                self.reference_reset,
-                sample,
-                expected_attachment=self.load.plug_attached,
-                rollback_drive_target=(
-                    self.baseline.drive_target
-                    if self.baseline is not None
-                    else None
-                ),
-            )
         if self.rejected_reset is None:
             return
         capture_failure = (
@@ -2895,19 +3408,15 @@ class ControlResolutionReport:
             raise ValueError("current control resolution report has no stable baseline")
         elif any(sample.settling_time_seconds is not None for sample in self.samples):
             raise ValueError("legacy control resolution report has settling time")
+        active_drive_target = (
+            self.baseline.drive_target
+            if self.baseline is not None
+            else None
+        )
         for sample in self.samples:
             probe = self.protocol.probe_plan(sample.index)
             if self.baseline is not None and sample.settling_time_seconds is None:
                 raise ValueError("current control resolution sample has no settling time")
-            drive_target = (
-                self.baseline.drive_target
-                if self.baseline is not None
-                and self.baseline.drive_target is not None
-                else ControlResolutionDriveTarget(
-                    sample.projection.proposed_joint_positions,
-                    0.0,
-                )
-            )
             ControlResolutionProbeExecution(
                 probe,
                 self.recorded_target_pose,
@@ -2915,9 +3424,17 @@ class ControlResolutionReport:
                 sample.commanded_action,
                 sample.target_pose,
                 sample.projection,
+                sample.drive_target_joint_positions,
             ).validate(
                 self.protocol,
                 self.observation_id,
+                active_drive_target,
+                (
+                    sample.start_reset
+                    if self.protocol.drive_bias_compensation is not None
+                    and self.protocol.drive_bias_compensation.path_dependent_rollback
+                    else self.reference_reset
+                ),
             )
             if (
                 sample.settling_time_seconds is not None
@@ -2927,15 +3444,11 @@ class ControlResolutionReport:
                 )
             ):
                 raise ValueError("control resolution command does not match its protocol")
-            self.protocol.validate_sample_execution(
+            active_drive_target = self.protocol.validate_sample_execution(
                 self.reference_reset,
                 sample,
                 expected_attachment=self.load.plug_attached,
-                rollback_drive_target=(
-                    self.baseline.drive_target
-                    if self.baseline is not None
-                    else None
-                ),
+                active_drive_target=active_drive_target,
             )
 
     @property

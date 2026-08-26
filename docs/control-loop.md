@@ -644,6 +644,15 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     value. Controller settlement/rollback must be corrected and the same roster
     rerun before choosing a deadband or orientation-hold tolerance. No JEPA
     action is authorized.
+    The corrected drive-only rerun now supersedes that status. All three
+    attached pose cases completed `9/9`; unloaded context 43 failed closed on
+    a discontinuous final IK projection, while unloaded contexts 74 and 106
+    each preserved a bounded second-`1 mm` motion/recovery timeout. The
+    attached evidence establishes the existing `0.5 mm` minimum translation
+    and `1.25 mrad` orientation-hold tolerance for exactly one context-43
+    attached action. It does not cover context 74's larger target or authorize
+    a second action. Realized progress remains a terminal fail-closed gate;
+    failure stops and rolls back.
     Multi-step, filming, and production authority remain false; exact metrics
     and evidence are in the
     [insertion control-resolution checkpoint](../README.md#insertion-control-resolution-checkpoint).
