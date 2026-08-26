@@ -12,6 +12,110 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ControlRolloutShellTest(unittest.TestCase):
+    def test_insertion_two_step_requires_action_one_before_followup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir)
+            ops = home / "quantis-robotics" / "ops"
+            ops.mkdir(parents=True)
+            shutil.copy(REPO_ROOT / "ops" / "run_insertion_two_step_trial.sh", ops)
+            log = home / "calls.log"
+            (ops / "shell_helpers.sh").write_text(
+                """#!/usr/bin/env bash
+is_safe_identifier() { return 0; }
+require_nonnegative_integer() { return 0; }
+require_positive_integer() { return 0; }
+isaac_server_call() {
+  printf 'verify %s\n' "$1" >> "${CALLS}"
+  if [[ "$1" == *"verify_insertion_followup_source"* ]]; then
+    [[ "${VERIFY_FIRST_FAIL:-0}" != "1" ]]
+  else
+    [[ "${VERIFY_FINAL_FAIL:-0}" != "1" ]]
+  fi
+}
+"""
+            )
+            for name in (
+                "run_insertion_safety_check.sh",
+                "run_insertion_reset_trial.sh",
+                "run_insertion_followup_trial.sh",
+            ):
+                (ops / name).write_text(
+                    "#!/usr/bin/env bash\nprintf '%s %s\\n' "
+                    f"'{name}' \"$*\" >> \"${{CALLS}}\"\n"
+                )
+
+            arguments = (
+                "two-step-run",
+                "insertion-held-00",
+                "52600",
+                "worker-test",
+                "43",
+            )
+            result = subprocess.run(
+                ["bash", str(ops / "run_insertion_two_step_trial.sh"), *arguments],
+                env={**os.environ, "HOME": str(home), "CALLS": str(log)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            calls = log.read_text().splitlines()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                [line.split()[0] for line in calls],
+                [
+                    "run_insertion_safety_check.sh",
+                    "run_insertion_reset_trial.sh",
+                    "verify",
+                    "run_insertion_followup_trial.sh",
+                    "verify",
+                ],
+            )
+            self.assertIn(
+                "verify_insertion_followup_source('two-step-run-action1')",
+                calls[2],
+            )
+            self.assertIn(
+                "verify_insertion_two_step_result('two-step-run-action1','two-step-run-action2','insertion-held-00',52600)",
+                calls[4],
+            )
+
+            log.write_text("")
+            failed = subprocess.run(
+                ["bash", str(ops / "run_insertion_two_step_trial.sh"), *arguments],
+                env={
+                    **os.environ,
+                    "HOME": str(home),
+                    "CALLS": str(log),
+                    "VERIFY_FIRST_FAIL": "1",
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertNotIn(
+                "run_insertion_followup_trial.sh",
+                log.read_text(),
+            )
+
+            log.write_text("")
+            failed_final = subprocess.run(
+                ["bash", str(ops / "run_insertion_two_step_trial.sh"), *arguments],
+                env={
+                    **os.environ,
+                    "HOME": str(home),
+                    "CALLS": str(log),
+                    "VERIFY_FINAL_FAIL": "1",
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(failed_final.returncode, 0)
+            self.assertIn("run_insertion_followup_trial.sh", log.read_text())
+            self.assertIn("verify_insertion_two_step_result", log.read_text())
+
     def test_insertion_followup_runs_safety_before_one_non_reset_apply(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             home = Path(temp_dir)

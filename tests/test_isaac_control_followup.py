@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -36,6 +37,7 @@ from sim.control_session import (
 from sim.isaac_control_followup import (
     build_insertion_followup_capture,
     validate_followup_continuity,
+    verify_insertion_two_step_result,
 )
 from sim.isaac_demo_runtime import JointCommand
 
@@ -108,6 +110,36 @@ class FollowupContinuityTest(unittest.TestCase):
                 current_plug_position=(0.4, 0.0, 0.5),
                 current_plug_attached=False,
             )
+
+    def test_terminal_verifier_uses_the_authenticated_proposal_path(self) -> None:
+        first_step = Mock()
+        first_step.observation.expected_proposal = Path("/tmp/actual-proposal.pth")
+        report = Mock()
+        report.to_dict.return_value = {"all_steps_applied": True}
+        with (
+            patch(
+                "jepa_wm.control_rollout.ControlStepSummary.from_session",
+                return_value=first_step,
+            ),
+            patch(
+                "jepa_wm.control_rollout.ControlRolloutReport.from_sessions",
+                return_value=report,
+            ) as from_sessions,
+            patch("sim.isaac_control_followup.ControlSession.at"),
+        ):
+            result = verify_insertion_two_step_result(
+                "run-action1",
+                "run-action2",
+                "reference",
+                52600,
+            )
+
+        self.assertEqual(result["status"], "two_step_applied")
+        self.assertEqual(
+            from_sessions.call_args.kwargs["proposal"],
+            Path("/tmp/actual-proposal.pth"),
+        )
+        report.require_all_steps_applied.assert_called_once_with()
 
     def test_builds_a_followup_capture_from_the_exact_applied_drive_target(self) -> None:
         previous = self._previous()

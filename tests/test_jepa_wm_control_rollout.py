@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from copy import deepcopy
 import json
 from pathlib import Path
 import tempfile
@@ -718,6 +719,47 @@ class ControlRolloutTest(unittest.TestCase):
                 state_path.write_text(json.dumps(payload))
             with self.assertRaisesRegex(ValueError, "changed its target frame"):
                 self._report(root, ("session-0", "session-1"), requested_steps=2)
+
+    def test_terminal_gate_rejects_blocked_or_rolled_back_second_action(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._write_reference(root)
+            self._write_step(
+                root,
+                "session-0",
+                previous_session_id=None,
+                pose_x=0.40,
+                post_x=0.41,
+            )
+            self._write_step(
+                root,
+                "session-1",
+                previous_session_id="session-0",
+                pose_x=0.41,
+                post_x=0.42,
+                warmup_frames=5,
+                captured_at=101.0,
+                previous_action_x=0.01,
+            )
+            report = ControlRolloutReport.from_sessions(
+                root,
+                "rollout-1",
+                ("session-0", "session-1"),
+                reference_recording="reference",
+                seed=11400,
+                proposal=Path("/tmp/proposal.pth"),
+                requested_steps=2,
+            )
+
+            report.require_all_steps_applied()
+            for status in (
+                ControlResultStatus.BLOCKED,
+                ControlResultStatus.ROLLED_BACK_PROGRESS,
+            ):
+                failed_report = deepcopy(report)
+                object.__setattr__(failed_report.steps[-1].result, "status", status)
+                with self.assertRaisesRegex(ValueError, "every requested step"):
+                    failed_report.require_all_steps_applied()
 
     def test_summarizes_shadow_search_and_counterfactual_safety(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

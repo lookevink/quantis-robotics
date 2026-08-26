@@ -62,6 +62,7 @@ from jepa_wm.insertion_contract import (
     InsertionControlTargetPolicy,
     insertion_control_target_policy,
 )
+from jepa_wm.target_progress import RealizedTargetProgressDecision
 from jepa_wm.trajectory import validate_observation_target
 from jepa_wm.persistence import write_json_atomic
 from jepa_wm.shadow_planning import ShadowPlanningRequest, ShadowSearchEvidence
@@ -673,6 +674,13 @@ class InsertionFollowupLineage:
         if self.result.insertion_trial_drive is None:
             raise ValueError("follow-up lineage has no drive evidence")
         return self.result.insertion_trial_drive.forward_target
+
+    @property
+    def realized_target_progress(self) -> RealizedTargetProgressDecision:
+        insertion_trial = self.post_action.insertion_trial
+        if insertion_trial is None:
+            raise ValueError("follow-up lineage has no progress evidence")
+        return insertion_trial.realized_target_progress
 
     def validate_source(
         self,

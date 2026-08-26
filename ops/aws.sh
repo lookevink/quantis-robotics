@@ -227,6 +227,50 @@ sync_repo() {
     "${repo_root}/" "${ssh_user}@$(instance_ip):~/quantis-robotics/"
 }
 
+guarded_insertion_summary=""
+
+finalize_guarded_insertion_workflow() {
+  local exit_status=$?
+  local backup_status=0
+  trap - EXIT
+  remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' \
+    || backup_status=$?
+  if (( exit_status == 0 && backup_status != 0 )); then
+    exit_status=${backup_status}
+  fi
+  [[ -z "${guarded_insertion_summary}" ]] \
+    || printf '%s\n' "${guarded_insertion_summary}"
+  exit "${exit_status}"
+}
+
+arm_guarded_insertion_workflow() {
+  guarded_insertion_summary=""
+  trap finalize_guarded_insertion_workflow EXIT
+}
+
+validate_guarded_insertion_identifiers() {
+  local identifier
+  for identifier in "$@"; do
+    is_safe_identifier "${identifier}" \
+      || die "invalid guarded insertion workflow identifier"
+  done
+}
+
+run_guarded_insertion_workflow() {
+  local artifacts_name="$1"
+  local workflow_command="$2"
+  local command_status=0
+  sync_repo || command_status=$?
+  if (( command_status == 0 )); then
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --artifacts '${artifacts_name}'" \
+      || command_status=$?
+  fi
+  if (( command_status == 0 )); then
+    remote "${workflow_command}" || command_status=$?
+  fi
+  return "${command_status}"
+}
+
 prepare_remote_host() {
   ensure_running
   configure_firewall
@@ -440,6 +484,7 @@ Commands:
   jepa-wm-insertion-safety REFERENCE_RECORDING SEED [artifacts] [context-index]
   jepa-wm-insertion-trial REFERENCE_RECORDING SEED ARTIFACTS SOURCE_SESSION [context-index]
   jepa-wm-insertion-followup REFERENCE_RECORDING SEED ARTIFACTS PREVIOUS_SESSION
+  jepa-wm-insertion-two-step REFERENCE_RECORDING SEED ARTIFACTS [context-index]
   jepa-wm-insertion-resolution REFERENCE_RECORDING SEED [context-index] [attached|unloaded]
   jepa-wm-control-rollout REFERENCE_RECORDING SEED STEPS [artifacts] [context-index]
   jepa-wm-control-baseline REFERENCE_RECORDING SEED STEPS zero|scripted [context-index]
@@ -1050,46 +1095,43 @@ case "${command}" in
   jepa-wm-insertion-followup)
     safety_session_id=""
     execution_session_id=""
-    finalize_insertion_followup() {
-      local exit_status=$?
-      local backup_status=0
-      trap - EXIT
-      remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' \
-        || backup_status=$?
-      if (( exit_status == 0 && backup_status != 0 )); then
-        exit_status=${backup_status}
-      fi
-      if [[ -n "${safety_session_id}" ]]; then
-        printf 'Insertion follow-up safety session: %s\n' "${safety_session_id}"
-      fi
-      if [[ -n "${execution_session_id}" ]]; then
-        printf 'Insertion follow-up trial session: %s\n' "${execution_session_id}"
-      fi
-      exit "${exit_status}"
-    }
-    trap finalize_insertion_followup EXIT
+    arm_guarded_insertion_workflow
     reference_name="${2:-}"
     exploration_seed="${3:-}"
     artifacts_name="${4:-}"
     previous_session_id="${5:-}"
-    for identifier in \
-      "${reference_name}" "${artifacts_name}" "${previous_session_id}"; do
-      is_safe_identifier "${identifier}" || die "invalid insertion follow-up identifier"
-    done
+    validate_guarded_insertion_identifiers \
+      "${reference_name}" "${artifacts_name}" "${previous_session_id}"
     require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
     timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
     safety_session_id="insertion-followup-safety-${timestamp}-${exploration_seed}"
     execution_session_id="insertion-followup-trial-${timestamp}-${exploration_seed}"
+    printf -v guarded_insertion_summary \
+      'Insertion follow-up safety session: %s\nInsertion follow-up trial session: %s' \
+      "${safety_session_id}" "${execution_session_id}"
     command_status=0
-    sync_repo || command_status=$?
-    if (( command_status == 0 )); then
-      remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --artifacts '${artifacts_name}'" \
-        || command_status=$?
-    fi
-    if (( command_status == 0 )); then
-      remote "bash ~/quantis-robotics/ops/run_insertion_followup_trial.sh '${safety_session_id}' '${execution_session_id}' '${previous_session_id}' '${reference_name}' '${exploration_seed}' '${artifacts_name}'" \
-        || command_status=$?
-    fi
+    run_guarded_insertion_workflow "${artifacts_name}" \
+      "bash ~/quantis-robotics/ops/run_insertion_followup_trial.sh '${safety_session_id}' '${execution_session_id}' '${previous_session_id}' '${reference_name}' '${exploration_seed}' '${artifacts_name}'" \
+      || command_status=$?
+    exit "${command_status}"
+    ;;
+  jepa-wm-insertion-two-step)
+    run_id=""
+    arm_guarded_insertion_workflow
+    reference_name="${2:-}"
+    exploration_seed="${3:-}"
+    artifacts_name="${4:-}"
+    context_index="${5:-43}"
+    validate_guarded_insertion_identifiers "${reference_name}" "${artifacts_name}"
+    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+    require_positive_integer "context index" "${context_index}" || exit 1
+    timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    run_id="insertion-two-step-${timestamp}-${exploration_seed}-c${context_index}"
+    guarded_insertion_summary="Insertion two-step run: ${run_id}"
+    command_status=0
+    run_guarded_insertion_workflow "${artifacts_name}" \
+      "bash ~/quantis-robotics/ops/run_insertion_two_step_trial.sh '${run_id}' '${reference_name}' '${exploration_seed}' '${artifacts_name}' '${context_index}'" \
+      || command_status=$?
     exit "${command_status}"
     ;;
   jepa-wm-insertion-resolution)

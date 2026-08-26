@@ -155,6 +155,57 @@ def validate_followup_continuity(
         raise ValueError("live stage no longer matches the previous applied result")
 
 
+def verify_insertion_followup_source(session_id: str) -> dict[str, Any]:
+    """Require one reconstructed applied action with passing realized progress."""
+
+    from jepa_wm.control_rollout import ControlStepSummary
+
+    previous = ControlSession.at(CONTROL_ROOT, session_id)
+    step = ControlStepSummary.from_session(previous)
+    lineage = InsertionFollowupLineage(
+        step.observation,
+        step.state,
+        step.result,
+    )
+    return {
+        "status": "followup_ready",
+        "session_id": session_id,
+        "realized_target_progress": lineage.realized_target_progress.to_dict(),
+    }
+
+
+def verify_insertion_two_step_result(
+    first_session_id: str,
+    second_session_id: str,
+    reference_name: str,
+    exploration_seed: int,
+) -> dict[str, Any]:
+    """Reconstruct and require exactly two applied insertion actions."""
+
+    from jepa_wm.control_rollout import ControlRolloutReport, ControlStepSummary
+
+    first_step = ControlStepSummary.from_session(
+        ControlSession.at(CONTROL_ROOT, first_session_id)
+    )
+
+    report = ControlRolloutReport.from_sessions(
+        QUANTIS_DATA_ROOT,
+        second_session_id,
+        (first_session_id, second_session_id),
+        reference_recording=reference_name,
+        seed=exploration_seed,
+        proposal=first_step.observation.expected_proposal,
+        requested_steps=2,
+    )
+    report.require_all_steps_applied()
+    return {
+        "status": "two_step_applied",
+        "first_session_id": first_session_id,
+        "second_session_id": second_session_id,
+        "report": report.to_dict(),
+    }
+
+
 async def _capture_generic_followup_observation(
     session: ControlSession,
     previous_step: ControlStepSummary,

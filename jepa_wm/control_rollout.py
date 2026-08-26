@@ -864,6 +864,19 @@ class ControlRolloutReport:
         )
 
     @property
+    def all_steps_applied(self) -> bool:
+        return (
+            len(self.applied_steps) == self.requested_steps
+            and self.orchestration_failure is None
+        )
+
+    def require_all_steps_applied(self) -> None:
+        """Fail unless every requested control step reconstructed as applied."""
+
+        if not self.all_steps_applied:
+            raise ValueError("control rollout did not apply every requested step")
+
+    @property
     def initial_goal_error(self) -> PoseError | None:
         if not self.complete_steps or self.target_pose is None:
             return None
@@ -937,10 +950,7 @@ class ControlRolloutReport:
             "attempted_steps": len(self.steps),
             "complete_steps": len(self.complete_steps),
             "applied_steps": applied_count,
-            "all_steps_applied": (
-                applied_count == self.requested_steps
-                and self.orchestration_failure is None
-            ),
+            "all_steps_applied": self.all_steps_applied,
             "orchestration_failure": (
                 self.orchestration_failure.to_dict()
                 if self.orchestration_failure is not None
