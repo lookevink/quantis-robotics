@@ -1313,6 +1313,20 @@ updates within the existing 40-update bound before checking the unchanged
 full reset contract. Both 12 GB backups were verified. No second translation
 probe ran, and no authority was granted.
 
+The strict-cap retry,
+`insertion-resolution-attached-20260826T015256Z-52600-c43`, preserved another
+typed rollback timeout after 40 updates (`3.75 s`). Error to the active drive
+target fell from `3.591876 mrad` to `1.193316 mrad`, still above the new
+`0.400000 mrad` cap, while the exact final state was already only
+`0.433058 mrad` from the persisted stable reference reset. This exposed a
+target-semantics error rather than inadequate settling: with the attached load,
+the stable observed joints are about `1.003 mrad` away from the drive target.
+The runtime must command and verify the baseline drive target, but rollback
+repeatability must settle against the stable observed reference. That
+distinction is now explicit; the strict cap and all safety limits remain
+unchanged. Peak contact was `0 N`, collision was false, attachment was
+retained, and both 12 GB backups were verified.
+
 The next diagnostic measured the simulator/controller noise floor before
 authorizing another insertion action. The first exact-code run stopped before
 any probe because the provisional `20 um`/`0.1 mrad` repeat contract was

@@ -445,14 +445,10 @@ class ControlResolutionProbePlan:
 
     def rollback_joint_target(
         self,
-        drive_target: ControlResolutionDriveTarget,
+        _drive_target: ControlResolutionDriveTarget,
         reference_reset: TrialResetState,
     ) -> tuple[float, ...]:
-        return (
-            drive_target.joint_positions
-            if self.applies_drive_command
-            else reference_reset.joint_positions
-        )
+        return reference_reset.joint_positions
 
     def to_dict(self) -> dict[str, Any]:
         return {

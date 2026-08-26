@@ -627,8 +627,11 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     threshold at the 32-update cap. A longer bounded observation then reached
     command-relative settlement but missed exact reset equivalence by a small
     joint margin. Rollback now has a stricter persisted tracking cap before the
-    unchanged full reset check; no acceptance or safety limit changed. Exact
-    negative evidence is retained in the linked README checkpoint.
+    unchanged full reset check. A strict-cap retry then exposed that loaded
+    rollback settlement was being measured against the drive target rather
+    than the stable observed reset; those command and repeatability targets are
+    now distinct. No acceptance or safety limit changed. Exact negative
+    evidence is retained in the linked README checkpoint.
     Multi-step, filming, and production authority remain false; exact metrics
     and evidence are in the
     [insertion control-resolution checkpoint](../README.md#insertion-control-resolution-checkpoint).

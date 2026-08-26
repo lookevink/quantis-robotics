@@ -188,6 +188,26 @@ def _sample(index: int, magnitude: float) -> ControlResolutionSample:
 
 
 class ControlResolutionReportTest(unittest.TestCase):
+    def test_translation_rollback_settles_against_stable_reference(self) -> None:
+        reference = _reset()
+        drive_target = ControlResolutionDriveTarget(
+            (
+                reference.joint_positions[0] + 1e-3,
+                *reference.joint_positions[1:],
+            ),
+            0.04,
+        )
+        probe = CONTROL_RESOLUTION_PROTOCOL.probe_plan(3)
+
+        self.assertEqual(
+            probe.rollback_joint_target(drive_target, reference),
+            reference.joint_positions,
+        )
+        self.assertNotEqual(
+            probe.rollback_joint_target(drive_target, reference),
+            drive_target.joint_positions,
+        )
+
     def test_legacy_settlement_protocol_omits_rollback_tracking_cap(self) -> None:
         payload = CONTROL_RESOLUTION_PROTOCOL.to_dict()
         payload["tracked_error_settlement"].pop(
