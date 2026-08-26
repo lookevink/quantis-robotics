@@ -270,7 +270,7 @@ class InsertionTrialBindingTest(unittest.TestCase):
             )
 
     def test_rebinds_one_exact_passing_source_to_an_equivalent_reset(self) -> None:
-        with self.assertRaisesRegex(ValueError, "binding is invalid"):
+        with self.assertRaisesRegex(ValueError, "selected exact proposal"):
             build_insertion_trial_response(
                 execution_session_id="insertion-trial",
                 source_session_id="insertion-safety",
@@ -289,6 +289,25 @@ class InsertionTrialBindingTest(unittest.TestCase):
             source=_source(),
             created_at_unix_seconds=101.0,
         )
+        legacy_source = replace(
+            _source(),
+            safety=replace(_source().safety, active_drive_target=None),
+        )
+        binding.validate_execution(
+            legacy_source,
+            InsertionTrialExecutionEvidence(
+                _context(10, ControlExecutionPolicy.INSERTION_RESET_TRIAL),
+                response,
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "selected exact proposal"):
+            build_insertion_trial_response(
+                execution_session_id="new-insertion-trial",
+                source_session_id="insertion-safety",
+                execution=_context(10, ControlExecutionPolicy.INSERTION_RESET_TRIAL),
+                source=legacy_source,
+                created_at_unix_seconds=101.0,
+            )
 
         self.assertEqual(response.observation_id, 10)
         self.assertEqual(response.proposal_fingerprint, _FINGERPRINT)

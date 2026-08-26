@@ -905,7 +905,10 @@ class InsertionTrialBinding:
             or safety.proposed_actions != self.actions
             or safety.selected_action_scale != self.source_selected_action_scale
             or source.active_drive_target != self.source_active_drive_target
-            or safety.active_drive_target != source.active_drive_target
+            or (
+                self.authority is InsertionTrialAuthority.FOLLOWUP_TRIAL_ONLY
+                and safety.active_drive_target != source.active_drive_target
+            )
             or not safety.passed
             or not safety.live_state.plug_attached
             or source_context.policy
@@ -1005,7 +1008,11 @@ def build_insertion_trial_response(
 
     source_response = source.response
     safety = source.safety
-    if source_response.proposal_fingerprint is None or safety.selected_action_scale is None:
+    if (
+        source_response.proposal_fingerprint is None
+        or safety.selected_action_scale is None
+        or safety.active_drive_target != source.active_drive_target
+    ):
         raise ValueError("insertion trial source has no selected exact proposal")
     binding = InsertionTrialBinding(
         execution_session_id=execution_session_id,
