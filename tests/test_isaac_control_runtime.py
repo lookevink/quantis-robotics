@@ -569,8 +569,8 @@ class ContactReadingTest(unittest.TestCase):
         actuators.actual_command.side_effect = lambda: SimpleNamespace(
             arm_positions=np.asarray(active_target.joint_positions),
             gripper_width_m=(
-                captured.gripper_width_m
-                if update_count == 1
+                active_target.gripper_width_m - 1.5320256352424622e-6
+                if update_count < 18
                 else settled.gripper_width_m
             ),
         )
@@ -622,7 +622,7 @@ class ContactReadingTest(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(update_count, 2)
+        self.assertEqual(update_count, 18)
         self.assertEqual(synchronized.safety, settled)
 
     def test_insertion_frame_capture_bounds_gripper_settling_before_camera(self) -> None:
@@ -689,8 +689,8 @@ class ContactReadingTest(unittest.TestCase):
                     )
                 )
 
-        self.assertEqual(update_count, 9)
-        self.assertEqual(observe.call_count, 10)
+        self.assertEqual(update_count, 25)
+        self.assertEqual(observe.call_count, 26)
         self.assertFalse(camera_called)
         self.assertEqual(timeline.events, ["play", "pause"])
 

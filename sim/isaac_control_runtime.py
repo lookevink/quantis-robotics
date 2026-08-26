@@ -24,7 +24,7 @@ from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH, world_pose
 
 CONTACT_SENSOR_NAME = "QuantisControlContact"
 CONNECTOR_CONTACT_SENSOR_NAME = "QuantisConnectorContact"
-MAXIMUM_INSERTION_FRAME_CAPTURE_SETTLEMENT_UPDATES = 8
+MAXIMUM_INSERTION_FRAME_CAPTURE_SETTLEMENT_UPDATES = 24
 
 
 @dataclass(frozen=True)
