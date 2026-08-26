@@ -1591,6 +1591,36 @@ attached context-43 JEPA action with the realized-progress terminal gate. A
 failed progress decision must stop and roll back. No second action, multi-step
 insertion, filming, or production authority is granted.
 
+That single action was attempted in session
+`insertion-trial-20260826T112537Z-52600-c43`, bound to source session
+`insertion-safety-20260826T095029Z-52600-c43` and frozen proposal fingerprint
+`efdf848c120a2e4bba5b5e08f16093eb9b20695940e525906313e5cb1057596f`.
+The refreshed gate accepted the full translation scale with rotation held;
+the projected maximum joint change was `1.641288 mrad`, IK position error was
+`0.000958 mm`, IK orientation error was `0.938542 mrad`, and the bound
+observation age was `1.746403 s`.
+
+Execution then failed closed before post-action progress measurement. Its
+command-relative joint error decreased from `1.410369 mrad` to
+`0.803017 mrad` over the bounded 32-update trace but did not reach the
+unchanged `0.500000 mrad` settlement threshold. Interlocked rollback to the
+refreshed live reset target was accepted, retained the plug, and reduced its
+joint error from `1.315117 mrad` to `1.069546 mrad`, but it also exhausted the
+32-update bound. The terminal result is therefore `rollback_failed`, with
+`0/1` applied steps and no claimed Cartesian progress. Both phases remained at
+`0 N` maximum contact with no collision and retained attachment. No second
+action was requested. The exact forward and arm-plus-gripper rollback traces,
+failure reasons, refreshed state, response, and rollout are preserved in the
+verified 13 GB recovery copy.
+
+This is controller-settlement negative evidence, not a JEPA, IK, contact, or
+attachment failure and not an autonomous insertion success. Action authority
+is closed again. Before another JEPA command, the drive-only controller must
+demonstrate bounded forward settlement and verified rollback at this action
+scale under the same `0.500000 mrad` threshold, force/collision/attachment
+interlock, and reset-equivalence contract. Multi-step insertion, filming, and
+production authority remain false.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

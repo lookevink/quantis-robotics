@@ -661,7 +661,12 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     continuity evidence before refreshing only that exact bound action's timing;
     the limits are not extended. It does not cover context 74's larger target
     or authorize a second action. Realized progress remains a terminal
-    fail-closed gate; failure stops and rolls back.
+    fail-closed gate. The resulting one-action trial stopped before progress
+    measurement when forward settlement missed its bounded threshold, and its
+    interlocked rollback also timed out. It retained attachment at zero contact
+    with no collision, but terminalized as `rollback_failed` with `0/1` applied
+    steps. Controller settlement and verified reset rollback must now pass under
+    the unchanged limits before another JEPA action is authorized.
     Multi-step, filming, and production authority remain false; exact metrics
     and evidence are in the
     [insertion control-resolution checkpoint](../README.md#insertion-control-resolution-checkpoint).
