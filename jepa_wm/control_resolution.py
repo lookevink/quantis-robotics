@@ -145,7 +145,7 @@ class TrackedErrorSettlement:
         CONTROL_RESOLUTION_RESET_TOLERANCES.maximum_joint_difference_radians
     )
     required_consecutive_updates: int = 2
-    maximum_updates: int = 40
+    maximum_updates: int = 48
 
     def __post_init__(self) -> None:
         if (

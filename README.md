@@ -1341,6 +1341,18 @@ translation, rotation, gripper, plug, attachment, contact, and collision reset
 checks. This removes an unjustified stricter duplicate; it does not loosen the
 reset contract.
 
+The reset-bound retry,
+`insertion-resolution-attached-20260826T022159Z-52600-c43`, completed all three
+HOLDs and the first two `0.5 mm` repetitions, each with exact rollback evidence.
+The third forward interval also settled, but its rollback stopped after 40
+updates (`3.75 s`) at `0.504404 mrad`, only `0.004404 mrad` above the unchanged
+`0.500000 mrad` limit. The last trace segment decreased monotonically from
+`0.966281 mrad`, and peak contact remained `0 N` with no collision and retained
+attachment. The next retry extends only the bounded settlement observation cap
+from 40 to 48 updates; the reset-derived tracking cap, all other reset checks,
+and every safety limit remain unchanged. Both 12 GB backups were verified, and
+the `1.0 mm` probe still has not run.
+
 The next diagnostic measured the simulator/controller noise floor before
 authorizing another insertion action. The first exact-code run stopped before
 any probe because the provisional `20 um`/`0.1 mrad` repeat contract was

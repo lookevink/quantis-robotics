@@ -632,7 +632,10 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     than the stable observed reset; those command and repeatability targets are
     now distinct. The cap derives from the unchanged reset joint tolerance,
     avoiding a second arbitrary limit. No acceptance or safety limit changed.
-    Exact negative evidence is retained in the linked README checkpoint.
+    The next retry completed two of three `0.5 mm` repetitions; the third
+    rollback missed the same limit by `0.004404 mrad`, so only the bounded
+    observation cap is extended. Exact negative evidence is retained in the
+    linked README checkpoint.
     Multi-step, filming, and production authority remain false; exact metrics
     and evidence are in the
     [insertion control-resolution checkpoint](../README.md#insertion-control-resolution-checkpoint).
