@@ -168,7 +168,10 @@ async def stabilize_resolution_capture(
                 evidence.maximum_contact_force_newtons,
             ),
         ),
-        baseline.final_interval_action,
+        # A qualified terminal baseline is the stationary HOLD history state.
+        # Its measured physical drift remains in the reset/safety evidence and
+        # must not be relabeled as a commanded action for JEPA conditioning.
+        DroidAction((0.0,) * 7),
     )
 
 

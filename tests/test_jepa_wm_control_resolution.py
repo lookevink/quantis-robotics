@@ -545,12 +545,6 @@ class ControlResolutionReportTest(unittest.TestCase):
             policy,
             ControlResolutionLoad.ATTACHED,
         )
-        self.assertAlmostEqual(evidence.final_interval_action.values[0], 1e-5)
-        self.assertEqual(
-            evidence.final_interval_action.values[1:],
-            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-        )
-
         with self.assertRaisesRegex(ValueError, "stable"):
             ControlResolutionBaselineEvidence(
                 ControlResolutionBaselineTrace(
@@ -1801,9 +1795,6 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
             0.039,
         )
         baseline = Mock()
-        baseline.final_interval_action = DroidAction(
-            (1e-5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-        )
         stabilize.return_value = (actual, baseline)
         runtime = SimpleNamespace(
             actuators=SimpleNamespace(actual_command=Mock(return_value=actual)),
@@ -1827,7 +1818,7 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(capture.safety.gripper_tracking_error_m, 0.001)
         self.assertFalse(capture.safety.collision_detected)
         self.assertEqual(capture.safety.contact_force_newtons, 0.0)
-        self.assertEqual(capture.previous_action, baseline.final_interval_action)
+        self.assertEqual(capture.previous_action, DroidAction((0.0,) * 7))
         stabilize.assert_awaited_once()
         self.assertFalse(stabilize.await_args.args[1].expected_attachment)
         baseline.validate.assert_called_once()
