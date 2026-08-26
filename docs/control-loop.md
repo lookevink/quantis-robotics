@@ -618,8 +618,12 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     `10 s` window and a later stable endpoint that was not continuous with the
     unsettled capture. Capture now qualifies stability before its strict frame
     and persists typed early failures; measurement independently requalifies
-    after pause/resume. No acceptance or safety limit changed. Exact negative
-    evidence is retained in the linked README checkpoint.
+    after pause/resume. The resulting three HOLD repetitions passed with
+    micrometer-scale drift, while the first `0.5 mm` probe was rejected before
+    actuation by the unchanged velocity gate; the next retry lengthens its
+    command period instead of weakening that gate. No acceptance or safety
+    limit changed. Exact negative evidence is retained in the linked README
+    checkpoint.
     Multi-step, filming, and production authority remain false; exact metrics
     and evidence are in the
     [insertion control-resolution checkpoint](../README.md#insertion-control-resolution-checkpoint).

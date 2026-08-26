@@ -583,6 +583,7 @@ class ControlResolutionProtocol:
     repeats_per_magnitude: int = 3
     motion_period_seconds: float = 0.25
     motion_period_overrides: tuple[ControlResolutionMotionPeriod, ...] = (
+        ControlResolutionMotionPeriod(5e-4, 0.5),
         ControlResolutionMotionPeriod(1e-3, 0.5),
     )
     baseline_policy: ControlResolutionBaselinePolicy | None = (

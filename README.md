@@ -1252,6 +1252,23 @@ source identity, load, limits, and false authority claims. The post-resume
 gate still authenticates continuity to the settled capture. No tolerance or
 safety limit changed, no probe executed, and both 12 GB backups were verified.
 
+The first run with that final lifecycle,
+`insertion-resolution-attached-20260826T003402Z-52600-c43`, completed all three
+HOLD repetitions before the first `0.5 mm` probe failed closed at safety
+projection with `joint_velocity_violation`. HOLD issued no drive command.
+Maximum realized zero-command translation was `0.00188 mm`, orientation drift
+was `0.00416 mrad`, and settlement-relative joint error was `0.00393 mrad`;
+each repetition settled over its explicit `0.25 s` observation interval.
+Start repeatability remained within `0.00686 mm` translation and `0.0138 mrad`
+joint difference, while rollback repeatability remained within `0.00907 mm`
+and `0.0176 mrad`. The separately reported error to the unchanged active
+controller target was `1.003 mrad`. Contact remained `0 N`, collision stayed
+false, and attachment was retained. The first translation did not actuate.
+Rather than weaken the unchanged `0.5 rad/s` velocity gate, the next exact-code
+retry gives both `0.5 mm` and `1.0 mm` probes a persisted `0.5 s` command
+period. Both 12 GB backups were verified; this is still diagnostic evidence,
+not insertion authority.
+
 The next diagnostic measured the simulator/controller noise floor before
 authorizing another insertion action. The first exact-code run stopped before
 any probe because the provisional `20 um`/`0.1 mrad` repeat contract was

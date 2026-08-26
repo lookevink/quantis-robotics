@@ -171,12 +171,12 @@ def _sample(index: int, magnitude: float) -> ControlResolutionSample:
             ).drive_command(
                 None
                 if magnitude == 0.0
-                else (0.5 if magnitude == 1e-3 else 0.25)
+                else 0.5
             ),
         ),
         motion_timing=ControlResolutionMotionTiming(
             1.0,
-            1.55 if magnitude == 1e-3 else 1.3,
+            1.3 if magnitude == 0.0 else 1.55,
         ),
     )
 
@@ -194,7 +194,7 @@ class ControlResolutionReportTest(unittest.TestCase):
         )
         self.assertEqual(
             CONTROL_RESOLUTION_PROTOCOL.motion_period_for(5e-4),
-            0.25,
+            0.5,
         )
         self.assertEqual(
             CONTROL_RESOLUTION_PROTOCOL.motion_period_for(1e-3),
