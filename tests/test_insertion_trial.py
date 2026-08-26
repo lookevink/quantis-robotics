@@ -23,6 +23,7 @@ from jepa_wm.direct_safety import (
     DirectInsertionSafetyEvidence,
 )
 from jepa_wm.insertion_trial import (
+    INSERTION_TRIAL_SETTLEMENT_MAXIMUM_UPDATES,
     InsertionTrialBinding,
     InsertionTrialExecutionRefresh,
     InsertionTrialRollbackFailure,
@@ -241,6 +242,10 @@ class InsertionTrialBindingTest(unittest.TestCase):
         self.assertEqual(InsertionTrialBinding.from_dict(binding.to_dict()), binding)
         self.assertFalse(binding.production_authority_granted)
         self.assertIsNotNone(binding.trial_policy)
+        self.assertEqual(
+            binding.trial_policy.joint_settlement.maximum_updates,
+            INSERTION_TRIAL_SETTLEMENT_MAXIMUM_UPDATES,
+        )
 
         for invalid_gripper_limit in (True, 0.1):
             invalid_policy = binding.to_dict()
