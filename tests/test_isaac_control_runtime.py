@@ -316,7 +316,15 @@ class ContactReadingTest(unittest.TestCase):
         captured = Mock(plug_attached=True)
         live = Mock()
         pose = Mock()
-        drive_target = Mock()
+        drive_target = JointDriveTarget((0.0,) * 7, 0.018)
+        refreshed_runtime.actuators.current_command.return_value = SimpleNamespace(
+            arm_positions=np.zeros(7),
+            gripper_width_m=drive_target.gripper_width_m,
+        )
+        refreshed_runtime.actuators.actual_command.return_value = SimpleNamespace(
+            arm_positions=np.zeros(7),
+            gripper_width_m=drive_target.gripper_width_m,
+        )
         events: list[str] = []
 
         async def advance() -> None:
@@ -432,6 +440,14 @@ class ContactReadingTest(unittest.TestCase):
             ),
             0.01802057959139347,
         )
+        refreshed_runtime.actuators.current_command.return_value = SimpleNamespace(
+            arm_positions=np.asarray(active_target.joint_positions),
+            gripper_width_m=active_target.gripper_width_m,
+        )
+        refreshed_runtime.actuators.actual_command.return_value = SimpleNamespace(
+            arm_positions=np.asarray(live.joint_positions),
+            gripper_width_m=live.gripper_width_m,
+        )
 
         async def advance() -> None:
             return None
@@ -489,6 +505,194 @@ class ContactReadingTest(unittest.TestCase):
 
         self.assertEqual(synchronized.safety, live)
         self.assertEqual(synchronized.active_drive_target, active_target)
+
+    def test_insertion_frame_capture_waits_for_active_gripper_target(self) -> None:
+        timeline = _Timeline(playing=False)
+        update_count = 0
+        active_target = JointDriveTarget(
+            (
+                0.8438414332563189,
+                -1.315508101544882,
+                -1.1587810713937188,
+                -2.602226899073789,
+                0.43315143339259177,
+                3.4939389858194185,
+                -0.7352948488082698,
+            ),
+            0.018020467832684517,
+        )
+        captured = ControlSafetySnapshot(
+            (
+                0.8433670997619629,
+                -1.3164868354797363,
+                -1.1596312522888184,
+                -2.603066921234131,
+                0.4332185685634613,
+                3.494137763977051,
+                -0.7353372573852539,
+            ),
+            0.018016536720097065,
+            (-0.07707371562719345, -0.2458123117685318, 1.3099448680877686),
+            0.0,
+            False,
+            True,
+        )
+        unsettled = ControlSafetySnapshot(
+            captured.joint_positions,
+            captured.gripper_width_m,
+            captured.plug_position,
+            0.0,
+            False,
+            True,
+        )
+        settled = ControlSafetySnapshot(
+            (
+                0.8437719345092773,
+                -1.3162533044815063,
+                -1.1597838401794434,
+                -2.6027638912200928,
+                0.4331825375556946,
+                3.4940075874328613,
+                -0.7353372573852539,
+            ),
+            0.018020231276750565,
+            (-0.07722251117229462, -0.24587148427963257, 1.309919834136963),
+            0.0,
+            False,
+            True,
+        )
+        actuators = Mock()
+        actuators.current_command.return_value = SimpleNamespace(
+            arm_positions=np.asarray(active_target.joint_positions),
+            gripper_width_m=active_target.gripper_width_m,
+        )
+        actuators.actual_command.side_effect = lambda: SimpleNamespace(
+            arm_positions=np.asarray(active_target.joint_positions),
+            gripper_width_m=(
+                captured.gripper_width_m
+                if update_count == 1
+                else settled.gripper_width_m
+            ),
+        )
+        old_runtime = LiveControlRuntime(
+            "session", object(), Mock(), Mock(attached=True), Mock()
+        )
+        refreshed_runtime = LiveControlRuntime(
+            "session", old_runtime.stage, actuators, Mock(attached=True), Mock()
+        )
+
+        async def advance() -> None:
+            nonlocal update_count
+            update_count += 1
+
+        async def capture(_observe_safety) -> None:
+            return None
+
+        def read(_runtime: LiveControlRuntime):
+            snapshot = unsettled if update_count == 1 else settled
+            return snapshot, Mock(), active_target
+
+        with (
+            patch(
+                "sim.isaac_control_runtime.refresh_live_control_runtime",
+                return_value=refreshed_runtime,
+            ),
+            patch(
+                "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
+                side_effect=read,
+            ),
+            patch(
+                "sim.isaac_control_runtime.LiveContactInterlock.observe",
+                return_value=SimpleNamespace(
+                    collision_detected=False,
+                    force_newtons=0.0,
+                ),
+            ),
+        ):
+            synchronized = asyncio.run(
+                synchronized_insertion_frame_capture(
+                    old_runtime,
+                    timeline,
+                    advance,
+                    captured,
+                    SimulatorSafetyLimits(),
+                    capture,
+                    expected_active_drive_target=active_target,
+                    operation="test insertion follow-up gripper settling",
+                )
+            )
+
+        self.assertEqual(update_count, 2)
+        self.assertEqual(synchronized.safety, settled)
+
+    def test_insertion_frame_capture_bounds_gripper_settling_before_camera(self) -> None:
+        timeline = _Timeline(playing=False)
+        update_count = 0
+        camera_called = False
+        active_target = JointDriveTarget((0.0,) * 7, 0.02)
+        captured = ControlSafetySnapshot(
+            (0.0,) * 7,
+            0.018,
+            (0.0, 0.0, 0.0),
+            0.0,
+            False,
+            True,
+        )
+        actuators = Mock()
+        actuators.current_command.return_value = SimpleNamespace(
+            arm_positions=np.zeros(7),
+            gripper_width_m=active_target.gripper_width_m,
+        )
+        actuators.actual_command.return_value = SimpleNamespace(
+            arm_positions=np.zeros(7),
+            gripper_width_m=captured.gripper_width_m,
+        )
+        old_runtime = LiveControlRuntime(
+            "session", object(), Mock(), Mock(attached=True), Mock()
+        )
+        refreshed_runtime = LiveControlRuntime(
+            "session", old_runtime.stage, actuators, Mock(attached=True), Mock()
+        )
+
+        async def advance() -> None:
+            nonlocal update_count
+            update_count += 1
+
+        async def capture(_observe_safety) -> None:
+            nonlocal camera_called
+            camera_called = True
+
+        with (
+            patch(
+                "sim.isaac_control_runtime.refresh_live_control_runtime",
+                return_value=refreshed_runtime,
+            ),
+            patch(
+                "sim.isaac_control_runtime.LiveContactInterlock.observe",
+                return_value=SimpleNamespace(
+                    collision_detected=False,
+                    force_newtons=0.0,
+                ),
+            ) as observe,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "gripper did not settle"):
+                asyncio.run(
+                    synchronized_insertion_frame_capture(
+                        old_runtime,
+                        timeline,
+                        advance,
+                        captured,
+                        SimulatorSafetyLimits(),
+                        capture,
+                        expected_active_drive_target=active_target,
+                        operation="test bounded insertion follow-up settling",
+                    )
+                )
+
+        self.assertEqual(update_count, 9)
+        self.assertEqual(observe.call_count, 10)
+        self.assertFalse(camera_called)
+        self.assertEqual(timeline.events, ["play", "pause"])
 
     def test_resolution_refresh_defers_bounded_drift_to_stable_baseline(self) -> None:
         timeline = _Timeline(playing=False)

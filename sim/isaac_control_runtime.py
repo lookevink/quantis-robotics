@@ -8,7 +8,10 @@ from typing import Any
 
 from jepa_wm.action import DroidPose
 from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimits
-from jepa_wm.insertion_refresh import ControlSafetySnapshot
+from jepa_wm.insertion_refresh import (
+    MAXIMUM_SYNCHRONIZED_GRIPPER_ERROR_METERS,
+    ControlSafetySnapshot,
+)
 from jepa_wm.joint_drive import JointDriveTarget
 from sim.isaac_demo_runtime import (
     Actuators,
@@ -21,6 +24,7 @@ from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH, world_pose
 
 CONTACT_SENSOR_NAME = "QuantisControlContact"
 CONNECTOR_CONTACT_SENSOR_NAME = "QuantisConnectorContact"
+MAXIMUM_INSERTION_FRAME_CAPTURE_SETTLEMENT_UPDATES = 8
 
 
 @dataclass(frozen=True)
@@ -185,15 +189,45 @@ def _control_safety_pose_and_drive_target(
     runtime: LiveControlRuntime,
 ) -> tuple[ControlSafetySnapshot, DroidPose, JointDriveTarget]:
     safety, pose = _control_safety_and_pose(runtime)
+    return safety, pose, _active_drive_target(runtime)
+
+
+def _active_drive_target(runtime: LiveControlRuntime) -> JointDriveTarget:
     active = runtime.actuators.current_command()
-    return (
-        safety,
-        pose,
-        JointDriveTarget(
-            tuple(float(value) for value in active.arm_positions),
-            active.gripper_width_m,
-        ),
+    return JointDriveTarget(
+        tuple(float(value) for value in active.arm_positions),
+        active.gripper_width_m,
     )
+
+
+async def _settle_insertion_frame_capture_gripper(
+    runtime: LiveControlRuntime,
+    advance: Any,
+    observe_safety: Any,
+    expected_active_drive_target: JointDriveTarget,
+    operation: str,
+) -> None:
+    """Wait bounded observed updates for the unchanged gripper drive target."""
+
+    for update_index in range(
+        MAXIMUM_INSERTION_FRAME_CAPTURE_SETTLEMENT_UPDATES + 1
+    ):
+        if _active_drive_target(runtime) != expected_active_drive_target:
+            raise RuntimeError(f"{operation} active drive target changed")
+        actual = runtime.actuators.actual_command()
+        if (
+            abs(
+                actual.gripper_width_m
+                - expected_active_drive_target.gripper_width_m
+            )
+            <= MAXIMUM_SYNCHRONIZED_GRIPPER_ERROR_METERS
+        ):
+            return
+        if update_index == MAXIMUM_INSERTION_FRAME_CAPTURE_SETTLEMENT_UPDATES:
+            break
+        await advance()
+        observe_safety()
+    raise RuntimeError(f"{operation} gripper did not settle to its active target")
 
 
 async def _synchronized_live_read(
@@ -378,11 +412,18 @@ async def synchronized_insertion_frame_capture(
     """Render and read one interlocked insertion frame before pausing."""
 
     async def capture_before_read(
-        _: LiveControlRuntime,
+        refreshed_runtime: LiveControlRuntime,
         observe: Any,
     ) -> None:
         if observe is None:
             raise RuntimeError("insertion frame capture has no live interlock")
+        await _settle_insertion_frame_capture_gripper(
+            refreshed_runtime,
+            advance,
+            observe,
+            expected_active_drive_target,
+            operation,
+        )
         await capture(observe)
 
     synchronized = await _synchronized_insertion_runtime(
