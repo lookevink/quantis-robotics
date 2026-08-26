@@ -17,6 +17,7 @@ from jepa_wm.control_resolution import (
     ControlResolutionFailureEvidence,
     ControlResolutionProtocol,
     ControlResolutionProbeExecution,
+    ControlResolutionProjectionFailure,
     ControlResolutionProbePlan,
     ControlResolutionReport,
     ControlResolutionResetPhase,
@@ -44,7 +45,11 @@ from jepa_wm.control_resolution import (
     retreat_direction,
 )
 from jepa_wm.control_safety import ControlInterlockEvidence
-from jepa_wm.control_safety import ControlGateDecision, SafetyProjectionAttempt
+from jepa_wm.control_safety import (
+    ControlGateDecision,
+    ControlGateReason,
+    SafetyProjectionAttempt,
+)
 from jepa_wm.control_resolution_baseline import (
     CONTROL_RESOLUTION_CAPTURE_FAILURE_SCHEMA,
     ControlResolutionCaptureBaselineContract,
@@ -73,6 +78,7 @@ from sim.isaac_control_resolution import (
     UnsettledControlResolutionTarget,
     recover_resolution_drive_target,
     ResolutionDriveTargetRecovery,
+    ControlResolutionProjectionRejected,
     resolution_failure_evidence,
 )
 from sim.isaac_control_resolution import resolution_probe_observation
@@ -584,6 +590,71 @@ class ControlResolutionReportTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "legacy.*capture identity"):
             replace(failure, protocol=legacy_protocol)
+
+    def test_projection_rejection_persists_exact_pre_actuation_attempt(self) -> None:
+        reference = _reset()
+        probe = CONTROL_RESOLUTION_PROTOCOL.probe_plan(3)
+        recorded_target = DroidPose(
+            (0.401, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)
+        )
+        commanded = CONTROL_RESOLUTION_PROTOCOL.probe_action(
+            reference.pose,
+            recorded_target,
+            probe.requested_translation_meters,
+        )
+        target = reference.pose.applied(commanded)
+        proposed_joints = (
+            reference.joint_positions[0] + 0.3,
+            *reference.joint_positions[1:],
+        )
+        projection_failure = ControlResolutionProjectionFailure(
+            probe=probe,
+            recorded_target_pose=recorded_target,
+            start_reset=reference,
+            commanded_action=commanded,
+            target_pose=target,
+            projection=SafetyProjectionAttempt(
+                DroidActionScale.uniform(1.0),
+                ControlGateDecision(
+                    123,
+                    target,
+                    (ControlGateReason.JOINT_VELOCITY_VIOLATION,),
+                ),
+                0.3,
+                proposed_joints,
+            ),
+            motion_period_seconds=0.5,
+        )
+        failure = resolution_failure_evidence(
+            "resolution-attached-52600-c43",
+            CONTROL_RESOLUTION_PROTOCOL,
+            reference,
+            tuple(_sample(index, 0.0) for index in range(3)),
+            ControlResolutionProjectionRejected(projection_failure),
+            ControlResolutionLoad.ATTACHED,
+            _baseline(reference),
+            _capture_identity(),
+        )
+
+        payload = failure.to_dict()
+        restored = ControlResolutionFailureEvidence.from_dict(payload)
+
+        self.assertEqual(restored, failure)
+        self.assertEqual(
+            restored.projection_failure.projection.gate.reasons,
+            (ControlGateReason.JOINT_VELOCITY_VIOLATION,),
+        )
+        self.assertAlmostEqual(
+            restored.projection_failure.projection.maximum_joint_delta_rad
+            / restored.protocol.safety_limits.maximum_joint_velocity_radians_per_second,
+            0.6,
+        )
+        malformed = failure.to_dict()
+        malformed["projection_failure"]["projection"][
+            "maximum_joint_delta_rad"
+        ] = 0.2
+        with self.assertRaisesRegex(ValueError, "failure evidence is incomplete"):
+            ControlResolutionFailureEvidence.from_dict(malformed)
 
     def test_unstable_baseline_failure_preserves_every_observed_state(self) -> None:
         states = tuple(

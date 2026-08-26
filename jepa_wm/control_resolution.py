@@ -21,6 +21,7 @@ from jepa_wm.action import (
     action_between,
 )
 from jepa_wm.control_safety import (
+    ControlGateReason,
     ControlInterlockEvidence,
     SafetyProjectionAttempt,
     SimulatorSafetyLimits,
@@ -59,7 +60,10 @@ CONTROL_RESOLUTION_FAILURE_SCHEMA_V2 = (
 CONTROL_RESOLUTION_FAILURE_SCHEMA_V3 = (
     "quantis.jepa_wm_control_resolution_failure.v3"
 )
-CONTROL_RESOLUTION_FAILURE_SCHEMA = "quantis.jepa_wm_control_resolution_failure.v4"
+CONTROL_RESOLUTION_FAILURE_SCHEMA_V4 = (
+    "quantis.jepa_wm_control_resolution_failure.v4"
+)
+CONTROL_RESOLUTION_FAILURE_SCHEMA = "quantis.jepa_wm_control_resolution_failure.v5"
 CONTROL_RESOLUTION_RESET_TOLERANCES = ResetEquivalenceTolerances(
     maximum_translation_difference_meters=5e-4,
     maximum_rotation_difference_radians=1e-3,
@@ -560,6 +564,104 @@ class ControlResolutionProbeExecution:
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(
                 "control resolution probe execution is incomplete"
+            ) from error
+
+
+@dataclass(frozen=True)
+class ControlResolutionProjectionFailure:
+    """Exact pre-actuation probe rejected by the simulator safety gate."""
+
+    probe: ControlResolutionProbePlan
+    recorded_target_pose: DroidPose
+    start_reset: TrialResetState
+    commanded_action: DroidAction
+    target_pose: DroidPose
+    projection: SafetyProjectionAttempt
+    motion_period_seconds: float
+
+    def validate(
+        self,
+        protocol: ControlResolutionProtocol,
+        observation_id: int,
+    ) -> None:
+        expected_action = protocol.probe_action(
+            self.start_reset.pose,
+            self.recorded_target_pose,
+            self.probe.requested_translation_meters,
+        )
+        expected_target = self.start_reset.pose.applied(expected_action)
+        expected_delta = maximum_joint_position_delta(
+            self.projection.proposed_joint_positions,
+            self.start_reset.joint_positions,
+        )
+        velocity_rejected = (
+            ControlGateReason.JOINT_VELOCITY_VIOLATION
+            in self.projection.gate.reasons
+        )
+        if (
+            protocol.probe_plan(self.probe.sample_index) != self.probe
+            or self.probe.kind is not ControlResolutionProbeKind.TRANSLATION
+            or self.commanded_action != expected_action
+            or self.target_pose != expected_target
+            or self.projection.gate.passed
+            or not self.projection.gate.reasons
+            or self.projection.gate.observation_id != observation_id
+            or self.projection.gate.next_pose != self.target_pose
+            or not isclose(
+                self.projection.maximum_joint_delta_rad,
+                expected_delta,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+            or not isclose(
+                self.motion_period_seconds,
+                protocol.motion_period_for(
+                    self.probe.requested_translation_meters
+                ),
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+            or (
+                velocity_rejected
+                and expected_delta
+                <= protocol.safety_limits.maximum_joint_velocity_radians_per_second
+                * self.motion_period_seconds
+            )
+        ):
+            raise ValueError(
+                "control resolution projection failure is inconsistent"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "probe": self.probe.to_dict(),
+            "recorded_target_pose": list(self.recorded_target_pose.values),
+            "start_reset": self.start_reset.to_dict(),
+            "commanded_action": list(self.commanded_action.values),
+            "target_pose": list(self.target_pose.values),
+            "projection": self.projection.to_dict(),
+            "motion_period_seconds": self.motion_period_seconds,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ControlResolutionProjectionFailure:
+        if not isinstance(payload, Mapping):
+            raise ValueError(
+                "control resolution projection failure must be an object"
+            )
+        try:
+            return cls(
+                ControlResolutionProbePlan.from_dict(payload["probe"]),
+                DroidPose(tuple(payload["recorded_target_pose"])),
+                TrialResetState.from_dict(payload["start_reset"]),
+                DroidAction(tuple(payload["commanded_action"])),
+                DroidPose(tuple(payload["target_pose"])),
+                SafetyProjectionAttempt.from_dict(payload["projection"]),
+                float(payload["motion_period_seconds"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "control resolution projection failure is incomplete"
             ) from error
 
 
@@ -2119,6 +2221,7 @@ class ControlResolutionFailureEvidence:
     baseline_attempt: ControlResolutionBaselineAttempt | None = None
     capture_identity: ControlResolutionCaptureIdentity | None = None
     settlement_failure: ControlResolutionSettlementFailure | None = None
+    projection_failure: ControlResolutionProjectionFailure | None = None
 
     def __post_init__(self) -> None:
         validate_recording_id(self.session_id)
@@ -2192,6 +2295,29 @@ class ControlResolutionFailureEvidence:
                 self.capture_identity.observation_id,
                 self.reference_reset,
                 self.load.plug_attached,
+            )
+        if self.projection_failure is not None:
+            if (
+                self.baseline is None
+                or self.reference_reset is None
+                or self.capture_identity is None
+                or self.baseline_attempt is not None
+                or self.rejected_reset is not None
+                or self.settlement_failure is not None
+                or len(self.completed_samples)
+                != self.projection_failure.probe.sample_index
+            ):
+                raise ValueError(
+                    "projection failure requires the next stable-baseline probe"
+                )
+            validate_reset_equivalence(
+                self.reference_reset,
+                self.projection_failure.start_reset,
+                tolerances=self.protocol.reset_tolerances,
+            )
+            self.projection_failure.validate(
+                self.protocol,
+                self.capture_identity.observation_id,
             )
         if self.reference_reset is None:
             if self.rejected_reset is not None:
@@ -2298,6 +2424,14 @@ class ControlResolutionFailureEvidence:
                 self.settlement_failure.execution.start_reset,
                 tolerances=self.protocol.reset_tolerances,
             )
+        if self.projection_failure is not None:
+            if (
+                observation.target_pose
+                != self.projection_failure.recorded_target_pose
+            ):
+                raise ValueError(
+                    "control resolution rejected probe target is not capture-bound"
+                )
         capture_failure = (
             self.rejected_reset is not None
             and self.rejected_reset.phase
@@ -2387,6 +2521,11 @@ class ControlResolutionFailureEvidence:
                 if self.settlement_failure is not None
                 else {}
             ),
+            **(
+                {"projection_failure": self.projection_failure.to_dict()}
+                if self.projection_failure is not None
+                else {}
+            ),
             "diagnostic_only": self.diagnostic_only,
             "multi_step_authority_granted": self.multi_step_authority_granted,
             "production_authority_granted": self.production_authority_granted,
@@ -2401,6 +2540,7 @@ class ControlResolutionFailureEvidence:
                 CONTROL_RESOLUTION_FAILURE_SCHEMA_V1,
                 CONTROL_RESOLUTION_FAILURE_SCHEMA_V2,
                 CONTROL_RESOLUTION_FAILURE_SCHEMA_V3,
+                CONTROL_RESOLUTION_FAILURE_SCHEMA_V4,
                 CONTROL_RESOLUTION_FAILURE_SCHEMA,
             )
         ):
@@ -2409,9 +2549,13 @@ class ControlResolutionFailureEvidence:
             current = payload["schema"] != CONTROL_RESOLUTION_FAILURE_SCHEMA_V1
             authenticated = payload["schema"] in (
                 CONTROL_RESOLUTION_FAILURE_SCHEMA_V3,
+                CONTROL_RESOLUTION_FAILURE_SCHEMA_V4,
                 CONTROL_RESOLUTION_FAILURE_SCHEMA,
             )
-            drive_bound = payload["schema"] == CONTROL_RESOLUTION_FAILURE_SCHEMA
+            drive_bound = payload["schema"] in (
+                CONTROL_RESOLUTION_FAILURE_SCHEMA_V4,
+                CONTROL_RESOLUTION_FAILURE_SCHEMA,
+            )
             if current != ("load" in payload):
                 raise ValueError("control resolution failure load is missing")
             if authenticated != ("capture_identity" in payload):
@@ -2473,6 +2617,13 @@ class ControlResolutionFailureEvidence:
                     if "settlement_failure" in payload
                     else None
                 ),
+                projection_failure=(
+                    ControlResolutionProjectionFailure.from_dict(
+                        payload["projection_failure"]
+                    )
+                    if "projection_failure" in payload
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(
@@ -2495,6 +2646,13 @@ class ControlResolutionFailureEvidence:
         ) or (not drive_bound and evidence.settlement_failure is not None):
             raise ValueError(
                 "control resolution failure drive-target generation is invalid"
+            )
+        if (
+            "projection_failure" in payload
+            and payload["schema"] != CONTROL_RESOLUTION_FAILURE_SCHEMA
+        ):
+            raise ValueError(
+                "control resolution projection failure generation is invalid"
             )
         if (
             payload.get("diagnostic_only") is not evidence.diagnostic_only

@@ -29,6 +29,7 @@ from jepa_wm.control_resolution import (
     ControlResolutionProbeKind,
     ControlResolutionProbePlan,
     ControlResolutionProbeExecution,
+    ControlResolutionProjectionFailure,
     ControlResolutionForwardEvidence,
     ControlResolutionRollbackFailure,
     ControlResolutionRollbackSuccess,
@@ -189,6 +190,18 @@ class ControlResolutionSettlementTimeout(RuntimeError):
         self.evidence = evidence
 
 
+class ControlResolutionProjectionRejected(RuntimeError):
+    def __init__(self, evidence: ControlResolutionProjectionFailure) -> None:
+        reasons = ",".join(
+            reason.value for reason in evidence.projection.gate.reasons
+        )
+        super().__init__(
+            "insertion control resolution probe failed safety projection: "
+            + reasons
+        )
+        self.evidence = evidence
+
+
 def resolution_failure_evidence(
     session_id: str,
     protocol: ControlResolutionProtocol,
@@ -224,6 +237,11 @@ def resolution_failure_evidence(
         settlement_failure=(
             error.evidence
             if isinstance(error, ControlResolutionSettlementTimeout)
+            else None
+        ),
+        projection_failure=(
+            error.evidence
+            if isinstance(error, ControlResolutionProjectionRejected)
             else None
         ),
     )
@@ -748,9 +766,16 @@ async def measure_insertion_control_resolution(
                     now_unix_seconds=sample_time,
                 )
                 if selected is None:
-                    raise RuntimeError(
-                        "insertion control resolution probe failed safety projection: "
-                        + ",".join(reason.value for reason in projection.gate.reasons)
+                    raise ControlResolutionProjectionRejected(
+                        ControlResolutionProjectionFailure(
+                            probe=probe,
+                            recorded_target_pose=observation.target_pose,
+                            start_reset=start_reset,
+                            commanded_action=commanded,
+                            target_pose=start_reset.pose.applied(commanded),
+                            projection=projection,
+                            motion_period_seconds=motion_period_seconds,
+                        )
                     )
             if not projection.gate.passed:
                 raise RuntimeError(
