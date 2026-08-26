@@ -33,6 +33,7 @@ from jepa_wm.control_resolution_baseline import (
     ControlResolutionBaselineEvidence,
     ControlResolutionBaselinePolicy,
     ControlResolutionBaselineTrace,
+    ControlResolutionCaptureSourceIdentity,
     ControlResolutionDriveTarget,
 )
 from jepa_wm.control_resolution_profile import ControlResolutionLoad
@@ -1467,31 +1468,33 @@ class ControlResolutionResetPhase(str, Enum):
 
 @dataclass(frozen=True)
 class ControlResolutionCaptureIdentity:
-    reference_recording: str
-    seed: int
-    context_index: int
+    source: ControlResolutionCaptureSourceIdentity
     observation_id: int
 
     def __post_init__(self) -> None:
-        validate_recording_id(self.reference_recording)
         if (
-            isinstance(self.seed, bool)
-            or not isinstance(self.seed, int)
-            or self.seed < 0
-            or isinstance(self.context_index, bool)
-            or not isinstance(self.context_index, int)
-            or self.context_index <= 0
+            not isinstance(self.source, ControlResolutionCaptureSourceIdentity)
             or isinstance(self.observation_id, bool)
             or not isinstance(self.observation_id, int)
             or self.observation_id <= 0
         ):
             raise ValueError("control resolution capture identity is invalid")
 
+    @property
+    def reference_recording(self) -> str:
+        return self.source.reference_recording
+
+    @property
+    def seed(self) -> int:
+        return self.source.seed
+
+    @property
+    def context_index(self) -> int:
+        return self.source.context_index
+
     def to_dict(self) -> dict[str, Any]:
         return {
-            "reference_recording": self.reference_recording,
-            "seed": self.seed,
-            "context_index": self.context_index,
+            **self.source.to_dict(),
             "observation_id": self.observation_id,
         }
 
@@ -1499,19 +1502,13 @@ class ControlResolutionCaptureIdentity:
     def from_dict(cls, payload: Any) -> ControlResolutionCaptureIdentity:
         if not isinstance(payload, Mapping):
             raise ValueError("control resolution capture identity must be an object")
-        values = (
-            payload.get("seed"),
-            payload.get("context_index"),
-            payload.get("observation_id"),
-        )
-        if any(isinstance(value, bool) or not isinstance(value, int) for value in values):
+        observation_id = payload.get("observation_id")
+        if isinstance(observation_id, bool) or not isinstance(observation_id, int):
             raise ValueError("control resolution capture identity counts are invalid")
         try:
             return cls(
-                str(payload["reference_recording"]),
-                values[0],
-                values[1],
-                values[2],
+                ControlResolutionCaptureSourceIdentity.from_dict(payload),
+                observation_id,
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(

@@ -45,6 +45,13 @@ from jepa_wm.control_resolution import (
 )
 from jepa_wm.control_safety import ControlInterlockEvidence
 from jepa_wm.control_safety import ControlGateDecision, SafetyProjectionAttempt
+from jepa_wm.control_resolution_baseline import (
+    CONTROL_RESOLUTION_CAPTURE_FAILURE_SCHEMA,
+    ControlResolutionCaptureBaselineContract,
+    ControlResolutionCaptureAttemptIdentity,
+    ControlResolutionCaptureFailureEvidence,
+    ControlResolutionCaptureSourceIdentity,
+)
 from jepa_wm.action import DroidActionScale
 from jepa_wm.direct_safety import ControlSafetySnapshot
 from jepa_wm.control_policy import ControlExecutionPolicy
@@ -70,7 +77,7 @@ from sim.isaac_control_resolution import (
 )
 from sim.isaac_control_resolution import resolution_probe_observation
 from sim.isaac_control_resolution import resolution_settlement_target
-from sim.isaac_control_capture import resolution_capture_safety
+from sim.isaac_control_capture import stabilize_resolution_capture
 from sim.isaac_demo_runtime import JointCommand
 from sim.control_session import ControlSession, ControlSessionState
 
@@ -102,9 +109,11 @@ def _baseline(
 
 def _capture_identity() -> ControlResolutionCaptureIdentity:
     return ControlResolutionCaptureIdentity(
-        "contact-insertion-held-00",
-        52600,
-        43,
+        ControlResolutionCaptureSourceIdentity(
+            "contact-insertion-held-00",
+            52600,
+            43,
+        ),
         123,
     )
 
@@ -625,6 +634,43 @@ class ControlResolutionReportTest(unittest.TestCase):
             _capture_identity(),
         )
         self.assertEqual(runtime_failure.baseline_attempt, attempt)
+
+        capture_failure = ControlResolutionCaptureFailureEvidence(
+            identity=ControlResolutionCaptureAttemptIdentity(
+                "resolution-attached-52600-c43",
+                ControlResolutionCaptureSourceIdentity(
+                    "contact-insertion-held-00",
+                    52600,
+                    43,
+                ),
+            ),
+            failed_at_unix_seconds=123.0,
+            contract=ControlResolutionCaptureBaselineContract(
+                ControlResolutionBaselinePolicy(),
+                CONTROL_RESOLUTION_PROTOCOL.safety_limits,
+                ControlResolutionLoad.ATTACHED,
+            ),
+            baseline_attempt=attempt,
+            error="UnstableControlResolutionBaseline: baseline did not stabilize",
+        )
+
+        capture_payload = capture_failure.to_dict()
+        self.assertEqual(
+            capture_payload["schema"],
+            CONTROL_RESOLUTION_CAPTURE_FAILURE_SCHEMA,
+        )
+        self.assertEqual(
+            ControlResolutionCaptureFailureEvidence.from_dict(capture_payload),
+            capture_failure,
+        )
+        malformed = capture_failure.to_dict()
+        malformed["identity"]["seed"] = True
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            ControlResolutionCaptureFailureEvidence.from_dict(malformed)
+        malformed = capture_failure.to_dict()
+        malformed["failed_at_unix_seconds"] = "123.0"
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            ControlResolutionCaptureFailureEvidence.from_dict(malformed)
 
     def test_capture_failure_authenticates_rejected_reference_to_raw_state(self) -> None:
         baseline = _baseline()
@@ -1332,24 +1378,46 @@ class ControlResolutionReportTest(unittest.TestCase):
 
 
 class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
-    def test_capture_persists_tracking_telemetry_without_a_second_baseline(self) -> None:
+    @patch(
+        "sim.isaac_control_resolution.stabilize_resolution_baseline",
+        new_callable=AsyncMock,
+    )
+    async def test_capture_stabilizes_before_persisting_tracking_telemetry(
+        self,
+        stabilize: AsyncMock,
+    ) -> None:
         command = JointCommand(np.zeros(7), 0.04)
         actual = JointCommand(
             np.asarray((2e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
             0.039,
         )
-        actuators = SimpleNamespace(actual_command=Mock(return_value=actual))
+        baseline = Mock()
+        stabilize.return_value = (actual, baseline)
+        runtime = SimpleNamespace(
+            actuators=SimpleNamespace(actual_command=Mock(return_value=actual)),
+            attachment=SimpleNamespace(attached=True),
+            sensor=object(),
+        )
+        timeline = Mock()
 
-        safety = resolution_capture_safety(
-            actuators,
+        safety = await stabilize_resolution_capture(
+            runtime,
+            timeline,
             command,
-            ControlInterlockEvidence(0.25, False),
+            ControlResolutionCaptureBaselineContract(
+                ControlResolutionBaselinePolicy(),
+                CONTROL_RESOLUTION_PROTOCOL.safety_limits,
+                ControlResolutionLoad.UNLOADED,
+            ),
         )
 
         self.assertEqual(safety.arm_tracking_error_rad, 2e-4)
         self.assertAlmostEqual(safety.gripper_tracking_error_m, 0.001)
         self.assertFalse(safety.collision_detected)
-        self.assertEqual(safety.contact_force_newtons, 0.25)
+        self.assertEqual(safety.contact_force_newtons, 0.0)
+        stabilize.assert_awaited_once()
+        self.assertFalse(stabilize.await_args.args[1].expected_attachment)
+        baseline.validate.assert_called_once()
 
     @patch("sim.isaac_control_resolution.advance_simulation_period", new_callable=AsyncMock)
     @patch("sim.isaac_control_resolution._capture_reset_state")

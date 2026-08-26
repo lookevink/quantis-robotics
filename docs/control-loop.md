@@ -614,10 +614,12 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     Its first full-roster attempt failed closed on cumulative zero-command
     drift before any nonzero probe; the follow-up requires an eight-interval
     globally stable baseline and distinguishes HOLD drift from active-target
-    tracking error. An authenticated retry showed its best window was still
-    improving at the bounded observation cap, so the next retry extends only
-    that cap from `10 s` to `20 s` without changing any acceptance or safety
-    limit. Exact negative evidence is retained in the linked README checkpoint.
+    tracking error. Authenticated retries showed both a still-improving
+    `10 s` window and a later stable endpoint that was not continuous with the
+    unsettled capture. Capture now qualifies stability before its strict frame
+    and persists typed early failures; measurement independently requalifies
+    after pause/resume. No acceptance or safety limit changed. Exact negative
+    evidence is retained in the linked README checkpoint.
     Multi-step, filming, and production authority remain false; exact metrics
     and evidence are in the
     [insertion control-resolution checkpoint](../README.md#insertion-control-resolution-checkpoint).

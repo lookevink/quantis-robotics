@@ -20,6 +20,7 @@ from jepa_wm.action import (
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.domain_recording import DomainRecording
+from jepa_wm.control_resolution_baseline import ControlResolutionCaptureBaselineContract
 from jepa_wm.insertion_contract import (
     CONTACT_INSERTION_RECORDING,
     ContactInsertionSegment,
@@ -27,7 +28,8 @@ from jepa_wm.insertion_contract import (
     insertion_control_target_policy,
 )
 from jepa_wm.insertion_recording import ContactInsertionEvidence
-from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimits
+from jepa_wm.persistence import write_json_atomic
+from jepa_wm.control_safety import SimulatorSafetyLimits
 from jepa_wm.trajectory import load_rollout_at
 from sim.control_session import (
     CONTROL_ROOT,
@@ -46,13 +48,13 @@ from sim.exploration import (
 )
 from sim.isaac_control_runtime import (
     LiveContactInterlock,
+    LiveControlRuntime,
     bind_live_runtime,
     control_contact_sensors,
     synchronized_control_safety_snapshot,
 )
 from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, DemoRecorder
 from sim.isaac_demo_runtime import (
-    Actuators,
     ContactReading,
     JointCommand,
     advance_physics_updates,
@@ -112,20 +114,50 @@ def validated_control_reference(
     return reference
 
 
-def resolution_capture_safety(
-    actuators: Actuators,
+async def stabilize_resolution_capture(
+    runtime: LiveControlRuntime,
+    timeline: Any,
     command: JointCommand,
-    interlock: ControlInterlockEvidence,
+    contract: ControlResolutionCaptureBaselineContract,
 ) -> RecordingSafetyTelemetry:
-    """Bind strict-current RGB telemetry to the final replay update."""
+    """Establish one stable drive-only state before strict-current capture."""
 
-    actual = actuators.actual_command()
+    from sim.isaac_control_resolution import (
+        ResolutionControlInterlock,
+        stabilize_resolution_baseline,
+    )
+
+    interlock = ResolutionControlInterlock(
+        LiveContactInterlock(
+            runtime.sensor,
+            contract.safety_limits.maximum_contact_force_newtons,
+            "insertion control resolution capture stabilization",
+        ),
+        runtime,
+        expected_attachment=contract.load.plug_attached,
+    )
+    _, baseline = await stabilize_resolution_baseline(
+        runtime,
+        interlock,
+        contract.baseline_policy,
+        timeline.get_current_time,
+        contract.load,
+        contract.safety_limits,
+    )
+    baseline.validate(
+        contract.baseline_policy,
+        contract.load,
+        contract.safety_limits,
+    )
+
+    actual = runtime.actuators.actual_command()
+    evidence = interlock.contact.evidence
     return recording_safety_telemetry(
         command,
         actual,
         ContactReading(
-            interlock.collision_detected,
-            interlock.maximum_contact_force_newtons,
+            evidence.collision_detected,
+            evidence.maximum_contact_force_newtons,
         ),
     )
 
@@ -298,11 +330,62 @@ async def capture_control_observation(
                 ),
             )
             if strict_current_capture:
-                capture_safety = resolution_capture_safety(
-                    actuators,
-                    command,
-                    warmup_interlock.evidence,
+                from jepa_wm.control_resolution import CONTROL_RESOLUTION_PROTOCOL
+                from jepa_wm.control_resolution_baseline import (
+                    ControlResolutionCaptureAttemptIdentity,
+                    ControlResolutionCaptureFailureEvidence,
+                    ControlResolutionCaptureSourceIdentity,
                 )
+                from jepa_wm.control_resolution_profile import ControlResolutionLoad
+                from sim.isaac_control_resolution import (
+                    UnstableControlResolutionBaseline,
+                )
+
+                capture_runtime = LiveControlRuntime(
+                    session_id,
+                    stage,
+                    actuators,
+                    attachment,
+                    sensor,
+                )
+                baseline_policy = CONTROL_RESOLUTION_PROTOCOL.baseline_policy
+                if baseline_policy is None:
+                    raise RuntimeError(
+                        "control resolution capture has no baseline policy"
+                    )
+                capture_contract = ControlResolutionCaptureBaselineContract(
+                    baseline_policy,
+                    CONTROL_RESOLUTION_PROTOCOL.safety_limits,
+                    ControlResolutionLoad.ATTACHED,
+                )
+                try:
+                    capture_safety = await stabilize_resolution_capture(
+                        capture_runtime,
+                        timeline,
+                        command,
+                        capture_contract,
+                    )
+                except UnstableControlResolutionBaseline as error:
+                    failure = ControlResolutionCaptureFailureEvidence(
+                        identity=ControlResolutionCaptureAttemptIdentity(
+                            session_id,
+                            ControlResolutionCaptureSourceIdentity(
+                                reference_recording,
+                                seed,
+                                context_index,
+                            ),
+                        ),
+                        failed_at_unix_seconds=time(),
+                        contract=capture_contract,
+                        baseline_attempt=error.attempt,
+                        error=f"{type(error).__name__}: {error}",
+                    )
+                    session.create()
+                    write_json_atomic(
+                        session.resolution_capture_failure_path,
+                        failure.to_dict(),
+                    )
+                    raise
                 await recorder.capture_current(
                     recording_snapshot(
                         recording_phase,

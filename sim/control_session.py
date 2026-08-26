@@ -555,6 +555,10 @@ class ControlSession:
         return self.path / "direct_insertion_safety.json"
 
     @property
+    def resolution_capture_failure_path(self) -> Path:
+        return self.path / "control_resolution_capture_failure.json"
+
+    @property
     def execution_path(self) -> Path:
         return self.path / "execution_started.json"
 

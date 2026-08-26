@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from math import isclose, isfinite
 from typing import Any, Mapping
 
+from jepa_wm.identifiers import validate_safe_identifier
 from jepa_wm.control_resolution_profile import ControlResolutionLoad
 from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimits
 from jepa_wm.trial_equivalence import (
@@ -22,6 +23,9 @@ CONTROL_RESOLUTION_BASELINE_TOLERANCES = ResetEquivalenceTolerances(
     maximum_joint_difference_radians=2.5e-4,
     maximum_reset_contact_force_newtons=0.01,
     maximum_plug_position_difference_meters=1.25e-4,
+)
+CONTROL_RESOLUTION_CAPTURE_FAILURE_SCHEMA = (
+    "quantis.jepa_wm_control_resolution_capture_failure.v1"
 )
 
 
@@ -311,6 +315,195 @@ class ControlResolutionBaselineAttempt:
     @classmethod
     def from_dict(cls, payload: Any) -> ControlResolutionBaselineAttempt:
         return cls(ControlResolutionBaselineTrace.from_dict(payload))
+
+
+@dataclass(frozen=True)
+class ControlResolutionCaptureSourceIdentity:
+    reference_recording: str
+    seed: int
+    context_index: int
+
+    def __post_init__(self) -> None:
+        validate_safe_identifier(self.reference_recording)
+        if (
+            isinstance(self.seed, bool)
+            or not isinstance(self.seed, int)
+            or self.seed < 0
+            or isinstance(self.context_index, bool)
+            or not isinstance(self.context_index, int)
+            or self.context_index <= 0
+        ):
+            raise ValueError("control resolution capture source identity is invalid")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "reference_recording": self.reference_recording,
+            "seed": self.seed,
+            "context_index": self.context_index,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ControlResolutionCaptureSourceIdentity:
+        if not isinstance(payload, Mapping):
+            raise ValueError("control resolution capture source identity must be an object")
+        try:
+            seed = payload["seed"]
+            context_index = payload["context_index"]
+            if (
+                not isinstance(payload["reference_recording"], str)
+                or isinstance(seed, bool)
+                or not isinstance(seed, int)
+                or isinstance(context_index, bool)
+                or not isinstance(context_index, int)
+            ):
+                raise ValueError("capture attempt integers are invalid")
+            return cls(
+                payload["reference_recording"],
+                seed,
+                context_index,
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "control resolution capture source identity is incomplete"
+            ) from error
+
+
+@dataclass(frozen=True)
+class ControlResolutionCaptureAttemptIdentity:
+    session_id: str
+    source: ControlResolutionCaptureSourceIdentity
+
+    def __post_init__(self) -> None:
+        validate_safe_identifier(self.session_id)
+        if not isinstance(self.source, ControlResolutionCaptureSourceIdentity):
+            raise ValueError("control resolution capture attempt source is invalid")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"session_id": self.session_id, **self.source.to_dict()}
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ControlResolutionCaptureAttemptIdentity:
+        if not isinstance(payload, Mapping) or not isinstance(
+            payload.get("session_id"), str
+        ):
+            raise ValueError("control resolution capture attempt identity is invalid")
+        return cls(
+            payload["session_id"],
+            ControlResolutionCaptureSourceIdentity.from_dict(payload),
+        )
+
+
+@dataclass(frozen=True)
+class ControlResolutionCaptureBaselineContract:
+    baseline_policy: ControlResolutionBaselinePolicy
+    safety_limits: SimulatorSafetyLimits
+    load: ControlResolutionLoad
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.baseline_policy, ControlResolutionBaselinePolicy)
+            or not isinstance(self.safety_limits, SimulatorSafetyLimits)
+            or not isinstance(self.load, ControlResolutionLoad)
+        ):
+            raise ValueError("control resolution capture baseline contract is invalid")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "baseline_policy": self.baseline_policy.to_dict(),
+            "safety_limits": self.safety_limits.to_dict(),
+            "load": self.load.value,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ControlResolutionCaptureBaselineContract:
+        if not isinstance(payload, Mapping) or not isinstance(payload.get("load"), str):
+            raise ValueError("control resolution capture baseline contract is invalid")
+        try:
+            return cls(
+                ControlResolutionBaselinePolicy.from_dict(payload["baseline_policy"]),
+                SimulatorSafetyLimits.from_dict(payload["safety_limits"]),
+                ControlResolutionLoad(payload["load"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "control resolution capture baseline contract is incomplete"
+            ) from error
+
+
+@dataclass(frozen=True)
+class ControlResolutionCaptureFailureEvidence:
+    identity: ControlResolutionCaptureAttemptIdentity
+    failed_at_unix_seconds: float
+    contract: ControlResolutionCaptureBaselineContract
+    baseline_attempt: ControlResolutionBaselineAttempt
+    error: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isfinite(self.failed_at_unix_seconds)
+            or self.failed_at_unix_seconds <= 0.0
+            or not self.error
+        ):
+            raise ValueError("control resolution capture failure is invalid")
+        self.baseline_attempt.validate(
+            self.contract.baseline_policy,
+            self.contract.load,
+            self.contract.safety_limits,
+        )
+
+    @property
+    def diagnostic_only(self) -> bool:
+        return True
+
+    @property
+    def multi_step_authority_granted(self) -> bool:
+        return False
+
+    @property
+    def production_authority_granted(self) -> bool:
+        return False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema": CONTROL_RESOLUTION_CAPTURE_FAILURE_SCHEMA,
+            "identity": self.identity.to_dict(),
+            "failed_at_unix_seconds": self.failed_at_unix_seconds,
+            "contract": self.contract.to_dict(),
+            "baseline_attempt": self.baseline_attempt.to_dict(),
+            "error": self.error,
+            "diagnostic_only": True,
+            "multi_step_authority_granted": False,
+            "production_authority_granted": False,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ControlResolutionCaptureFailureEvidence:
+        if not isinstance(payload, Mapping):
+            raise ValueError("control resolution capture failure must be an object")
+        try:
+            failed_at = payload["failed_at_unix_seconds"]
+            if (
+                isinstance(failed_at, bool)
+                or not isinstance(failed_at, (int, float))
+                or not isinstance(payload["error"], str)
+            ):
+                raise ValueError("capture failure scalar fields are invalid")
+            if (
+                payload.get("schema") != CONTROL_RESOLUTION_CAPTURE_FAILURE_SCHEMA
+                or payload.get("diagnostic_only") is not True
+                or payload.get("multi_step_authority_granted") is not False
+                or payload.get("production_authority_granted") is not False
+            ):
+                raise ValueError("capture failure authority claims are invalid")
+            return cls(
+                ControlResolutionCaptureAttemptIdentity.from_dict(payload["identity"]),
+                float(failed_at),
+                ControlResolutionCaptureBaselineContract.from_dict(payload["contract"]),
+                ControlResolutionBaselineAttempt.from_dict(payload["baseline_attempt"]),
+                payload["error"],
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("control resolution capture failure is incomplete") from error
 
 
 @dataclass(frozen=True)

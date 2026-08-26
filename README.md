@@ -1216,11 +1216,10 @@ tracking error remains bound to the unchanged active drive target. This is a
 preserved diagnostic negative, not control authority.
 
 The first global-window retry then exposed that baseline qualification was
-duplicated inside capture, before an authenticated session existed. It stopped
-without a probe but could not preserve its trace. Capture now records one
-strict current RGB/telemetry frame with no fallback physics update, while the
-authenticated measurement boundary solely owns baseline qualification and
-typed failure persistence. Exact-code session
+performed inside capture before an authenticated session existed. It stopped
+without a probe but could not preserve its trace. An interim diagnostic moved
+qualification behind strict current-frame capture so the authenticated
+measurement boundary could retain the exact failure. Exact-code session
 `insertion-resolution-attached-20260825T235817Z-52600-c43` subsequently
 preserved a schema-v4 failure with all 41 states from the bounded `10 s`
 attempt. The arm moved `33.538 mm` and `129.945 mrad` over the full attempt as
@@ -1234,6 +1233,24 @@ only the bounded observation cap from `10 s` to `20 s`; it does not loosen a
 tolerance, force/collision/attachment limit, settlement rule, or velocity
 gate. Both backup layers again verified the 12 GB recovery copy. No HOLD or
 translation probe executed, and no control authority was granted.
+
+The bounded-`20 s` retry then qualified after 44 intervals, but failed the
+independent capture-to-baseline continuity gate. Session
+`insertion-resolution-attached-20260826T001258Z-52600-c43` reconstructed the
+raw capture and found that the first resumed baseline state was already
+`5.941 mm` and `23.614 mrad` away; the arm then moved another `33.568 mm` and
+`130.025 mrad` before reaching its stable endpoint. Its qualifying final
+window remained strict: `0.086 mm` translation, `0.148 mrad` rotation,
+`0.237 mrad` joint, and `0.069 mm` plug-axis drift, with `0 N`, no collision,
+and retained attachment. This proves that a strict image/telemetry read alone
+does not make the preceding replay state a settled reset. The final lifecycle
+therefore uses the same unchanged global-window policy at two distinct
+boundaries: capture must settle before recording the strict current frame, and
+measurement must requalify after pause/resume before any probe. Capture-side
+timeout now writes a dedicated typed failure artifact with the complete trace,
+source identity, load, limits, and false authority claims. The post-resume
+gate still authenticates continuity to the settled capture. No tolerance or
+safety limit changed, no probe executed, and both 12 GB backups were verified.
 
 The next diagnostic measured the simulator/controller noise floor before
 authorizing another insertion action. The first exact-code run stopped before

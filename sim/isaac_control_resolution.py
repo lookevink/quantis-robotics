@@ -48,6 +48,7 @@ from jepa_wm.control_resolution import (
     maximum_joint_position_delta,
 )
 from jepa_wm.control_safety import SimulatorSafetyLimits
+from jepa_wm.control_resolution_baseline import ControlResolutionCaptureSourceIdentity
 from jepa_wm.control_safety import SafetyProjectionAttempt
 from jepa_wm.direct_safety import ControlSafetySnapshot
 from jepa_wm.persistence import write_json_atomic
@@ -1004,9 +1005,11 @@ async def measure_insertion_control_resolution(
             load,
             baseline,
             ControlResolutionCaptureIdentity(
-                state.reference_recording,
-                state.seed,
-                observation.warmup_frames,
+                ControlResolutionCaptureSourceIdentity(
+                    state.reference_recording,
+                    state.seed,
+                    observation.warmup_frames,
+                ),
                 observation.observation_id,
             ),
         )
