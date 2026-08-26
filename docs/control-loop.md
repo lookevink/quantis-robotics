@@ -620,10 +620,12 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     and persists typed early failures; measurement independently requalifies
     after pause/resume. The resulting three HOLD repetitions passed with
     micrometer-scale drift, while the first `0.5 mm` probe was rejected before
-    actuation by the unchanged velocity gate; the next retry lengthens its
-    command period instead of weakening that gate. No acceptance or safety
-    limit changed. Exact negative evidence is retained in the linked README
-    checkpoint.
+    actuation by the unchanged velocity gate. A retry with the safely longer
+    persisted period was also rejected before actuation because IK selected an
+    inadmissibly distant joint configuration. The remaining roster is paused
+    until local IK continuity is repaired or independently bounded. No
+    acceptance or safety limit changed. Exact negative evidence is retained in
+    the linked README checkpoint.
     Multi-step, filming, and production authority remain false; exact metrics
     and evidence are in the
     [insertion control-resolution checkpoint](../README.md#insertion-control-resolution-checkpoint).

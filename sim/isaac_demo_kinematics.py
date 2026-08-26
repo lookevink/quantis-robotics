@@ -63,6 +63,10 @@ def _closest_inverse_kinematics(
         alternating * -1e-4,
         alternating * 5e-4,
         alternating * -5e-4,
+        alternating * 1e-3,
+        alternating * -1e-3,
+        alternating * 5e-3,
+        alternating * -5e-3,
     )
     solutions = []
     for offset in offsets:

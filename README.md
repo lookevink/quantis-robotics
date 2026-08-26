@@ -1269,6 +1269,21 @@ retry gives both `0.5 mm` and `1.0 mm` probes a persisted `0.5 s` command
 period. Both 12 GB backups were verified; this is still diagnostic evidence,
 not insertion authority.
 
+The exact-code `0.5 s` retry,
+`insertion-resolution-attached-20260826T010729Z-52600-c43`, again completed all
+three HOLD repetitions and then rejected the first `0.5 mm` probe before any
+drive command. Its authenticated schema-v5 failure now preserves the complete
+rejected projection rather than only an error string. The IK result required a
+`1.613083 rad` maximum joint change, so the unchanged `0.5 rad/s` velocity gate
+would require at least `3.226165 s` even before tracking and settling. That is
+an inadmissible joint-configuration jump for a `0.5 mm` diagnostic probe, not a
+reason to extend the period blindly. The completed HOLD intervals retained the
+plug with `0 N` peak contact and no collision; both 12 GB recovery backups were
+verified. The remaining poses, unloaded cases, and `1.0 mm` probes were not
+attempted. Local IK continuity must be repaired or bounded independently before
+the drive-only roster can resume. No JEPA action, multi-step insertion,
+filming, or production authority is granted.
+
 The next diagnostic measured the simulator/controller noise floor before
 authorizing another insertion action. The first exact-code run stopped before
 any probe because the provisional `20 um`/`0.1 mrad` repeat contract was
