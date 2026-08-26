@@ -39,6 +39,11 @@ class InsertionTargetOrigin(str, Enum):
     LIVE_OBSERVATION = "live_observation"
 
 
+class InsertionLiveTargetMetric(str, Enum):
+    EUCLIDEAN_DISTANCE = "euclidean_distance"
+    FORWARD_PROJECTION = "forward_projection"
+
+
 @dataclass(frozen=True)
 class InsertionControlTargetPolicy:
     minimum_translation_meters: float = 5e-4
@@ -50,6 +55,9 @@ class InsertionControlTargetPolicy:
         minimum_action_norm=0.0
     )
     target_origin: InsertionTargetOrigin = InsertionTargetOrigin.REFERENCE_CONTEXT
+    live_target_metric: InsertionLiveTargetMetric = (
+        InsertionLiveTargetMetric.FORWARD_PROJECTION
+    )
 
     def __post_init__(self) -> None:
         validate_safe_identifier(self.camera)
@@ -70,6 +78,7 @@ class InsertionControlTargetPolicy:
             or not isinstance(self.maximum_action_horizon, int)
             or self.maximum_action_horizon < self.minimum_action_horizon
             or not isinstance(self.target_origin, InsertionTargetOrigin)
+            or not isinstance(self.live_target_metric, InsertionLiveTargetMetric)
         ):
             raise ValueError("insertion control target policy is invalid")
 
@@ -105,7 +114,7 @@ class InsertionControlTargetPolicy:
         context_index: int,
         current_pose: DroidPose | None = None,
     ) -> RecordedRollout:
-        """Select the nearest bounded-horizon target above control resolution."""
+        """Select the first bounded target beyond the configured resolution metric."""
 
         if (
             self.target_origin is InsertionTargetOrigin.LIVE_OBSERVATION
@@ -127,12 +136,44 @@ class InsertionControlTargetPolicy:
             )
             if self.target_origin is InsertionTargetOrigin.LIVE_OBSERVATION:
                 assert current_pose is not None
-                origin = current_pose
+                if (
+                    self.live_target_metric
+                    is InsertionLiveTargetMetric.FORWARD_PROJECTION
+                ):
+                    reference_delta = tuple(
+                        target - context
+                        for target, context in zip(
+                            rollout.target_pose.values[:3],
+                            rollout.context_pose.values[:3],
+                        )
+                    )
+                    reference_distance = sqrt(
+                        sum(value * value for value in reference_delta)
+                    )
+                    translation_meters = (
+                        sum(
+                            (target - live) * direction
+                            for target, live, direction in zip(
+                                rollout.target_pose.values[:3],
+                                current_pose.values[:3],
+                                reference_delta,
+                            )
+                        )
+                        / reference_distance
+                        if reference_distance > 0.0
+                        else 0.0
+                    )
+                else:
+                    translation_meters = dist(
+                        current_pose.values[:3],
+                        rollout.target_pose.values[:3],
+                    )
             else:
-                origin = rollout.context_pose
-            if dist(origin.values[:3], rollout.target_pose.values[:3]) >= (
-                self.minimum_translation_meters
-            ):
+                translation_meters = dist(
+                    rollout.context_pose.values[:3],
+                    rollout.target_pose.values[:3],
+                )
+            if translation_meters >= self.minimum_translation_meters:
                 return rollout
         raise ValueError(
             "insertion control target has no resolvable bounded-horizon goal"
@@ -165,6 +206,7 @@ class InsertionControlTargetPolicy:
             "camera": self.camera,
             "action_bounds": self.action_bounds.to_dict(),
             "target_origin": self.target_origin.value,
+            "live_target_metric": self.live_target_metric.value,
         }
         if self.orientation_hold_tolerance_radians is not None:
             payload["orientation_hold_tolerance_radians"] = (
@@ -204,6 +246,12 @@ class InsertionControlTargetPolicy:
                     payload.get(
                         "target_origin",
                         InsertionTargetOrigin.REFERENCE_CONTEXT.value,
+                    )
+                ),
+                live_target_metric=InsertionLiveTargetMetric(
+                    payload.get(
+                        "live_target_metric",
+                        InsertionLiveTargetMetric.EUCLIDEAN_DISTANCE.value,
                     )
                 ),
             )

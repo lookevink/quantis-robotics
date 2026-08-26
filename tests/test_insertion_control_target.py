@@ -7,7 +7,10 @@ from unittest.mock import patch
 from jepa_wm.action import ActionSelectionBounds, DroidAction, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.control_safety import ACTION_SCALES, ORIENTATION_HOLD_ACTION_SCALES
-from jepa_wm.insertion_contract import InsertionControlTargetPolicy
+from jepa_wm.insertion_contract import (
+    InsertionControlTargetPolicy,
+    InsertionLiveTargetMetric,
+)
 from jepa_wm.trajectory import RecordedFrame, RecordedRollout
 
 
@@ -61,6 +64,8 @@ class InsertionControlTargetPolicyTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "policy is invalid"):
             InsertionControlTargetPolicy(target_origin="live_observation")
+        with self.assertRaisesRegex(ValueError, "policy is invalid"):
+            InsertionControlTargetPolicy(live_target_metric="forward_projection")
 
     def test_nondefault_policy_round_trips_and_validates_exact_observation(self) -> None:
         policy = InsertionControlTargetPolicy(
@@ -183,6 +188,51 @@ class InsertionControlTargetPolicyTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "observation pose"):
             policy.select(Path("recording"), context_index=44)
+
+    def test_followup_skips_targets_already_behind_the_live_pose(self) -> None:
+        policy = InsertionControlTargetPolicy().for_followup()
+        live_pose = DroidPose((0.401, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+        with patch(
+            "jepa_wm.insertion_contract.load_rollout_at",
+            side_effect=(
+                _rollout(3, 4e-4),
+                _rollout(4, 6e-4),
+                _rollout(5, 9e-4),
+                _rollout(6, 1.2e-3),
+                _rollout(7, 1.55e-3),
+            ),
+        ) as load:
+            selected = policy.select(
+                Path("recording"),
+                context_index=45,
+                current_pose=live_pose,
+            )
+
+        self.assertEqual(selected.target.index, 50)
+        self.assertEqual(len(load.call_args_list), 5)
+
+    def test_legacy_followup_preserves_euclidean_target_selection(self) -> None:
+        payload = InsertionControlTargetPolicy().to_dict()
+        del payload["live_target_metric"]
+        policy = InsertionControlTargetPolicy.from_dict(payload).for_followup()
+        live_pose = DroidPose((0.401, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+
+        with patch(
+            "jepa_wm.insertion_contract.load_rollout_at",
+            side_effect=(_rollout(3, 4e-4),),
+        ) as load:
+            selected = policy.select(
+                Path("recording"),
+                context_index=45,
+                current_pose=live_pose,
+            )
+
+        self.assertEqual(
+            policy.live_target_metric,
+            InsertionLiveTargetMetric.EUCLIDEAN_DISTANCE,
+        )
+        self.assertEqual(selected.target.index, 46)
+        self.assertEqual(len(load.call_args_list), 1)
 
     def test_fails_when_no_bounded_horizon_is_resolvable(self) -> None:
         policy = InsertionControlTargetPolicy(maximum_action_horizon=4)
