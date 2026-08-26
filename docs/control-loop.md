@@ -666,7 +666,11 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     interlocked rollback also timed out. It retained attachment at zero contact
     with no collision, but terminalized as `rollback_failed` with `0/1` applied
     steps. Controller settlement and verified reset rollback must now pass under
-    the unchanged limits before another JEPA action is authorized.
+    the unchanged limits before another JEPA action is authorized. The
+    insertion-specific observation cap now matches the validated 48-update
+    drive-only checkpoint without changing any threshold or safety limit, and
+    fresh current-code no-actuation checks pass `2/2`. This reopens only a
+    separately invoked one-action retry, never an automatic next step.
     Multi-step, filming, and production authority remain false; exact metrics
     and evidence are in the
     [insertion control-resolution checkpoint](../README.md#insertion-control-resolution-checkpoint).

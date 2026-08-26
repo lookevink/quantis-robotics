@@ -1621,6 +1621,31 @@ scale under the same `0.500000 mrad` threshold, force/collision/attachment
 interlock, and reset-equivalence contract. Multi-step insertion, filming, and
 production authority remain false.
 
+The failure exposed one policy mismatch with the corrected drive-only
+checkpoint: the insertion trial observed only 32 updates, while the validated
+attached context-43 control-resolution roster uses 48. The insertion-specific
+cap is now 48 and is persisted in the trial binding. The `0.500000 mrad`
+threshold, two-consecutive-pass rule, velocity gate, gripper tolerance, and all
+force, collision, attachment, and reset limits are unchanged; generic
+settlement remains at 32 updates. The full local suite passes `536` tests with
+`70` optional dependency skips, and both independent reviews pass.
+
+Fresh current-code no-actuation sessions then requalified both reserved seeds.
+Session `insertion-safety-20260826T113919Z-52600-c43` selected full translation
+with rotation held and a `1.633083 mrad` maximum projected joint change.
+Session `insertion-safety-20260826T120217Z-52601-c43` independently selected
+the same scale with a `1.712435 mrad` maximum projected joint change. Both
+recorded `0 N` contact, no collision, retained attachment, and
+`authority: no_actuation`; both verified 13 GB backups. The first seed-52601
+attempt, `insertion-safety-20260826T115339Z-52601-c43`, is retained as a
+freshness negative: evaluation arrived about `2.824 s` after its response and
+all scales failed the unchanged `2.5 s` command-age limit before IK.
+
+This restores only the exact `2/2` pre-action boundary for a separately invoked
+single context-43 retry. No action was launched from these safety sessions, and
+they do not authorize an automatic second action, multi-step insertion,
+filming, or production use.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded
