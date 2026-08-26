@@ -1202,6 +1202,20 @@ class ControlResolutionReportTest(unittest.TestCase):
         restored = ControlResolutionReport.from_dict(report.to_dict())
 
         self.assertEqual(restored, report)
+        runtime_rounding = report.to_dict()
+        runtime_rounding["summary"]["responses"][1][
+            "mean_realized_along_axis_meters"
+        ] += 3e-19
+        self.assertEqual(
+            ControlResolutionReport.from_dict(runtime_rounding),
+            report,
+        )
+        tampered_summary = report.to_dict()
+        tampered_summary["summary"]["responses"][1][
+            "mean_realized_along_axis_meters"
+        ] += 1e-10
+        with self.assertRaisesRegex(ValueError, "summary is inconsistent"):
+            ControlResolutionReport.from_dict(tampered_summary)
         missing_drive_command = report.to_dict()
         del missing_drive_command["samples"][0]["tracked_settlement"][
             "rollback_drive_command"

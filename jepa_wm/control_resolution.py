@@ -89,6 +89,37 @@ def maximum_joint_position_delta(
     return max(abs(left_value - right_value) for left_value, right_value in zip(left, right))
 
 
+def _reconstructed_metric_payload_matches(expected: Any, actual: Any) -> bool:
+    """Compare reconstructed metrics across Python/NumPy runtimes."""
+
+    if isinstance(expected, float):
+        return (
+            not isinstance(actual, bool)
+            and isinstance(actual, (int, float))
+            and isfinite(actual)
+            and isclose(expected, float(actual), rel_tol=1e-12, abs_tol=1e-15)
+        )
+    if isinstance(expected, dict):
+        return (
+            isinstance(actual, dict)
+            and expected.keys() == actual.keys()
+            and all(
+                _reconstructed_metric_payload_matches(value, actual[key])
+                for key, value in expected.items()
+            )
+        )
+    if isinstance(expected, (list, tuple)):
+        return (
+            isinstance(actual, list)
+            and len(expected) == len(actual)
+            and all(
+                _reconstructed_metric_payload_matches(left, right)
+                for left, right in zip(expected, actual)
+            )
+        )
+    return type(expected) is type(actual) and expected == actual
+
+
 @dataclass(frozen=True)
 class ControlResolutionMotionPeriod:
     translation_meters: float
@@ -3137,7 +3168,10 @@ class ControlResolutionReport:
             raise ValueError(
                 "control resolution report drive-target generation is invalid"
             )
-        if payload.get("summary") != report.summary.to_dict():
+        if not _reconstructed_metric_payload_matches(
+            report.summary.to_dict(),
+            payload.get("summary"),
+        ):
             raise ValueError("control resolution summary is inconsistent")
         return report
 
