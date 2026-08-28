@@ -48,6 +48,7 @@ from jepa_wm.control_policy import (
     ControlExecutionPolicy,
     is_insertion_trial_execution_policy,
 )
+from jepa_wm.contact_grasp_target import ContactGraspTargetPolicy
 from jepa_wm.experimental_candidate import (
     CandidateExecutionEvidence,
     CandidateSourceEvidence,
@@ -121,6 +122,15 @@ class ControlResultStatus(str, Enum):
         }[reason]
 
 
+CONTROL_SESSION_STATE_SCHEMA = "quantis.control_session_state.v2"
+
+
+class ControlTargetContract(str, Enum):
+    GENERIC = "generic"
+    INSERTION = "insertion"
+    CONTACT_GRASP = "contact_grasp"
+
+
 @dataclass(frozen=True)
 class ControlSessionState:
     session_id: str
@@ -138,12 +148,33 @@ class ControlSessionState:
     insertion_target_policy: InsertionControlTargetPolicy | None = None
     active_drive_target: JointDriveTarget | None = None
     insertion_rollout_position: InsertionRolloutPosition | None = None
+    contact_grasp_target_policy: ContactGraspTargetPolicy | None = None
+    schema: str | None = CONTROL_SESSION_STATE_SCHEMA
+
+    @property
+    def target_contract(self) -> ControlTargetContract:
+        if self.contact_grasp_target_policy is not None:
+            return ControlTargetContract.CONTACT_GRASP
+        if self.insertion_target_policy is not None:
+            return ControlTargetContract.INSERTION
+        return ControlTargetContract.GENERIC
 
     @classmethod
     def from_dict(cls, payload: Any) -> ControlSessionState:
         if not isinstance(payload, dict):
             raise ValueError("control session state must be an object")
         try:
+            schema = payload.get("schema")
+            if schema not in (None, CONTROL_SESSION_STATE_SCHEMA):
+                raise ValueError("control session state schema is invalid")
+            claimed_target_contract = payload.get("target_contract")
+            if schema is None:
+                if claimed_target_contract is not None:
+                    raise ValueError("legacy control target contract is invalid")
+            else:
+                claimed_target_contract = ControlTargetContract(
+                    claimed_target_contract
+                )
             state = cls(
                 session_id=str(payload["session_id"]),
                 reference_recording=str(payload["reference_recording"]),
@@ -192,6 +223,14 @@ class ControlSessionState:
                     if payload.get("insertion_rollout_position") is not None
                     else None
                 ),
+                contact_grasp_target_policy=(
+                    ContactGraspTargetPolicy.from_dict(
+                        payload["contact_grasp_target_policy"]
+                    )
+                    if payload.get("contact_grasp_target_policy") is not None
+                    else None
+                ),
+                schema=schema,
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("control session state is incomplete") from error
@@ -201,7 +240,13 @@ class ControlSessionState:
         if state.previous_session_id is not None:
             validate_recording_id(state.previous_session_id)
         if (
-            state.seed < 0
+            state.schema is not None
+            and claimed_target_contract is not state.target_contract
+        ):
+            raise ValueError("control target contract is invalid")
+        if (
+            state.schema not in (None, CONTROL_SESSION_STATE_SCHEMA)
+            or state.seed < 0
             or len(state.current_joint_positions) != 7
             or not all(isfinite(value) for value in state.current_joint_positions)
             or not isinstance(state.collision_detected, bool)
@@ -240,6 +285,18 @@ class ControlSessionState:
                     or not is_insertion_rollout_policy(state.execution_policy)
                 )
             )
+            or (
+                state.contact_grasp_target_policy is not None
+                and (
+                    not isinstance(
+                        state.contact_grasp_target_policy,
+                        ContactGraspTargetPolicy,
+                    )
+                    or state.execution_policy is not ControlExecutionPolicy.DIRECT
+                    or state.insertion_target_policy is not None
+                    or state.active_drive_target is None
+                )
+            )
         ):
             raise ValueError("control session state is invalid")
         return state
@@ -261,6 +318,9 @@ class ControlSessionState:
             "plug_attached": self.plug_attached,
             "current_gripper_width_m": self.current_gripper_width_m,
         }
+        if self.schema is not None:
+            payload["schema"] = self.schema
+            payload["target_contract"] = self.target_contract.value
         if self.insertion_target_policy is not None:
             payload["insertion_target_policy"] = (
                 self.insertion_target_policy.to_dict()
@@ -271,7 +331,24 @@ class ControlSessionState:
             payload["insertion_rollout_position"] = (
                 self.insertion_rollout_position.to_dict()
             )
+        if self.contact_grasp_target_policy is not None:
+            payload["contact_grasp_target_policy"] = (
+                self.contact_grasp_target_policy.to_dict()
+            )
         return payload
+
+    def require_current_contact_grasp_policy(self) -> ContactGraspTargetPolicy:
+        if (
+            self.schema != CONTROL_SESSION_STATE_SCHEMA
+            or not isinstance(
+                self.contact_grasp_target_policy,
+                ContactGraspTargetPolicy,
+            )
+        ):
+            raise ValueError(
+                "contact-grasp target policy is not current execution authority"
+            )
+        return self.contact_grasp_target_policy
 
     def resolved_insertion_rollout_position(self) -> InsertionRolloutPosition:
         """Return current position or the bounded legacy two-step interpretation."""
@@ -310,7 +387,16 @@ class ControlSessionState:
         configured_policy = insertion_control_target_policy(
             self.execution_policy
         )
-        if self.insertion_target_policy is not None:
+        if self.contact_grasp_target_policy is not None:
+            if self.insertion_target_policy is not None:
+                raise ValueError("control target policies are mutually exclusive")
+            self.contact_grasp_target_policy.validate_observation_target(
+                observation,
+                recording,
+                frame_root=frame_root,
+                require_initial=self.previous_session_id is None,
+            )
+        elif self.insertion_target_policy is not None:
             if configured_policy is None:
                 raise ValueError(
                     "insertion target policy is invalid for the execution policy"
@@ -1031,7 +1117,10 @@ class ControlSession:
             raise ValueError(f"control session is incomplete: {self.session_id}") from error
         if state.session_id != self.session_id:
             raise ValueError("control state belongs to a different session")
-        if insertion_control_target_policy(state.execution_policy) is not None:
+        if (
+            insertion_control_target_policy(state.execution_policy) is not None
+            or state.contact_grasp_target_policy is not None
+        ):
             state.validate_observation_target(
                 observation,
                 self.data_root / "recordings" / state.reference_recording,
@@ -1060,6 +1149,16 @@ class ControlSession:
             proposal = self.load_response()
         except FileNotFoundError as error:
             raise ValueError(f"control session is incomplete: {self.session_id}") from error
+        if (
+            state.execution_policy is ControlExecutionPolicy.DIRECT
+            and state.insertion_target_policy is None
+            and state.active_drive_target is not None
+            and recording_task(
+                self.data_root / "recordings" / state.reference_recording
+            )
+            == INSERTION_TASK_ID
+        ):
+            state.require_current_contact_grasp_policy()
         is_candidate = (
             state.execution_policy is ControlExecutionPolicy.RESET_TRIAL_CANDIDATE
         )

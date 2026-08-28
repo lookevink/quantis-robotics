@@ -18,6 +18,7 @@ from jepa_wm.control_policy import (
     ControlExecutionPolicy,
     is_insertion_trial_execution_policy,
 )
+from jepa_wm.contact_grasp_target import ContactGraspTargetPolicy
 from jepa_wm.insertion_contract import (
     CONTACT_INSERTION_RECORDING,
     INSERTION_TASK_ID,
@@ -617,22 +618,6 @@ def verify_insertion_demo_rollout_result(
     }
 
 
-def _next_contact_grasp_target(
-    reference_path: Path,
-    context_index: int,
-) -> ControlTarget:
-    rollout = load_rollout_at(
-        reference_path,
-        camera="wrist",
-        context_index=context_index,
-        bounds=ActionSelectionBounds(minimum_action_norm=0.0),
-    )
-    return ControlTarget(
-        rollout.target.path.relative_to(QUANTIS_DATA_ROOT),
-        rollout.target_pose,
-    )
-
-
 async def _capture_contact_grasp_followup(
     session: ControlSession,
     previous_step: ControlStepSummary,
@@ -682,12 +667,22 @@ async def _capture_contact_grasp_followup(
         raise RuntimeError("contact grasp follow-up pose was not refreshed")
     if synchronized.active_drive_target != active_drive_target:
         raise RuntimeError("contact grasp follow-up drive target changed")
-    next_context_index = previous_observation.warmup_frames + 1
+    target_policy = previous_state.contact_grasp_target_policy
+    if not isinstance(target_policy, ContactGraspTargetPolicy):
+        raise ValueError("contact grasp follow-up target policy is missing")
+    target = target_policy.select(
+        reference_path,
+        frame_root=QUANTIS_DATA_ROOT,
+        live_pose=synchronized.pose,
+        plug_attached=synchronized.safety.plug_attached,
+        previous_target=previous_observation.target_frame,
+    )
+    next_context_index = target_policy.context_index_for_target(target.frame)
     observation = ControlObservation(
         observation_id=observation_id_for_session(session.session_id),
         captured_at_unix_seconds=time(),
         context_frame=context_path.relative_to(QUANTIS_DATA_ROOT),
-        target=_next_contact_grasp_target(reference_path, next_context_index),
+        target=target,
         expected_proposal=previous_observation.expected_proposal,
         pose=synchronized.pose,
         previous_action=action_between(previous_observation.pose, synchronized.pose),
@@ -707,6 +702,7 @@ async def _capture_contact_grasp_followup(
         plug_attached=synchronized.safety.plug_attached,
         current_gripper_width_m=synchronized.safety.gripper_width_m,
         active_drive_target=active_drive_target,
+        contact_grasp_target_policy=target_policy,
     )
     previous.validate_followup_capture(
         observation,

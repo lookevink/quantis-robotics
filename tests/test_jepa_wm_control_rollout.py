@@ -798,7 +798,7 @@ class ControlRolloutTest(unittest.TestCase):
                 payload = json.loads(state_path.read_text())
                 del payload["insertion_target_policy"]
                 state_path.write_text(json.dumps(payload))
-            with self.assertRaisesRegex(ValueError, "changed its target frame"):
+            with self.assertRaisesRegex(ValueError, "target contract"):
                 self._report(root, ("session-0", "session-1"), requested_steps=2)
 
     def test_terminal_gate_rejects_blocked_or_rolled_back_second_action(self) -> None:

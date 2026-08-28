@@ -15,6 +15,7 @@ from sim.isaac_demo_runtime import (
     PlugCollisionPolicy,
     _advance_sample,
     move_joint_command,
+    move_joint_command_over_physics_steps,
     recording_snapshot,
     resume_live_simulation,
 )
@@ -39,28 +40,6 @@ class _RigidPrim:
 
 
 class PlugAttachmentTest(unittest.TestCase):
-    def test_refreshes_fixed_joint_tensor_handle_without_losing_attachment(self) -> None:
-        original_rigid = _RigidPrim()
-        refreshed_rigid = _RigidPrim()
-        offset = np.array([0.04, 0.0, 0.0])
-        attachment = PlugAttachment(
-            motion=FixedJointPlugMotion(
-                prim=object(),
-                hand_prim=object(),
-                rigid_prim=original_rigid,
-                fixed_joint=object(),
-                hand_to_plug_offset=offset,
-            ),
-            collisions=PlugCollisionPolicy([]),
-        )
-
-        refreshed = attachment.with_refreshed_physics(refreshed_rigid)
-
-        self.assertIs(refreshed.motion.rigid_prim, refreshed_rigid)
-        self.assertTrue(refreshed.attached)
-        np.testing.assert_array_equal(refreshed.motion.hand_to_plug_offset, offset)
-        self.assertIsNot(refreshed.motion.hand_to_plug_offset, offset)
-
     def test_follow_updates_the_bound_physics_body(self) -> None:
         rigid = _RigidPrim()
         attachment = PlugAttachment(
@@ -247,6 +226,84 @@ class SafetyInterlockTest(unittest.IsolatedAsyncioTestCase):
 
 
 class DriveOnlyMotionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_recorded_motion_settles_each_target_over_physics_steps(self) -> None:
+        physics = SimpleNamespace(current=0.0)
+        applied: list[float] = []
+        actuators = Mock()
+
+        def apply(command: JointCommand) -> None:
+            applied.append(float(command.arm_positions[0]))
+
+        actuators.apply_drive_command.side_effect = apply
+        actuators.actual_command.return_value = JointCommand(
+            np.full(7, 0.25), 0.04
+        )
+        attachment = Mock(hand_prim=object())
+        recorder = Mock(capture_current=AsyncMock())
+
+        class _SimulationManager:
+            @staticmethod
+            def get_physics_dt() -> float:
+                return 0.0625
+
+            @staticmethod
+            def step(*, steps, callback, update_fabric) -> None:
+                self.assertFalse(update_fabric)
+                for index in range(steps):
+                    physics.current += 0.0625
+                    callback(index + 1, steps)
+
+        class _RenderingManager:
+            render_async = AsyncMock()
+
+        simulation_manager = ModuleType("isaacsim.core.simulation_manager")
+        simulation_manager.SimulationManager = _SimulationManager
+        rendering_manager = ModuleType("isaacsim.core.rendering_manager")
+        rendering_manager.RenderingManager = _RenderingManager
+
+        recorded_arm_positions: list[np.ndarray] = []
+
+        def snapshot(*args, **_kwargs):
+            recorded_arm_positions.append(args[2].arm_positions.copy())
+            return SimpleNamespace(simulation_time_seconds=physics.current)
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {
+                    "isaacsim.core.simulation_manager": simulation_manager,
+                    "isaacsim.core.rendering_manager": rendering_manager,
+                },
+            ),
+            patch(
+                "sim.isaac_demo_runtime.physics_simulation_time_seconds",
+                side_effect=lambda: physics.current,
+            ),
+            patch(
+                "sim.isaac_demo_runtime.world_pose",
+                return_value=(np.zeros(3), np.asarray([1.0, 0.0, 0.0, 0.0])),
+            ),
+            patch("sim.isaac_demo_runtime.recording_snapshot", side_effect=snapshot),
+        ):
+            sample_times = await move_joint_command_over_physics_steps(
+                actuators,
+                JointCommand(np.zeros(7), 0.04),
+                JointCommand(np.ones(7), 0.04),
+                attachment,
+                frame_count=1,
+                phase=RecordingLabel(RecordingMoment.MOTION, Phase.READY),
+                stage=ObservationStage.CABLE_GRASPED,
+                recorder=recorder,
+                sample_period_seconds=0.25,
+            )
+
+        self.assertEqual(applied, [1.0])
+        np.testing.assert_allclose(recorded_arm_positions, [np.full(7, 0.25)])
+        self.assertEqual(sample_times, (0.25,))
+        _RenderingManager.render_async.assert_awaited_once_with()
+        recorder.capture_current.assert_awaited_once()
+        actuators.articulation.set_dof_positions.assert_not_called()
+
     async def test_recording_cadence_is_configured_before_stage_reset(self) -> None:
         events: list[object] = []
 

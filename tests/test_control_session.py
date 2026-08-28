@@ -118,12 +118,8 @@ class ControlSessionTest(unittest.TestCase):
             stripped = state.to_dict()
             del stripped["insertion_target_policy"]
             session.state_path.write_text(json.dumps(stripped))
-            with patch(
-                "sim.control_session.validate_observation_target",
-                side_effect=ValueError("legacy target is inconsistent"),
-            ):
-                with self.assertRaisesRegex(ValueError, "legacy target"):
-                    session.load_capture()
+            with self.assertRaisesRegex(ValueError, "target contract"):
+                session.load_capture()
 
     def test_persists_only_a_response_bound_to_the_captured_session(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

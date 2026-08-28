@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import sys
-from types import ModuleType
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -22,7 +20,6 @@ from sim.isaac_control_runtime import (
     LiveInsertionInterlock,
     read_contact,
     read_control_contact,
-    refresh_live_control_runtime,
     synchronized_control_safety_snapshot,
     synchronized_contact_grasp_execution_runtime,
     synchronized_contact_grasp_safety_snapshot,
@@ -30,7 +27,6 @@ from sim.isaac_control_runtime import (
     synchronized_insertion_safety_snapshot,
     synchronized_insertion_resolution_runtime,
 )
-from sim.isaac_demo_runtime import FixedJointPlugMotion, PlugAttachment
 
 
 class _Timeline:
@@ -240,89 +236,6 @@ class ContactReadingTest(unittest.TestCase):
         self.assertEqual(updates, ["update"])
         self.assertEqual(timeline.events, ["pause"])
 
-    def test_recreates_every_tensor_backed_runtime_wrapper(self) -> None:
-        prims = ModuleType("isaacsim.core.experimental.prims")
-        articulation_token = object()
-        rigid_token = object()
-        prims.Articulation = lambda path: (articulation_token, path)
-        prims.RigidPrim = lambda path: (rigid_token, path)
-        isaacsim = ModuleType("isaacsim")
-        core = ModuleType("isaacsim.core")
-        experimental = ModuleType("isaacsim.core.experimental")
-        isaacsim.core = core
-        core.experimental = experimental
-        experimental.prims = prims
-        stage = object()
-        old_offset = np.asarray((0.1, 0.2, 0.3))
-        old_motion = SimpleNamespace(
-            prim=object(),
-            hand_prim=object(),
-            rigid_prim=object(),
-            fixed_joint=object(),
-            hand_to_plug_offset=old_offset,
-        )
-        collision_attributes = [object()]
-        attachment = SimpleNamespace(
-            motion=old_motion,
-            collisions=SimpleNamespace(
-                collision_attributes=collision_attributes,
-                excluded_collision_paths=frozenset({"/World/RJ45_Plug/Body"}),
-            ),
-        )
-        old_runtime = LiveControlRuntime(
-            "session",
-            stage,
-            Mock(),
-            attachment,
-            SimpleNamespace(hand=Mock(), connector=Mock()),
-        )
-        refreshed_actuators = Mock()
-        refreshed_sensors = Mock()
-
-        with (
-            patch.dict(
-                sys.modules,
-                {
-                    "isaacsim": isaacsim,
-                    "isaacsim.core": core,
-                    "isaacsim.core.experimental": experimental,
-                    "isaacsim.core.experimental.prims": prims,
-                },
-            ),
-            patch(
-                "sim.isaac_control_runtime.create_actuators",
-                return_value=refreshed_actuators,
-            ) as create,
-            patch(
-                "sim.isaac_control_runtime.control_contact_sensors",
-                return_value=refreshed_sensors,
-            ) as sensors,
-        ):
-            refreshed = refresh_live_control_runtime(old_runtime)
-
-        create.assert_called_once_with(stage, (articulation_token, "/World/Franka_R"))
-        sensors.assert_called_once_with(
-            stage, create=False, include_connector=True
-        )
-        self.assertIs(refreshed.actuators, refreshed_actuators)
-        self.assertIsInstance(refreshed.attachment, PlugAttachment)
-        self.assertIsInstance(refreshed.attachment.motion, FixedJointPlugMotion)
-        self.assertEqual(
-            refreshed.attachment.motion.rigid_prim,
-            (rigid_token, "/World/RJ45_Plug"),
-        )
-        self.assertIsNot(refreshed.attachment.motion.hand_to_plug_offset, old_offset)
-        np.testing.assert_array_equal(
-            refreshed.attachment.motion.hand_to_plug_offset,
-            old_offset,
-        )
-        self.assertIsNot(refreshed.attachment.collisions, attachment.collisions)
-        self.assertEqual(
-            refreshed.attachment.collisions.collision_attributes,
-            collision_attributes,
-        )
-        self.assertIs(refreshed.sensor, refreshed_sensors)
-
     def test_pauses_when_resuming_the_timeline_fails(self) -> None:
         timeline = _Timeline(playing=False)
         timeline.play = Mock(side_effect=RuntimeError("resume failed"))
@@ -383,13 +296,10 @@ class ContactReadingTest(unittest.TestCase):
         self.assertEqual(state.plug_position, (0.1, 0.2, 0.3))
         self.assertEqual(timeline.events, ["play", "pause"])
 
-    def test_insertion_rebuilds_wrappers_after_physics_ready_update(self) -> None:
+    def test_insertion_preserves_retained_physics_wrappers_after_resume(self) -> None:
         timeline = _Timeline(playing=False)
         old_runtime = LiveControlRuntime(
             "session", object(), Mock(), Mock(), Mock()
-        )
-        refreshed_runtime = LiveControlRuntime(
-            "session", old_runtime.stage, Mock(), Mock(), Mock()
         )
         captured = Mock()
         live = Mock()
@@ -401,35 +311,24 @@ class ContactReadingTest(unittest.TestCase):
             events.append("advance")
             physics_ready = True
 
-        def refresh(runtime: LiveControlRuntime) -> LiveControlRuntime:
-            if not physics_ready:
-                raise RuntimeError("physics tensor view is not ready")
-            events.append("refresh")
-            self.assertIs(runtime, old_runtime)
-            return refreshed_runtime
-
         pose = Mock()
         drive_target = JointDriveTarget((0.0,) * 7, 0.04)
 
         def read(runtime):
+            if not physics_ready:
+                raise RuntimeError("retained tensor view is not ready")
             events.append("read")
-            self.assertIs(runtime, refreshed_runtime)
+            self.assertIs(runtime, old_runtime)
             return live, pose, drive_target
 
         def observe():
-            events.append(
-                "observe resumed" if "refresh" not in events else "observe refreshed"
-            )
+            events.append("observe live")
             return SimpleNamespace(
                 collision_detected=False,
                 force_newtons=0.0,
             )
 
         with (
-            patch(
-                "sim.isaac_control_runtime.refresh_live_control_runtime",
-                side_effect=refresh,
-            ),
             patch(
                 "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
                 side_effect=read,
@@ -446,7 +345,7 @@ class ContactReadingTest(unittest.TestCase):
                     advance,
                     captured,
                     SimulatorSafetyLimits(),
-                    operation="test insertion refresh",
+                    operation="test insertion resume",
                 )
             )
 
@@ -454,13 +353,11 @@ class ContactReadingTest(unittest.TestCase):
             events,
             [
                 "advance",
-                "observe resumed",
-                "refresh",
-                "observe refreshed",
+                "observe live",
                 "read",
             ],
         )
-        self.assertIs(synchronized.runtime, refreshed_runtime)
+        self.assertIs(synchronized.runtime, old_runtime)
         self.assertIs(synchronized.safety, live)
         self.assertIs(synchronized.pose, pose)
         self.assertIs(synchronized.active_drive_target, drive_target)
@@ -472,15 +369,12 @@ class ContactReadingTest(unittest.TestCase):
         )
         self.assertEqual(timeline.events, ["play", "pause"])
 
-    def test_contact_grasp_refresh_accepts_target_relative_gripper_settling(
+    def test_contact_grasp_resume_accepts_target_relative_gripper_settling(
         self,
     ) -> None:
         timeline = _Timeline(playing=False)
         old_runtime = LiveControlRuntime(
             "session", object(), Mock(), Mock(attached=False), Mock()
-        )
-        refreshed_runtime = LiveControlRuntime(
-            "session", old_runtime.stage, Mock(), Mock(attached=False), Mock()
         )
         captured = ControlSafetySnapshot(
             (0.0,) * 7,
@@ -505,10 +399,6 @@ class ContactReadingTest(unittest.TestCase):
 
         with (
             patch(
-                "sim.isaac_control_runtime.refresh_live_control_runtime",
-                return_value=refreshed_runtime,
-            ),
-            patch(
                 "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
                 return_value=(live, Mock(), drive_target),
             ),
@@ -528,7 +418,7 @@ class ContactReadingTest(unittest.TestCase):
                     captured,
                     SimulatorSafetyLimits(),
                     expected_active_drive_target=drive_target,
-                    operation="test contact-grasp refresh",
+                    operation="test contact-grasp resume",
                     maximum_gripper_error_meters=(
                         MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
                     ),
@@ -541,10 +431,6 @@ class ContactReadingTest(unittest.TestCase):
 
         execution_timeline = _Timeline(playing=False)
         with (
-            patch(
-                "sim.isaac_control_runtime.refresh_live_control_runtime",
-                return_value=refreshed_runtime,
-            ),
             patch(
                 "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
                 return_value=(live, Mock(), drive_target),
@@ -565,7 +451,7 @@ class ContactReadingTest(unittest.TestCase):
                     captured,
                     SimulatorSafetyLimits(),
                     expected_active_drive_target=drive_target,
-                    operation="test contact-grasp execution refresh",
+                    operation="test contact-grasp execution resume",
                     maximum_gripper_error_meters=(
                         MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
                     ),
@@ -581,18 +467,15 @@ class ContactReadingTest(unittest.TestCase):
         old_runtime = LiveControlRuntime(
             "session", object(), Mock(), Mock(attached=True), Mock()
         )
-        refreshed_runtime = LiveControlRuntime(
-            "session", old_runtime.stage, Mock(), Mock(attached=True), Mock()
-        )
         captured = Mock(plug_attached=True)
         live = Mock()
         pose = Mock()
         drive_target = JointDriveTarget((0.0,) * 7, 0.018)
-        refreshed_runtime.actuators.current_command.return_value = SimpleNamespace(
+        old_runtime.actuators.current_command.return_value = SimpleNamespace(
             arm_positions=np.zeros(7),
             gripper_width_m=drive_target.gripper_width_m,
         )
-        refreshed_runtime.actuators.actual_command.return_value = SimpleNamespace(
+        old_runtime.actuators.actual_command.return_value = SimpleNamespace(
             arm_positions=np.zeros(7),
             gripper_width_m=drive_target.gripper_width_m,
         )
@@ -606,22 +489,13 @@ class ContactReadingTest(unittest.TestCase):
             events.append("camera update")
             observe_safety()
 
-        def refresh(runtime: LiveControlRuntime) -> LiveControlRuntime:
-            self.assertIs(runtime, old_runtime)
-            events.append("refresh")
-            return refreshed_runtime
-
         def read(runtime: LiveControlRuntime):
             self.assertTrue(timeline.is_playing())
-            self.assertIs(runtime, refreshed_runtime)
+            self.assertIs(runtime, old_runtime)
             events.append("read")
             return live, pose, drive_target
 
         with (
-            patch(
-                "sim.isaac_control_runtime.refresh_live_control_runtime",
-                side_effect=refresh,
-            ),
             patch(
                 "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
                 side_effect=read,
@@ -649,7 +523,11 @@ class ContactReadingTest(unittest.TestCase):
 
         self.assertEqual(
             events,
-            ["readiness update", "refresh", "camera update", "read"],
+            [
+                "readiness update",
+                "camera update",
+                "read",
+            ],
         )
         self.assertIs(synchronized.safety, live)
         live.validate_followup_continuity.assert_called_once_with(
@@ -664,9 +542,6 @@ class ContactReadingTest(unittest.TestCase):
         timeline = _Timeline(playing=False)
         old_runtime = LiveControlRuntime(
             "session", object(), Mock(), Mock(attached=True), Mock()
-        )
-        refreshed_runtime = LiveControlRuntime(
-            "session", old_runtime.stage, Mock(), Mock(attached=True), Mock()
         )
         captured = ControlSafetySnapshot(
             (
@@ -712,11 +587,11 @@ class ContactReadingTest(unittest.TestCase):
             ),
             0.01802057959139347,
         )
-        refreshed_runtime.actuators.current_command.return_value = SimpleNamespace(
+        old_runtime.actuators.current_command.return_value = SimpleNamespace(
             arm_positions=np.asarray(active_target.joint_positions),
             gripper_width_m=active_target.gripper_width_m,
         )
-        refreshed_runtime.actuators.actual_command.return_value = SimpleNamespace(
+        old_runtime.actuators.actual_command.return_value = SimpleNamespace(
             arm_positions=np.asarray(live.joint_positions),
             gripper_width_m=live.gripper_width_m,
         )
@@ -728,10 +603,6 @@ class ContactReadingTest(unittest.TestCase):
             return None
 
         with (
-            patch(
-                "sim.isaac_control_runtime.refresh_live_control_runtime",
-                return_value=refreshed_runtime,
-            ),
             patch(
                 "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
                 return_value=(live, Mock(), active_target),
@@ -847,10 +718,7 @@ class ContactReadingTest(unittest.TestCase):
             ),
         )
         old_runtime = LiveControlRuntime(
-            "session", object(), Mock(), Mock(attached=True), Mock()
-        )
-        refreshed_runtime = LiveControlRuntime(
-            "session", old_runtime.stage, actuators, Mock(attached=True), Mock()
+            "session", object(), actuators, Mock(attached=True), Mock()
         )
 
         async def advance() -> None:
@@ -865,10 +733,6 @@ class ContactReadingTest(unittest.TestCase):
             return snapshot, Mock(), active_target
 
         with (
-            patch(
-                "sim.isaac_control_runtime.refresh_live_control_runtime",
-                return_value=refreshed_runtime,
-            ),
             patch(
                 "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
                 side_effect=read,
@@ -920,10 +784,7 @@ class ContactReadingTest(unittest.TestCase):
             gripper_width_m=captured.gripper_width_m,
         )
         old_runtime = LiveControlRuntime(
-            "session", object(), Mock(), Mock(attached=True), Mock()
-        )
-        refreshed_runtime = LiveControlRuntime(
-            "session", old_runtime.stage, actuators, Mock(attached=True), Mock()
+            "session", object(), actuators, Mock(attached=True), Mock()
         )
 
         async def advance() -> None:
@@ -935,10 +796,6 @@ class ContactReadingTest(unittest.TestCase):
             camera_called = True
 
         with (
-            patch(
-                "sim.isaac_control_runtime.refresh_live_control_runtime",
-                return_value=refreshed_runtime,
-            ),
             patch(
                 "sim.isaac_control_runtime.LiveContactInterlock.observe",
                 return_value=SimpleNamespace(
@@ -962,17 +819,14 @@ class ContactReadingTest(unittest.TestCase):
                 )
 
         self.assertEqual(update_count, 97)
-        self.assertEqual(observe.call_count, 98)
+        self.assertEqual(observe.call_count, 97)
         self.assertFalse(camera_called)
         self.assertEqual(timeline.events, ["play", "pause"])
 
-    def test_resolution_refresh_defers_bounded_drift_to_stable_baseline(self) -> None:
+    def test_resolution_resume_defers_bounded_drift_to_stable_baseline(self) -> None:
         timeline = _Timeline(playing=False)
         old_runtime = LiveControlRuntime(
             "session", object(), Mock(), Mock(), Mock()
-        )
-        refreshed_runtime = LiveControlRuntime(
-            "session", old_runtime.stage, Mock(), Mock(attached=True), Mock()
         )
         captured = Mock(plug_attached=True)
         live = Mock(plug_attached=True)
@@ -981,10 +835,6 @@ class ContactReadingTest(unittest.TestCase):
             return None
 
         with (
-            patch(
-                "sim.isaac_control_runtime.refresh_live_control_runtime",
-                return_value=refreshed_runtime,
-            ),
             patch(
                 "sim.isaac_control_runtime._control_safety_snapshot",
                 return_value=live,
@@ -1004,17 +854,17 @@ class ContactReadingTest(unittest.TestCase):
                     advance,
                     captured,
                     SimulatorSafetyLimits(),
-                    operation="test resolution refresh",
+                    operation="test resolution resume",
                 )
             )
 
-        self.assertIs(synchronized.runtime, refreshed_runtime)
+        self.assertIs(synchronized.runtime, old_runtime)
         self.assertIs(synchronized.safety, live)
         live.validate_continuity.assert_not_called()
-        self.assertEqual(observe.call_count, 2)
+        self.assertEqual(observe.call_count, 1)
         self.assertEqual(timeline.events, ["play", "pause"])
 
-    def test_resolution_refresh_rejects_attachment_change(self) -> None:
+    def test_resolution_resume_rejects_attachment_change(self) -> None:
         timeline = _Timeline(playing=False)
         runtime = LiveControlRuntime("session", object(), Mock(), Mock(), Mock())
         live = Mock(plug_attached=False)
@@ -1023,10 +873,6 @@ class ContactReadingTest(unittest.TestCase):
             return None
 
         with (
-            patch(
-                "sim.isaac_control_runtime.refresh_live_control_runtime",
-                return_value=runtime,
-            ),
             patch(
                 "sim.isaac_control_runtime._control_safety_snapshot",
                 return_value=live,
@@ -1043,7 +889,7 @@ class ContactReadingTest(unittest.TestCase):
                         advance,
                         Mock(plug_attached=True),
                         SimulatorSafetyLimits(),
-                        operation="test resolution refresh",
+                        operation="test resolution resume",
                     )
                 )
 

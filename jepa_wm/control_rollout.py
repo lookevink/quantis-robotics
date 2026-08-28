@@ -17,6 +17,10 @@ from jepa_wm.control_tracking import (
     evaluate_action_tracking,
     tracking_limits_for_policy,
 )
+from jepa_wm.contact_grasp_target import (
+    ContactGraspTargetPolicy,
+    ContactGraspTargetStep,
+)
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.control_policy import (
     ControlExecutionPolicy,
@@ -870,6 +874,32 @@ def _target_pose(
     raise ValueError("control target pose is missing from recording telemetry")
 
 
+def _contact_grasp_target_policy(
+    steps: Sequence[ControlStepSummary],
+) -> ContactGraspTargetPolicy | None:
+    policies = tuple(step.state.contact_grasp_target_policy for step in steps)
+    if not any(policy is not None for policy in policies):
+        return None
+    if any(policy is None for policy in policies) or len(set(policies)) != 1:
+        raise ValueError("contact-grasp target policy changed")
+    policy = policies[0]
+    if not isinstance(policy, ContactGraspTargetPolicy):
+        raise ValueError("contact-grasp target policy is invalid")
+    return policy
+
+
+def _contact_grasp_target_steps(
+    steps: Sequence[ControlStepSummary],
+) -> tuple[ContactGraspTargetStep, ...]:
+    return tuple(
+        ContactGraspTargetStep(
+            step.observation,
+            step.state.plug_attached,
+        )
+        for step in steps
+    )
+
+
 @dataclass(frozen=True)
 class ControlRolloutReport:
     rollout_id: str
@@ -969,31 +999,47 @@ class ControlRolloutReport:
                         MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
                     ),
                 )
-        if self.reference_task == GRASP_TASK_ID or direct_contact_grasp:
-            target_indices = tuple(
-                int(frame.stem.removeprefix("frame_")) for frame in target_frames
+        contact_grasp_policy = _contact_grasp_target_policy(complete)
+        if contact_grasp_policy is not None and not direct_contact_grasp:
+            raise ValueError("contact-grasp target policy is outside its task")
+        if contact_grasp_policy is not None:
+            current_contact_grasp = True
+            contact_grasp_policy.validate_schedule(
+                _contact_grasp_target_steps(complete),
             )
-            if target_indices != tuple(
-                range(target_indices[0], target_indices[0] + len(target_indices))
-            ):
-                raise ValueError("control rollout target schedule is invalid")
-        elif (
-            not (
-                self.reference_task == INSERTION_TASK_ID
-                and all(
-                    step.state.insertion_target_policy is not None
-                    for step in complete
+        else:
+            current_contact_grasp = False
+        if not current_contact_grasp:
+            if self.reference_task == GRASP_TASK_ID or direct_contact_grasp:
+                target_indices = tuple(
+                    int(frame.stem.removeprefix("frame_"))
+                    for frame in target_frames
                 )
-            )
-            and len(set(target_frames)) != 1
-        ):
-            raise ValueError("control rollout changed its target frame")
-        initial_warmup = observations[0].warmup_frames
-        if initial_warmup < 4 or any(
-            observation.warmup_frames != initial_warmup + index
-            for index, observation in enumerate(observations)
-        ):
-            raise ValueError("control rollout warm-up sequence is invalid")
+                if target_indices != tuple(
+                    range(
+                        target_indices[0],
+                        target_indices[0] + len(target_indices),
+                    )
+                ):
+                    raise ValueError("control rollout target schedule is invalid")
+            elif (
+                not (
+                    self.reference_task == INSERTION_TASK_ID
+                    and all(
+                        step.state.insertion_target_policy is not None
+                        for step in complete
+                    )
+                )
+                and len(set(target_frames)) != 1
+            ):
+                raise ValueError("control rollout changed its target frame")
+        if not current_contact_grasp:
+            initial_warmup = observations[0].warmup_frames
+            if initial_warmup < 4 or any(
+                observation.warmup_frames != initial_warmup + index
+                for index, observation in enumerate(observations)
+            ):
+                raise ValueError("control rollout warm-up sequence is invalid")
         if any(
             current.captured_at_unix_seconds <= previous.captured_at_unix_seconds
             for previous, current in zip(observations, observations[1:])
@@ -1226,6 +1272,15 @@ class ControlRolloutReport:
             )
             metadata = manifest.get("metadata") if isinstance(manifest, dict) else None
             reference_task = metadata.get("task") if isinstance(metadata, dict) else None
+            if reference_task == INSERTION_TASK_ID:
+                policy = _contact_grasp_target_policy(complete)
+                if policy is not None:
+                    recording = data_root / "recordings" / reference_recording
+                    policy.validate_reference_schedule(
+                        _contact_grasp_target_steps(complete),
+                        recording,
+                        frame_root=data_root,
+                    )
         target_observation = (
             None
             if not complete

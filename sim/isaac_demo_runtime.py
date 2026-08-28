@@ -352,44 +352,6 @@ class PlugAttachment:
     def set_collisions(self, enabled: bool) -> None:
         self.collisions.set_collisions(enabled)
 
-    def with_refreshed_physics(self, rigid_prim: Any) -> PlugAttachment:
-        """Rebind tensor-backed plug motion while preserving attachment state."""
-
-        if not isinstance(self.motion, FixedJointPlugMotion):
-            return self
-        return type(self).from_prior_generation(self, rigid_prim)
-
-    @classmethod
-    def from_prior_generation(
-        cls,
-        prior: Any,
-        rigid_prim: Any,
-    ) -> PlugAttachment:
-        """Rebuild a fixed-joint attachment without stale class dispatch."""
-
-        try:
-            motion = prior.motion
-            collisions = prior.collisions
-            offset = motion.hand_to_plug_offset
-            return cls(
-                FixedJointPlugMotion(
-                    motion.prim,
-                    motion.hand_prim,
-                    rigid_prim,
-                    motion.fixed_joint,
-                    None if offset is None else offset.copy(),
-                ),
-                PlugCollisionPolicy(
-                    list(collisions.collision_attributes),
-                    frozenset(collisions.excluded_collision_paths),
-                ),
-            )
-        except (AttributeError, TypeError, ValueError) as error:
-            raise RuntimeError(
-                "live insertion attachment cannot be refreshed"
-            ) from error
-
-
 @dataclass(frozen=True)
 class FixedJointPlugPreparation:
     prim: Any
@@ -657,6 +619,42 @@ async def advance_simulation_period(
     return await _advance_sample(period_seconds, observe_safety)
 
 
+def _interpolated_joint_command(
+    start: JointCommand,
+    end: JointCommand,
+    progress: float,
+) -> JointCommand:
+    blend = _smoothstep(progress)
+    return JointCommand(
+        start.arm_positions + (end.arm_positions - start.arm_positions) * blend,
+        start.gripper_width_m
+        + (end.gripper_width_m - start.gripper_width_m) * blend,
+    )
+
+
+async def _capture_joint_command_sample(
+    actuators: Actuators,
+    command: JointCommand,
+    attachment: PlugAttachment,
+    contact_reading: ContactReading,
+    phase: RecordingLabel,
+    stage: ObservationStage,
+    recorder: Any | None,
+) -> float | None:
+    attachment.follow(world_pose(attachment.hand_prim)[0])
+    actual = actuators.actual_command()
+    snapshot = recording_snapshot(
+        phase,
+        stage,
+        actual,
+        attachment,
+        safety=recording_safety_telemetry(command, actual, contact_reading),
+    )
+    if recorder is not None:
+        await recorder.capture_current(snapshot)
+    return snapshot.simulation_time_seconds
+
+
 async def move_joint_command(
     actuators: Actuators,
     start: JointCommand,
@@ -676,29 +674,91 @@ async def move_joint_command(
         raise ValueError("frame count must be positive")
     sample_times = []
     for frame in range(1, frame_count + 1):
-        blend = _smoothstep(frame / frame_count)
-        command = JointCommand(
-            start.arm_positions + (end.arm_positions - start.arm_positions) * blend,
-            start.gripper_width_m
-            + (end.gripper_width_m - start.gripper_width_m) * blend,
-        )
+        command = _interpolated_joint_command(start, end, frame / frame_count)
         actuators.apply_drive_command(command)
         contact_reading = await _advance_sample(
             sample_period_seconds,
             observe_safety,
         )
-        attachment.follow(world_pose(attachment.hand_prim)[0])
-        actual = actuators.actual_command()
-        safety = recording_safety_telemetry(command, actual, contact_reading)
-        snapshot = recording_snapshot(
-            phase,
-            stage,
+        sample_time = await _capture_joint_command_sample(
+            actuators,
             command,
             attachment,
-            safety=safety,
+            contact_reading,
+            phase,
+            stage,
+            recorder,
         )
-        if snapshot.simulation_time_seconds is not None:
-            sample_times.append(snapshot.simulation_time_seconds)
-        if recorder is not None:
-            await recorder.capture_current(snapshot)
+        if sample_time is not None:
+            sample_times.append(sample_time)
+    return tuple(sample_times)
+
+
+async def move_joint_command_over_physics_steps(
+    actuators: Actuators,
+    start: JointCommand,
+    end: JointCommand,
+    attachment: PlugAttachment,
+    *,
+    frame_count: int,
+    phase: RecordingLabel,
+    stage: ObservationStage,
+    recorder: Any,
+    sample_period_seconds: float,
+    observe_safety: Callable[[], ContactReading] | None = None,
+) -> tuple[float, ...]:
+    """Set one frame target, step PhysX exactly, and render without simulation."""
+
+    from isaacsim.core.rendering_manager import RenderingManager
+    from isaacsim.core.simulation_manager import SimulationManager
+
+    if frame_count <= 0:
+        raise ValueError("frame count must be positive")
+    physics_dt = float(SimulationManager.get_physics_dt())
+    if (
+        not isfinite(sample_period_seconds)
+        or sample_period_seconds <= 0.0
+        or not isfinite(physics_dt)
+        or physics_dt <= 0.0
+    ):
+        raise ValueError("sample and physics periods must be finite and positive")
+    substeps_per_sample = round(sample_period_seconds / physics_dt)
+    if (
+        substeps_per_sample <= 0
+        or abs(substeps_per_sample * physics_dt - sample_period_seconds) > 1e-9
+    ):
+        raise ValueError("sample period must contain an exact number of physics steps")
+
+    sample_times = []
+    for frame in range(frame_count):
+        interval_safety = ContactReading()
+        command = _interpolated_joint_command(
+            start,
+            end,
+            (frame + 1) / frame_count,
+        )
+        actuators.apply_drive_command(command)
+
+        def observe_step(_step: int, _steps: int) -> None:
+            nonlocal interval_safety
+            if observe_safety is not None:
+                interval_safety = interval_safety.peak(observe_safety())
+
+        SimulationManager.step(
+            steps=substeps_per_sample,
+            callback=observe_step,
+            update_fabric=False,
+        )
+        await RenderingManager.render_async()
+        sample_time = await _capture_joint_command_sample(
+            actuators,
+            command,
+            attachment,
+            interval_safety,
+            phase,
+            stage,
+            recorder,
+        )
+        if sample_time is not None:
+            sample_times.append(sample_time)
     return tuple(sample_times)

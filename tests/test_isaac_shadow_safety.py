@@ -7,6 +7,7 @@ from jepa_wm.control_safety import (
     ACTION_SCALES,
     CONTACT_GRASP_ACTION_SCALES,
     CONTACT_GRASP_CLOSING_ACTION_SCALE_POLICIES,
+    CONTACT_GRASP_REDUCED_CLOSING_ACTION_SCALE_POLICIES,
     CONTACT_GRASP_FINE_ACTION_SCALES,
     CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES,
     CONTACT_GRASP_ULTRAFINE_ACTION_SCALES,
@@ -170,6 +171,25 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
             action.values[6]
             * CONTACT_GRASP_CLOSING_ACTION_SCALE_POLICIES[1][0].gripper
             * 0.08,
+            0.0015,
+        )
+
+    def test_very_large_gripper_closure_reduces_scale_to_the_command_bound(
+        self,
+    ) -> None:
+        action = DroidAction(
+            (-0.0017157, 0.0001624, -0.0001836, 0.0, 0.0, 0.0, 0.215816)
+        )
+
+        scales = contact_grasp_action_scales(action)
+
+        self.assertEqual(
+            scales,
+            CONTACT_GRASP_REDUCED_CLOSING_ACTION_SCALE_POLICIES[0][1],
+        )
+        self.assertEqual(scales[0].gripper, 0.0625)
+        self.assertLessEqual(
+            action.values[6] * scales[0].gripper * 0.08,
             0.0015,
         )
 

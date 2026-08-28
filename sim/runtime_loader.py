@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import importlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import sys
 from types import ModuleType
@@ -12,12 +12,79 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class _ActuatorsHandoff:
+    articulation: Any
+    arm_attributes: tuple[Any, ...]
+    finger_attributes: tuple[Any, ...]
+
+
+@dataclass(frozen=True)
+class KinematicPlugMotionHandoff:
+    prim: Any
+    hand_prim: Any
+    hand_to_plug_offset: Any | None
+    kind: str = field(default="kinematic", init=False)
+
+
+@dataclass(frozen=True)
+class FixedJointPlugMotionHandoff:
+    prim: Any
+    hand_prim: Any
+    rigid_prim: Any
+    fixed_joint: Any
+    hand_to_plug_offset: Any | None
+    kind: str = field(default="fixed_joint", init=False)
+
+
+@dataclass(frozen=True)
+class _PlugAttachmentHandoff:
+    motion: KinematicPlugMotionHandoff | FixedJointPlugMotionHandoff
+    collision_attributes: tuple[Any, ...]
+    excluded_collision_paths: frozenset[str]
+
+
+@dataclass(frozen=True)
+class _ContactSensorsHandoff:
+    hand: Any
+    connector: Any | None
+
+
+@dataclass(frozen=True)
 class _LiveRuntimeHandoff:
     session_id: str
     stage: Any
-    actuators: Any
-    attachment: Any
-    sensor: Any
+    actuators: _ActuatorsHandoff
+    attachment: _PlugAttachmentHandoff
+    sensor: _ContactSensorsHandoff
+
+
+def _contact_sensor_handoff(sensor: Any) -> _ContactSensorsHandoff:
+    if hasattr(sensor, "hand") or hasattr(sensor, "connector"):
+        try:
+            return _ContactSensorsHandoff(sensor.hand, sensor.connector)
+        except AttributeError as error:
+            raise RuntimeError("live control sensor handoff is malformed") from error
+    return _ContactSensorsHandoff(sensor, None)
+
+
+def _plug_motion_handoff(
+    motion: Any,
+) -> KinematicPlugMotionHandoff | FixedJointPlugMotionHandoff:
+    offset = motion.hand_to_plug_offset
+    copied_offset = None if offset is None else offset.copy()
+    if hasattr(motion, "rigid_prim") or hasattr(motion, "fixed_joint"):
+        return FixedJointPlugMotionHandoff(
+            motion.prim,
+            motion.hand_prim,
+            motion.rigid_prim,
+            motion.fixed_joint,
+            copied_offset,
+        )
+    return KinematicPlugMotionHandoff(
+        motion.prim,
+        motion.hand_prim,
+        copied_offset,
+    )
 
 
 def _resident_live_runtime_handoff(module: ModuleType | None) -> _LiveRuntimeHandoff | None:
@@ -28,13 +95,27 @@ def _resident_live_runtime_handoff(module: ModuleType | None) -> _LiveRuntimeHan
     runtime = getattr(module, "_live_runtime", None)
     if runtime is None:
         return None
-    return _LiveRuntimeHandoff(
-        runtime.session_id,
-        runtime.stage,
-        runtime.actuators,
-        runtime.attachment,
-        runtime.sensor,
-    )
+    try:
+        actuators = runtime.actuators
+        motion = runtime.attachment.motion
+        collisions = runtime.attachment.collisions
+        return _LiveRuntimeHandoff(
+            runtime.session_id,
+            runtime.stage,
+            _ActuatorsHandoff(
+                actuators.articulation,
+                tuple(actuators.arm_attributes),
+                tuple(actuators.finger_attributes),
+            ),
+            _PlugAttachmentHandoff(
+                _plug_motion_handoff(motion),
+                tuple(collisions.collision_attributes),
+                frozenset(collisions.excluded_collision_paths),
+            ),
+            _contact_sensor_handoff(runtime.sensor),
+        )
+    except (AttributeError, TypeError, ValueError) as error:
+        raise RuntimeError("live control runtime handoff is malformed") from error
 
 
 def _reload_project_module_from_source(module_name: str) -> ModuleType:
@@ -106,6 +187,8 @@ def reload_demo_runtime() -> ModuleType:
         "jepa_wm.trajectory",
         "jepa_wm.insertion_transition",
         "jepa_wm.insertion_contract",
+        "jepa_wm.task_windows",
+        "jepa_wm.contact_grasp_target",
         "jepa_wm.insertion_task",
         "jepa_wm.direct_safety",
         "jepa_wm.objective_calibration",

@@ -44,7 +44,7 @@ from sim.isaac_demo_runtime import (
     ContactReading,
     advance_physics_updates,
     create_actuators,
-    move_joint_command,
+    move_joint_command_over_physics_steps,
     prepare_fixed_joint_plug,
     prepare_plug,
     recording_safety_telemetry,
@@ -313,7 +313,7 @@ async def _record_successful_grasp(
         ),
     ):
         sample_times.extend(
-            await move_joint_command(
+            await move_joint_command_over_physics_steps(
                 actuators,
                 current,
                 command,
@@ -369,7 +369,7 @@ async def _record_successful_grasp(
         ),
     ):
         sample_times.extend(
-            await move_joint_command(
+            await move_joint_command_over_physics_steps(
                 actuators,
                 current,
                 command,
@@ -467,7 +467,7 @@ async def _record_successful_insertion(
         ),
     ):
         sample_times.extend(
-            await move_joint_command(
+            await move_joint_command_over_physics_steps(
                 actuators,
                 current,
                 command,
@@ -599,7 +599,7 @@ async def record_exploration_trajectory(
                 target.gripper_width_m,
             )
             sample_times.extend(
-                await move_joint_command(
+                await move_joint_command_over_physics_steps(
                     actuators,
                     current,
                     command,

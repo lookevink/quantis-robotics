@@ -56,14 +56,40 @@ class RuntimeLoaderTest(unittest.TestCase):
 
     def test_reloads_action_safety_and_shadow_contract_as_one_generation(self) -> None:
         source = """
-from sim.runtime_loader import reload_demo_runtime
+import runpy
+reload_demo_runtime = runpy.run_path(
+    "sim/runtime_loader.py"
+)["reload_demo_runtime"]
 from jepa_wm import control_resolution_baseline, control_resolution_profile, insertion_transition
 from sim import isaac_control_runtime as old_control_runtime
+from sim import isaac_demo_runtime as old_demo_runtime
 from sim import isaac_insertion_demo as old_insertion_demo
 stage = object()
-actuators = object()
-attachment = object()
-sensor = object()
+articulation = object()
+arm_attributes = [object() for _ in range(7)]
+finger_attributes = [object() for _ in range(2)]
+actuators = old_demo_runtime.Actuators(
+    articulation, arm_attributes, finger_attributes
+)
+plug_prim = object()
+hand_prim = object()
+rigid_prim = object()
+fixed_joint = object()
+collision_attributes = [object()]
+attachment = old_demo_runtime.PlugAttachment(
+    old_demo_runtime.FixedJointPlugMotion(
+        plug_prim,
+        hand_prim,
+        rigid_prim,
+        fixed_joint,
+    ),
+    old_demo_runtime.PlugCollisionPolicy(collision_attributes),
+)
+hand_sensor = object()
+connector_sensor = object()
+sensor = old_control_runtime.ControlContactSensors(
+    hand_sensor, connector_sensor
+)
 old_control_runtime.bind_live_runtime(
     "live-session", stage, actuators, attachment, sensor
 )
@@ -73,7 +99,7 @@ del insertion_transition.resolve_insertion_followup_proposal
 del old_insertion_demo.record_insertion_demo
 reload_demo_runtime()
 from jepa_wm import action, control_resolution, control_resolution_baseline, control_resolution_profile, control_safety, direct_safety, experimental_candidate, insertion_contract, insertion_recording, insertion_refresh, insertion_transition, insertion_trial, joint_drive, objective_calibration, shadow_planning, shadow_safety, training_artifact
-from sim import control_identity, control_session, demo_sequence, isaac_control_runtime, isaac_demo, isaac_demo_kinematics, isaac_exploration, isaac_insertion_demo, isaac_insertion_trial, recording, trial_source_cache
+from sim import control_identity, control_session, demo_sequence, isaac_control_runtime, isaac_demo, isaac_demo_kinematics, isaac_demo_runtime, isaac_exploration, isaac_insertion_demo, isaac_insertion_trial, recording, trial_source_cache
 assert control_resolution_baseline.ControlResolutionLoad is control_resolution_profile.ControlResolutionLoad
 assert control_resolution.ControlResolutionLoad is control_resolution_profile.ControlResolutionLoad
 assert control_resolution.ControlResolutionBaselineAttempt is control_resolution_baseline.ControlResolutionBaselineAttempt
@@ -95,9 +121,52 @@ assert insertion_recording.RECORDING_SCHEMA == recording.RECORDING_SCHEMA
 assert isaac_demo.record_insertion_demo is isaac_insertion_demo.record_insertion_demo
 restored_runtime = isaac_control_runtime.live_runtime_for("live-session", stage)
 assert isinstance(restored_runtime, isaac_control_runtime.LiveControlRuntime)
-assert restored_runtime.actuators is actuators
-assert restored_runtime.attachment is attachment
-assert restored_runtime.sensor is sensor
+assert isinstance(restored_runtime.actuators, isaac_demo_runtime.Actuators)
+assert restored_runtime.actuators is not actuators
+assert restored_runtime.actuators.articulation is articulation
+assert restored_runtime.actuators.arm_attributes == arm_attributes
+assert restored_runtime.actuators.finger_attributes == finger_attributes
+assert isinstance(restored_runtime.attachment, isaac_demo_runtime.PlugAttachment)
+assert restored_runtime.attachment is not attachment
+assert restored_runtime.attachment.motion.rigid_prim is rigid_prim
+assert restored_runtime.attachment.motion.prim is plug_prim
+assert restored_runtime.attachment.motion.hand_prim is hand_prim
+assert restored_runtime.attachment.motion.fixed_joint is fixed_joint
+assert restored_runtime.attachment.collisions.collision_attributes == collision_attributes
+assert isinstance(restored_runtime.sensor, isaac_control_runtime.ControlContactSensors)
+assert restored_runtime.sensor is not sensor
+assert restored_runtime.sensor.hand is hand_sensor
+assert restored_runtime.sensor.connector is connector_sensor
+kinematic_stage = object()
+kinematic_offset = __import__("numpy").asarray((0.01, 0.02, 0.03))
+kinematic_motion = isaac_demo_runtime.KinematicPlugMotion(
+    plug_prim,
+    hand_prim,
+    kinematic_offset,
+)
+kinematic_attachment = isaac_demo_runtime.PlugAttachment(
+    kinematic_motion,
+    isaac_demo_runtime.PlugCollisionPolicy(collision_attributes),
+)
+isaac_control_runtime.bind_live_runtime(
+    "kinematic-session",
+    kinematic_stage,
+    restored_runtime.actuators,
+    kinematic_attachment,
+    restored_runtime.sensor,
+)
+reload_demo_runtime()
+restored_kinematic = isaac_control_runtime.live_runtime_for(
+    "kinematic-session", kinematic_stage
+)
+assert isinstance(
+    restored_kinematic.attachment.motion,
+    isaac_demo_runtime.KinematicPlugMotion,
+)
+assert restored_kinematic.attachment.motion.prim is plug_prim
+assert restored_kinematic.attachment.motion.hand_prim is hand_prim
+assert restored_kinematic.attachment.motion.hand_to_plug_offset is not kinematic_offset
+assert tuple(restored_kinematic.attachment.motion.hand_to_plug_offset) == tuple(kinematic_offset)
 scale = control_safety.ACTION_SCALES[0]
 evidence = shadow_safety.ShadowSafetyEvidence(
     observation_id=1,

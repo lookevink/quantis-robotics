@@ -5,7 +5,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from jepa_wm.insertion_contract import INSERTION_TASK_ID
+from jepa_wm.insertion_contract import (
+    CONTACT_INSERTION_RECORDING,
+    INSERTION_TASK_ID,
+)
 from jepa_wm.insertion_recording import (
     ContactInsertionEvidence,
     InsertionDemonstrationEvidence,
@@ -92,13 +95,9 @@ class InsertionDemonstrationTest(unittest.TestCase):
                                 ),
                                 **(
                                     {
-                                        "connector_collisions_enabled": True,
-                                        "contact_sensor": "connector_tip",
-                                        "compliant_collision_parts": ["latch"],
-                                        "attachment": "dynamic_fixed_joint",
-                                        "socket_scale": 1.05,
-                                        "insertion_steps": 64,
-                                        "expected_frames": 112,
+                                        **CONTACT_INSERTION_RECORDING.instrumentation_metadata(
+                                            ("latch",)
+                                        ),
                                     }
                                     if contact_aware
                                     else {}
@@ -205,6 +204,23 @@ class InsertionDemonstrationTest(unittest.TestCase):
         self.assertEqual(evidence.seated_observations, 4)
         self.assertAlmostEqual(evidence.maximum_contact_force_newtons, 0.8)
         self.assertTrue(evidence.to_dict()["contact_aware"])
+
+    def test_rejects_tracking_error_during_authored_motion(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            recording = self._write_recording(
+                Path(temporary_directory),
+                contact_aware=True,
+            )
+            steps_path = recording / "steps.jsonl"
+            steps = [json.loads(line) for line in steps_path.read_text().splitlines()]
+            steps[5]["arm_tracking_error_rad"] = 0.05
+            steps_path.write_text("\n".join(json.dumps(step) for step in steps) + "\n")
+
+            with self.assertRaisesRegex(ValueError, "tracking_failed"):
+                ContactInsertionEvidence.from_recording(
+                    recording,
+                    expected_split="held_out",
+                )
 
     def test_rejects_contact_force_above_the_insertion_limit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

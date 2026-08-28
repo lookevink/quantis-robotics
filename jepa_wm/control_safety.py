@@ -75,6 +75,12 @@ CONTACT_GRASP_ULTRAFINE_ACTION_SCALES = (
     DroidActionScale(0.03125, 0.125, 0.125),
 )
 CONTACT_GRASP_MICRO_ACTION_SCALES = (DroidActionScale(0.03125, 0.125, 0.125),)
+CONTACT_GRASP_ACTION_SCALE_LEVELS = (
+    CONTACT_GRASP_ACTION_SCALES,
+    CONTACT_GRASP_FINE_ACTION_SCALES,
+    CONTACT_GRASP_ULTRAFINE_ACTION_SCALES,
+    CONTACT_GRASP_MICRO_ACTION_SCALES,
+)
 
 # Once the fixed-joint attachment is live, gripper intent no longer controls
 # the approach scale. Preserve the authenticated active gripper target and let
@@ -83,12 +89,7 @@ CONTACT_GRASP_MICRO_ACTION_SCALES = (DroidActionScale(0.03125, 0.125, 0.125),)
 # gates before a drive target is written.
 CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES = tuple(
     tuple(DroidActionScale(scale.translation, scale.rotation, 0.0) for scale in policy)
-    for policy in (
-        CONTACT_GRASP_ACTION_SCALES,
-        CONTACT_GRASP_FINE_ACTION_SCALES,
-        CONTACT_GRASP_ULTRAFINE_ACTION_SCALES,
-        CONTACT_GRASP_MICRO_ACTION_SCALES,
-    )
+    for policy in CONTACT_GRASP_ACTION_SCALE_LEVELS
 )
 
 # The demonstration closes from 44 mm to 18 mm across the contact window. The
@@ -98,12 +99,23 @@ CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES = tuple(
 # remains on the exercised 0.125 scale.
 CONTACT_GRASP_CLOSING_ACTION_SCALE_POLICIES = tuple(
     tuple(DroidActionScale(scale.translation, scale.rotation, 0.25) for scale in policy)
-    for policy in (
-        CONTACT_GRASP_ACTION_SCALES,
-        CONTACT_GRASP_FINE_ACTION_SCALES,
-        CONTACT_GRASP_ULTRAFINE_ACTION_SCALES,
-        CONTACT_GRASP_MICRO_ACTION_SCALES,
+    for policy in CONTACT_GRASP_ACTION_SCALE_LEVELS
+)
+
+# Large positive closedness proposals still represent a receding-horizon
+# grasp, not authority to close the whole recorded contact window at once.
+# Reduce only the gripper component until the physical width command is within
+# the same 1.5 mm bound; Cartesian approach scales and all ordinary gates stay
+# unchanged.
+CONTACT_GRASP_REDUCED_CLOSING_ACTION_SCALE_POLICIES = tuple(
+    tuple(
+        tuple(
+            DroidActionScale(scale.translation, scale.rotation, gripper_scale)
+            for scale in policy
+        )
+        for gripper_scale in (0.125, 0.0625, 0.03125, 0.015625)
     )
+    for policy in CONTACT_GRASP_ACTION_SCALE_LEVELS
 )
 
 # These policies were exercised by earlier guarded contact-grasp checkpoints.
@@ -163,28 +175,26 @@ def contact_grasp_action_scales(
     if action.values[6] < 0.0:
         return CONTACT_GRASP_MICRO_ACTION_SCALES
 
-    policies = (
-        CONTACT_GRASP_ACTION_SCALES,
-        CONTACT_GRASP_FINE_ACTION_SCALES,
-        CONTACT_GRASP_ULTRAFINE_ACTION_SCALES,
-        CONTACT_GRASP_MICRO_ACTION_SCALES,
-    )
-    for index, scales in enumerate(policies):
+    for index, scales in enumerate(CONTACT_GRASP_ACTION_SCALE_LEVELS):
         if (
             translation_norm * scales[0].translation
             <= MAXIMUM_CONTACT_GRASP_TRANSLATION_COMMAND_METERS
         ):
-            return (
-                CONTACT_GRASP_CLOSING_ACTION_SCALE_POLICIES[index]
+            if action.values[6] <= 0.0:
+                return scales
+            closing_policies = (
+                CONTACT_GRASP_CLOSING_ACTION_SCALE_POLICIES[index],
+                *CONTACT_GRASP_REDUCED_CLOSING_ACTION_SCALE_POLICIES[index],
+            )
+            for closing_policy in closing_policies:
                 if (
-                    action.values[6] > 0.0
-                    and action.values[6]
-                    * CONTACT_GRASP_CLOSING_ACTION_SCALE_POLICIES[index][0].gripper
+                    action.values[6]
+                    * closing_policy[0].gripper
                     * MAX_GRIPPER_WIDTH_M
                     <= MAXIMUM_CONTACT_GRASP_FINE_CLOSURE_COMMAND_METERS
-                )
-                else scales
-            )
+                ):
+                    return closing_policy
+            return closing_policies[-1]
     return CONTACT_GRASP_MICRO_ACTION_SCALES
 
 
@@ -211,10 +221,12 @@ ACTION_SCALE_POLICIES = (ACTION_SCALES, LEGACY_ACTION_SCALES)
 INSERTION_ACTION_SCALE_POLICIES = (
     *ACTION_SCALE_POLICIES,
     *CONTACT_GRASP_CLOSING_ACTION_SCALE_POLICIES,
-    CONTACT_GRASP_ACTION_SCALES,
-    CONTACT_GRASP_FINE_ACTION_SCALES,
-    CONTACT_GRASP_ULTRAFINE_ACTION_SCALES,
-    CONTACT_GRASP_MICRO_ACTION_SCALES,
+    *(
+        policy
+        for policies in CONTACT_GRASP_REDUCED_CLOSING_ACTION_SCALE_POLICIES
+        for policy in policies
+    ),
+    *CONTACT_GRASP_ACTION_SCALE_LEVELS,
     *CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES,
     *LEGACY_CONTACT_GRASP_ACTION_SCALE_POLICIES,
     ORIENTATION_HOLD_ACTION_SCALES,

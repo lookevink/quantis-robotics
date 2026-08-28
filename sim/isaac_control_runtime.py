@@ -16,8 +16,10 @@ from jepa_wm.insertion_refresh import (
 from jepa_wm.joint_drive import JointDriveTarget
 from sim.isaac_demo_runtime import (
     Actuators,
+    FixedJointPlugMotion,
+    KinematicPlugMotion,
     PlugAttachment,
-    create_actuators,
+    PlugCollisionPolicy,
     resume_live_simulation,
 )
 from sim.isaac_demo_runtime import ContactReading
@@ -118,7 +120,7 @@ class LiveInsertionInterlock:
 
 @dataclass(frozen=True)
 class LiveControlRuntime:
-    """Session-bound Isaac objects whose tensor handles can be refreshed."""
+    """Session-bound Isaac objects retained across reloads and timeline pauses."""
 
     session_id: str
     stage: Any
@@ -244,23 +246,17 @@ async def _synchronized_live_read(
     state: Any,
     read: Any,
     *,
-    refresh: Any | None = None,
-    observe_after_advance: Any | None = None,
     observe_safety: Any | None = None,
     before_read: Any | None = None,
     pause_on_success: bool = True,
 ) -> tuple[Any, Any]:
-    """Own resume, refresh, observed read, and requested terminal lifecycle."""
+    """Own resume, observed read, and requested terminal lifecycle."""
 
     completed = False
     try:
         readiness_update = resume_live_simulation(timeline)
         if readiness_update:
             await advance()
-            if observe_after_advance is not None:
-                observe_after_advance(state)
-            if refresh is not None:
-                state = refresh(state)
         if observe_safety is not None:
             observe_safety(state)
         if before_read is not None:
@@ -334,7 +330,7 @@ async def _synchronized_insertion_runtime(
     before_read: Any | None = None,
     pause_on_success: bool = True,
 ) -> SynchronizedInsertionRuntime:
-    """Own the shared paused insertion refresh and interlock lifecycle."""
+    """Own the shared paused insertion resume and interlock lifecycle."""
 
     def interlock_for(value: LiveControlRuntime) -> Any:
         contact = LiveContactInterlock(
@@ -351,19 +347,17 @@ async def _synchronized_insertion_runtime(
             operation,
         )
 
-    resumed_interlock = interlock_for(runtime)
-    refreshed_interlock: Any | None = None
-
-    def observe_resumed_state(_: LiveControlRuntime) -> None:
-        resumed_interlock.observe()
-        if validate_resumed is not None:
-            validate_resumed(resumed_interlock.evidence)
+    live_interlock = interlock_for(runtime)
+    continuity_validated = False
 
     def observe_safety(value: LiveControlRuntime) -> None:
-        nonlocal refreshed_interlock
-        if refreshed_interlock is None:
-            refreshed_interlock = interlock_for(value)
-        refreshed_interlock.observe()
+        nonlocal continuity_validated
+        if value is not runtime:
+            raise RuntimeError("live insertion runtime identity changed")
+        live_interlock.observe()
+        if not continuity_validated and validate_resumed is not None:
+            validate_resumed(live_interlock.evidence)
+        continuity_validated = True
 
     read = (
         _control_safety_pose_and_drive_target
@@ -383,8 +377,6 @@ async def _synchronized_insertion_runtime(
         advance,
         runtime,
         read,
-        refresh=refresh_live_control_runtime,
-        observe_after_advance=observe_resumed_state,
         observe_safety=observe_safety,
         before_read=before_read,
         pause_on_success=pause_on_success,
@@ -618,13 +610,13 @@ async def synchronized_insertion_frame_capture(
     """Render and read one interlocked insertion frame before pausing."""
 
     async def capture_before_read(
-        refreshed_runtime: LiveControlRuntime,
+        live_runtime: LiveControlRuntime,
         observe: Any,
     ) -> None:
         if observe is None:
             raise RuntimeError("insertion frame capture has no live interlock")
         await _settle_insertion_frame_capture_gripper(
-            refreshed_runtime,
+            live_runtime,
             advance,
             observe,
             expected_active_drive_target,
@@ -667,7 +659,7 @@ async def synchronized_insertion_resolution_runtime(
     *,
     operation: str,
 ) -> SynchronizedInsertionRuntime:
-    """Refresh safely while deferring bounded settling to the baseline contract."""
+    """Resume safely while deferring bounded settling to the baseline contract."""
 
     synchronized = await _synchronized_insertion_runtime(
         runtime,
@@ -703,14 +695,45 @@ def bind_live_runtime(
 def restore_live_runtime_handoff(
     handoff: Any,
 ) -> LiveControlRuntime:
-    """Rebind retained collaborators to the current module generation."""
+    """Wrap retained low-level physics handles in current-generation owners."""
+
+    retained_motion = handoff.attachment.motion
+    if retained_motion.kind == "fixed_joint":
+        motion = FixedJointPlugMotion(
+            retained_motion.prim,
+            retained_motion.hand_prim,
+            retained_motion.rigid_prim,
+            retained_motion.fixed_joint,
+            retained_motion.hand_to_plug_offset,
+        )
+    elif retained_motion.kind == "kinematic":
+        motion = KinematicPlugMotion(
+            retained_motion.prim,
+            retained_motion.hand_prim,
+            retained_motion.hand_to_plug_offset,
+        )
+    else:
+        raise RuntimeError("live control plug motion handoff is invalid")
 
     return bind_live_runtime(
         handoff.session_id,
         handoff.stage,
-        handoff.actuators,
-        handoff.attachment,
-        handoff.sensor,
+        Actuators(
+            handoff.actuators.articulation,
+            list(handoff.actuators.arm_attributes),
+            list(handoff.actuators.finger_attributes),
+        ),
+        PlugAttachment(
+            motion,
+            PlugCollisionPolicy(
+                list(handoff.attachment.collision_attributes),
+                handoff.attachment.excluded_collision_paths,
+            ),
+        ),
+        ControlContactSensors(
+            handoff.sensor.hand,
+            handoff.sensor.connector,
+        ),
     )
 
 
@@ -732,31 +755,6 @@ def _contact_sensor_components(sensors: Any) -> tuple[Any, Any | None]:
     if not callable(getattr(sensors, "get_sensor_reading", None)):
         raise RuntimeError("control contact sensor is malformed")
     return sensors, None
-
-
-def refresh_live_control_runtime(runtime: LiveControlRuntime) -> LiveControlRuntime:
-    """Recreate experimental physics wrappers invalidated by a timeline pause."""
-
-    from isaacsim.core.experimental.prims import Articulation, RigidPrim
-
-    actuators = create_actuators(runtime.stage, Articulation(ROBOT_PATH))
-    attachment = PlugAttachment.from_prior_generation(
-        runtime.attachment,
-        RigidPrim(PLUG_PATH),
-    )
-    _, retained_connector = _contact_sensor_components(runtime.sensor)
-    sensor = control_contact_sensors(
-        runtime.stage,
-        create=False,
-        include_connector=retained_connector is not None,
-    )
-    return bind_live_runtime(
-        runtime.session_id,
-        runtime.stage,
-        actuators,
-        attachment,
-        sensor,
-    )
 
 
 def live_runtime_for(session_id: str, stage: Any) -> LiveControlRuntime | None:

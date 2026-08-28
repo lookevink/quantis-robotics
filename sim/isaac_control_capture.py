@@ -20,6 +20,7 @@ from jepa_wm.action import (
 )
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.control_policy import ControlExecutionPolicy
+from jepa_wm.contact_grasp_target import CONTACT_GRASP_TARGET_POLICY
 from jepa_wm.domain_recording import DomainRecording
 from jepa_wm.control_resolution_baseline import ControlResolutionCaptureBaselineContract
 from jepa_wm.insertion_contract import (
@@ -538,6 +539,11 @@ async def capture_control_observation(
         insertion_rollout_position=(
             InsertionRolloutPosition.initial(insertion_rollout_maximum_steps)
             if is_insertion_rollout_policy(policy)
+            else None
+        ),
+        contact_grasp_target_policy=(
+            CONTACT_GRASP_TARGET_POLICY
+            if capture_purpose is ControlContextPurpose.CONTACT_GRASP
             else None
         ),
     )
