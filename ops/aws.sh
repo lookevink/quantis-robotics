@@ -1109,7 +1109,8 @@ case "${command}" in
     reference_name="${2:-}"
     exploration_seed="${3:-}"
     artifacts_name="${4:-quantis_wrist_control}"
-    context_index="${5:-43}"
+    context_index="$(resolve_insertion_context \
+      "${5:-}" "${repo_root}" python3)"
     is_safe_identifier "${reference_name}" || die "invalid reference recording"
     require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
     is_safe_identifier "${artifacts_name}" || die "invalid worker artifact name"
@@ -1139,7 +1140,8 @@ case "${command}" in
     exploration_seed="${3:-}"
     artifacts_name="${4:-}"
     source_session_id="${5:-}"
-    context_index="${6:-43}"
+    context_index="$(resolve_insertion_context \
+      "${6:-}" "${repo_root}" python3)"
     for identifier in \
       "${reference_name}" "${artifacts_name}" "${source_session_id}"; do
       is_safe_identifier "${identifier}" || die "invalid insertion trial identifier"
@@ -1214,7 +1216,8 @@ case "${command}" in
     reference_name="${2:-}"
     exploration_seed="${3:-}"
     artifacts_name="${4:-}"
-    context_index="${5:-43}"
+    context_index="$(resolve_insertion_context \
+      "${5:-}" "${repo_root}" python3)"
     validate_guarded_insertion_identifiers "${reference_name}" "${artifacts_name}"
     require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
     require_positive_integer "context index" "${context_index}" || exit 1
@@ -1233,7 +1236,8 @@ case "${command}" in
     reference_name="${2:-}"
     exploration_seed="${3:-}"
     artifacts_name="${4:-}"
-    context_index="${5:-43}"
+    context_index="$(resolve_insertion_context \
+      "${5:-}" "${repo_root}" python3)"
     validate_guarded_insertion_identifiers "${reference_name}" "${artifacts_name}"
     require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
     require_positive_integer "context index" "${context_index}" || exit 1
@@ -1324,7 +1328,8 @@ case "${command}" in
   jepa-wm-insertion-resolution)
     reference_name="${2:-}"
     exploration_seed="${3:-}"
-    context_index="${4:-43}"
+    context_index="$(resolve_insertion_context \
+      "${4:-}" "${repo_root}" python3)"
     load_mode="${5:-attached}"
     is_safe_identifier "${reference_name}" || die "invalid reference recording"
     require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1

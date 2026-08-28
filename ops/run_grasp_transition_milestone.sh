@@ -23,7 +23,8 @@ require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
 
 cd "${repo_dir}"
 grasp_rollout_id="${run_id}-grasp"
-grasp_context_index=18
+grasp_context_index="$(contact_grasp_initial_context \
+  "${repo_dir}" "${venv_python}")"
 grasp_steps="$(contact_grasp_maximum_actions \
   "${repo_dir}" "${venv_python}")"
 

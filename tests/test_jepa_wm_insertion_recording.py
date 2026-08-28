@@ -7,6 +7,7 @@ import unittest
 
 from jepa_wm.insertion_contract import (
     CONTACT_INSERTION_RECORDING,
+    ContactInsertionSegment,
     INSERTION_TASK_ID,
 )
 from jepa_wm.insertion_recording import (
@@ -30,33 +31,31 @@ class InsertionDemonstrationTest(unittest.TestCase):
         recording = root / "insertion-held-12402"
         recording.mkdir()
         if contact_aware:
-            phases = (
-                ["initial"]
-                + ["pre_grasp"] * 8
-                + ["grasp"] * 8
-                + ["grasp_close"] * 4
-                + ["grasp_attached"]
-                + ["pre_insertion"] * 8
-                + ["pre_insertion_settle"] * 4
-                + ["pre_insertion"] * 8
-                + ["pre_insertion_settle"] * 2
-                + ["insert"] * 64
-                + ["insert_settle"] * seated_observations
+            attach_index = CONTACT_INSERTION_RECORDING.start_index(
+                ContactInsertionSegment.GRASP_ATTACH
+            )
+            aligned_index = CONTACT_INSERTION_RECORDING.start_index(
+                ContactInsertionSegment.ALIGN_HOLD
+            )
+            seated_index = CONTACT_INSERTION_RECORDING.start_index(
+                ContactInsertionSegment.SEATED_HOLD
             )
             steps = tuple(
                 (
                     (
                         (0.0, 0.04, False, "approaching_cable")
-                        if index < 21
+                        if index < attach_index
                         else (0.0, 0.04, True, "cable_grasped")
-                        if index < 42
+                        if index < aligned_index
                         else (-0.08, -0.04, True, "aligned_with_socket")
-                        if index < 108
+                        if index < seated_index
                         else (-0.10, -0.06, True, "plug_seated")
                     )
                     + (phase,)
                 )
-                for index, phase in enumerate(phases)
+                for index, phase in enumerate(
+                    CONTACT_INSERTION_RECORDING.phase_roster
+                )
             )
         else:
             steps = (
@@ -260,7 +259,10 @@ class InsertionDemonstrationTest(unittest.TestCase):
             )
             steps_path = recording / "steps.jsonl"
             steps = [json.loads(line) for line in steps_path.read_text().splitlines()]
-            steps[44]["phase"] = "pre_insertion_settle"
+            insertion_index = CONTACT_INSERTION_RECORDING.start_index(
+                ContactInsertionSegment.INSERT
+            )
+            steps[insertion_index]["phase"] = "pre_insertion_settle"
             steps_path.write_text("\n".join(json.dumps(step) for step in steps) + "\n")
 
             with self.assertRaisesRegex(ValueError, "phase contract"):
@@ -277,7 +279,14 @@ class InsertionDemonstrationTest(unittest.TestCase):
             )
             steps_path = recording / "steps.jsonl"
             steps = [json.loads(line) for line in steps_path.read_text().splitlines()]
-            steps[21]["gripper_frame_world_position"] = [0.031, 0.0, 0.0]
+            attach_index = CONTACT_INSERTION_RECORDING.start_index(
+                ContactInsertionSegment.GRASP_ATTACH
+            )
+            steps[attach_index]["gripper_frame_world_position"] = [
+                0.031,
+                0.0,
+                0.0,
+            ]
             steps_path.write_text("\n".join(json.dumps(step) for step in steps) + "\n")
 
             with self.assertRaisesRegex(ValueError, "grasp offset"):
@@ -294,7 +303,10 @@ class InsertionDemonstrationTest(unittest.TestCase):
             )
             steps_path = recording / "steps.jsonl"
             steps = [json.loads(line) for line in steps_path.read_text().splitlines()]
-            steps[21]["plug_attached"] = False
+            attach_index = CONTACT_INSERTION_RECORDING.start_index(
+                ContactInsertionSegment.GRASP_ATTACH
+            )
+            steps[attach_index]["plug_attached"] = False
             steps_path.write_text("\n".join(json.dumps(step) for step in steps) + "\n")
 
             with self.assertRaisesRegex(ValueError, "attachment contract"):

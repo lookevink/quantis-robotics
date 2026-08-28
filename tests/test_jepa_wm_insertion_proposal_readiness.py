@@ -25,6 +25,11 @@ from jepa_wm.insertion_proposal_readiness import (
     validate_insertion_goal_deltas,
 )
 from jepa_wm.insertion_corpus import InsertionCorpusRoster
+from jepa_wm.insertion_contract import (
+    CONTACT_INSERTION_RECORDING,
+    ContactInsertionSegment,
+)
+from jepa_wm.trajectory import DROID_ROLLOUT_PROTOCOL
 from jepa_wm.training_artifact import (
     TrainingArtifactMetadata,
     artifact_fingerprint,
@@ -42,9 +47,22 @@ if torch is not None:
 
 class InsertionProposalReadinessTest(unittest.TestCase):
     def test_window_covers_every_post_attachment_rollout_through_seating(self) -> None:
+        start = CONTACT_INSERTION_RECORDING.start_index(
+            ContactInsertionSegment.GRASP_ATTACH
+        )
         self.assertEqual(
             INSERTION_WINDOW.to_dict(),
-            {"start_index": 21, "count": 88, "stride": 1},
+            {
+                "start_index": start,
+                "count": (
+                    CONTACT_INSERTION_RECORDING.frame_count
+                    - DROID_ROLLOUT_PROTOCOL.context_frames
+                    - DROID_ROLLOUT_PROTOCOL.action_horizon
+                    + 1
+                    - start
+                ),
+                "stride": 1,
+            },
         )
 
     def test_rejects_an_evaluation_outside_the_complete_insertion_window(self) -> None:

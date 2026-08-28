@@ -14,7 +14,8 @@ from jepa_wm.trajectory import DROID_ROLLOUT_PROTOCOL, RolloutWindow
 
 GRASP_PROPOSAL_WINDOW = RolloutWindow(69, 30, 1)
 _CONTACT_GRASP_START = (
-    CONTACT_INSERTION_RECORDING.start_index(ContactInsertionSegment.GRASP_CLOSE) + 1
+    CONTACT_INSERTION_RECORDING.start_index(ContactInsertionSegment.GRASP_ATTACH)
+    - DROID_ROLLOUT_PROTOCOL.action_horizon
 )
 CONTACT_GRASP_PROPOSAL_WINDOW = RolloutWindow(_CONTACT_GRASP_START, 8, 1)
 _INSERTION_START = CONTACT_INSERTION_RECORDING.start_index(
@@ -45,9 +46,18 @@ def proposal_window(task: str) -> RolloutWindow:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("task", choices=("grasp", "contact-grasp", "insertion"))
+    parser.add_argument(
+        "field",
+        nargs="?",
+        choices=("window", "start-index"),
+        default="window",
+    )
     arguments = parser.parse_args(argv)
     window = proposal_window(arguments.task)
-    print(window.start_index, window.count, window.stride)
+    if arguments.field == "start-index":
+        print(window.start_index)
+    else:
+        print(window.start_index, window.count, window.stride)
     return 0
 
 

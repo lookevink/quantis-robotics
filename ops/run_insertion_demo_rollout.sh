@@ -4,12 +4,13 @@ set -euo pipefail
 repo_dir="${HOME}/quantis-robotics"
 # shellcheck source=ops/shell_helpers.sh
 source "${repo_dir}/ops/shell_helpers.sh"
+venv_python="${HOME}/.venvs/quantis-jepa-wm/bin/python"
 run_id="${1:-}"
 reference_name="${2:-}"
 exploration_seed="${3:-}"
 control_identity="${4:-}"
-context_index="${5:-43}"
-venv_python="${HOME}/.venvs/quantis-jepa-wm/bin/python"
+context_index="$(resolve_insertion_context \
+  "${5:-}" "${repo_dir}" "${venv_python}")"
 
 for identifier in "${run_id}" "${reference_name}" "${control_identity}"; do
   is_safe_identifier "${identifier}" || {

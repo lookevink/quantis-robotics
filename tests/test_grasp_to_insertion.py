@@ -6,7 +6,11 @@ from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.control_safety import ControlGateDecision, SafetyProjectionAttempt
 from jepa_wm.control_tracking import ActionTrackingDecision
-from jepa_wm.insertion_contract import INSERTION_CONTROL_TARGET_POLICY
+from jepa_wm.insertion_contract import (
+    CONTACT_INSERTION_RECORDING,
+    ContactInsertionSegment,
+    INSERTION_CONTROL_TARGET_POLICY,
+)
 from jepa_wm.insertion_rollout import InsertionRolloutPosition
 from jepa_wm.joint_drive import JointDriveTarget
 from sim.control_session import (
@@ -93,7 +97,9 @@ class GraspToInsertionLineageTest(unittest.TestCase):
             self.observation,
             observation_id=102,
             expected_proposal=Path("/tmp/insertion.pth"),
-            warmup_frames=21,
+            warmup_frames=CONTACT_INSERTION_RECORDING.start_index(
+                ContactInsertionSegment.GRASP_ATTACH
+            ),
         )
         state = replace(
             self.state,

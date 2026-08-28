@@ -6,7 +6,12 @@ import tempfile
 import unittest
 
 from jepa_wm.grasp_contract import GRASP_TASK_ID
-from jepa_wm.insertion_contract import INSERTION_TASK_ID
+from jepa_wm.insertion_contract import (
+    CONTACT_INSERTION_RECORDING,
+    ContactInsertionSegment,
+    INSERTION_TASK_ID,
+)
+from jepa_wm.task_windows import CONTACT_GRASP_PROPOSAL_WINDOW
 from sim.control_context import ControlContextPurpose, load_control_context
 from sim.exploration import DatasetSplit, build_exploration_plan
 
@@ -65,24 +70,34 @@ class RecordedControlContextTest(unittest.TestCase):
     def test_allows_exact_contact_insertion_command_contexts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             recording = self._recording(
-                Path(temp_dir), task=INSERTION_TASK_ID, frames=112
+                Path(temp_dir),
+                task=INSERTION_TASK_ID,
+                frames=CONTACT_INSERTION_RECORDING.frame_count,
             )
             plan = build_exploration_plan(52600, DatasetSplit.HELD_OUT)
+            contexts = (
+                CONTACT_INSERTION_RECORDING.insertion_command_window.context_indices
+            )
 
-            first = load_control_context(recording, 43, plan)
-            last = load_control_context(recording, 106, plan)
+            first = load_control_context(recording, contexts[0], plan)
+            last = load_control_context(recording, contexts[-1], plan)
 
-            self.assertEqual(first[-1].index, 43)
-            self.assertEqual(last[-1].index, 106)
+            self.assertEqual(first[-1].index, contexts[0])
+            self.assertEqual(last[-1].index, contexts[-1])
 
     def test_rejects_contact_insertion_contexts_outside_command_window(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             recording = self._recording(
-                Path(temp_dir), task=INSERTION_TASK_ID, frames=112
+                Path(temp_dir),
+                task=INSERTION_TASK_ID,
+                frames=CONTACT_INSERTION_RECORDING.frame_count,
             )
             plan = build_exploration_plan(52600, DatasetSplit.HELD_OUT)
+            contexts = (
+                CONTACT_INSERTION_RECORDING.insertion_command_window.context_indices
+            )
 
-            for context_index in (42, 107):
+            for context_index in (contexts[0] - 1, contexts[-1] + 1):
                 with self.subTest(context_index=context_index):
                     with self.assertRaisesRegex(ValueError, "insertion command window"):
                         load_control_context(recording, context_index, plan)
@@ -90,24 +105,31 @@ class RecordedControlContextTest(unittest.TestCase):
     def test_contact_grasp_purpose_admits_only_the_canonical_pre_grasp_context(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             recording = self._recording(
-                Path(temp_dir), task=INSERTION_TASK_ID, frames=112
+                Path(temp_dir),
+                task=INSERTION_TASK_ID,
+                frames=CONTACT_INSERTION_RECORDING.frame_count,
             )
             plan = build_exploration_plan(52601, DatasetSplit.HELD_OUT)
+            context_index = CONTACT_GRASP_PROPOSAL_WINDOW.start_index
 
             context = load_control_context(
                 recording,
-                18,
+                context_index,
                 plan,
                 ControlContextPurpose.CONTACT_GRASP,
             )
 
-            self.assertEqual(context[-1].index, 18)
-            for context_index in (17, 19, 43):
-                with self.subTest(context_index=context_index):
+            self.assertEqual(context[-1].index, context_index)
+            for invalid_context in (
+                context_index - 1,
+                context_index + 1,
+                CONTACT_INSERTION_RECORDING.insertion_command_window.context_indices[0],
+            ):
+                with self.subTest(context_index=invalid_context):
                     with self.assertRaisesRegex(ValueError, "canonical context"):
                         load_control_context(
                             recording,
-                            context_index,
+                            invalid_context,
                             plan,
                             ControlContextPurpose.CONTACT_GRASP,
                         )

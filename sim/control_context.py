@@ -14,6 +14,7 @@ from jepa_wm.insertion_contract import (
     ContactInsertionSegment,
     INSERTION_TASK_ID,
 )
+from jepa_wm.task_windows import CONTACT_GRASP_PROPOSAL_WINDOW
 from sim.exploration import ExplorationPlan, exploration_prefix
 
 
@@ -79,12 +80,7 @@ def load_control_context(
     task = recording_task(recording)
     if task == INSERTION_TASK_ID:
         if purpose is ControlContextPurpose.CONTACT_GRASP:
-            if context_index != (
-                CONTACT_INSERTION_RECORDING.start_index(
-                    ContactInsertionSegment.GRASP_ATTACH
-                )
-                - 3
-            ):
+            if context_index != CONTACT_GRASP_PROPOSAL_WINDOW.start_index:
                 raise ValueError(
                     "contact grasp capture must start at its canonical context"
                 )

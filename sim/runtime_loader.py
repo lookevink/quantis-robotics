@@ -167,6 +167,7 @@ def reload_demo_runtime() -> ModuleType:
     for module_name in (
         "jepa.contract",
         "jepa_wm.identifiers",
+        "jepa_wm.insertion_layout",
         "jepa_wm.action",
         "jepa_wm.training_artifact",
         "jepa_wm.control_policy",

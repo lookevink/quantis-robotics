@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 from enum import Enum
 
+from jepa_wm.insertion_layout import CONTACT_INSERTION_LAYOUT
+
 
 class ControlResolutionLoad(str, Enum):
     ATTACHED = "attached"
@@ -15,7 +17,12 @@ class ControlResolutionLoad(str, Enum):
         return self is ControlResolutionLoad.ATTACHED
 
 
-CONTROL_RESOLUTION_CONTEXTS = (43, 74, 106)
+_INSERTION_CONTEXTS = CONTACT_INSERTION_LAYOUT.insertion_command_context_indices
+CONTROL_RESOLUTION_CONTEXTS = (
+    _INSERTION_CONTEXTS[0],
+    _INSERTION_CONTEXTS[len(_INSERTION_CONTEXTS) // 2 - 1],
+    _INSERTION_CONTEXTS[-1],
+)
 CONTROL_RESOLUTION_LOADS = tuple(ControlResolutionLoad)
 CONTROL_RESOLUTION_MEASUREMENT_TIMEOUT_SECONDS = 1800
 

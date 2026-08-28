@@ -26,6 +26,11 @@ from jepa_wm.control_safety import (
     TRACKING_BOUNDED_ORIENTATION_HOLD_ACTION_SCALES,
 )
 from jepa_wm.identifiers import validate_safe_identifier
+from jepa_wm.insertion_layout import (
+    ContactInsertionLayout,
+    ContactInsertionSegment,
+    ContactInsertionSpan,
+)
 from jepa_wm.trajectory import (
     RecordedRollout,
     RolloutProtocol,
@@ -402,61 +407,10 @@ def insertion_control_target_policy(
     )
 
 
-class ContactInsertionSegment(str, Enum):
-    INITIAL = "initial"
-    PRE_GRASP = "pre_grasp"
-    GRASP_OPEN = "grasp_open"
-    GRASP_CLOSE = "grasp_close"
-    GRASP_ATTACH = "grasp_attach"
-    RETREAT = "retreat"
-    RETREAT_HOLD = "retreat_hold"
-    ALIGN = "align"
-    ALIGN_HOLD = "align_hold"
-    INSERT = "insert"
-    SEATED_HOLD = "seated_hold"
-
-
 @dataclass(frozen=True)
-class ContactInsertionSpan:
-    segment: ContactInsertionSegment
-    phase: str
-    stage: str
-    frames: int
-    attached: bool
-
-
-@dataclass(frozen=True)
-class ContactInsertionRecordingContract:
+class ContactInsertionRecordingContract(ContactInsertionLayout):
     attachment: str = "dynamic_fixed_joint"
     socket_scale: float = 1.05
-    spans: tuple[ContactInsertionSpan, ...] = (
-        ContactInsertionSpan(ContactInsertionSegment.INITIAL, "initial", "approaching_cable", 1, False),
-        ContactInsertionSpan(ContactInsertionSegment.PRE_GRASP, "pre_grasp", "approaching_cable", 8, False),
-        ContactInsertionSpan(ContactInsertionSegment.GRASP_OPEN, "grasp", "approaching_cable", 8, False),
-        ContactInsertionSpan(ContactInsertionSegment.GRASP_CLOSE, "grasp_close", "approaching_cable", 4, False),
-        ContactInsertionSpan(ContactInsertionSegment.GRASP_ATTACH, "grasp_attached", "cable_grasped", 1, True),
-        ContactInsertionSpan(ContactInsertionSegment.RETREAT, "pre_insertion", "cable_grasped", 8, True),
-        ContactInsertionSpan(ContactInsertionSegment.RETREAT_HOLD, "pre_insertion_settle", "cable_grasped", 4, True),
-        ContactInsertionSpan(ContactInsertionSegment.ALIGN, "pre_insertion", "cable_grasped", 8, True),
-        ContactInsertionSpan(ContactInsertionSegment.ALIGN_HOLD, "pre_insertion_settle", "aligned_with_socket", 2, True),
-        ContactInsertionSpan(ContactInsertionSegment.INSERT, "insert", "aligned_with_socket", 64, True),
-        ContactInsertionSpan(ContactInsertionSegment.SEATED_HOLD, "insert_settle", "plug_seated", 4, True),
-    )
-
-    def span(self, segment: ContactInsertionSegment) -> ContactInsertionSpan:
-        return next(span for span in self.spans if span.segment is segment)
-
-    def start_index(self, segment: ContactInsertionSegment) -> int:
-        start = 0
-        for span in self.spans:
-            if span.segment is segment:
-                return start
-            start += span.frames
-        raise ValueError(f"unknown insertion segment: {segment.value}")
-
-    @property
-    def insertion_steps(self) -> int:
-        return self.span(ContactInsertionSegment.INSERT).frames
 
     @property
     def insertion_command_window(self) -> RolloutWindow:
@@ -464,28 +418,6 @@ class ContactInsertionRecordingContract:
             self.start_index(ContactInsertionSegment.INSERT) - 1,
             self.insertion_steps,
             1,
-        )
-
-    @property
-    def frame_count(self) -> int:
-        return sum(span.frames for span in self.spans)
-
-    @property
-    def phase_roster(self) -> tuple[str, ...]:
-        return tuple(
-            span.phase for span in self.spans for _ in range(span.frames)
-        )
-
-    @property
-    def stage_roster(self) -> tuple[str, ...]:
-        return tuple(
-            span.stage for span in self.spans for _ in range(span.frames)
-        )
-
-    @property
-    def attachment_roster(self) -> tuple[bool, ...]:
-        return tuple(
-            span.attached for span in self.spans for _ in range(span.frames)
         )
 
     def instrumentation_metadata(

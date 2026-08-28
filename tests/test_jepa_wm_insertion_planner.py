@@ -17,6 +17,10 @@ from jepa_wm.insertion_planner import (
     insertion_planner_profile,
 )
 from jepa_wm.insertion_planner_profile import InsertionPlannerProfileName
+from jepa_wm.insertion_contract import (
+    CONTACT_INSERTION_RECORDING,
+    ContactInsertionSegment,
+)
 from jepa_wm.planner import PlannerActionBounds, ProposalCenteredBounds
 from jepa_wm.planner_readiness import FirstActionGate, FirstActionReason
 from jepa_wm.planner_policy import (
@@ -83,8 +87,14 @@ class InsertionPlannerProfileTest(unittest.TestCase):
 
     def test_samples_the_insertion_stroke_with_a_pinned_search_identity(self) -> None:
         profile = INSERTION_SAMPLED_READINESS_PLANNER_PROFILE
+        insertion_start = CONTACT_INSERTION_RECORDING.start_index(
+            ContactInsertionSegment.INSERT
+        )
 
-        self.assertEqual(profile.window.context_indices, tuple(range(44, 108, 8)))
+        self.assertEqual(
+            profile.window.context_indices,
+            tuple(range(insertion_start, insertion_start + 64, 8)),
+        )
         self.assertEqual(profile.planner.iterations, 4)
         self.assertEqual(profile.planner.samples, 64)
         self.assertEqual(profile.planner.elites, 8)
@@ -97,7 +107,7 @@ class InsertionPlannerProfileTest(unittest.TestCase):
     def test_dense_profile_covers_every_insertion_command_context(self) -> None:
         self.assertEqual(
             INSERTION_DENSE_PLANNER_PROFILE.window.context_indices,
-            tuple(range(43, 107)),
+            CONTACT_INSERTION_RECORDING.insertion_command_window.context_indices,
         )
         self.assertEqual(
             INSERTION_DENSE_PLANNER_PROFILE.task_policy,

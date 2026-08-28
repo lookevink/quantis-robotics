@@ -77,6 +77,20 @@ control_resolution_profile_field() {
   )
 }
 
+resolve_insertion_context() {
+  local supplied="$1"
+  local repository="$2"
+  local python_bin="$3"
+  if [[ -n "${supplied}" ]]; then
+    printf '%s\n' "${supplied}"
+    return
+  fi
+  (
+    cd "${repository}"
+    "${python_bin}" -m jepa_wm.insertion_layout initial-command-context
+  )
+}
+
 insertion_rollout_profile_field() {
   local repository="$1"
   local python_bin="$2"
@@ -95,6 +109,15 @@ contact_grasp_maximum_actions() {
     cd "${repository}"
     "${python_bin}" -c \
       'from jepa_wm.grasp_task import MAXIMUM_CONTACT_GRASP_ACTIONS; print(MAXIMUM_CONTACT_GRASP_ACTIONS)'
+  )
+}
+
+contact_grasp_initial_context() {
+  local repository="$1"
+  local python_bin="$2"
+  (
+    cd "${repository}"
+    "${python_bin}" -m jepa_wm.task_windows contact-grasp start-index
   )
 }
 

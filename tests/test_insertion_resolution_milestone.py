@@ -11,6 +11,7 @@ from jepa_wm.control_resolution_profile import (
     CONTROL_RESOLUTION_LOADS,
     CONTROL_RESOLUTION_MEASUREMENT_TIMEOUT_SECONDS,
 )
+from jepa_wm.insertion_layout import CONTACT_INSERTION_LAYOUT
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,14 @@ MILESTONE = REPO_ROOT / "ops" / "jepa_wm_insertion_resolution_milestone.sh"
 
 
 class InsertionResolutionMilestoneTest(unittest.TestCase):
+    def test_contexts_are_first_middle_and_last_insertion_commands(self) -> None:
+        contexts = CONTACT_INSERTION_LAYOUT.insertion_command_context_indices
+
+        self.assertEqual(
+            CONTROL_RESOLUTION_CONTEXTS,
+            (contexts[0], contexts[len(contexts) // 2 - 1], contexts[-1]),
+        )
+
     def test_measurement_timeout_covers_long_real_physics_runs(self) -> None:
         result = subprocess.run(
             [

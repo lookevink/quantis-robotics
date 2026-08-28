@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -15,15 +17,48 @@ from jepa_wm.contact_grasp_proposal_readiness import (
     validate_contact_grasp_goal_deltas,
     validate_contact_grasp_training_selection,
 )
+from jepa_wm.insertion_contract import (
+    CONTACT_INSERTION_RECORDING,
+    ContactInsertionSegment,
+)
 from jepa_wm.task_windows import proposal_window
+from jepa_wm.trajectory import DROID_ROLLOUT_PROTOCOL
 from jepa_wm.training_artifact import TrainingArtifactMetadata
 
 
 class ContactGraspProposalReadinessTest(unittest.TestCase):
+    def test_named_cli_field_exposes_the_initial_context(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "jepa_wm.task_windows",
+                "contact-grasp",
+                "start-index",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            int(result.stdout.strip()),
+            CONTACT_GRASP_WINDOW.start_index,
+        )
+
     def test_window_covers_close_attachment_and_retained_grasp(self) -> None:
         self.assertEqual(
             CONTACT_GRASP_WINDOW.to_dict(),
-            {"start_index": 18, "count": 8, "stride": 1},
+            {
+                "start_index": CONTACT_INSERTION_RECORDING.start_index(
+                    ContactInsertionSegment.GRASP_ATTACH
+                )
+                - DROID_ROLLOUT_PROTOCOL.action_horizon,
+                "count": 8,
+                "stride": 1,
+            },
         )
         self.assertEqual(proposal_window("contact-grasp"), CONTACT_GRASP_WINDOW)
 

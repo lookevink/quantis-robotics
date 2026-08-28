@@ -7,11 +7,42 @@ import subprocess
 import tempfile
 import unittest
 
+from jepa_wm.insertion_layout import CONTACT_INSERTION_LAYOUT
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ControlRolloutShellTest(unittest.TestCase):
+    def test_insertion_context_resolver_uses_the_canonical_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runner = Path(temp_dir) / "run.sh"
+            runner.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                f"source '{REPO_ROOT}/ops/shell_helpers.sh'\n"
+                f"resolve_insertion_context '' '{REPO_ROOT}' python3\n"
+                f"resolve_insertion_context 43 '{REPO_ROOT}' python3\n"
+            )
+
+            result = subprocess.run(
+                ["bash", str(runner)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            [
+                str(
+                    CONTACT_INSERTION_LAYOUT.insertion_command_context_indices[0]
+                ),
+                "43",
+            ],
+        )
+
     def test_grasp_transition_milestone_reestablishes_grasp_then_one_action(
         self,
     ) -> None:
@@ -28,6 +59,7 @@ class ControlRolloutShellTest(unittest.TestCase):
 is_safe_identifier() { return 0; }
 require_nonnegative_integer() { return 0; }
 contact_grasp_maximum_actions() { printf '52\n'; }
+contact_grasp_initial_context() { printf '110\n'; }
 require_control_rollout_reach_and_grasp() { return 0; }
 control_rollout_terminal_session() { printf 'milestone-grasp-42\n'; }
 isaac_server_call() { printf 'isaac %s\n' "$1" >> "${CALLS}"; }
@@ -166,6 +198,7 @@ insertion_rollout_profile_field() {
   printf '4\n'
 }
 contact_grasp_maximum_actions() { printf '52\n'; }
+contact_grasp_initial_context() { printf '110\n'; }
 isaac_server_call() { printf 'isaac %s|%s\n' "$1" "${3:-false}" >> "${CALLS}"; }
 control_proposal_from_identity() { printf 'insertion-proposal\n'; }
 require_control_rollout_reach_and_grasp() { return 0; }
@@ -220,7 +253,7 @@ run_insertion_followup_trial() {
                 ],
             )
             self.assertIn(
-                "full-chain-grasp contact-reference 12401 52 grasp-worker direct 18 contact_grasp",
+                "full-chain-grasp contact-reference 12401 52 grasp-worker direct 110 contact_grasp",
                 calls[2],
             )
             self.assertIn(
@@ -254,6 +287,7 @@ run_insertion_followup_trial() {
 is_safe_identifier() { return 0; }
 require_nonnegative_integer() { return 0; }
 require_positive_integer() { return 0; }
+resolve_insertion_context() { printf '%s\n' "$1"; }
 insertion_rollout_profile_field() {
   [[ "$3" == demo ]] || return 9
   printf '4\n'
@@ -330,6 +364,7 @@ isaac_server_call() { printf 'verify %s\n' "$1" >> "${CALLS}"; }
 is_safe_identifier() { return 0; }
 require_nonnegative_integer() { return 0; }
 require_positive_integer() { return 0; }
+resolve_insertion_context() { printf '%s\n' "$1"; }
 isaac_server_call() {
   printf 'verify %s\n' "$1" >> "${CALLS}"
   if [[ "$1" == *"verify_insertion_followup_source"* ]]; then
@@ -642,6 +677,7 @@ isaac_insertion_trial_apply_timeout_seconds=600
 is_safe_identifier() { return 0; }
 require_nonnegative_integer() { return 0; }
 require_positive_integer() { return 0; }
+resolve_insertion_context() { printf '%s\n' "$1"; }
 control_proposal_from_identity() { printf 'proposal-test\n'; }
 insertion_rollout_profile_field() {
   [[ "$3" == two-step ]] || return 9
@@ -686,6 +722,7 @@ run_reset_trial_control_session() { printf '%s\n' "$*" >> "${CALLS}"; }
             (ops / "shell_helpers.sh").write_text(
                 """#!/usr/bin/env bash
 isaac_server_call() { printf '%s\\n' "$1" >> "${CALLS}"; }
+resolve_insertion_context() { printf '%s\\n' "$1"; }
 insertion_rollout_profile_field() {
   [[ "$3" == two-step ]] || return 9
   printf '2\n'

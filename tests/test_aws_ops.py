@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 from typing import Optional
 
+from jepa_wm.control_resolution_profile import CONTROL_RESOLUTION_CONTEXTS
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AWS_SCRIPT = REPO_ROOT / "ops" / "aws.sh"
@@ -1292,14 +1294,13 @@ class AwsLifecycleTests(unittest.TestCase):
                 "insertion-fresh-held-00",
                 "52600",
                 "contact-insertion-v9-2600-dense-control",
-                "43",
             ),
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ops/run_insertion_safety_check.sh", calls)
         self.assertIn("contact-insertion-v9-2600-dense-control", calls)
-        self.assertIn("'43'", calls)
+        self.assertIn(f"'{CONTROL_RESOLUTION_CONTEXTS[0]}'", calls)
         self.assertIn("ops/backup_state.sh", calls)
 
     def test_insertion_safety_backs_up_a_failed_live_evaluation(self):
