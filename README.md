@@ -1969,6 +1969,38 @@ disjoint two-seed offline gate before another integrated live action. No
 tracking, rollback, force, collision, velocity, or freshness threshold is
 opened by this negative.
 
+The contact-aware corpus refresh for that gate now uses a 284-frame drive-only
+recording: 48 samples each for pre-grasp, open-grasp approach, retreat, and
+alignment; 16 for gripper closure; 64 for insertion; and the existing bounded
+holds. The first canonical TRAIN recording,
+`contact-insertion-v10-drive-slow-2600-train-00`, completed at `0 N` with
+`8.402 mrad` maximum arm error and `1.936 mm` maximum gripper error. The first
+seed-2601 attempt stopped during insertion when connector force crossed the
+unchanged `2 N` gate at `2.180 N`; the partial recording and job are preserved
+under timestamp `20260828T201133Z` in the recovery quarantine.
+
+An exact no-camera fixed-step reproduction localized the negative to insertion
+sample 39 of 64: connector force rose from `0.114 N` to `2.180 N` within that
+single interval while the hand sensor remained at `0 N`. Extending insertion
+to 96 samples did not remove the obstruction. The scripted waypoint solver was
+still accepting the first inverse-kinematics result inside a `3 mm` Cartesian
+position tolerance, which left the failing seed roughly `0.55 mm` laterally
+offset before socket contact. Scripted waypoints now use the same bounded
+nine-start local-branch search as live control, with `0.1 mm` position and
+`1 mrad` orientation solver tolerances. No force, tracking, seating, velocity,
+or task tolerance changed.
+
+The corrected full camera-backed seed-2601 artifact reused the same recording
+identity and completed all 284 frames. Independent reconstruction reports
+`0 N` maximum force, `7.644 mrad` maximum arm error, `1.936 mm` maximum gripper
+error, `0.0021 mm` seating-depth error, `0.0715 mm` lateral error, `0.437 mrad`
+orientation error, attachment at frame 113, and four seated observations. A
+separate held-out canary `contact-insertion-v10-drive-slow-72600-held-00` also
+passes the new contract. The verified recovery copy is `15 GB`. The remaining
+canonical TRAIN and HELD_OUT recordings have not yet been collected, so this
+checkpoint authorizes only resuming the resumable corpus workflow—not model
+training, a new JEPA action, filming, or production use.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

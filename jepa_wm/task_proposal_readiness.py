@@ -92,6 +92,12 @@ class TaskProposalReadinessPolicy:
     ) -> ProposalArtifactIdentity:
         proposal = proposal.resolve()
         self.validate_conditioning(payload)
+        identity = ProposalArtifactIdentity.from_artifact(proposal)
+        if payload.get("proposal_fingerprint") != identity.fingerprint:
+            raise ValueError(
+                f"{self.task_name} proposal fingerprint does not match its "
+                "training report"
+            )
         from jepa_wm.proposal import load_action_proposal_with_training_selection
         import torch
 
@@ -133,12 +139,6 @@ class TaskProposalReadinessPolicy:
         ):
             raise ValueError(
                 f"{self.task_name} proposal checkpoint and training report disagree"
-            )
-        identity = ProposalArtifactIdentity.from_artifact(proposal)
-        if payload.get("proposal_fingerprint") != identity.fingerprint:
-            raise ValueError(
-                f"{self.task_name} proposal fingerprint does not match its "
-                "training report"
             )
         return identity
 

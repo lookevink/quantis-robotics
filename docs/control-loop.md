@@ -751,6 +751,16 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     contact-scene grasp proposal must pass a new disjoint offline gate before
     another live chain; full grasp-to-insertion, filming, and production
     authority remain false. Exact evidence is in the linked README checkpoint.
+    The replacement contact-aware corpus now uses the longer 284-frame
+    drive-only phase layout. Its first two canonical TRAIN seeds and one
+    separate HELD_OUT canary pass after scripted waypoints adopted the bounded
+    strict local-branch IK policy already used by live control; the seed-2601
+    pre-fix connector-force negative remains quarantined and reconstructible.
+    The `2 N` force gate and every tracking, seating, velocity, attachment, and
+    task tolerance are unchanged. The remaining corpus is not yet collected,
+    so only resumable data capture is open; retraining, another JEPA action,
+    filming, and production authority remain closed. Exact measurements and
+    artifact identities are in the linked README checkpoint.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

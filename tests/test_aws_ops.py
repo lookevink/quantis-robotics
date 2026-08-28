@@ -509,6 +509,7 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("recordings/incomplete/contact-insert-held-12402", calls)
         self.assertIn("job_is_quarantinable", calls)
         self.assertIn("test ! -f", calls)
+        self.assertIn("sudo mv", calls)
 
     def test_demo_dashboard_records_scores_and_renders_one_recording(self):
         result, calls = self.run_command(

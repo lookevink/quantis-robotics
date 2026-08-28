@@ -137,13 +137,12 @@ def solve_waypoints() -> tuple[SolvedWaypoint, ...]:
 
     solved: list[SolvedWaypoint] = []
     for waypoint in build_demo_sequence(_task_geometry(stage)):
-        arm_positions, success = solver.compute_inverse_kinematics(
+        arm_positions, success = _closest_inverse_kinematics(
+            solver,
             "right_gripper",
             np.array(waypoint.target_position, dtype=np.float64),
             desired_gripper_quaternion,
-            warm_start=warm_start,
-            position_tolerance=0.003,
-            orientation_tolerance=0.05,
+            warm_start,
         )
         if not success:
             raise RuntimeError(f"IK failed for {waypoint.phase.value}")
