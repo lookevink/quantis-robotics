@@ -19,6 +19,7 @@ from jepa_wm.control_safety import (
     SimulatorSafetyLimits,
 )
 from jepa_wm.joint_settlement import (
+    GripperSettlementCriterion,
     JointSettlementAttempt,
     TrackedJointSettlementPolicy,
 )
@@ -109,7 +110,7 @@ class ControlExecutionLifecycleTest(unittest.TestCase):
                 return_value=runtime,
             ),
             patch(
-                "sim.isaac_control_execution.synchronized_insertion_safety_snapshot",
+                "sim.isaac_control_execution.synchronized_insertion_execution_runtime",
                 synchronize,
             ),
         ):
@@ -305,6 +306,13 @@ class FakeTimeline:
     def __init__(self, articulation: FakeArticulation | None = None) -> None:
         self.events: list[str] = []
         self.articulation = articulation
+        self.auto_update = False
+
+    def is_playing(self) -> bool:
+        return False
+
+    def set_auto_update(self, value: bool) -> None:
+        self.auto_update = value
 
     def play(self) -> None:
         self.events.append("play")
@@ -463,6 +471,52 @@ class IsaacControlExecutionTest(unittest.TestCase):
 
         self.assertEqual(updates, 2)
         self.assertEqual(observations, 2)
+
+    def test_contact_grasp_settlement_can_observe_beyond_generic_eight_updates(self) -> None:
+        actuators = FakeActuators(valid=True)
+        actuators.command = JointCommand(np.ones(7), 0.044)
+        updates = 0
+
+        async def advance() -> None:
+            nonlocal updates
+            updates += 1
+            if updates == 12:
+                actuators.command = JointCommand(np.zeros(7), 0.04)
+
+        asyncio.run(
+            settle_joint_command(
+                actuators,
+                np.zeros(7),
+                advance,
+                maximum_updates=96,
+                maximum_arm_error_radians=5e-3,
+                gripper=GripperSettlementCriterion(0.04, 1e-6),
+            )
+        )
+
+        self.assertEqual(updates, 12)
+
+    def test_contact_grasp_settlement_fails_closed_at_its_gripper_bound(self) -> None:
+        actuators = FakeActuators(valid=True)
+        actuators.command = JointCommand(np.zeros(7), 0.044)
+        updates = 0
+
+        async def advance() -> None:
+            nonlocal updates
+            updates += 1
+
+        with self.assertRaisesRegex(RuntimeError, "error_meters=0.004000000"):
+            asyncio.run(
+                settle_joint_command(
+                    actuators,
+                    np.zeros(7),
+                    advance,
+                    maximum_updates=3,
+                    gripper=GripperSettlementCriterion(0.04, 1e-6),
+                )
+            )
+
+        self.assertEqual(updates, 3)
 
     def test_insertion_settlement_requires_consecutive_command_relative_updates(self) -> None:
         actuators = FakeActuators(valid=True)

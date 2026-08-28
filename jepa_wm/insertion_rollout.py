@@ -29,9 +29,23 @@ class InsertionRolloutProfile:
 
 TWO_STEP_INSERTION_ROLLOUT = InsertionRolloutProfile("two-step", 2)
 DEMO_INSERTION_ROLLOUT = InsertionRolloutProfile("demo", 4)
+APPROACH_INSERTION_ROLLOUT = InsertionRolloutProfile("approach", 8)
+ALIGNMENT_INSERTION_ROLLOUT = InsertionRolloutProfile("alignment", 12)
+PRE_INSERTION_ROLLOUT = InsertionRolloutProfile("pre-insertion", 32)
+CONTACT_INSERTION_ROLLOUT = InsertionRolloutProfile("contact-insertion", 96)
 INSERTION_ROLLOUT_PROFILES = (
     TWO_STEP_INSERTION_ROLLOUT,
     DEMO_INSERTION_ROLLOUT,
+    APPROACH_INSERTION_ROLLOUT,
+    ALIGNMENT_INSERTION_ROLLOUT,
+    PRE_INSERTION_ROLLOUT,
+    CONTACT_INSERTION_ROLLOUT,
+)
+INSERTION_ROLLOUT_EXTENSIONS = (
+    (DEMO_INSERTION_ROLLOUT, APPROACH_INSERTION_ROLLOUT),
+    (APPROACH_INSERTION_ROLLOUT, ALIGNMENT_INSERTION_ROLLOUT),
+    (ALIGNMENT_INSERTION_ROLLOUT, PRE_INSERTION_ROLLOUT),
+    (PRE_INSERTION_ROLLOUT, CONTACT_INSERTION_ROLLOUT),
 )
 
 
@@ -87,10 +101,28 @@ class InsertionRolloutPosition:
     def initial(cls, maximum_steps: int) -> InsertionRolloutPosition:
         return cls(1, maximum_steps)
 
-    def followup(self) -> InsertionRolloutPosition:
-        if not self.can_followup:
-            raise ValueError("insertion rollout reached its maximum step")
-        return InsertionRolloutPosition(self.step_index + 1, self.maximum_steps)
+    def followup(
+        self,
+        next_maximum_steps: int | None = None,
+    ) -> InsertionRolloutPosition:
+        if self.can_followup:
+            if next_maximum_steps not in (None, self.maximum_steps):
+                raise ValueError("insertion rollout cap cannot change mid-rollout")
+            return InsertionRolloutPosition(
+                self.step_index + 1,
+                self.maximum_steps,
+            )
+        for previous, following in INSERTION_ROLLOUT_EXTENSIONS:
+            if (
+                self.step_index == previous.maximum_steps
+                and self.maximum_steps == previous.maximum_steps
+                and next_maximum_steps == following.maximum_steps
+            ):
+                return InsertionRolloutPosition(
+                    self.step_index + 1,
+                    following.maximum_steps,
+                )
+        raise ValueError("insertion rollout reached its maximum step")
 
     def to_dict(self) -> dict[str, int]:
         return {

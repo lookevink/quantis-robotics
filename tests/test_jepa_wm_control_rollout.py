@@ -695,6 +695,54 @@ class ControlRolloutTest(unittest.TestCase):
                     requested_steps=2,
                 )
 
+    def test_report_can_authenticate_an_explicit_external_predecessor(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._write_reference(root)
+            self._write_step(
+                root,
+                "insertion-1",
+                previous_session_id="grasp-8",
+                pose_x=0.40,
+                post_x=0.41,
+            )
+            self._write_step(
+                root,
+                "insertion-2",
+                previous_session_id="insertion-1",
+                pose_x=0.41,
+                post_x=0.42,
+                warmup_frames=5,
+                captured_at=101.0,
+                previous_action_x=0.01,
+            )
+
+            report = ControlRolloutReport.from_sessions(
+                root,
+                "rollout-1",
+                ("insertion-1", "insertion-2"),
+                reference_recording="reference",
+                seed=11400,
+                proposal=Path("/tmp/proposal.pth"),
+                requested_steps=2,
+                predecessor_session_id="grasp-8",
+            )
+
+            self.assertTrue(report.all_steps_applied)
+            self.assertEqual(report.predecessor_session_id, "grasp-8")
+            self.assertEqual(report.to_dict()["predecessor_session_id"], "grasp-8")
+            with self.assertRaisesRegex(ValueError, "session chain"):
+                ControlRolloutReport.from_sessions(
+                    root,
+                    "rollout-1",
+                    ("insertion-1", "insertion-2"),
+                    reference_recording="reference",
+                    seed=11400,
+                    proposal=Path("/tmp/proposal.pth"),
+                    requested_steps=2,
+                    predecessor_session_id="wrong-grasp",
+                )
+
     def test_insertion_followup_accepts_policy_selected_target_and_bounded_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

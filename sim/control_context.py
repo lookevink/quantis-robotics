@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 import json
 from math import isfinite
 from pathlib import Path
@@ -10,6 +11,7 @@ from pathlib import Path
 from jepa_wm.grasp_contract import GRASP_TASK_ID
 from jepa_wm.insertion_contract import (
     CONTACT_INSERTION_RECORDING,
+    ContactInsertionSegment,
     INSERTION_TASK_ID,
 )
 from sim.exploration import ExplorationPlan, exploration_prefix
@@ -18,6 +20,13 @@ from sim.exploration import ExplorationPlan, exploration_prefix
 GRASP_TASK_CONTEXT_START = 69
 GRASP_TASK_CONTEXT_END = 98
 EXPLORATION_CONTEXT_BOUNDARIES = tuple(range(4, 69, 4))
+
+
+class ControlContextPurpose(str, Enum):
+    """The narrow task phase that an initial live capture may replay."""
+
+    STANDARD = "standard"
+    CONTACT_GRASP = "contact_grasp"
 
 
 def recording_task(recording: Path) -> str | None:
@@ -63,15 +72,28 @@ def load_control_context(
     recording: Path,
     context_index: int,
     plan: ExplorationPlan,
+    purpose: ControlContextPurpose = ControlContextPurpose.STANDARD,
 ) -> tuple[RecordedControlStep, ...]:
     """Load an exact prefix and admit task interiors only for grasp recordings."""
 
     task = recording_task(recording)
     if task == INSERTION_TASK_ID:
-        if context_index not in (
+        if purpose is ControlContextPurpose.CONTACT_GRASP:
+            if context_index != (
+                CONTACT_INSERTION_RECORDING.start_index(
+                    ContactInsertionSegment.GRASP_ATTACH
+                )
+                - 3
+            ):
+                raise ValueError(
+                    "contact grasp capture must start at its canonical context"
+                )
+        elif context_index not in (
             CONTACT_INSERTION_RECORDING.insertion_command_window.context_indices
         ):
             raise ValueError("control context is outside the insertion command window")
+    elif purpose is not ControlContextPurpose.STANDARD:
+        raise ValueError("contact grasp capture requires an insertion recording")
     elif task == GRASP_TASK_ID:
         if not (
             context_index in EXPLORATION_CONTEXT_BOUNDARIES

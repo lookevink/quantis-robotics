@@ -102,7 +102,10 @@ async def evaluate_direct_insertion_candidate(session_id: str) -> dict[str, Any]
         safety,
         proposal,
         now_unix_seconds=evaluated_at,
-        action_scales=persisted_state.insertion_projection_scales(observation),
+        action_scales=persisted_state.insertion_projection_scales(
+            observation,
+            proposal.first_action,
+        ),
         target_progress=INSERTION_TARGET_PROGRESS,
     )
     evidence = DirectInsertionSafetyEvidence(

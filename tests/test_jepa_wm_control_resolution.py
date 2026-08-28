@@ -1799,11 +1799,8 @@ class ControlResolutionSettlementRuntimeTest(unittest.IsolatedAsyncioTestCase):
             attachment=SimpleNamespace(attached=True),
             sensor=object(),
         )
-        timeline = Mock()
-
         capture = await stabilize_resolution_capture(
             runtime,
-            timeline,
             command,
             ControlResolutionCaptureBaselineContract(
                 ControlResolutionBaselinePolicy(),

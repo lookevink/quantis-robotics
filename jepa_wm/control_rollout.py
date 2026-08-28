@@ -23,18 +23,28 @@ from jepa_wm.control_policy import (
     is_insertion_trial_execution_policy,
 )
 from jepa_wm.grasp_task import (
+    MAXIMUM_CONTACT_GRASP_ACTIONS,
     GraspTaskStep,
     ReachAndGraspDecision,
     evaluate_reach_and_grasp,
 )
 from jepa_wm.grasp_contract import GRASP_TASK_ID
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
-from jepa_wm.control_safety import ControlGateReason, SimulatorSafetyLimits
+from jepa_wm.insertion_refresh import (
+    MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
+)
+from jepa_wm.control_safety import (
+    ControlGateReason,
+    SimulatorSafetyLimits,
+    contact_grasp_action_scales,
+    insertion_projection_policy_for_attempts,
+)
 from jepa_wm.insertion_trial import (
     InsertionTrialOutcomeObservation,
     InsertionTrialRollbackEvidence,
     InsertionTrialRollbackFailure,
 )
+from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.shadow_planning import ShadowSearchEvidence
 from sim.control_session import (
     ControlResult,
@@ -47,7 +57,8 @@ from sim.recording import validate_recording_id
 
 
 ROLLOUT_SCHEMA = "quantis.jepa_wm_control_rollout.v1"
-MAX_CONTROL_ROLLOUT_STEPS = 8
+STANDARD_MAX_CONTROL_ROLLOUT_STEPS = 8
+MAX_CONTROL_ROLLOUT_STEPS = MAXIMUM_CONTACT_GRASP_ACTIONS
 
 
 class IncompleteStepStatus(str, Enum):
@@ -206,6 +217,18 @@ class ControlStepSummary:
     shadow: ShadowSearchEvidence | None = None
     shadow_safety: ShadowSafetyEvidence | None = None
 
+    def contact_grasp_drive_target(self) -> JointDriveTarget:
+        """Reconstruct the arm target plus any attached-state gripper hold."""
+
+        return self.result.applied_drive_target(
+            held_gripper_width_m=(
+                self.state.active_drive_target.gripper_width_m
+                if self.state.plug_attached
+                and self.state.active_drive_target is not None
+                else None
+            )
+        )
+
     @classmethod
     def from_session(cls, session: ControlSession) -> ControlStepSummary:
         observation, state = session.load_capture()
@@ -214,6 +237,30 @@ class ControlStepSummary:
         captured_response = response
         result = session.load_result()
         limits = SimulatorSafetyLimits()
+        potential_contact_grasp = (
+            state.execution_policy is ControlExecutionPolicy.DIRECT
+            and state.insertion_target_policy is None
+            and state.active_drive_target is not None
+        )
+        reference_task = None
+        if potential_contact_grasp:
+            manifest = json.loads(
+                (
+                    session.data_root
+                    / "recordings"
+                    / state.reference_recording
+                    / "manifest.json"
+                ).read_text()
+            )
+            metadata = (
+                manifest.get("metadata") if isinstance(manifest, dict) else None
+            )
+            reference_task = (
+                metadata.get("task") if isinstance(metadata, dict) else None
+            )
+        contact_grasp_execution = (
+            potential_contact_grasp and reference_task == INSERTION_TASK_ID
+        )
         if is_insertion_trial_execution_policy(state.execution_policy):
             binding = session.load_insertion_trial_binding(response)
             attempted_scales = tuple(
@@ -516,6 +563,65 @@ class ControlStepSummary:
                 raise ValueError(
                     f"insertion trial rollback settlement is missing: {session.session_id}"
                 )
+        elif contact_grasp_execution:
+            try:
+                projection_policy = insertion_projection_policy_for_attempts(
+                    tuple(attempt.scale for attempt in result.projection_attempts)
+                )
+            except ValueError as error:
+                raise ValueError(
+                    f"contact grasp projection policy is invalid: {session.session_id}"
+                ) from error
+            expected_projection_policy = contact_grasp_action_scales(
+                response.first_action,
+                attachment_acquired=state.plug_attached,
+            )
+            if projection_policy != expected_projection_policy:
+                raise ValueError(
+                    f"contact grasp projection phase is invalid: {session.session_id}"
+                )
+            if (
+                result.insertion_trial_refresh is None
+                or result.insertion_trial_refresh.live_pose is None
+            ):
+                raise ValueError(
+                    f"contact grasp live-pose refresh is missing: {session.session_id}"
+                )
+            if state.active_drive_target is None:
+                raise ValueError(
+                    f"contact grasp active drive target is missing: {session.session_id}"
+                )
+            if state.previous_session_id is None:
+                observation, response = (
+                    result.insertion_trial_refresh.authorize_initial_contact_grasp(
+                        observation,
+                        response,
+                        state.require_safety_snapshot(),
+                        MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
+                    )
+                )
+            else:
+                observation, response = (
+                    result.insertion_trial_refresh.authorize_target_relative(
+                        observation,
+                        response,
+                        state.require_safety_snapshot(),
+                        state.active_drive_target,
+                        MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
+                    )
+                )
+            if (
+                result.insertion_trial_drive is not None
+                or result.insertion_trial_rollback is not None
+                or result.insertion_trial_settlement_failure is not None
+                or (
+                    result.post_action is not None
+                    and result.post_action.insertion_trial is not None
+                )
+            ):
+                raise ValueError(
+                    f"contact grasp has insertion-trial evidence: {session.session_id}"
+                )
         elif (
             result.insertion_trial_refresh is not None
             or result.insertion_trial_drive is not None
@@ -626,11 +732,36 @@ class ControlStepSummary:
         observation = self.observation
         response = self.response
         if self.result.insertion_trial_refresh is not None:
-            observation, response = self.result.insertion_trial_refresh.authorize(
-                observation,
-                response,
-                self.state.require_safety_snapshot(),
-            )
+            if (
+                self.state.execution_policy is ControlExecutionPolicy.DIRECT
+                and self.state.insertion_target_policy is None
+                and self.state.active_drive_target is not None
+            ):
+                if self.state.previous_session_id is None:
+                    observation, response = (
+                        self.result.insertion_trial_refresh.authorize_initial_contact_grasp(
+                            observation,
+                            response,
+                            self.state.require_safety_snapshot(),
+                            MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
+                        )
+                    )
+                else:
+                    observation, response = (
+                        self.result.insertion_trial_refresh.authorize_target_relative(
+                            observation,
+                            response,
+                            self.state.require_safety_snapshot(),
+                            self.state.active_drive_target,
+                            MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
+                        )
+                    )
+            else:
+                observation, response = self.result.insertion_trial_refresh.authorize(
+                    observation,
+                    response,
+                    self.state.require_safety_snapshot(),
+                )
         return ControlStepTiming.from_step(
             observation,
             response,
@@ -750,10 +881,13 @@ class ControlRolloutReport:
     target_pose: DroidPose | None
     orchestration_failure: OrchestrationFailure | None = None
     reference_task: str | None = None
+    predecessor_session_id: str | None = None
 
     def __post_init__(self) -> None:
         validate_recording_id(self.rollout_id)
         validate_recording_id(self.reference_recording)
+        if self.predecessor_session_id is not None:
+            validate_recording_id(self.predecessor_session_id)
         if (
             self.seed < 0
             or not self.proposal.is_absolute()
@@ -783,7 +917,11 @@ class ControlRolloutReport:
         if self.target_pose is None:
             raise ValueError("control rollout target pose is missing")
         for index, step in enumerate(complete):
-            expected_previous = self.steps[index - 1].session_id if index else None
+            expected_previous = (
+                self.steps[index - 1].session_id
+                if index
+                else self.predecessor_session_id
+            )
             if (
                 step.state.previous_session_id != expected_previous
                 or step.state.reference_recording != self.reference_recording
@@ -797,7 +935,41 @@ class ControlRolloutReport:
         ):
             raise ValueError("control rollout observation IDs must be unique")
         target_frames = tuple(observation.target_frame for observation in observations)
-        if self.reference_task == GRASP_TASK_ID:
+        direct_contact_grasp = (
+            self.reference_task == INSERTION_TASK_ID
+            and all(
+                step.state.execution_policy is ControlExecutionPolicy.DIRECT
+                and step.state.insertion_target_policy is None
+                and step.state.active_drive_target is not None
+                for step in complete
+            )
+        )
+        maximum_steps = (
+            MAXIMUM_CONTACT_GRASP_ACTIONS
+            if direct_contact_grasp
+            else STANDARD_MAX_CONTROL_ROLLOUT_STEPS
+        )
+        if self.requested_steps > maximum_steps:
+            raise ValueError("control rollout exceeds its task-specific action cap")
+        if direct_contact_grasp:
+            for previous, current in zip(complete, complete[1:]):
+                expected_target = previous.contact_grasp_drive_target()
+                previous_post_action = previous.result.post_action
+                if (
+                    previous_post_action is None
+                    or current.state.active_drive_target != expected_target
+                ):
+                    raise ValueError(
+                        "contact-grasp follow-up drive target is invalid"
+                    )
+                current.state.require_safety_snapshot().validate_followup_continuity(
+                    previous_post_action.require_safety_snapshot(),
+                    expected_target,
+                    maximum_gripper_error_meters=(
+                        MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+                    ),
+                )
+        if self.reference_task == GRASP_TASK_ID or direct_contact_grasp:
             target_indices = tuple(
                 int(frame.stem.removeprefix("frame_")) for frame in target_frames
             )
@@ -939,7 +1111,7 @@ class ControlRolloutReport:
         ]
         applied_count = len(self.applied_steps)
         grasp = self.reach_and_grasp
-        return {
+        payload = {
             "schema": ROLLOUT_SCHEMA,
             "rollout_id": self.rollout_id,
             "reference_recording": self.reference_recording,
@@ -1008,6 +1180,9 @@ class ControlRolloutReport:
             "reach_and_grasp": grasp.to_dict() if grasp is not None else None,
             "steps": [step.to_dict() for step in self.steps],
         }
+        if self.predecessor_session_id is not None:
+            payload["predecessor_session_id"] = self.predecessor_session_id
+        return payload
 
     @classmethod
     def from_sessions(
@@ -1021,6 +1196,7 @@ class ControlRolloutReport:
         proposal: Path,
         requested_steps: int,
         orchestration_failure: OrchestrationFailure | None = None,
+        predecessor_session_id: str | None = None,
     ) -> ControlRolloutReport:
         if not session_ids:
             raise ValueError("control rollout sessions must be non-empty")
@@ -1072,4 +1248,5 @@ class ControlRolloutReport:
             target_pose=target,
             orchestration_failure=orchestration_failure,
             reference_task=(reference_task if isinstance(reference_task, str) else None),
+            predecessor_session_id=predecessor_session_id,
         )

@@ -16,6 +16,7 @@ if torch is not None:
         ActionProposalNetwork,
         ProposalConditioning,
         ProposalInputs,
+        action_proposal_training_fingerprints,
         load_action_proposal,
         save_action_proposal,
     )
@@ -32,6 +33,31 @@ def _normalization() -> DroidValueNormalization:
 
 @unittest.skipIf(torch is None, "PyTorch is not installed in the local test runtime")
 class ActionProposalTest(unittest.TestCase):
+    def test_training_provenance_fingerprints_round_trip_in_checkpoint(self) -> None:
+        proposal = ActionProposalNetwork(
+            feature_dimension=2,
+            horizon=3,
+            hidden_dimension=4,
+            action_mean=torch.zeros((3, 7)),
+            action_standard_deviation=torch.ones((3, 7)),
+        )
+        metadata = TrainingArtifactMetadata(
+            "jepa_wm_droid", "revision", "wrist", ("train-00",), 10
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint = Path(temp_dir) / "proposal.pth"
+            save_action_proposal(
+                proposal,
+                checkpoint,
+                metadata,
+                training_selection_fingerprint="a" * 64,
+                training_evaluation_fingerprint="b" * 64,
+            )
+
+            fingerprints = action_proposal_training_fingerprints(checkpoint)
+            self.assertEqual(fingerprints.selection, "a" * 64)
+            self.assertEqual(fingerprints.evaluation, "b" * 64)
+
     def test_task_progress_conditioning_changes_the_prediction(self) -> None:
         proposal = ActionProposalNetwork(
             feature_dimension=2,
@@ -143,9 +169,7 @@ class ActionProposalTest(unittest.TestCase):
         self.assertTrue(loaded.uses_goal_delta)
         self.assertTrue(loaded.uses_task_progress)
         self.assertEqual(loaded_metadata, metadata)
-        self.assertTrue(
-            torch.equal(loaded.goal_delta_mean, proposal.goal_delta_mean)
-        )
+        self.assertTrue(torch.equal(loaded.goal_delta_mean, proposal.goal_delta_mean))
 
     def test_conditioning_residual_round_trips_through_the_checkpoint(self) -> None:
         proposal = ActionProposalNetwork(
@@ -166,9 +190,7 @@ class ActionProposalTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             checkpoint = Path(temp_dir) / "residual.pth"
             save_action_proposal(proposal, checkpoint, metadata)
-            loaded, _ = load_action_proposal(
-                checkpoint, device=torch.device("cpu")
-            )
+            loaded, _ = load_action_proposal(checkpoint, device=torch.device("cpu"))
 
         self.assertTrue(loaded.conditioning_residual)
         self.assertIsNotNone(loaded.conditioning_network)
@@ -260,7 +282,9 @@ class ActionProposalTest(unittest.TestCase):
 
         self.assertTrue(torch.allclose(loaded(context, target, inputs), expected))
 
-    def test_legacy_pose_history_checkpoint_is_strict_except_for_goal_buffers(self) -> None:
+    def test_legacy_pose_history_checkpoint_is_strict_except_for_goal_buffers(
+        self,
+    ) -> None:
         proposal = ActionProposalNetwork(
             feature_dimension=2,
             horizon=3,
@@ -289,9 +313,7 @@ class ActionProposalTest(unittest.TestCase):
             payload["state_dict"].pop("task_progress_standard_deviation")
             torch.save(payload, checkpoint)
 
-            loaded, _ = load_action_proposal(
-                checkpoint, device=torch.device("cpu")
-            )
+            loaded, _ = load_action_proposal(checkpoint, device=torch.device("cpu"))
             self.assertFalse(loaded.uses_goal_delta)
 
             payload["state_dict"].pop("network.0.weight")
@@ -346,7 +368,9 @@ class ActionProposalTest(unittest.TestCase):
             payload["state_dict"].pop("task_progress_standard_deviation")
             torch.save(payload, checkpoint)
 
-            with self.assertRaisesRegex(ValueError, "task-progress state is incomplete"):
+            with self.assertRaisesRegex(
+                ValueError, "task-progress state is incomplete"
+            ):
                 load_action_proposal(checkpoint, device=torch.device("cpu"))
 
     def test_current_checkpoint_rejects_missing_goal_delta_state(self) -> None:

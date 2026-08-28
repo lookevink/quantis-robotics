@@ -10,7 +10,12 @@ from typing import Any, Callable
 import numpy as np
 
 from jepa.contract import ObservationStage
-from jepa_wm.action import DROID_FPS, DroidActionScale, DroidPose, action_between
+from jepa_wm.action import (
+    DROID_FPS,
+    DroidActionScale,
+    DroidPose,
+    action_between,
+)
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.control_policy import (
     ControlExecutionPolicy,
@@ -26,6 +31,7 @@ from jepa_wm.control_safety import (
     SimulatorSafetyLimits,
     SimulatorSafetyState,
     SafetyProjectionAttempt,
+    contact_grasp_action_scales,
 )
 from jepa_wm.control_tracking import evaluate_action_tracking, tracking_limits_for_policy
 from jepa_wm.joint_drive import JointDriveTarget
@@ -49,7 +55,10 @@ from jepa_wm.insertion_trial import (
     InsertionTrialRollbackFailureReason,
     InsertionTrialRollbackOutcome,
 )
-from jepa_wm.insertion_refresh import InsertionEvaluationRefresh
+from jepa_wm.insertion_refresh import (
+    MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
+    InsertionEvaluationRefresh,
+)
 from sim.control_session import (
     ControlResult,
     ControlResultStatus,
@@ -62,11 +71,15 @@ from sim.control_context import recording_task
 from sim.isaac_control_runtime import (
     LiveContactInterlock,
     LiveInsertionInterlock,
+    MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES,
     bind_live_runtime,
     contact_sensor,
     live_runtime_for,
+    pause_control_timeline,
     read_control_contact,
-    synchronized_insertion_safety_snapshot,
+    synchronized_contact_grasp_execution_runtime,
+    synchronized_initial_contact_grasp_execution_runtime,
+    synchronized_insertion_execution_runtime,
 )
 from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, capture_camera_frame
 from sim.grasp_task import evaluate_grasp_acquisition
@@ -80,9 +93,13 @@ from sim.isaac_demo_runtime import (
     move_joint_command,
     prepare_plug,
     recording_snapshot,
+    resume_live_simulation,
 )
 from sim.isaac_demo_scene import ROBOT_PATH, world_pose
 from sim.recording import RecordingLabel, RecordingMoment, RecordingSnapshot
+
+
+CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS = 5e-3
 
 
 @dataclass(frozen=True)
@@ -194,18 +211,35 @@ async def settle_joint_command(
     *,
     observe_safety: Callable[[], ContactReading] | None = None,
     maximum_updates: int = 8,
+    maximum_arm_error_radians: float = 0.01,
+    gripper: GripperSettlementCriterion | None = None,
 ) -> None:
     """Settle toward a target while polling the interlock after every update."""
 
-    if maximum_updates <= 0:
+    if maximum_updates <= 0 or maximum_arm_error_radians <= 0.0:
         raise ValueError("settling update count must be positive")
     for _ in range(maximum_updates):
         actual = actuators.actual_command()
-        if np.max(np.abs(actual.arm_positions - target_arm_positions)) <= 0.01:
+        arm_settled = (
+            np.max(np.abs(actual.arm_positions - target_arm_positions))
+            <= maximum_arm_error_radians
+        )
+        gripper_settled = (
+            gripper is None
+            or gripper.error(actual.gripper_width_m)
+            <= gripper.maximum_error_meters
+        )
+        if arm_settled and gripper_settled:
             return
         await advance()
         if observe_safety is not None:
             observe_safety()
+    if gripper is not None:
+        error_meters = gripper.error(actuators.actual_command().gripper_width_m)
+        raise RuntimeError(
+            "gripper did not settle within its bounded timeout: "
+            f"error_meters={error_meters:.9f}"
+        )
 
 
 async def settle_tracked_joint_command(
@@ -586,7 +620,7 @@ async def synchronized_actual_command(
 
     if not actuators.articulation.is_physics_tensor_entity_valid():
         try:
-            timeline.play()
+            resume_live_simulation(timeline)
             await advance()
             return actuators.actual_command()
         finally:
@@ -619,6 +653,24 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         action_scales = binding.allowed_projection_scales
         target_progress = trial_policy.projected_progress
         control_period_seconds = trial_policy.control_period_seconds
+    contact_insertion_execution = (
+        recording_task(
+            CONTROL_ROOT.parent
+            / "recordings"
+            / persisted_state.reference_recording
+        )
+        == INSERTION_TASK_ID
+    )
+    contact_grasp_execution = (
+        contact_insertion_execution
+        and persisted_state.execution_policy is ControlExecutionPolicy.DIRECT
+        and persisted_state.insertion_target_policy is None
+    )
+    if contact_grasp_execution:
+        action_scales = contact_grasp_action_scales(
+            proposal.first_action,
+            attachment_acquired=persisted_state.plug_attached,
+        )
     session.claim_execution()
     stage = omni.usd.get_context().get_stage()
     if SimulationManager.get_physics_sim_view() is None:
@@ -626,9 +678,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
     timeline = omni.timeline.get_timeline_interface()
     runtime = live_runtime_for(session_id, stage)
     if runtime is None:
-        if recording_task(
-            CONTROL_ROOT.parent / "recordings" / persisted_state.reference_recording
-        ) == INSERTION_TASK_ID:
+        if contact_insertion_execution:
             raise RuntimeError("live insertion runtime was lost before execution")
         actuators = create_actuators(stage, Articulation(ROBOT_PATH))
         attachment = prepare_plug(stage)
@@ -641,50 +691,102 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
     limits = SimulatorSafetyLimits()
     insertion_trial_refresh = None
     insertion_trial_active_drive_target = None
-    if insertion_trial_execution:
+    if contact_insertion_execution:
         if runtime is None:
             raise RuntimeError("live insertion runtime was lost before execution")
-        synchronized = await synchronized_insertion_safety_snapshot(
-            runtime,
-            timeline,
-            omni.kit.app.get_app().next_update_async,
-            persisted_state.require_safety_snapshot(),
-            limits,
-            operation="insertion trial synchronization",
-        )
-        runtime = synchronized.runtime
-        actuators = runtime.actuators
-        attachment = runtime.attachment
-        sensor = runtime.sensor
-        live_state = synchronized.safety
-        current = JointCommand(
-            np.asarray(live_state.joint_positions),
-            live_state.gripper_width_m,
-        )
-        collision_detected = live_state.collision_detected
-        contact_force = live_state.contact_force_newtons
-        if synchronized.pose is None:
-            raise RuntimeError("live insertion pose was not refreshed")
-        refreshed_drive_target = synchronized.active_drive_target
-        if refreshed_drive_target is None:
-            raise RuntimeError("live insertion drive target was not refreshed")
-        if persisted_state.active_drive_target is None:
-            raise RuntimeError("captured insertion drive target is missing")
-        persisted_state.active_drive_target.validate_active(
-            refreshed_drive_target.joint_positions,
-            refreshed_drive_target.gripper_width_m,
-        )
-        insertion_trial_active_drive_target = persisted_state.active_drive_target
-        insertion_trial_refresh = InsertionEvaluationRefresh(
-            time(),
-            live_state,
-            synchronized.pose,
-        )
-        observation, proposal = insertion_trial_refresh.authorize(
-            observation,
-            proposal,
-            persisted_state.require_safety_snapshot(),
-        )
+        if contact_grasp_execution:
+            if persisted_state.active_drive_target is None:
+                raise RuntimeError("captured contact-grasp drive target is missing")
+            synchronize_contact_grasp = (
+                synchronized_initial_contact_grasp_execution_runtime
+                if persisted_state.previous_session_id is None
+                else synchronized_contact_grasp_execution_runtime
+            )
+            synchronized = await synchronize_contact_grasp(
+                runtime,
+                timeline,
+                omni.kit.app.get_app().next_update_async,
+                persisted_state.require_safety_snapshot(),
+                limits,
+                expected_active_drive_target=persisted_state.active_drive_target,
+                operation="contact-grasp execution synchronization",
+                maximum_gripper_error_meters=(
+                    MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+                ),
+            )
+        else:
+            synchronized = await synchronized_insertion_execution_runtime(
+                runtime,
+                timeline,
+                omni.kit.app.get_app().next_update_async,
+                persisted_state.require_safety_snapshot(),
+                limits,
+                operation="insertion trial synchronization",
+            )
+        try:
+            runtime = synchronized.runtime
+            actuators = runtime.actuators
+            attachment = runtime.attachment
+            sensor = runtime.sensor
+            live_state = synchronized.safety
+            current = JointCommand(
+                np.asarray(live_state.joint_positions),
+                live_state.gripper_width_m,
+            )
+            collision_detected = live_state.collision_detected
+            contact_force = live_state.contact_force_newtons
+            if synchronized.pose is None:
+                raise RuntimeError("live insertion pose was not refreshed")
+            refreshed_drive_target = synchronized.active_drive_target
+            if refreshed_drive_target is None:
+                raise RuntimeError("live insertion drive target was not refreshed")
+            if persisted_state.active_drive_target is None:
+                raise RuntimeError("captured insertion drive target is missing")
+            persisted_state.active_drive_target.validate_active(
+                refreshed_drive_target.joint_positions,
+                refreshed_drive_target.gripper_width_m,
+            )
+            if insertion_trial_execution or contact_grasp_execution:
+                insertion_trial_active_drive_target = (
+                    persisted_state.active_drive_target
+                )
+                insertion_trial_refresh = InsertionEvaluationRefresh(
+                    time(),
+                    live_state,
+                    synchronized.pose,
+                )
+                if contact_grasp_execution:
+                    if persisted_state.previous_session_id is None:
+                        observation, proposal = (
+                            insertion_trial_refresh.authorize_initial_contact_grasp(
+                                observation,
+                                proposal,
+                                persisted_state.require_safety_snapshot(),
+                                MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
+                            )
+                        )
+                    else:
+                        observation, proposal = (
+                            insertion_trial_refresh.authorize_target_relative(
+                                observation,
+                                proposal,
+                                persisted_state.require_safety_snapshot(),
+                                persisted_state.active_drive_target,
+                                MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
+                            )
+                        )
+                else:
+                    observation, proposal = insertion_trial_refresh.authorize(
+                        observation,
+                        proposal,
+                        persisted_state.require_safety_snapshot(),
+                    )
+        except Exception:
+            await pause_control_timeline(
+                timeline,
+                omni.kit.app.get_app().next_update_async,
+            )
+            raise
     else:
         current = await synchronized_actual_command(
             actuators,
@@ -785,6 +887,11 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     and insertion_trial_active_drive_target is None
                 ):
                     raise RuntimeError("insertion active drive target is missing")
+                preserve_contact_grasp_target = (
+                    contact_grasp_execution
+                    and persisted_state.plug_attached
+                    and insertion_trial_active_drive_target is not None
+                )
                 active_drive_target = (
                     JointCommand(
                         np.asarray(
@@ -792,7 +899,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                         ),
                         insertion_trial_active_drive_target.gripper_width_m,
                     )
-                    if insertion_trial_execution
+                    if (insertion_trial_execution or preserve_contact_grasp_target)
                     and insertion_trial_active_drive_target is not None
                     else current
                 )
@@ -835,17 +942,38 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                         attachment,
                         omni.kit.app.get_app().next_update_async,
                         expected_attachment=persisted_state.plug_attached,
+                        observe_safety=(
+                            live_interlock.observe
+                            if contact_insertion_execution
+                            else None
+                        ),
+                        settlement=(
+                            RollbackSettlementPolicy(
+                                maximum_updates=(
+                                    MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES
+                                )
+                            )
+                            if contact_grasp_execution
+                            else RollbackSettlementPolicy()
+                        ),
                     )
                     return None
 
-                timeline.play()
+                resume_live_simulation(timeline)
                 target = (
                     JointCommand(
                         np.asarray(insertion_drive_target.joint_positions),
                         insertion_drive_target.gripper_width_m,
                     )
                     if insertion_drive_target is not None
-                    else JointCommand(solved.arm_positions, solved.gripper_width_m)
+                    else JointCommand(
+                        solved.arm_positions,
+                        (
+                            insertion_trial_active_drive_target.gripper_width_m
+                            if preserve_contact_grasp_target
+                            else solved.gripper_width_m
+                        ),
+                    )
                 )
                 await move_joint_command(
                     actuators,
@@ -859,9 +987,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     sample_period_seconds=control_period_seconds,
                     observe_safety=(
                         live_interlock.observe
-                        if is_insertion_trial_execution_policy(
-                            persisted_state.execution_policy
-                        )
+                        if contact_insertion_execution
                         else None
                     ),
                 )
@@ -879,6 +1005,29 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                         actuators,
                         solved.arm_positions,
                         omni.kit.app.get_app().next_update_async,
+                        observe_safety=(
+                            live_interlock.observe
+                            if contact_insertion_execution
+                            else None
+                        ),
+                        maximum_updates=(
+                            MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES
+                            if contact_grasp_execution
+                            else 8
+                        ),
+                        maximum_arm_error_radians=(
+                            CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS
+                            if contact_grasp_execution
+                            else 0.01
+                        ),
+                        gripper=(
+                            GripperSettlementCriterion(
+                                target.gripper_width_m,
+                                MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
+                            )
+                            if contact_grasp_execution
+                            else None
+                        ),
                     )
                     settlement = None
                 captured = await capture_synchronized_post_action(
@@ -888,13 +1037,13 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     session.path / "post_action.png",
                     observe_safety=(
                         live_interlock.observe
-                        if insertion_trial_execution
+                        if contact_insertion_execution
                         else None
                     ),
                 )
                 actual = captured.command
                 post_collision = captured.collision_detected or (
-                    insertion_trial_execution
+                    contact_insertion_execution
                     and live_interlock.evidence.collision_detected
                 )
                 post_force = (
@@ -902,7 +1051,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                         captured.contact_force_newtons,
                         live_interlock.evidence.maximum_contact_force_newtons,
                     )
-                    if insertion_trial_execution
+                    if contact_insertion_execution
                     else captured.contact_force_newtons
                 )
                 post_snapshot = captured.snapshot
@@ -990,7 +1139,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                         "; rollback verification failed: "
                         f"{type(rollback_error).__name__}: {rollback_error}"
                     )
-                if insertion_trial_execution:
+                if contact_insertion_execution:
                     execution_interlock = live_interlock.evidence
             if post_action is not None:
                 if (
@@ -1040,7 +1189,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                             "rollback verification failed: "
                             f"{type(rollback_error).__name__}: {rollback_error}"
                         )
-                if insertion_trial_execution:
+                if contact_insertion_execution:
                     execution_interlock = live_interlock.evidence
 
         result = ControlResult(
@@ -1068,4 +1217,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         session.write_result(result)
         return result.to_dict()
     finally:
-        timeline.pause()
+        await pause_control_timeline(
+            timeline,
+            omni.kit.app.get_app().next_update_async,
+        )

@@ -12,6 +12,236 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ControlRolloutShellTest(unittest.TestCase):
+    def test_grasp_transition_milestone_reestablishes_grasp_then_one_action(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir)
+            ops = home / "quantis-robotics" / "ops"
+            ops.mkdir(parents=True)
+            shutil.copy(
+                REPO_ROOT / "ops" / "run_grasp_transition_milestone.sh", ops
+            )
+            log = home / "calls.log"
+            (ops / "shell_helpers.sh").write_text(
+                """#!/usr/bin/env bash
+is_safe_identifier() { return 0; }
+require_nonnegative_integer() { return 0; }
+contact_grasp_maximum_actions() { printf '52\n'; }
+require_control_rollout_reach_and_grasp() { return 0; }
+control_rollout_terminal_session() { printf 'milestone-grasp-42\n'; }
+isaac_server_call() { printf 'isaac %s\n' "$1" >> "${CALLS}"; }
+"""
+            )
+            (ops / "jepa_wm.sh").write_text(
+                "#!/usr/bin/env bash\nprintf 'worker %s\\n' \"$*\" >> \"${CALLS}\"\n"
+            )
+            (ops / "run_control_rollout.sh").write_text(
+                "#!/usr/bin/env bash\nprintf 'grasp %s\\n' \"$*\" >> \"${CALLS}\"\n"
+            )
+            (ops / "run_grasp_transition_trial.sh").write_text(
+                "#!/usr/bin/env bash\nprintf 'transition %s\\n' \"$*\" >> \"${CALLS}\"\n"
+            )
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(ops / "run_grasp_transition_milestone.sh"),
+                    "milestone",
+                    "contact-reference",
+                    "42601",
+                    "grasp-control",
+                    "transition-control",
+                ],
+                env={**os.environ, "HOME": str(home), "CALLS": str(log)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            calls = log.read_text().splitlines()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                [line.split()[0] for line in calls],
+                ["worker", "worker", "grasp", "isaac", "worker", "worker", "transition"],
+            )
+            self.assertIn("grasp-control", calls[1])
+            self.assertIn("milestone-grasp-42", calls[3])
+            self.assertIn("transition-control", calls[5])
+            self.assertIn(
+                "milestone-transition milestone-grasp-42 contact-reference 42601 transition-control",
+                calls[6],
+            )
+
+    def test_grasp_transition_resolves_worker_manifest_from_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir)
+            repository = home / "quantis-robotics"
+            ops = repository / "ops"
+            ops.mkdir(parents=True)
+            shutil.copy(REPO_ROOT / "ops" / "run_grasp_transition_trial.sh", ops)
+            log = home / "calls.log"
+            (ops / "shell_helpers.sh").write_text(
+                """#!/usr/bin/env bash
+is_safe_identifier() { return 0; }
+require_nonnegative_integer() { return 0; }
+control_proposal_from_identity() {
+  pwd >> "${CALLS}"
+  printf 'transition-proposal\n'
+}
+run_insertion_followup_trial() { printf '%s\n' "$*" >> "${CALLS}"; }
+require_control_rollout_applied() { return 0; }
+"""
+            )
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(ops / "run_grasp_transition_trial.sh"),
+                    "transition-run",
+                    "grasp-action-42",
+                    "contact-reference",
+                    "42601",
+                    "transition-control",
+                ],
+                cwd=home,
+                env={**os.environ, "HOME": str(home), "CALLS": str(log)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            calls = log.read_text().splitlines()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(calls[0], str(repository))
+            self.assertIn("transition-proposal", calls[1])
+
+    def test_contact_grasp_bounds_shadow_postmortem_to_rollout_endpoints(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir)
+            ops = home / "quantis-robotics" / "ops"
+            ops.mkdir(parents=True)
+            shutil.copy(REPO_ROOT / "ops" / "shell_helpers.sh", ops)
+            runner = home / "run.sh"
+            runner.write_text(
+                """#!/usr/bin/env bash
+set -euo pipefail
+source "${HOME}/quantis-robotics/ops/shell_helpers.sh"
+control_rollout_shadow_session_roster contact_grasp 'grasp-00,grasp-01,grasp-39'
+control_rollout_shadow_session_roster standard 'direct-00,direct-01,direct-02'
+"""
+            )
+
+            result = subprocess.run(
+                ["bash", str(runner)],
+                env={**os.environ, "HOME": str(home)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                result.stdout.splitlines(),
+                ["grasp-00,grasp-39", "direct-00,direct-01,direct-02"],
+            )
+
+    def test_grasp_to_insertion_runs_one_task_terminal_grasp_plus_four_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir)
+            ops = home / "quantis-robotics" / "ops"
+            ops.mkdir(parents=True)
+            shutil.copy(
+                REPO_ROOT / "ops" / "run_grasp_to_insertion_milestone.sh", ops
+            )
+            log = home / "calls.log"
+            (ops / "shell_helpers.sh").write_text(
+                """#!/usr/bin/env bash
+is_safe_identifier() { return 0; }
+require_nonnegative_integer() { return 0; }
+insertion_rollout_profile_field() {
+  [[ "$3" == demo && "$4" == maximum-steps ]] || return 9
+  printf '4\n'
+}
+contact_grasp_maximum_actions() { printf '52\n'; }
+isaac_server_call() { printf 'isaac %s|%s\n' "$1" "${3:-false}" >> "${CALLS}"; }
+control_proposal_from_identity() { printf 'insertion-proposal\n'; }
+require_control_rollout_reach_and_grasp() { return 0; }
+control_rollout_terminal_session() { printf 'full-chain-grasp-12\n'; }
+run_insertion_followup_trial() {
+  printf 'followup %s\n' "$*" >> "${CALLS}"
+}
+"""
+            )
+            (ops / "jepa_wm.sh").write_text(
+                "#!/usr/bin/env bash\nprintf 'worker %s\\n' \"$*\" >> \"${CALLS}\"\n"
+            )
+            (ops / "run_control_rollout.sh").write_text(
+                "#!/usr/bin/env bash\nprintf 'grasp %s\\n' \"$*\" >> \"${CALLS}\"\n"
+            )
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(ops / "run_grasp_to_insertion_milestone.sh"),
+                    "full-chain",
+                    "contact-reference",
+                    "12401",
+                    "grasp-worker",
+                    "insertion-worker",
+                ],
+                env={**os.environ, "HOME": str(home), "CALLS": str(log)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            calls = log.read_text().splitlines()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                [line.split()[0] for line in calls],
+                [
+                    "worker",
+                    "worker",
+                    "grasp",
+                    "isaac",
+                    "worker",
+                    "worker",
+                    "followup",
+                    "isaac",
+                    "followup",
+                    "isaac",
+                    "followup",
+                    "isaac",
+                    "followup",
+                    "isaac",
+                ],
+            )
+            self.assertIn(
+                "full-chain-grasp contact-reference 12401 52 grasp-worker direct 18 contact_grasp",
+                calls[2],
+            )
+            self.assertIn(
+                "verify_grasp_to_insertion_source('full-chain-grasp-12')",
+                calls[3],
+            )
+            followups = [line for line in calls if line.startswith("followup ")]
+            self.assertEqual(len(followups), 4)
+            self.assertIn(
+                "full-chain-action1 full-chain-grasp-12 contact-reference 12401 insertion-proposal full-chain-action1 4 full-chain-grasp-12",
+                followups[0],
+            )
+            self.assertIn(
+                "full-chain-action1,full-chain-action2,full-chain-action3,full-chain-action4 4 full-chain-grasp-12",
+                followups[-1],
+            )
+            self.assertIn(
+                "verify_grasp_to_insertion_result('full-chain','full-chain-grasp','full-chain-action1,full-chain-action2,full-chain-action3,full-chain-action4','contact-reference',12401)",
+                calls[-1],
+            )
+
     def test_insertion_demo_rollout_runs_exactly_four_verified_actions(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             home = Path(temp_dir)
@@ -209,7 +439,7 @@ isaac_server_call() {
                 """#!/usr/bin/env bash
 set -euo pipefail
 source "${HOME}/quantis-robotics/ops/shell_helpers.sh"
-isaac_server_call() { printf '%s|%s\n' "$1" "${3:-false}" >> "${CALLS}"; }
+isaac_server_call() { printf '%s|%s|%s\n' "$1" "$2" "${3:-false}" >> "${CALLS}"; }
 respond_to_control_session() { printf 'respond %s %s\n' "$2" "$3" >> "${CALLS}"; }
 run_insertion_followup_trial \
   "${HOME}/quantis-robotics" followup-safety followup-trial previous-trial \
@@ -234,9 +464,92 @@ run_insertion_followup_trial \
             self.assertIn("prepare_insertion_trial_source", calls[3])
             self.assertIn("persist_insertion_followup_response", calls[4])
             self.assertIn("apply_control_response", calls[5])
+            self.assertIn("|600|false", calls[5])
             self.assertNotIn("capture_control_observation", "\n".join(calls))
             self.assertIn("--sessions previous-trial,followup-trial", calls[6])
             self.assertIn("--requested-steps 2", calls[6])
+
+    def test_insertion_followup_reports_one_proposal_handoff_segment(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir)
+            ops = home / "quantis-robotics" / "ops"
+            ops.mkdir(parents=True)
+            shutil.copy(REPO_ROOT / "ops" / "shell_helpers.sh", ops)
+            log = home / "calls.log"
+            (ops / "jepa_wm.sh").write_text(
+                "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"${CALLS}\"\n"
+            )
+            runner = home / "run.sh"
+            runner.write_text(
+                """#!/usr/bin/env bash
+set -euo pipefail
+source "${HOME}/quantis-robotics/ops/shell_helpers.sh"
+isaac_server_call() { printf '%s|%s\n' "$1" "${3:-false}" >> "${CALLS}"; }
+respond_to_control_session() { :; }
+run_insertion_followup_trial \
+  "${HOME}/quantis-robotics" followup-safety parent-trial bridge-trial \
+  insertion-held-00 52600 parent-proposal parent-trial 1 bridge-trial true
+"""
+            )
+
+            result = subprocess.run(
+                ["bash", str(runner)],
+                env={**os.environ, "HOME": str(home), "CALLS": str(log)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = log.read_text().splitlines()
+            self.assertIn("insertion-transition-handoff", calls[0])
+            self.assertIn("persist_insertion_proposal_handoff", calls[1])
+            self.assertTrue(calls[1].endswith("|true"))
+            self.assertIn("capture_followup_observation", calls[2])
+            self.assertTrue(calls[2].endswith("|false"))
+            report = calls[-1]
+            self.assertIn("--sessions parent-trial", report)
+            self.assertIn("--requested-steps 1", report)
+            self.assertIn("--predecessor-session bridge-trial", report)
+
+    def test_insertion_segment_retry_restores_the_settled_rollback_runtime(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir)
+            ops = home / "quantis-robotics" / "ops"
+            ops.mkdir(parents=True)
+            shutil.copy(REPO_ROOT / "ops" / "shell_helpers.sh", ops)
+            log = home / "calls.log"
+            (ops / "jepa_wm.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+            runner = home / "run.sh"
+            runner.write_text(
+                """#!/usr/bin/env bash
+set -euo pipefail
+source "${HOME}/quantis-robotics/ops/shell_helpers.sh"
+isaac_server_call() { printf '%s|%s\n' "$1" "${3:-false}" >> "${CALLS}"; }
+respond_to_control_session() { :; }
+run_insertion_followup_trial \
+  "${HOME}/quantis-robotics" followup-safety retry-trial previous-trial \
+  insertion-held-00 52600 proposal-test retry-trial 1 previous-trial false \
+  rolled-back-trial
+"""
+            )
+
+            result = subprocess.run(
+                ["bash", str(runner)],
+                env={**os.environ, "HOME": str(home), "CALLS": str(log)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            calls = log.read_text().splitlines()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("restore_insertion_retry", calls[0])
+            self.assertTrue(calls[0].endswith("|true"))
+            self.assertIn("capture_followup_observation", calls[1])
+            self.assertTrue(calls[1].endswith("|false"))
 
     def test_shared_reset_trial_reports_a_typed_preflight_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -290,7 +603,7 @@ run_reset_trial_control_session \
                 """#!/usr/bin/env bash
 set -euo pipefail
 source "${HOME}/quantis-robotics/ops/shell_helpers.sh"
-isaac_server_call() { printf '%s\n' "$1" >> "${CALLS}"; }
+isaac_server_call() { printf '%s|%s\n' "$1" "$2" >> "${CALLS}"; }
 run_reset_trial_control_session \
   "${HOME}/quantis-robotics" trial-session insertion-held-00 52600 \
   proposal-test insertion_reset_trial safety-session 43 900 \
@@ -312,6 +625,7 @@ run_reset_trial_control_session \
             self.assertIn("capture_control_observation", calls[1])
             self.assertIn("persist_insertion_trial_response", calls[2])
             self.assertIn("apply_control_response", calls[3])
+            self.assertTrue(calls[3].endswith("|180"), calls[3])
             self.assertIn("--requested-steps 1", calls[4])
 
     def test_insertion_reset_trial_delegates_to_shared_one_action_flow(self) -> None:
@@ -324,6 +638,7 @@ run_reset_trial_control_session \
             (ops / "shell_helpers.sh").write_text(
                 """#!/usr/bin/env bash
 isaac_control_capture_timeout_seconds=900
+isaac_insertion_trial_apply_timeout_seconds=600
 is_safe_identifier() { return 0; }
 require_nonnegative_integer() { return 0; }
 require_positive_integer() { return 0; }
@@ -359,6 +674,7 @@ run_reset_trial_control_session() { printf '%s\n' "$*" >> "${CALLS}"; }
             self.assertIn("insertion_reset_trial safety-session 43 900", call)
             self.assertIn("prepare_insertion_trial_source", call)
             self.assertIn("persist_insertion_trial_response", call)
+            self.assertTrue(call.rstrip().endswith("2 600"), call)
 
     def test_insertion_safety_check_never_calls_the_execution_entrypoint(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -1941,6 +1941,34 @@ receding-horizon control from fresh attached resets. They do not establish full
 seating, an unknown-start approach/grasp/insertion run, filming authority, or
 production readiness. No fifth action or broader rollout authority is implied.
 
+The first integrated grasp-to-insertion canary is retained as a negative, not
+as a full-motion claim. A new typed workflow now keeps one contact-aware Isaac
+stage live across an eight-action grasp roster, an authenticated proposal
+handoff, and a four-action insertion roster; the terminal report requires
+exactly `8/8 + 4/4` APPLIED and grants no production authority. Initial runs
+failed closed before motion on an invalid pre-grasp context, post-capture
+state drift, and incomplete warm-up. Canonical mapping then established that
+grasp context `86` corresponds to contact-insertion context `18`, three
+reference actions before attachment, and an execution-time live-pose/time
+refresh reduced command age to `0.010 s` without changing freshness limits.
+
+Run `grasp-to-insertion-20260827T034816Z-52601` produced genuine JEPA-powered
+motion on the held-out contact scene, but did not grasp. Action 1 passed
+freshness, IK (`0.00024 mm` position, `0.502 mrad` orientation), joint,
+workspace, velocity, force, and collision gates. It realized `14.738 mm` of a
+`17.100 mm` translation command at `0 N` with no collision, but missed the
+unchanged Cartesian tracking limit by recording `2.411 mm` error, left the
+connector unattached, and its interlocked rollback remained `3.695 mrad` from
+the captured target versus the unchanged `1.000 mrad` requirement. The exact
+grasp proposal also repeatedly commanded the gripper toward opening at the
+contact-scene attachment frame. Therefore the run ended `0/8`; insertion was
+never inferred or attempted, and a verified `14 GB` recovery copy was taken.
+The next gate is a dedicated contact-grasp proposal trained only on the 12
+existing TRAIN contact recordings (contexts `18-25`), followed by a new
+disjoint two-seed offline gate before another integrated live action. No
+tracking, rollback, force, collision, velocity, or freshness threshold is
+opened by this negative.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

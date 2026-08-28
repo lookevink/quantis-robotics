@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from types import ModuleType, SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import numpy as np
 
@@ -15,7 +15,10 @@ from sim.isaac_demo_runtime import (
     PlugCollisionPolicy,
     _advance_sample,
     move_joint_command,
+    recording_snapshot,
+    resume_live_simulation,
 )
+from sim.isaac_exploration import prepare_recording_stage
 from jepa.contract import ObservationStage
 from sim.demo_sequence import Phase
 from sim.recording import RecordingLabel, RecordingMoment
@@ -81,23 +84,75 @@ class PlugAttachmentTest(unittest.TestCase):
 
 
 class SafetyInterlockTest(unittest.IsolatedAsyncioTestCase):
+    def test_resume_live_simulation_enables_app_driven_updates(self) -> None:
+        timeline = SimpleNamespace(playing=False)
+        timeline.set_auto_update = Mock()
+        timeline.is_playing = lambda: timeline.playing
+        timeline.play = Mock()
+
+        self.assertTrue(resume_live_simulation(timeline))
+
+        timeline.set_auto_update.assert_called_once_with(True)
+        timeline.play.assert_called_once_with()
+
     @staticmethod
-    def _omni_modules(app, timeline):
+    def _omni_modules(app, timeline, *, simulation_time=None):
         omni = ModuleType("omni")
         kit = ModuleType("omni.kit")
         kit_app = ModuleType("omni.kit.app")
         timeline_module = ModuleType("omni.timeline")
+        isaacsim = ModuleType("isaacsim")
+        core = ModuleType("isaacsim.core")
+        simulation_manager = ModuleType("isaacsim.core.simulation_manager")
         kit_app.get_app = lambda: app
         timeline_module.get_timeline_interface = lambda: timeline
+        simulation_manager.SimulationManager = SimpleNamespace(
+            get_simulation_time=(
+                simulation_time
+                if simulation_time is not None
+                else timeline.get_current_time
+            )
+        )
         omni.kit = kit
         omni.timeline = timeline_module
         kit.app = kit_app
+        isaacsim.core = core
+        core.simulation_manager = simulation_manager
         return {
             "omni": omni,
             "omni.kit": kit,
             "omni.kit.app": kit_app,
             "omni.timeline": timeline_module,
+            "isaacsim": isaacsim,
+            "isaacsim.core": core,
+            "isaacsim.core.simulation_manager": simulation_manager,
         }
+
+    async def test_uses_physics_time_when_the_presentation_clock_is_frozen(
+        self,
+    ) -> None:
+        timeline = SimpleNamespace(get_current_time=lambda: 19.5)
+        physics = SimpleNamespace(current=2.0)
+
+        class _App:
+            updates = 0
+
+            async def next_update_async(self) -> None:
+                self.updates += 1
+                physics.current += 0.01
+
+        app = _App()
+        with patch.dict(
+            "sys.modules",
+            self._omni_modules(
+                app,
+                timeline,
+                simulation_time=lambda: physics.current,
+            ),
+        ):
+            await _advance_sample(0.02)
+
+        self.assertEqual(app.updates, 2)
 
     async def test_polls_during_sample_and_stops_on_intermediate_force(self) -> None:
         class _Timeline:
@@ -192,6 +247,120 @@ class SafetyInterlockTest(unittest.IsolatedAsyncioTestCase):
 
 
 class DriveOnlyMotionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_recording_cadence_is_configured_before_stage_reset(self) -> None:
+        events: list[object] = []
+
+        class _RenderingManager:
+            @staticmethod
+            def get_dt() -> float:
+                events.append("get_dt")
+                return 1.0 / 60.0
+
+            @staticmethod
+            def set_dt(period_seconds: float) -> None:
+                events.append(("set_dt", period_seconds))
+
+        async def reset_stage() -> None:
+            events.append("reset_stage")
+
+        rendering_manager = ModuleType("isaacsim.core.rendering_manager")
+        rendering_manager.RenderingManager = _RenderingManager
+        with (
+            patch.dict(
+                "sys.modules",
+                {"isaacsim.core.rendering_manager": rendering_manager},
+            ),
+            patch("sim.isaac_demo_runtime.reset_stage", reset_stage),
+        ):
+            original_period = await prepare_recording_stage(0.25)
+
+        self.assertEqual(original_period, 1.0 / 60.0)
+        self.assertEqual(
+            events,
+            ["get_dt", ("set_dt", 0.25), "reset_stage"],
+        )
+
+    def test_recording_snapshot_uses_the_physics_clock(self) -> None:
+        hand = Mock()
+        hand.GetStage.return_value.GetPrimAtPath.return_value = object()
+        attachment = Mock(hand_prim=hand, attached=True)
+        attachment.world_pose.return_value = (
+            np.zeros(3),
+            np.asarray([1.0, 0.0, 0.0, 0.0]),
+        )
+        omni = ModuleType("omni")
+        timeline = ModuleType("omni.timeline")
+        timeline.get_timeline_interface = Mock(
+            return_value=SimpleNamespace(get_current_time=Mock(return_value=2.0))
+        )
+        omni.timeline = timeline
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {"omni": omni, "omni.timeline": timeline},
+            ),
+            patch(
+                "sim.isaac_demo_runtime.world_pose",
+                return_value=(np.zeros(3), np.asarray([1.0, 0.0, 0.0, 0.0])),
+            ),
+            patch(
+                "sim.isaac_demo_runtime.physics_simulation_time_seconds",
+                return_value=0.25,
+            ),
+            patch(
+                "sim.isaac_demo_runtime.DroidPose.from_world_poses",
+                return_value=Mock(),
+            ),
+        ):
+            snapshot = recording_snapshot(
+                RecordingLabel(RecordingMoment.MOTION, Phase.READY),
+                ObservationStage.CABLE_GRASPED,
+                JointCommand(np.zeros(7), 0.04),
+                attachment,
+            )
+
+        self.assertEqual(snapshot.simulation_time_seconds, 0.25)
+
+    async def test_recorded_motion_captures_the_timestamped_current_frame(self) -> None:
+        actuators = Mock()
+        actuators.actual_command.return_value = JointCommand(np.zeros(7), 0.04)
+        attachment = Mock(hand_prim=object())
+        recorder = Mock()
+        recorder.capture = AsyncMock()
+        recorder.capture_current = AsyncMock()
+        snapshot = SimpleNamespace(simulation_time_seconds=1.25)
+
+        async def advance(_period, _observer):
+            return ContactReading()
+
+        with (
+            patch("sim.isaac_demo_runtime._advance_sample", advance),
+            patch(
+                "sim.isaac_demo_runtime.world_pose",
+                return_value=(np.zeros(3), np.asarray([1.0, 0.0, 0.0, 0.0])),
+            ),
+            patch(
+                "sim.isaac_demo_runtime.recording_snapshot",
+                return_value=snapshot,
+            ),
+        ):
+            sample_times = await move_joint_command(
+                actuators,
+                JointCommand(np.zeros(7), 0.04),
+                JointCommand(np.full(7, 0.001), 0.04),
+                attachment,
+                frame_count=1,
+                phase=RecordingLabel(RecordingMoment.MOTION, Phase.READY),
+                stage=ObservationStage.CABLE_GRASPED,
+                recorder=recorder,
+                sample_period_seconds=0.25,
+            )
+
+        self.assertEqual(sample_times, (1.25,))
+        recorder.capture_current.assert_awaited_once_with(snapshot)
+        recorder.capture.assert_not_awaited()
+
     def test_explicit_reset_retains_direct_state_initialization(self) -> None:
         articulation = Mock()
         actuators = Actuators(

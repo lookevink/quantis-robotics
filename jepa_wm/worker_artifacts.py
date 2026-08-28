@@ -52,6 +52,17 @@ class ControlWorkerArtifacts:
     def calibrated(self) -> bool:
         return self.calibration is not None
 
+    def replacing_proposal(self, proposal: Path) -> ControlWorkerArtifacts:
+        """Retain one qualified worker contract while swapping its proposal."""
+
+        return type(self)(
+            proposal.resolve(),
+            self.adapter,
+            self.calibration,
+            self.progress_margins,
+            self.planner,
+        )
+
     def to_dict(self, *, relative_to: Path | None = None) -> dict[str, Any]:
         def encoded(path: Path | None) -> str | None:
             if path is None:
@@ -142,9 +153,18 @@ def main() -> None:
     write_parser.add_argument("--planner-elites", type=int)
     proposal_parser = subparsers.add_parser("proposal-name")
     proposal_parser.add_argument("--manifest", type=Path, required=True)
+    replace_parser = subparsers.add_parser("replace-proposal")
+    replace_parser.add_argument("--source", type=Path, required=True)
+    replace_parser.add_argument("--output", type=Path, required=True)
+    replace_parser.add_argument("--proposal", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "proposal-name":
         print(ControlWorkerArtifacts.load(args.manifest).proposal.stem)
+        return
+    if args.command == "replace-proposal":
+        source = ControlWorkerArtifacts.load(args.source)
+        source.replacing_proposal(args.proposal).write(args.output)
+        print(args.output)
         return
     margin_values = (
         args.translation_margin,

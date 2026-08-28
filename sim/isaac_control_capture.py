@@ -45,7 +45,11 @@ from sim.control_session import (
     ControlSession,
     ControlSessionState,
 )
-from sim.control_context import load_control_context, recording_task
+from sim.control_context import (
+    ControlContextPurpose,
+    load_control_context,
+    recording_task,
+)
 from sim.control_identity import control_proposal_path, observation_id_for_session
 from sim.demo_sequence import Phase
 from sim.exploration import (
@@ -66,10 +70,12 @@ from sim.isaac_demo_runtime import (
     advance_physics_updates,
     create_actuators,
     move_joint_command,
+    physics_simulation_time_seconds,
     prepare_plug,
     recording_safety_telemetry,
     recording_snapshot,
     reset_stage,
+    resume_live_simulation,
 )
 from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH, world_pose
 from sim.isaac_exploration import (
@@ -128,7 +134,6 @@ def validated_control_reference(
 
 async def stabilize_resolution_capture(
     runtime: LiveControlRuntime,
-    timeline: Any,
     command: JointCommand,
     contract: ControlResolutionCaptureBaselineContract,
 ) -> StabilizedControlCapture:
@@ -153,7 +158,7 @@ async def stabilize_resolution_capture(
         runtime,
         interlock,
         contract.baseline_policy,
-        timeline.get_current_time,
+        physics_simulation_time_seconds,
         contract.load,
         contract.safety_limits,
     )
@@ -187,6 +192,7 @@ def requires_stable_insertion_capture(
     insertion_control: bool,
     step_index: int,
     context_index: int,
+    context_purpose: ControlContextPurpose = ControlContextPurpose.STANDARD,
 ) -> bool:
     """Require a strict stable frame before insertion safety or execution."""
 
@@ -194,6 +200,8 @@ def requires_stable_insertion_capture(
         insertion_control
         and step_index == context_index
         and (
+            context_purpose is ControlContextPurpose.CONTACT_GRASP
+            or
             policy is ControlExecutionPolicy.INSERTION_RESOLUTION_MEASUREMENT
             or insertion_control_target_policy(policy) is not None
         )
@@ -208,6 +216,7 @@ async def capture_control_observation(
     execution_policy: str = ControlExecutionPolicy.DIRECT.value,
     context_index: int = 4,
     insertion_rollout_maximum_steps: int | None = None,
+    context_purpose: str = ControlContextPurpose.STANDARD.value,
 ) -> dict[str, Any]:
     """Replay a seeded segment prefix and persist one live wrist observation."""
 
@@ -220,6 +229,7 @@ async def capture_control_observation(
 
     validate_recording_id(proposal_name)
     policy = ControlExecutionPolicy(execution_policy)
+    capture_purpose = ControlContextPurpose(context_purpose)
     session = ControlSession.at(CONTROL_ROOT, session_id)
     if session.path.exists():
         raise ValueError(f"control session already exists: {session_id}")
@@ -235,7 +245,12 @@ async def capture_control_observation(
     plan = build_exploration_plan(seed, reference.split)
     if insertion_profile is not None:
         plan = insertion_profile.apply_to_plan(plan)
-    context_steps = load_control_context(reference.path, context_index, plan)
+    context_steps = load_control_context(
+        reference.path,
+        context_index,
+        plan,
+        capture_purpose,
+    )
     target_policy = insertion_control_target_policy(policy)
     reference_rollout = (
         target_policy.select(
@@ -306,7 +321,7 @@ async def capture_control_observation(
             np.asarray(context_steps[0].arm_positions),
             context_steps[0].gripper_width_m,
         )
-        timeline.play()
+        resume_live_simulation(timeline)
         actuators.set_reset_state(origin)
         if insertion_control:
             await advance_physics_updates(16, warmup_interlock.observe)
@@ -355,6 +370,7 @@ async def capture_control_observation(
                 insertion_control=insertion_control,
                 step_index=step.index,
                 context_index=context_index,
+                context_purpose=capture_purpose,
             )
             await move_joint_command(
                 actuators,
@@ -397,12 +413,16 @@ async def capture_control_observation(
                 capture_contract = ControlResolutionCaptureBaselineContract(
                     baseline_policy,
                     CONTROL_RESOLUTION_PROTOCOL.safety_limits,
-                    ControlResolutionLoad.ATTACHED,
+                    (
+                        ControlResolutionLoad.UNLOADED
+                        if capture_purpose
+                        is ControlContextPurpose.CONTACT_GRASP
+                        else ControlResolutionLoad.ATTACHED
+                    ),
                 )
                 try:
                     stabilized_capture = await stabilize_resolution_capture(
                         capture_runtime,
-                        timeline,
                         command,
                         capture_contract,
                     )

@@ -22,6 +22,14 @@ from sim.isaac_control_bridge import (
     apply_control_response,
     capture_control_observation,
     capture_followup_observation,
+    capture_insertion_transition_observation,
+    persist_insertion_proposal_handoff,
+    restore_insertion_no_actuation_retry,
+    restore_insertion_retry,
+    restore_insertion_rollback_retry,
+    restore_grasp_transition_retry,
+    verify_grasp_to_insertion_result,
+    verify_grasp_to_insertion_source,
     verify_insertion_demo_rollout_result,
     verify_insertion_followup_source,
     verify_insertion_two_step_result,
@@ -37,6 +45,7 @@ from sim.isaac_control_bridge import (
 )
 from sim.isaac_candidate_demo import record_candidate_demo
 from sim.isaac_grasp_demo import record_grasp_demo
+from sim.isaac_insertion_demo import record_insertion_demo
 from sim.isaac_demo_runtime import (
     Actuators,
     JointCommand,

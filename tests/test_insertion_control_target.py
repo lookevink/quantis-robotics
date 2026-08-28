@@ -6,10 +6,18 @@ from unittest.mock import patch
 
 from jepa_wm.action import ActionSelectionBounds, DroidAction, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
-from jepa_wm.control_safety import ACTION_SCALES, ORIENTATION_HOLD_ACTION_SCALES
+from jepa_wm.control_safety import (
+    ACTION_SCALES,
+    ORIENTATION_HOLD_ACTION_SCALES,
+    TRACKING_BOUNDED_ACTION_SCALES,
+    TRACKING_BOUNDED_ORIENTATION_HOLD_ACTION_SCALES,
+)
 from jepa_wm.insertion_contract import (
+    MAXIMUM_FULL_SCALE_INSERTION_TRANSLATION_METERS,
+    MINIMUM_CURRENT_FOLLOWUP_ACTION_HORIZON,
     InsertionControlTargetPolicy,
     InsertionLiveTargetMetric,
+    InsertionProjectionScalePolicy,
 )
 from jepa_wm.trajectory import RecordedFrame, RecordedRollout
 
@@ -56,6 +64,95 @@ class InsertionControlTargetPolicyTest(unittest.TestCase):
             ACTION_SCALES,
         )
 
+    def test_large_followup_translation_starts_at_half_scale(self) -> None:
+        policy = InsertionControlTargetPolicy()
+        current = DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+        held_target = DroidPose((0.42, 0.0, 0.5, 0.0, 0.0, 0.0001, 0.5))
+        active_target = DroidPose((0.42, 0.0, 0.5, 0.0, 0.0, 0.002, 0.5))
+        large = DroidAction(
+            (
+                MAXIMUM_FULL_SCALE_INSERTION_TRANSLATION_METERS + 1e-6,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            )
+        )
+        bounded = DroidAction(
+            (
+                MAXIMUM_FULL_SCALE_INSERTION_TRANSLATION_METERS,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            )
+        )
+
+        self.assertEqual(
+            policy.projection_scales(current, held_target, large),
+            TRACKING_BOUNDED_ORIENTATION_HOLD_ACTION_SCALES,
+        )
+        self.assertEqual(
+            policy.projection_scales(current, active_target, large),
+            TRACKING_BOUNDED_ACTION_SCALES,
+        )
+        self.assertEqual(TRACKING_BOUNDED_ACTION_SCALES[0].translation, 0.75)
+        self.assertTrue(
+            all(
+                scale.translation <= 0.75
+                for scale in TRACKING_BOUNDED_ACTION_SCALES
+            )
+        )
+        self.assertNotIn(ACTION_SCALES[0], TRACKING_BOUNDED_ACTION_SCALES)
+        self.assertEqual(
+            policy.projection_scales(current, active_target, bounded),
+            ACTION_SCALES,
+        )
+
+    def test_legacy_policy_keeps_its_persisted_scale_roster_until_followup(self) -> None:
+        payload = InsertionControlTargetPolicy().to_dict()
+        del payload["maximum_full_scale_translation_meters"]
+        del payload["projection_scale_policy"]
+        legacy = InsertionControlTargetPolicy.from_dict(payload)
+        current = DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+        target = DroidPose((0.42, 0.0, 0.5, 0.0, 0.0, 0.002, 0.5))
+        large = DroidAction((0.0145, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+
+        self.assertIsNone(legacy.maximum_full_scale_translation_meters)
+        self.assertEqual(
+            legacy.projection_scales(current, target, large),
+            ACTION_SCALES,
+        )
+        self.assertEqual(
+            legacy.for_followup().projection_scales(current, target, large),
+            ACTION_SCALES,
+        )
+        self.assertEqual(
+            legacy.for_current_followup().projection_scales(current, target, large),
+            TRACKING_BOUNDED_ACTION_SCALES,
+        )
+        self.assertTrue(legacy.authorizes_followup(legacy.for_followup()))
+        self.assertTrue(
+            legacy.authorizes_followup(legacy.for_legacy_bounded_followup())
+        )
+        self.assertTrue(legacy.authorizes_followup(legacy.for_current_followup()))
+
+        positional_payload = InsertionControlTargetPolicy().to_dict()
+        del positional_payload["projection_scale_policy"]
+        positional = InsertionControlTargetPolicy.from_dict(positional_payload)
+        self.assertIs(
+            positional.projection_scale_policy,
+            InsertionProjectionScalePolicy.LEGACY_POSITIONAL,
+        )
+        self.assertEqual(
+            positional.projection_scales(current, target, large),
+            ACTION_SCALES[1:],
+        )
+
     def test_rejects_unsafe_camera_identifier(self) -> None:
         for camera in (".", "..", "../wrist", "wrist/camera"):
             with self.subTest(camera=camera):
@@ -66,6 +163,10 @@ class InsertionControlTargetPolicyTest(unittest.TestCase):
             InsertionControlTargetPolicy(target_origin="live_observation")
         with self.assertRaisesRegex(ValueError, "policy is invalid"):
             InsertionControlTargetPolicy(live_target_metric="forward_projection")
+        with self.assertRaisesRegex(ValueError, "policy is invalid"):
+            InsertionControlTargetPolicy(
+                projection_scale_policy="tracking_bounded"
+            )
 
     def test_nondefault_policy_round_trips_and_validates_exact_observation(self) -> None:
         policy = InsertionControlTargetPolicy(
@@ -188,6 +289,43 @@ class InsertionControlTargetPolicyTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "observation pose"):
             policy.select(Path("recording"), context_index=44)
+
+    def test_current_followup_retains_first_still_ahead_reference_target(
+        self,
+    ) -> None:
+        source_policy = InsertionControlTargetPolicy()
+        historical_policy = source_policy.for_current_followup()
+        policy = source_policy.for_adaptive_followup()
+        live_pose = DroidPose((0.4008, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+        with patch(
+            "jepa_wm.insertion_contract.load_rollout_at",
+            side_effect=(
+                _rollout(1, 6e-4),
+                _rollout(2, 1.4e-3),
+            ),
+        ) as load:
+            selected = policy.select(
+                Path("recording"),
+                context_index=43,
+                current_pose=live_pose,
+            )
+
+        self.assertEqual(
+            policy.minimum_action_horizon,
+            MINIMUM_CURRENT_FOLLOWUP_ACTION_HORIZON,
+        )
+        self.assertEqual(historical_policy.minimum_action_horizon, 3)
+        self.assertTrue(source_policy.authorizes_followup(historical_policy))
+        self.assertTrue(source_policy.authorizes_followup(policy))
+        self.assertEqual(selected.target.index, 45)
+        self.assertEqual(
+            [item.kwargs["protocol"].action_horizon for item in load.call_args_list],
+            [1, 2],
+        )
+        self.assertEqual(
+            InsertionControlTargetPolicy.from_dict(policy.to_dict()),
+            policy,
+        )
 
     def test_followup_skips_targets_already_behind_the_live_pose(self) -> None:
         policy = InsertionControlTargetPolicy().for_followup()

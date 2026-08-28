@@ -73,14 +73,19 @@ task_proposal_setting() {
   local setting="$2"
   case "${task_name}:${setting}" in
     grasp:seed) printf '234\n' ;;
+    contact-grasp:seed) printf '2600\n' ;;
     insertion:seed) printf '2600\n' ;;
     grasp:inactive_gripper) printf '0\n' ;;
+    contact-grasp:inactive_gripper) printf '0\n' ;;
     insertion:inactive_gripper) printf '0.01\n' ;;
     grasp:goal_direction) printf '0\n' ;;
+    contact-grasp:goal_direction) printf '0\n' ;;
     insertion:goal_direction) printf '1.0\n' ;;
     grasp:readiness_module) printf 'jepa_wm.grasp_proposal_readiness\n' ;;
+    contact-grasp:readiness_module) printf 'jepa_wm.contact_grasp_proposal_readiness\n' ;;
     insertion:readiness_module) printf 'jepa_wm.insertion_proposal_readiness\n' ;;
     grasp:readiness_suffix) printf 'grasp_readiness\n' ;;
+    contact-grasp:readiness_suffix) printf 'contact_grasp_readiness\n' ;;
     insertion:readiness_suffix) printf 'insertion_readiness\n' ;;
     *) die "unsupported task proposal setting: ${task_name}:${setting}" ;;
   esac
@@ -730,8 +735,63 @@ train_grasp_action_proposal() {
   train_task_action_proposal grasp "$@"
 }
 
+train_contact_grasp_action_proposal() {
+  train_task_action_proposal contact-grasp "$@"
+}
+
 train_insertion_action_proposal() {
   train_task_action_proposal insertion "$@"
+}
+
+finetune_insertion_transition() {
+  local -A options=()
+  parse_named_options options \
+    "source-session parent proposal steps learning-rate" "$@"
+  local source_session="${options[source-session]:-}"
+  local parent_name="${options[parent]:-}"
+  local proposal_name="${options[proposal]:-}"
+  local training_steps="${options[steps]:-500}"
+  local learning_rate="${options[learning-rate]:-0.0001}"
+  is_safe_identifier "${source_session}" || die "invalid transition source session"
+  is_safe_identifier "${parent_name}" || die "invalid transition parent proposal"
+  is_safe_identifier "${proposal_name}" || die "invalid transition proposal"
+  require_positive_integer "transition training steps" "${training_steps}" || exit 1
+  require_nonnegative_number "transition learning rate" "${learning_rate}" || exit 1
+  local parent="${checkpoint_dir}/${parent_name}.pth"
+  [[ -s "${parent}" ]] || die "transition parent proposal does not exist: ${parent_name}"
+  require_runtime
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.insertion_transition_finetune \
+    --source "${source_dir}" \
+    --checkpoint "${jepa_checkpoint}" \
+    --data-root "${control_frame_root}" \
+    --parent "${parent}" \
+    --source-session "${source_session}" \
+    --output "${checkpoint_dir}/${proposal_name}.pth" \
+    --steps "${training_steps}" \
+    --learning-rate "${learning_rate}"
+}
+
+evaluate_insertion_transition() {
+  local -A options=()
+  parse_named_options options "source-session proposal output" "$@"
+  local source_session="${options[source-session]:-}"
+  local proposal_name="${options[proposal]:-}"
+  local output_name="${options[output]:-}"
+  is_safe_identifier "${source_session}" || die "invalid transition evaluation session"
+  is_safe_identifier "${proposal_name}" || die "invalid transition evaluation proposal"
+  is_safe_identifier "${output_name}" || die "invalid transition evaluation output"
+  local proposal="${checkpoint_dir}/${proposal_name}.pth"
+  [[ -s "${proposal}" ]] || die "transition proposal does not exist: ${proposal_name}"
+  require_runtime
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.insertion_transition_evaluate \
+    --source "${source_dir}" \
+    --checkpoint "${jepa_checkpoint}" \
+    --data-root "${control_frame_root}" \
+    --proposal "${proposal}" \
+    --source-session "${source_session}" \
+    --output "${checkpoint_dir}/experiments/${output_name}.json"
 }
 
 evaluate_action_proposal() {
@@ -797,6 +857,10 @@ evaluate_task_action_proposal() {
 
 evaluate_grasp_action_proposal() {
   evaluate_task_action_proposal grasp "$@"
+}
+
+evaluate_contact_grasp_action_proposal() {
+  evaluate_task_action_proposal contact-grasp "$@"
 }
 
 evaluate_insertion_action_proposal() {
@@ -904,6 +968,10 @@ summarize_task_action_proposal() {
 
 summarize_grasp_action_proposal() {
   summarize_task_action_proposal grasp "$@"
+}
+
+summarize_contact_grasp_action_proposal() {
+  summarize_task_action_proposal contact-grasp "$@"
 }
 
 summarize_insertion_action_proposal() {
@@ -1053,7 +1121,7 @@ persist_experimental_candidate() {
 report_control_rollout() {
   local -A options=()
   parse_named_options options \
-    "rollout reference seed proposal policy sessions requested-steps orchestration-failure" \
+    "rollout reference seed proposal policy sessions requested-steps orchestration-failure predecessor-session" \
     "$@"
   local rollout_id="${options[rollout]:-}"
   local reference_name="${options[reference]:-}"
@@ -1063,6 +1131,7 @@ report_control_rollout() {
   local sessions="${options[sessions]:-}"
   local requested_steps="${options[requested-steps]:-}"
   local orchestration_failure="${options[orchestration-failure]:-}"
+  local predecessor_session="${options[predecessor-session]:-}"
   is_safe_identifier "${rollout_id}" || die "invalid control rollout"
   is_safe_identifier "${reference_name}" || die "invalid reference recording"
   require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
@@ -1073,15 +1142,25 @@ report_control_rollout() {
     || die "proposal does not match control policy"
   is_safe_identifier_list "${sessions}" || die "invalid control session list"
   require_positive_integer "requested steps" "${requested_steps}" || exit 1
-  (( requested_steps <= 8 )) || die "control rollout is capped at eight steps"
+  local maximum_rollout_steps
+  maximum_rollout_steps="$(contact_grasp_maximum_actions \
+    "${repo_dir}" "${venv_dir}/bin/python")"
+  (( requested_steps <= maximum_rollout_steps )) \
+    || die "control rollout exceeds its task-specific action cap"
   local report_dir="${control_frame_root}/control_rollouts/${rollout_id}"
   local proposal="${checkpoint_dir}/${proposal_name}.pth"
   local -a error_arguments=()
+  local -a predecessor_arguments=()
   if [[ "${CONTROL_POLICY_REQUIRES_CHECKPOINT}" == "true" ]]; then
     [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
   fi
   if [[ -n "${orchestration_failure}" ]]; then
     error_arguments=(--orchestration-failure "${orchestration_failure}")
+  fi
+  if [[ -n "${predecessor_session}" ]]; then
+    is_safe_identifier "${predecessor_session}" \
+      || die "invalid control rollout predecessor"
+    predecessor_arguments=(--predecessor-session "${predecessor_session}")
   fi
   sudo install -d -o "${USER}" -g "${USER}" "${report_dir}"
   cd "${repo_dir}"
@@ -1093,6 +1172,7 @@ report_control_rollout() {
     --proposal "${proposal}" \
     --sessions "${sessions}" \
     --requested-steps "${requested_steps}" \
+    "${predecessor_arguments[@]}" \
     "${error_arguments[@]}" \
     --output "${report_dir}/report.json"
 }
@@ -1241,6 +1321,26 @@ configure_control_worker() {
     "${calibration_arguments[@]}" \
     "${margin_arguments[@]}" \
     "${planner_arguments[@]}"
+}
+
+rebase_control_worker_proposal() {
+  local -A options=()
+  parse_named_options options "source name proposal" "$@"
+  local source_name="${options[source]:-}"
+  local name="${options[name]:-}"
+  local proposal_name="${options[proposal]:-}"
+  for identifier in "${source_name}" "${name}" "${proposal_name}"; do
+    is_safe_identifier "${identifier}" || die "invalid worker artifact identifier"
+  done
+  local source_manifest="${checkpoint_dir}/${source_name}.worker.json"
+  local proposal="${checkpoint_dir}/${proposal_name}.pth"
+  [[ -s "${source_manifest}" ]] || die "source worker manifest does not exist"
+  [[ -s "${proposal}" ]] || die "action proposal does not exist: ${proposal_name}"
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.worker_artifacts replace-proposal \
+    --source "${source_manifest}" \
+    --output "${checkpoint_dir}/${name}.worker.json" \
+    --proposal "${proposal}"
 }
 
 rollout_session_list() {
@@ -1501,14 +1601,43 @@ case "${1:-}" in
   grasp-proposal-train)
     train_grasp_action_proposal "${@:2}"
     ;;
+  contact-grasp-proposal-train)
+    train_contact_grasp_action_proposal "${@:2}"
+    ;;
   insertion-proposal-train)
     train_insertion_action_proposal "${@:2}"
+    ;;
+  insertion-transition-finetune)
+    finetune_insertion_transition "${@:2}"
+    ;;
+  insertion-transition-eval)
+    evaluate_insertion_transition "${@:2}"
+    ;;
+  insertion-transition-handoff)
+    previous_session_id="${2:-}"
+    parent_proposal="${3:-}"
+    output_session_id="${4:-}"
+    for identifier in \
+      "${previous_session_id}" "${parent_proposal}" "${output_session_id}"; do
+      is_safe_identifier "${identifier}" \
+        || die "invalid insertion transition handoff identifier"
+    done
+    "${venv_dir}/bin/python" -m jepa_wm.insertion_transition \
+      --previous-request "${control_frame_root}/control_sessions/${previous_session_id}/request.json" \
+      --previous-response "${control_frame_root}/control_sessions/${previous_session_id}/response.json" \
+      --parent "${checkpoint_dir}/${parent_proposal}.pth" \
+      --data-root "${control_frame_root}" \
+      --previous-session "${previous_session_id}" \
+      | base64 | tr -d '\n'
     ;;
   proposal-eval)
     evaluate_action_proposal "${@:2}"
     ;;
   grasp-proposal-eval)
     evaluate_grasp_action_proposal "${@:2}"
+    ;;
+  contact-grasp-proposal-eval)
+    evaluate_contact_grasp_action_proposal "${@:2}"
     ;;
   insertion-proposal-eval)
     evaluate_insertion_action_proposal "${@:2}"
@@ -1518,6 +1647,9 @@ case "${1:-}" in
     ;;
   grasp-proposal-summarize)
     summarize_grasp_action_proposal "${@:2}"
+    ;;
+  contact-grasp-proposal-summarize)
+    summarize_contact_grasp_action_proposal "${@:2}"
     ;;
   insertion-proposal-summarize)
     summarize_insertion_action_proposal "${@:2}"
@@ -1561,6 +1693,9 @@ case "${1:-}" in
   control-worker-configure)
     configure_control_worker "${@:2}"
     ;;
+  control-worker-rebase-proposal)
+    rebase_control_worker_proposal "${@:2}"
+    ;;
   control-worker-start)
     start_control_worker "${@:2}"
     ;;
@@ -1575,6 +1710,6 @@ case "${1:-}" in
       "${2:-}" "${3:-}" "${4:-}" "${5:-wrist}" "${6:-40}"
     ;;
   *)
-    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, insertion-plan-benchmark, insertion-plan-summarize, insertion-proposal-training-diagnostic, proposal-train, grasp-proposal-train, insertion-proposal-train, proposal-eval, grasp-proposal-eval, insertion-proposal-eval, proposal-summarize, grasp-proposal-summarize, insertion-proposal-summarize, insertion-wm-summarize, control-worker-configure, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, grasp-control-summarize, control-candidate-report, control-candidate-summarize, control-objective-calibrate, or summarize"
+    die "expected install, smoke, status, evaluate, adapt, adapt-set, plan-benchmark, insertion-plan-benchmark, insertion-plan-summarize, insertion-proposal-training-diagnostic, proposal-train, grasp-proposal-train, contact-grasp-proposal-train, insertion-proposal-train, proposal-eval, grasp-proposal-eval, contact-grasp-proposal-eval, insertion-proposal-eval, proposal-summarize, grasp-proposal-summarize, contact-grasp-proposal-summarize, insertion-proposal-summarize, insertion-wm-summarize, control-worker-configure, control-worker-rebase-proposal, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, grasp-control-summarize, control-candidate-report, control-candidate-summarize, control-objective-calibrate, or summarize"
     ;;
 esac

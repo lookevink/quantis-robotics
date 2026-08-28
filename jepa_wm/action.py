@@ -192,11 +192,11 @@ class DroidActionScale:
             or not isfinite(self.rotation)
             or not 0.0 <= self.rotation <= 1.0
             or not isfinite(self.gripper)
-            or not 0.0 < self.gripper <= 1.0
+            or not 0.0 <= self.gripper <= 1.0
         ):
             raise ValueError(
-                "action translation/gripper scales must be positive and rotation "
-                "must be nonnegative, with every scale at most one"
+                "action translation scale must be positive and rotation/gripper "
+                "scales must be nonnegative, with every scale at most one"
             )
 
     @classmethod

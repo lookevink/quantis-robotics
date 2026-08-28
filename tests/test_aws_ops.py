@@ -554,6 +554,78 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/encode_demo_recording.sh 'grasp-film-12401'", calls)
         self.assertIn("ops/render_demo_dashboard.sh 'grasp-film-12401'", calls)
 
+    def test_insertion_demo_film_reconstructs_and_encodes_the_source_run(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-demo-film",
+            arguments=("insertion-demo-source", "insertion-demo-film"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("record_insertion_demo", calls)
+        self.assertIn("insertion-demo-source", calls)
+        self.assertIn("ops/encode_demo_recording.sh 'insertion-demo-film'", calls)
+        self.assertNotIn("ops/render_demo_dashboard.sh", calls)
+
+    def test_grasp_to_insertion_runs_one_guarded_phase_chain(self):
+        result, calls = self.run_command(
+            "jepa-wm-grasp-to-insertion",
+            arguments=(
+                "contact-reference",
+                "12401",
+                "grasp-control",
+                "insertion-control",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/run_grasp_to_insertion_milestone.sh", calls)
+        self.assertIn("contact-reference", calls)
+        self.assertIn("grasp-control", calls)
+        self.assertIn("insertion-control", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+
+    def test_grasp_transition_switches_worker_before_the_guarded_trial(self):
+        result, calls = self.run_command(
+            "jepa-wm-grasp-transition-trial",
+            arguments=(
+                "transition-run",
+                "grasp-action-42",
+                "contact-reference",
+                "42601",
+                "transition-control",
+                "rolled-back-action",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        worker_stop = calls.index("ops/jepa_wm.sh control-worker-stop")
+        worker_start = calls.index(
+            "ops/jepa_wm.sh control-worker-start --artifacts 'transition-control'"
+        )
+        transition_trial = calls.index("ops/run_grasp_transition_trial.sh")
+        self.assertLess(worker_stop, worker_start)
+        self.assertLess(worker_start, transition_trial)
+        self.assertIn("rolled-back-action", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+
+    def test_grasp_transition_milestone_is_one_guarded_remote_workflow(self):
+        result, calls = self.run_command(
+            "jepa-wm-grasp-transition-milestone",
+            arguments=(
+                "transition-milestone",
+                "contact-reference",
+                "42601",
+                "grasp-control",
+                "transition-control",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/run_grasp_transition_milestone.sh", calls)
+        self.assertIn("grasp-control", calls)
+        self.assertIn("transition-control", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+
     def test_jepa_embed_forwards_recording_and_camera(self):
         result, calls = self.run_command(
             "jepa-embed",
@@ -908,6 +980,39 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/jepa_wm.sh grasp-proposal-summarize", summary_calls)
         self.assertIn("grasp-held-00,grasp-held-01", summary_calls)
 
+    def test_jepa_wm_contact_grasp_commands_bind_the_contact_domain(self):
+        trained, training_calls = self.run_command(
+            "jepa-wm-contact-grasp-proposal-train",
+            arguments=(
+                "contact-train-00,contact-train-01",
+                "3000",
+                "contact-grasp-proposal",
+                "256",
+                "0.001",
+                "0.0001",
+                "2600",
+            ),
+        )
+        evaluated, evaluation_calls = self.run_command(
+            "jepa-wm-contact-grasp-proposal-eval",
+            arguments=("contact-held-00", "contact-grasp-proposal"),
+        )
+        summarized, summary_calls = self.run_command(
+            "jepa-wm-contact-grasp-proposal-summarize",
+            arguments=(
+                "contact-held-00,contact-held-01",
+                "contact-grasp-proposal",
+            ),
+        )
+
+        self.assertEqual(trained.returncode, 0, trained.stderr)
+        self.assertIn("contact-grasp-proposal-train", training_calls)
+        self.assertIn("--seed '2600'", training_calls)
+        self.assertEqual(evaluated.returncode, 0, evaluated.stderr)
+        self.assertIn("contact-grasp-proposal-eval", evaluation_calls)
+        self.assertEqual(summarized.returncode, 0, summarized.stderr)
+        self.assertIn("contact-grasp-proposal-summarize", summary_calls)
+
     def test_jepa_wm_insertion_proposal_commands_bind_the_post_attachment_window(self):
         trained, training_calls = self.run_command(
             "jepa-wm-insertion-proposal-train",
@@ -1081,6 +1186,19 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/jepa_wm.sh control-worker-configure", calls)
         self.assertIn("--name 'quantis_calibrated_control'", calls)
         self.assertIn("--calibration 'quantis_action_response'", calls)
+
+    def test_jepa_wm_control_worker_rebases_only_the_proposal(self):
+        result, calls = self.run_command(
+            "jepa-wm-control-worker-rebase-proposal",
+            arguments=("transition-v1", "transition-v2", "bridge-proposal"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("control-worker-rebase-proposal", calls)
+        self.assertIn("--source 'transition-v1'", calls)
+        self.assertIn("--name 'transition-v2'", calls)
+        self.assertIn("--proposal 'bridge-proposal'", calls)
+        self.assertIn("ops/backup_state.sh", calls)
 
     def test_jepa_wm_control_worker_binds_progress_margins(self):
         result, calls = self.run_command(
@@ -1265,6 +1383,136 @@ class AwsLifecycleTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertIn("ops/run_insertion_followup_trial.sh", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+
+    def test_insertion_parent_followup_reports_one_predecessor_bound_segment(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-parent-followup",
+            arguments=(
+                "insertion-fresh-held-00",
+                "52600",
+                "contact-insertion-v9-2600-dense-control",
+                "bridge-trial",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ops/run_insertion_followup_trial.sh", calls)
+        self.assertIn("'bridge-trial'", calls)
+        self.assertIn("'1' 'bridge-trial' 'true'", calls)
+        self.assertLess(
+            calls.index("ops/jepa_wm.sh control-worker-stop"),
+            calls.index(
+                "ops/jepa_wm.sh control-worker-start --artifacts "
+                "'contact-insertion-v9-2600-dense-control'"
+            ),
+        )
+        self.assertIn("ops/backup_state.sh", calls)
+
+    def test_insertion_segment_followup_keeps_the_current_worker(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-segment-followup",
+            arguments=(
+                "insertion-fresh-held-00",
+                "52600",
+                "phase2-control",
+                "phase2-action1",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("ops/jepa_wm.sh control-worker-stop", calls)
+        self.assertIn("'1' 'phase2-action1' 'false'", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+
+    def test_insertion_segment_retry_forwards_the_rolled_back_runtime_owner(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-segment-followup",
+            arguments=(
+                "insertion-fresh-held-00",
+                "52600",
+                "phase2-control",
+                "phase2-action2",
+                "phase2-rolled-back-action3",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "'1' 'phase2-action2' 'false' 'phase2-rolled-back-action3'",
+            calls,
+        )
+        self.assertIn("ops/backup_state.sh", calls)
+
+    def test_insertion_approach_followup_explicitly_requests_the_named_extension(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-approach-followup",
+            arguments=(
+                "insertion-fresh-held-00",
+                "52600",
+                "phase2-control",
+                "terminal-demo-action",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "'1' 'terminal-demo-action' 'false' '' 'approach'",
+            calls,
+        )
+        self.assertIn("ops/backup_state.sh", calls)
+
+    def test_insertion_alignment_followup_requests_only_the_alignment_extension(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-alignment-followup",
+            arguments=(
+                "insertion-fresh-held-00",
+                "52600",
+                "phase2-control",
+                "terminal-approach-action",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "'1' 'terminal-approach-action' 'false' '' 'alignment'",
+            calls,
+        )
+
+    def test_insertion_pre_insertion_followup_requests_only_the_bounded_extension(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-pre-insertion-followup",
+            arguments=(
+                "insertion-fresh-held-00",
+                "52600",
+                "phase3-control",
+                "terminal-alignment-action",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "'1' 'terminal-alignment-action' 'false' '' 'pre-insertion'",
+            calls,
+        )
+        self.assertIn("ops/backup_state.sh", calls)
+
+    def test_insertion_contact_followup_requests_only_the_contact_extension(self):
+        result, calls = self.run_command(
+            "jepa-wm-insertion-contact-followup",
+            arguments=(
+                "insertion-fresh-held-00",
+                "52600",
+                "phase7-control",
+                "terminal-pre-insertion-action",
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "'1' 'terminal-pre-insertion-action' 'false' '' 'contact-insertion'",
+            calls,
+        )
         self.assertIn("ops/backup_state.sh", calls)
 
     def test_insertion_followup_backs_up_an_early_validation_failure(self):

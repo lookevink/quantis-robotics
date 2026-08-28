@@ -79,7 +79,9 @@ from sim.isaac_demo_runtime import (
     advance_physics_updates,
     advance_simulation_period,
     move_joint_command,
+    physics_simulation_time_seconds,
     recording_snapshot,
+    resume_live_simulation,
 )
 from sim.recording import RecordingLabel, RecordingMoment
 
@@ -666,7 +668,7 @@ async def measure_insertion_control_resolution(
         runtime = synchronized.runtime
         if load is ControlResolutionLoad.UNLOADED:
             runtime.attachment.remove_load_for_diagnostic()
-        timeline.play()
+        resume_live_simulation(timeline)
         if protocol.baseline_policy is None:
             raise RuntimeError("current control resolution has no baseline policy")
         baseline_interlock = ResolutionControlInterlock(
@@ -683,7 +685,7 @@ async def measure_insertion_control_resolution(
             runtime,
             baseline_interlock,
             protocol.baseline_policy,
-            timeline.get_current_time,
+            physics_simulation_time_seconds,
             load,
             limits,
         )

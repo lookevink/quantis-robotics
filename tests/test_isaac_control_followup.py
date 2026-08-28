@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import sys
+from types import ModuleType, SimpleNamespace
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -25,6 +27,7 @@ from jepa_wm.insertion_contract import INSERTION_CONTROL_TARGET_POLICY
 from jepa_wm.insertion_trial import (
     InsertionTrialDriveEvidence,
     InsertionTrialPostActionEvidence,
+    InsertionTrialRollbackEvidence,
 )
 from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.joint_settlement import JointSettlementEvidence
@@ -39,6 +42,8 @@ from sim.control_session import (
 )
 from sim.isaac_control_followup import (
     build_insertion_followup_capture,
+    restore_grasp_transition_retry,
+    restore_insertion_rollback_retry,
     validate_followup_continuity,
     verify_insertion_demo_rollout_result,
     verify_insertion_two_step_result,
@@ -47,6 +52,106 @@ from sim.isaac_demo_runtime import JointCommand
 
 
 class FollowupContinuityTest(unittest.TestCase):
+    def test_insertion_retry_rebinds_only_an_exact_settled_safe_rollback(
+        self,
+    ) -> None:
+        drive_target = JointDriveTarget((0.0,) * 7, 0.03)
+        rollback = object.__new__(InsertionTrialRollbackEvidence)
+        object.__setattr__(rollback, "drive_target", drive_target)
+        object.__setattr__(rollback, "plug_attached", True)
+        previous = Mock()
+        rolled_back = Mock()
+        rolled_back.result.status = ControlResultStatus.ROLLED_BACK_PROGRESS
+        rolled_back.result.insertion_trial_rollback = rollback
+        rolled_back.state.previous_session_id = "previous-insertion"
+        runtime = SimpleNamespace(
+            actuators=object(), attachment=object(), sensor=object()
+        )
+        stage = object()
+        usd = ModuleType("omni.usd")
+        usd.get_context = lambda: SimpleNamespace(get_stage=lambda: stage)
+        omni = ModuleType("omni")
+        omni.usd = usd
+        with (
+            patch.dict(sys.modules, {"omni": omni, "omni.usd": usd}),
+            patch("sim.isaac_control_followup.ControlSession.at"),
+            patch(
+                "jepa_wm.control_rollout.ControlStepSummary.from_session",
+                side_effect=(previous, rolled_back),
+            ),
+            patch(
+                "sim.isaac_control_followup.InsertionFollowupLineage",
+                return_value=SimpleNamespace(active_drive_target=drive_target),
+            ),
+            patch(
+                "sim.isaac_control_followup.live_runtime_for",
+                return_value=runtime,
+            ) as live_runtime,
+            patch("sim.isaac_control_followup.bind_live_runtime") as bind_runtime,
+        ):
+            evidence = restore_insertion_rollback_retry(
+                "previous-insertion", "rolled-back-insertion"
+            )
+
+        self.assertEqual(evidence["status"], "insertion_rollback_retry_ready")
+        live_runtime.assert_called_once_with("rolled-back-insertion", stage)
+        bind_runtime.assert_called_once_with(
+            "previous-insertion",
+            stage,
+            runtime.actuators,
+            runtime.attachment,
+            runtime.sensor,
+        )
+
+    def test_retry_rebinds_only_one_exact_settled_tracking_rollback(self) -> None:
+        drive_target = JointDriveTarget((0.0,) * 7, 0.03)
+        rollback = object.__new__(InsertionTrialRollbackEvidence)
+        object.__setattr__(rollback, "drive_target", drive_target)
+        object.__setattr__(rollback, "plug_attached", True)
+        grasp = Mock()
+        rolled_back = Mock()
+        rolled_back.result.status = ControlResultStatus.ROLLED_BACK_TRACKING
+        rolled_back.result.insertion_trial_rollback = rollback
+        rolled_back.state.previous_session_id = "grasp-session"
+        runtime = SimpleNamespace(
+            actuators=object(), attachment=object(), sensor=object()
+        )
+        stage = object()
+        usd = ModuleType("omni.usd")
+        usd.get_context = lambda: SimpleNamespace(get_stage=lambda: stage)
+        omni = ModuleType("omni")
+        omni.usd = usd
+        with (
+            patch.dict(sys.modules, {"omni": omni, "omni.usd": usd}),
+            patch("sim.isaac_control_followup.ControlSession.at"),
+            patch(
+                "jepa_wm.control_rollout.ControlStepSummary.from_session",
+                side_effect=(grasp, rolled_back),
+            ),
+            patch(
+                "sim.isaac_control_followup.GraspToInsertionLineage",
+                return_value=SimpleNamespace(active_drive_target=drive_target),
+            ),
+            patch(
+                "sim.isaac_control_followup.live_runtime_for",
+                return_value=runtime,
+            ) as live_runtime,
+            patch("sim.isaac_control_followup.bind_live_runtime") as bind_runtime,
+        ):
+            evidence = restore_grasp_transition_retry(
+                "grasp-session", "rolled-back-session"
+            )
+
+        self.assertEqual(evidence["status"], "grasp_transition_retry_ready")
+        live_runtime.assert_called_once_with("rolled-back-session", stage)
+        bind_runtime.assert_called_once_with(
+            "grasp-session",
+            stage,
+            runtime.actuators,
+            runtime.attachment,
+            runtime.sensor,
+        )
+
     def _previous(self) -> PostActionEvidence:
         action = DroidAction((0.0,) * 7)
         return PostActionEvidence(
@@ -291,8 +396,13 @@ class FollowupContinuityTest(unittest.TestCase):
             current_pose=previous.pose,
             active_drive_target=drive.forward_target,
             target_policy=INSERTION_CONTROL_TARGET_POLICY.for_followup(),
+            expected_proposal=Path("/tmp/parent-proposal.pth"),
         )
 
+        self.assertEqual(
+            observation.expected_proposal,
+            Path("/tmp/parent-proposal.pth"),
+        )
         self.assertEqual(observation.previous_action, previous.actual_action)
         self.assertEqual(observation.warmup_frames, 44)
         self.assertEqual(state.previous_session_id, result.session_id)
@@ -325,6 +435,20 @@ class FollowupContinuityTest(unittest.TestCase):
                 ),
                 result,
             )
+        extended = InsertionFollowupLineage(
+            prior_observation,
+            replace(
+                prior_state,
+                previous_session_id="insertion-trial-before-previous",
+                insertion_rollout_position=InsertionRolloutPosition(4, 4),
+            ),
+            result,
+            8,
+        )
+        self.assertEqual(
+            extended.followup_position,
+            InsertionRolloutPosition(5, 8),
+        )
 
 
 if __name__ == "__main__":

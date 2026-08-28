@@ -7,7 +7,7 @@ import unittest
 
 from jepa_wm.grasp_contract import GRASP_TASK_ID
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
-from sim.control_context import load_control_context
+from sim.control_context import ControlContextPurpose, load_control_context
 from sim.exploration import DatasetSplit, build_exploration_plan
 
 
@@ -86,6 +86,41 @@ class RecordedControlContextTest(unittest.TestCase):
                 with self.subTest(context_index=context_index):
                     with self.assertRaisesRegex(ValueError, "insertion command window"):
                         load_control_context(recording, context_index, plan)
+
+    def test_contact_grasp_purpose_admits_only_the_canonical_pre_grasp_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recording = self._recording(
+                Path(temp_dir), task=INSERTION_TASK_ID, frames=112
+            )
+            plan = build_exploration_plan(52601, DatasetSplit.HELD_OUT)
+
+            context = load_control_context(
+                recording,
+                18,
+                plan,
+                ControlContextPurpose.CONTACT_GRASP,
+            )
+
+            self.assertEqual(context[-1].index, 18)
+            for context_index in (17, 19, 43):
+                with self.subTest(context_index=context_index):
+                    with self.assertRaisesRegex(ValueError, "canonical context"):
+                        load_control_context(
+                            recording,
+                            context_index,
+                            plan,
+                            ControlContextPurpose.CONTACT_GRASP,
+                        )
+
+    def test_contact_grasp_purpose_rejects_a_non_insertion_recording(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "requires an insertion recording"):
+                load_control_context(
+                    self._recording(Path(temp_dir), task=GRASP_TASK_ID),
+                    69,
+                    build_exploration_plan(12401, DatasetSplit.HELD_OUT),
+                    ControlContextPurpose.CONTACT_GRASP,
+                )
 
 
 if __name__ == "__main__":

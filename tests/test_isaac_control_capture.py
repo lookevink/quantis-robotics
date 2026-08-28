@@ -14,6 +14,7 @@ from sim.isaac_control_capture import (
     requires_stable_insertion_capture,
     validated_control_reference,
 )
+from sim.control_context import ControlContextPurpose
 
 
 class ControlCaptureContractTest(unittest.TestCase):
@@ -38,6 +39,15 @@ class ControlCaptureContractTest(unittest.TestCase):
                 insertion_control=True,
                 step_index=43,
                 context_index=43,
+            )
+        )
+        self.assertTrue(
+            requires_stable_insertion_capture(
+                ControlExecutionPolicy.DIRECT,
+                insertion_control=True,
+                step_index=18,
+                context_index=18,
+                context_purpose=ControlContextPurpose.CONTACT_GRASP,
             )
         )
         self.assertFalse(

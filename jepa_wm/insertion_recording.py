@@ -27,6 +27,8 @@ from jepa_wm.insertion_task import (
     evaluate_insertion,
     evaluate_insertion_geometry,
 )
+from jepa_wm.task_windows import CONTACT_GRASP_PROPOSAL_WINDOW
+from jepa_wm.trajectory import DROID_ROLLOUT_PROTOCOL
 from jepa.contract import ObservationStage
 from sim.exploration import DatasetSplit
 from sim.recording import (
@@ -169,6 +171,87 @@ class _ParsedInsertionRecording:
         )
 
 
+def _validate_contact_recording_contract(
+    parsed: _ParsedInsertionRecording,
+) -> None:
+    CONTACT_INSERTION_RECORDING.validate_instrumentation(parsed.target_payload)
+    if len(parsed.steps) != CONTACT_INSERTION_RECORDING.frame_count:
+        raise ValueError("contact-aware insertion frame contract is invalid")
+    if (
+        tuple(step.get("phase") for step in parsed.steps)
+        != CONTACT_INSERTION_RECORDING.phase_roster
+    ):
+        raise ValueError("contact-aware insertion phase contract is invalid")
+    if (
+        tuple(step.get("stage") for step in parsed.steps)
+        != CONTACT_INSERTION_RECORDING.stage_roster
+    ):
+        raise ValueError("contact-aware insertion stage contract is invalid")
+    if (
+        tuple(step.get("plug_attached") for step in parsed.steps)
+        != CONTACT_INSERTION_RECORDING.attachment_roster
+    ):
+        raise ValueError("contact-aware insertion attachment contract is invalid")
+
+
+@dataclass(frozen=True)
+class ContactGraspEvidence:
+    recording: str
+    maximum_contact_force_newtons: float
+    maximum_arm_tracking_error_rad: float
+    maximum_gripper_tracking_error_m: float
+
+    @classmethod
+    def from_recording(
+        cls,
+        path: Path,
+        *,
+        expected_split: str,
+        limits: InsertionTaskLimits = InsertionTaskLimits(),
+        expected_seed: int | None = None,
+    ) -> ContactGraspEvidence:
+        parsed = _ParsedInsertionRecording.load(
+            path,
+            expected_split=expected_split,
+            expected_mode=CONTACT_AWARE_INSERTION_MODE,
+            expected_seed=expected_seed,
+        )
+        _validate_contact_recording_contract(parsed)
+        final_target_index = (
+            CONTACT_GRASP_PROPOSAL_WINDOW.context_indices[-1]
+            + DROID_ROLLOUT_PROTOCOL.action_horizon
+        )
+        safety = tuple(
+            RecordingSafetyTelemetry.from_dict(step)
+            for step in parsed.steps[: final_target_index + 1]
+        )
+        if any(
+            item.collision_detected
+            or item.contact_force_newtons > limits.maximum_contact_force_newtons
+            or item.arm_tracking_error_rad
+            > limits.maximum_arm_tracking_error_rad
+            or item.gripper_tracking_error_m
+            > limits.maximum_gripper_tracking_error_m
+            for item in safety
+        ):
+            raise ValueError("contact-aware grasp safety evidence is invalid")
+        return cls(
+            parsed.recording.name,
+            max(item.contact_force_newtons for item in safety),
+            max(item.arm_tracking_error_rad for item in safety),
+            max(item.gripper_tracking_error_m for item in safety),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "recording": self.recording,
+            "contact_aware": True,
+            "maximum_contact_force_newtons": self.maximum_contact_force_newtons,
+            "maximum_arm_tracking_error_rad": self.maximum_arm_tracking_error_rad,
+            "maximum_gripper_tracking_error_m": self.maximum_gripper_tracking_error_m,
+        }
+
+
 @dataclass(frozen=True)
 class InsertionDemonstrationEvidence:
     recording: str
@@ -260,24 +343,7 @@ class ContactInsertionEvidence:
             expected_mode=CONTACT_AWARE_INSERTION_MODE,
             expected_seed=expected_seed,
         )
-        CONTACT_INSERTION_RECORDING.validate_instrumentation(parsed.target_payload)
-        if len(parsed.steps) != CONTACT_INSERTION_RECORDING.frame_count:
-            raise ValueError("contact-aware insertion frame contract is invalid")
-        if (
-            tuple(step.get("phase") for step in parsed.steps)
-            != CONTACT_INSERTION_RECORDING.phase_roster
-        ):
-            raise ValueError("contact-aware insertion phase contract is invalid")
-        if (
-            tuple(step.get("stage") for step in parsed.steps)
-            != CONTACT_INSERTION_RECORDING.stage_roster
-        ):
-            raise ValueError("contact-aware insertion stage contract is invalid")
-        if (
-            tuple(step.get("plug_attached") for step in parsed.steps)
-            != CONTACT_INSERTION_RECORDING.attachment_roster
-        ):
-            raise ValueError("contact-aware insertion attachment contract is invalid")
+        _validate_contact_recording_contract(parsed)
         task_steps = []
         arm_errors = []
         gripper_errors = []

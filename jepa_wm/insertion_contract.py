@@ -10,13 +10,21 @@ from typing import Any, Mapping
 
 from jepa_wm.action import (
     ActionSelectionBounds,
+    DroidAction,
     DroidActionScale,
     DroidPose,
     action_between,
 )
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
-from jepa_wm.control_safety import ACTION_SCALES, ORIENTATION_HOLD_ACTION_SCALES
+from jepa_wm.control_safety import (
+    ACTION_SCALES,
+    LEGACY_TRACKING_BOUNDED_ACTION_SCALES,
+    LEGACY_TRACKING_BOUNDED_ORIENTATION_HOLD_ACTION_SCALES,
+    ORIENTATION_HOLD_ACTION_SCALES,
+    TRACKING_BOUNDED_ACTION_SCALES,
+    TRACKING_BOUNDED_ORIENTATION_HOLD_ACTION_SCALES,
+)
 from jepa_wm.identifiers import validate_safe_identifier
 from jepa_wm.trajectory import (
     RecordedRollout,
@@ -27,6 +35,8 @@ from jepa_wm.trajectory import (
 
 INSERTION_TASK_ID = "reach_and_insert"
 INSERTION_AXIS = (-1.0, 0.0, 0.0)
+MAXIMUM_FULL_SCALE_INSERTION_TRANSLATION_METERS = 0.0125
+MINIMUM_CURRENT_FOLLOWUP_ACTION_HORIZON = 1
 REARWARD_GRASP_OFFSET_METERS = 0.04
 KINEMATIC_INSERTION_MODE = "kinematic_scripted_baseline"
 CONTACT_AWARE_INSERTION_MODE = "contact_aware_scripted_baseline"
@@ -44,6 +54,13 @@ class InsertionLiveTargetMetric(str, Enum):
     FORWARD_PROJECTION = "forward_projection"
 
 
+class InsertionProjectionScalePolicy(str, Enum):
+    """Persisted compatibility semantics for large translation proposals."""
+
+    LEGACY_POSITIONAL = "legacy_positional"
+    TRACKING_BOUNDED = "tracking_bounded"
+
+
 @dataclass(frozen=True)
 class InsertionControlTargetPolicy:
     minimum_translation_meters: float = 5e-4
@@ -57,6 +74,12 @@ class InsertionControlTargetPolicy:
     target_origin: InsertionTargetOrigin = InsertionTargetOrigin.REFERENCE_CONTEXT
     live_target_metric: InsertionLiveTargetMetric = (
         InsertionLiveTargetMetric.FORWARD_PROJECTION
+    )
+    maximum_full_scale_translation_meters: float | None = (
+        MAXIMUM_FULL_SCALE_INSERTION_TRANSLATION_METERS
+    )
+    projection_scale_policy: InsertionProjectionScalePolicy = (
+        InsertionProjectionScalePolicy.TRACKING_BOUNDED
     )
 
     def __post_init__(self) -> None:
@@ -79,6 +102,17 @@ class InsertionControlTargetPolicy:
             or self.maximum_action_horizon < self.minimum_action_horizon
             or not isinstance(self.target_origin, InsertionTargetOrigin)
             or not isinstance(self.live_target_metric, InsertionLiveTargetMetric)
+            or not isinstance(
+                self.projection_scale_policy,
+                InsertionProjectionScalePolicy,
+            )
+            or (
+                self.maximum_full_scale_translation_meters is not None
+                and (
+                    not isfinite(self.maximum_full_scale_translation_meters)
+                    or self.maximum_full_scale_translation_meters <= 0.0
+                )
+            )
         ):
             raise ValueError("insertion control target policy is invalid")
 
@@ -90,10 +124,64 @@ class InsertionControlTargetPolicy:
             target_origin=InsertionTargetOrigin.LIVE_OBSERVATION,
         )
 
+    def for_current_followup(self) -> InsertionControlTargetPolicy:
+        """Apply current fail-closed bounds when deriving a new follow-up."""
+
+        return replace(
+            self.for_followup(),
+            maximum_full_scale_translation_meters=(
+                self.maximum_full_scale_translation_meters
+                or MAXIMUM_FULL_SCALE_INSERTION_TRANSLATION_METERS
+            ),
+            projection_scale_policy=(
+                InsertionProjectionScalePolicy.TRACKING_BOUNDED
+            ),
+        )
+
+    def for_adaptive_followup(self) -> InsertionControlTargetPolicy:
+        """Retain the first still-ahead live target under current bounds.
+
+        A live controller may still be behind the immediately preceding
+        reference frames.  Starting the signed forward search at horizon one
+        avoids forcing a farther target whose required progress exceeds the
+        bounded command.  This is a distinct generation so persisted current
+        policies keep their historical reconstruction semantics.
+        """
+
+        return replace(
+            self.for_current_followup(),
+            minimum_action_horizon=MINIMUM_CURRENT_FOLLOWUP_ACTION_HORIZON,
+        )
+
+    def for_legacy_bounded_followup(self) -> InsertionControlTargetPolicy:
+        """Reconstruct the brief cap-with-positional-roster generation."""
+
+        return replace(
+            self.for_followup(),
+            maximum_full_scale_translation_meters=(
+                self.maximum_full_scale_translation_meters
+                or MAXIMUM_FULL_SCALE_INSERTION_TRANSLATION_METERS
+            ),
+            projection_scale_policy=(
+                InsertionProjectionScalePolicy.LEGACY_POSITIONAL
+            ),
+        )
+
+    def authorizes_followup(self, candidate: InsertionControlTargetPolicy) -> bool:
+        """Accept exact historical lineage or the current one-way tightening."""
+
+        return candidate in (
+            self.for_followup(),
+            self.for_legacy_bounded_followup(),
+            self.for_current_followup(),
+            self.for_adaptive_followup(),
+        )
+
     def projection_scales(
         self,
         current: DroidPose,
         target: DroidPose | None,
+        proposed_action: DroidAction | None = None,
     ) -> tuple[DroidActionScale, ...]:
         """Hold orientation when its target error is below measured resolution."""
 
@@ -101,11 +189,32 @@ class InsertionControlTargetPolicy:
             return ACTION_SCALES
         relative = action_between(current, target)
         rotation_error = sqrt(sum(value * value for value in relative.values[3:6]))
-        return (
+        scales = (
             ORIENTATION_HOLD_ACTION_SCALES
             if rotation_error <= self.orientation_hold_tolerance_radians
             else ACTION_SCALES
         )
+        if (
+            proposed_action is not None
+            and self.maximum_full_scale_translation_meters is not None
+            and sqrt(sum(value * value for value in proposed_action.values[:3]))
+            > self.maximum_full_scale_translation_meters
+        ):
+            if (
+                self.projection_scale_policy
+                is InsertionProjectionScalePolicy.LEGACY_POSITIONAL
+            ):
+                return (
+                    LEGACY_TRACKING_BOUNDED_ORIENTATION_HOLD_ACTION_SCALES
+                    if scales is ORIENTATION_HOLD_ACTION_SCALES
+                    else LEGACY_TRACKING_BOUNDED_ACTION_SCALES
+                )
+            return (
+                TRACKING_BOUNDED_ORIENTATION_HOLD_ACTION_SCALES
+                if scales is ORIENTATION_HOLD_ACTION_SCALES
+                else TRACKING_BOUNDED_ACTION_SCALES
+            )
+        return scales
 
     def select(
         self,
@@ -207,6 +316,10 @@ class InsertionControlTargetPolicy:
             "action_bounds": self.action_bounds.to_dict(),
             "target_origin": self.target_origin.value,
             "live_target_metric": self.live_target_metric.value,
+            "maximum_full_scale_translation_meters": (
+                self.maximum_full_scale_translation_meters
+            ),
+            "projection_scale_policy": self.projection_scale_policy.value,
         }
         if self.orientation_hold_tolerance_radians is not None:
             payload["orientation_hold_tolerance_radians"] = (
@@ -252,6 +365,18 @@ class InsertionControlTargetPolicy:
                     payload.get(
                         "live_target_metric",
                         InsertionLiveTargetMetric.EUCLIDEAN_DISTANCE.value,
+                    )
+                ),
+                maximum_full_scale_translation_meters=(
+                    float(payload["maximum_full_scale_translation_meters"])
+                    if payload.get("maximum_full_scale_translation_meters")
+                    is not None
+                    else None
+                ),
+                projection_scale_policy=InsertionProjectionScalePolicy(
+                    payload.get(
+                        "projection_scale_policy",
+                        InsertionProjectionScalePolicy.LEGACY_POSITIONAL.value,
                     )
                 ),
             )

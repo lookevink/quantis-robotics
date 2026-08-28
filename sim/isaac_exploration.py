@@ -229,6 +229,22 @@ def _recording_label(outcome: SegmentOutcome) -> RecordingLabel:
     return RecordingLabel(moment, Phase.READY)
 
 
+async def prepare_recording_stage(sample_period_seconds: float) -> float:
+    """Set the app cadence before reopening the stage and return its prior value."""
+
+    from isaacsim.core.rendering_manager import RenderingManager
+    from sim.isaac_demo_runtime import reset_stage
+
+    original_rendering_dt = RenderingManager.get_dt()
+    RenderingManager.set_dt(sample_period_seconds)
+    try:
+        await reset_stage()
+    except BaseException:
+        RenderingManager.set_dt(original_rendering_dt)
+        raise
+    return original_rendering_dt
+
+
 async def _record_successful_grasp(
     actuators: Actuators,
     current: JointCommand,
@@ -483,35 +499,35 @@ async def record_exploration_trajectory(
     from isaacsim.core.experimental.prims import Articulation, RigidPrim
     from isaacsim.core.rendering_manager import RenderingManager
     from isaacsim.core.simulation_manager import SimulationManager
-    from sim.isaac_demo_runtime import reset_stage
 
     profile = ExplorationRecordingProfile.for_mode(mode)
     plan = profile.apply_to_plan(build_exploration_plan(seed, split))
-    await reset_stage()
-    stage = omni.usd.get_context().get_stage()
-    stage.SetEditTarget(stage.GetSessionLayer())
-    apply_variant(stage, plan)
-    attachment_preparation = profile.prepare_attachment(stage)
-    metadata = profile.metadata(plan, stage, attachment_preparation)
-    recorder = DemoRecorder(
-        recording_id,
-        fps=DROID_FPS,
-        minimum_stage_frames=0,
-        camera_specs=JEPA_WM_CAMERA_SPECS,
-        metadata=metadata,
+    original_rendering_dt = await prepare_recording_stage(
+        plan.sample_period_seconds
     )
-    timeline = omni.timeline.get_timeline_interface()
-    original_rendering_dt = RenderingManager.get_dt()
     completed = False
     sample_times = []
+    recorder = None
+    timeline = None
     try:
+        stage = omni.usd.get_context().get_stage()
+        stage.SetEditTarget(stage.GetSessionLayer())
+        apply_variant(stage, plan)
+        attachment_preparation = profile.prepare_attachment(stage)
+        metadata = profile.metadata(plan, stage, attachment_preparation)
+        recorder = DemoRecorder(
+            recording_id,
+            fps=DROID_FPS,
+            minimum_stage_frames=0,
+            camera_specs=JEPA_WM_CAMERA_SPECS,
+            metadata=metadata,
+        )
+        timeline = omni.timeline.get_timeline_interface()
         await recorder.initialize()
-        # Isaac keeps the physics scene at its existing high-frequency dt and
-        # advances the timeline by this render interval, yielding one rendered
-        # observation for each DROID 4 FPS sample instead of rendering every
-        # intermediate physics tick. Configure it before creating the physics
-        # tensor view because timeline timing changes invalidate that view.
-        RenderingManager.set_dt(plan.sample_period_seconds)
+        # The cadence was configured before the stage reopened so Fabric and
+        # the timeline share one period. Isaac keeps the physics scene at its
+        # existing high-frequency dt and yields one rendered observation for
+        # each DROID 4 FPS sample instead of rendering intermediate ticks.
         safety_observer = None
         if profile.physics_attachment:
             hand_sensor = contact_sensor(stage, create=True)
@@ -564,7 +580,7 @@ async def record_exploration_trajectory(
                 initial_safety,
             ),
         )
-        await recorder.capture(initial, advance=False)
+        await recorder.capture_current(initial)
         if initial.simulation_time_seconds is not None:
             sample_times.append(initial.simulation_time_seconds)
         if profile.physics_attachment:
@@ -623,15 +639,18 @@ async def record_exploration_trajectory(
         validate_sample_times(tuple(sample_times), plan.sample_period_seconds)
         completed = True
     except Exception:
-        recorder.abort()
+        if recorder is not None:
+            recorder.abort()
         raise
     finally:
         RenderingManager.set_dt(original_rendering_dt)
-        if completed:
-            timeline.pause()
-        else:
-            timeline.stop()
+        if timeline is not None:
+            if completed:
+                timeline.pause()
+            else:
+                timeline.stop()
 
+    assert recorder is not None
     output_dir = recorder.finish()
     return {
         "status": "complete",

@@ -97,30 +97,44 @@ class ProposalInputs:
         include_pose = conditioning is None or conditioning.uses_proprioception
         include_history = conditioning is None or conditioning.uses_action_history
         include_goal_delta = conditioning is None or conditioning.uses_goal_delta
-        include_task_progress = (
-            conditioning is None or conditioning.uses_task_progress
-        )
+        include_task_progress = conditioning is None or conditioning.uses_task_progress
         return cls(
-            pose=torch.tensor(
-                [rollout.context_pose.values for rollout in rollouts],
-                device=device,
-                dtype=dtype,
-            ) if include_pose else None,
-            previous_action=torch.tensor(
-                [rollout.previous_action.values for rollout in rollouts],
-                device=device,
-                dtype=dtype,
-            ) if include_history else None,
-            goal_delta=torch.tensor(
-                [rollout.goal_action.values for rollout in rollouts],
-                device=device,
-                dtype=dtype,
-            ) if include_goal_delta else None,
-            task_progress=torch.tensor(
-                [[float(rollout.task_context_index.value)] for rollout in rollouts],
-                device=device,
-                dtype=dtype,
-            ) if include_task_progress else None,
+            pose=(
+                torch.tensor(
+                    [rollout.context_pose.values for rollout in rollouts],
+                    device=device,
+                    dtype=dtype,
+                )
+                if include_pose
+                else None
+            ),
+            previous_action=(
+                torch.tensor(
+                    [rollout.previous_action.values for rollout in rollouts],
+                    device=device,
+                    dtype=dtype,
+                )
+                if include_history
+                else None
+            ),
+            goal_delta=(
+                torch.tensor(
+                    [rollout.goal_action.values for rollout in rollouts],
+                    device=device,
+                    dtype=dtype,
+                )
+                if include_goal_delta
+                else None
+            ),
+            task_progress=(
+                torch.tensor(
+                    [[float(rollout.task_context_index.value)] for rollout in rollouts],
+                    device=device,
+                    dtype=dtype,
+                )
+                if include_task_progress
+                else None
+            ),
         )
 
     @classmethod
@@ -133,20 +147,34 @@ class ProposalInputs:
         dtype: torch.dtype,
     ) -> ProposalInputs:
         return cls(
-            pose=torch.tensor(
-                (observation.pose.values,), device=device, dtype=dtype
-            ) if conditioning.uses_proprioception else None,
-            previous_action=torch.tensor(
-                (observation.previous_action.values,), device=device, dtype=dtype
-            ) if conditioning.uses_action_history else None,
-            goal_delta=torch.tensor(
-                (observation.goal_action.values,), device=device, dtype=dtype
-            ) if conditioning.uses_goal_delta else None,
-            task_progress=torch.tensor(
-                ((float(observation.task_context_index.value),),),
-                device=device,
-                dtype=dtype,
-            ) if conditioning.uses_task_progress else None,
+            pose=(
+                torch.tensor((observation.pose.values,), device=device, dtype=dtype)
+                if conditioning.uses_proprioception
+                else None
+            ),
+            previous_action=(
+                torch.tensor(
+                    (observation.previous_action.values,), device=device, dtype=dtype
+                )
+                if conditioning.uses_action_history
+                else None
+            ),
+            goal_delta=(
+                torch.tensor(
+                    (observation.goal_action.values,), device=device, dtype=dtype
+                )
+                if conditioning.uses_goal_delta
+                else None
+            ),
+            task_progress=(
+                torch.tensor(
+                    ((float(observation.task_context_index.value),),),
+                    device=device,
+                    dtype=dtype,
+                )
+                if conditioning.uses_task_progress
+                else None
+            ),
         )
 
     def indexed(self, indices: torch.Tensor) -> ProposalInputs:
@@ -162,9 +190,7 @@ class ProposalInputs:
     ) -> ProposalInputs:
         return ProposalInputs(
             *(
-                value.to(device=device, dtype=dtype)
-                if value is not None
-                else None
+                value.to(device=device, dtype=dtype) if value is not None else None
                 for value in self.values
             )
         )
@@ -372,9 +398,7 @@ class ActionProposalNetwork(torch.nn.Module):
             "goal_delta_standard_deviation",
             goal_delta_standard_deviation.clone().float(),
         )
-        self.register_buffer(
-            "task_progress_mean", task_progress_mean.clone().float()
-        )
+        self.register_buffer("task_progress_mean", task_progress_mean.clone().float())
         self.register_buffer(
             "task_progress_standard_deviation",
             task_progress_standard_deviation.clone().float(),
@@ -478,8 +502,7 @@ class ActionProposalNetwork(torch.nn.Module):
         predicted = self.network(features)
         conditioning_values = (
             torch.cat(conditioning_features, dim=-1)
-            if self.conditioning_network is not None
-            or self.gripper_network is not None
+            if self.conditioning_network is not None or self.gripper_network is not None
             else None
         )
         if self.conditioning_network is not None:
@@ -532,9 +555,12 @@ def save_action_proposal(
     metadata: TrainingArtifactMetadata,
     *,
     training_selection_fingerprint: str | None = None,
+    training_evaluation_fingerprint: str | None = None,
 ) -> None:
     if training_selection_fingerprint is not None:
         validate_artifact_fingerprint(training_selection_fingerprint)
+    if training_evaluation_fingerprint is not None:
+        validate_artifact_fingerprint(training_evaluation_fingerprint)
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
@@ -548,9 +574,72 @@ def save_action_proposal(
             "conditioning_residual": proposal.conditioning_residual,
             "conditioned_gripper_head": proposal.conditioned_gripper_head,
             "training_selection_fingerprint": training_selection_fingerprint,
+            "training_evaluation_fingerprint": training_evaluation_fingerprint,
             "state_dict": proposal.state_dict(),
         },
         path,
+    )
+
+
+def _training_fingerprint_from_payload(
+    payload: dict[str, object],
+    field: str,
+    description: str,
+) -> str | None:
+    if payload.get("schema") not in (
+        LEGACY_PROPOSAL_SCHEMA,
+        PREVIOUS_PROPOSAL_SCHEMA,
+        PROPOSAL_SCHEMA,
+    ):
+        raise ValueError("action proposal schema is unsupported")
+    fingerprint = payload.get(field)
+    if fingerprint is None:
+        return None
+    if not isinstance(fingerprint, str):
+        raise ValueError(f"proposal training {description} fingerprint is invalid")
+    validate_artifact_fingerprint(fingerprint)
+    return fingerprint
+
+
+def _training_selection_fingerprint_from_payload(
+    payload: dict[str, object],
+) -> str | None:
+    return _training_fingerprint_from_payload(
+        payload,
+        "training_selection_fingerprint",
+        "selection",
+    )
+
+
+def _training_evaluation_fingerprint_from_payload(
+    payload: dict[str, object],
+) -> str | None:
+    return _training_fingerprint_from_payload(
+        payload,
+        "training_evaluation_fingerprint",
+        "evaluation",
+    )
+
+
+@dataclass(frozen=True)
+class ProposalTrainingFingerprints:
+    """Training provenance embedded in one immutable proposal checkpoint."""
+
+    selection: str | None
+    evaluation: str | None
+
+
+def action_proposal_training_fingerprints(
+    path: Path,
+) -> ProposalTrainingFingerprints:
+    """Read all training fingerprints from one proposal-artifact snapshot."""
+
+    payload = torch.load(path.resolve(), map_location="cpu", weights_only=True)
+    if not isinstance(payload, dict):
+        raise ValueError("action proposal checkpoint must be a dictionary")
+    return ProposalTrainingFingerprints(
+        selection=_training_selection_fingerprint_from_payload(payload),
+        evaluation=_training_evaluation_fingerprint_from_payload(payload),
     )
 
 
@@ -560,11 +649,7 @@ def load_action_proposal_with_training_selection(
     device: torch.device,
 ) -> tuple[ActionProposalNetwork, TrainingArtifactMetadata, str | None]:
     payload = torch.load(path, map_location=device, weights_only=True)
-    selection_fingerprint = payload.get("training_selection_fingerprint")
-    if selection_fingerprint is not None:
-        if not isinstance(selection_fingerprint, str):
-            raise ValueError("proposal training selection fingerprint is invalid")
-        validate_artifact_fingerprint(selection_fingerprint)
+    selection_fingerprint = _training_selection_fingerprint_from_payload(payload)
     schema = payload.get("schema")
     if schema not in (
         LEGACY_PROPOSAL_SCHEMA,
@@ -580,9 +665,7 @@ def load_action_proposal_with_training_selection(
     if not isinstance(raw_state, dict):
         raise ValueError("action proposal state is missing")
     state = dict(raw_state)
-    conditioned_gripper_head = bool(
-        payload.get("conditioned_gripper_head", False)
-    )
+    conditioned_gripper_head = bool(payload.get("conditioned_gripper_head", False))
     if schema == PREVIOUS_PROPOSAL_SCHEMA and conditioned_gripper_head:
         horizon = int(payload["horizon"])
         cartesian_rows = [
@@ -612,7 +695,9 @@ def load_action_proposal_with_training_selection(
                 "goal_standard_deviation"
             )
         except KeyError as error:
-            raise ValueError("action proposal goal-delta state is incomplete") from error
+            raise ValueError(
+                "action proposal goal-delta state is incomplete"
+            ) from error
     conditioning_payload = payload.get("conditioning")
     if conditioning_payload is None:
         capabilities = ProposalConditioningCapabilities(
@@ -622,9 +707,7 @@ def load_action_proposal_with_training_selection(
             False,
         )
     else:
-        capabilities = ProposalConditioningCapabilities.from_dict(
-            conditioning_payload
-        )
+        capabilities = ProposalConditioningCapabilities.from_dict(conditioning_payload)
     goal_delta_state_keys = {
         "goal_delta_mean",
         "goal_delta_standard_deviation",

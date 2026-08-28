@@ -11,6 +11,7 @@ control_identity="${4:-}"
 shadow_mode="${5:-immediate}"
 policy="${6:-direct}"
 context_index="${7:-4}"
+context_purpose="${8:-standard}"
 checkpoint_dir="${HOME}/docker/jepa-wm/checkpoints"
 venv_python="${HOME}/.venvs/quantis-jepa-wm/bin/python"
 
@@ -21,7 +22,7 @@ venv_python="${HOME}/.venvs/quantis-jepa-wm/bin/python"
 capture_and_respond_control_session \
   "${repo_dir}" "${session_id}" "${reference_name}" "${exploration_seed}" \
   "${control_identity}" "${policy}" "${context_index}" \
-  "${checkpoint_dir}" "${venv_python}"
+  "${checkpoint_dir}" "${venv_python}" "" "" "${context_purpose}"
 isaac_server_call "await demo.apply_control_response('${session_id}')" 180
 if [[ "${shadow_mode}" == "immediate" && "${policy}" == "direct" ]]; then
   capture_shadow_control_evidence "${repo_dir}" "${session_id}"

@@ -11,6 +11,7 @@ step_count="${4:-}"
 control_identity="${5:-}"
 policy="${6:-direct}"
 context_index="${7:-4}"
+context_purpose="${8:-standard}"
 data_root="${HOME}/docker/isaac-sim/data/quantis"
 venv_python="${HOME}/.venvs/quantis-jepa-wm/bin/python"
 
@@ -24,8 +25,13 @@ for value in "${rollout_id}" "${reference_name}" "${control_identity}"; do
 done
 require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
 require_positive_integer "step count" "${step_count}" || exit 1
-(( step_count <= 8 )) || {
-  printf 'error: control rollout is capped at eight steps\n' >&2
+maximum_step_count=8
+if [[ "${context_purpose}" == "contact_grasp" ]]; then
+  maximum_step_count="$(contact_grasp_maximum_actions \
+    "${repo_dir}" "${venv_python}")"
+fi
+(( step_count <= maximum_step_count )) || {
+  printf 'error: control rollout exceeds its task-specific step cap\n' >&2
   exit 1
 }
 validate_control_policy "${policy}" || exit 1
@@ -43,6 +49,17 @@ step_status() {
   "${venv_python}" -m jepa_wm.control_rollout_cli status \
     --data-root "${data_root}" \
     --session "$1"
+}
+
+reach_and_grasp_status() {
+  "${venv_python}" -m jepa_wm.control_rollout_cli reach-and-grasp-status \
+    --data-root "${data_root}" \
+    --rollout-id "${rollout_id}" \
+    --reference-recording "${reference_name}" \
+    --seed "${exploration_seed}" \
+    --proposal "${HOME}/docker/jepa-wm/checkpoints/${proposal_name}.pth" \
+    --sessions "${sessions}" \
+    --requested-steps "${step_count}"
 }
 
 sessions=""
@@ -85,13 +102,20 @@ sessions="${first_session}"
 current_phase="initial_control_step"
 bash "${repo_dir}/ops/run_control_step.sh" \
   "${first_session}" "${reference_name}" "${exploration_seed}" \
-  "${control_identity}" deferred "${policy}" "${context_index}"
+  "${control_identity}" deferred "${policy}" "${context_index}" \
+  "${context_purpose}"
 previous_session="${first_session}"
 current_phase="initial_status"
 status="$(step_status "${first_session}")"
+task_terminal=false
+if [[ "${context_purpose}" == "contact_grasp" && "${status}" == "applied" ]]; then
+  if [[ "$(reach_and_grasp_status)" == "ready" ]]; then
+    task_terminal=true
+  fi
+fi
 
 for (( index = 1; index < step_count; index++ )); do
-  [[ "${status}" == "applied" ]] || break
+  [[ "${status}" == "applied" && "${task_terminal}" == "false" ]] || break
   printf -v suffix '%02d' "${index}"
   session_id="${rollout_id}-${suffix}"
   sessions="${sessions},${session_id}"
@@ -106,10 +130,17 @@ for (( index = 1; index < step_count; index++ )); do
   previous_session="${session_id}"
   current_phase="followup_status_${suffix}"
   status="$(step_status "${session_id}")"
+  if [[ "${context_purpose}" == "contact_grasp" && "${status}" == "applied" ]]; then
+    if [[ "$(reach_and_grasp_status)" == "ready" ]]; then
+      task_terminal=true
+    fi
+  fi
 done
 if [[ "${policy}" == "direct" ]]; then
   current_phase="shadow_evidence"
-  IFS=',' read -r -a shadow_sessions <<<"${sessions}"
+  shadow_roster="$(control_rollout_shadow_session_roster \
+    "${context_purpose}" "${sessions}")"
+  IFS=',' read -r -a shadow_sessions <<<"${shadow_roster}"
   for session_id in "${shadow_sessions[@]}"; do
     capture_shadow_control_evidence "${repo_dir}" "${session_id}"
   done

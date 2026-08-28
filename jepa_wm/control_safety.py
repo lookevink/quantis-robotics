@@ -4,20 +4,37 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from math import dist, isfinite
+from math import dist, isfinite, sqrt
 from time import time
 from typing import Any, Mapping, Sequence
 
-from jepa_wm.action import DroidActionScale, DroidPose
+from jepa_wm.action import (
+    MAX_GRIPPER_WIDTH_M,
+    DroidAction,
+    DroidActionScale,
+    DroidPose,
+)
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
 from jepa_wm.planner import PlannerActionBounds
 
 
 FRANKA_LOWER_JOINT_LIMITS = (
-    -2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973,
+    -2.8973,
+    -1.7628,
+    -2.8973,
+    -3.0718,
+    -2.8973,
+    -0.0175,
+    -2.8973,
 )
 FRANKA_UPPER_JOINT_LIMITS = (
-    2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973,
+    2.8973,
+    1.7628,
+    2.8973,
+    -0.0698,
+    2.8973,
+    3.7525,
+    2.8973,
 )
 
 # Historical ordered projections remain readable in persisted shadow evidence.
@@ -36,15 +53,175 @@ ACTION_SCALES = (
     *LEGACY_ACTION_SCALES,
 )
 
+# Contact acquisition is a receding-horizon close, not a one-shot replay of the
+# reference gripper delta. Keep small proposals above the measured translation
+# noise floor, while bounding larger proposals to a one-millimetre command.
+MAXIMUM_CONTACT_GRASP_TRANSLATION_COMMAND_METERS = 0.001
+MAXIMUM_CONTACT_GRASP_FINE_CLOSURE_COMMAND_METERS = 0.0015
+MAXIMUM_CONTACT_GRASP_TRANSPORT_COMMAND_METERS = 0.00075
+CONTACT_GRASP_ACTION_SCALES = (
+    DroidActionScale(0.25, 0.125, 0.125),
+    DroidActionScale.uniform(0.125),
+    DroidActionScale(0.0625, 0.125, 0.125),
+    DroidActionScale(0.03125, 0.125, 0.125),
+)
+CONTACT_GRASP_FINE_ACTION_SCALES = (
+    DroidActionScale.uniform(0.125),
+    DroidActionScale(0.0625, 0.125, 0.125),
+    DroidActionScale(0.03125, 0.125, 0.125),
+)
+CONTACT_GRASP_ULTRAFINE_ACTION_SCALES = (
+    DroidActionScale(0.0625, 0.125, 0.125),
+    DroidActionScale(0.03125, 0.125, 0.125),
+)
+CONTACT_GRASP_MICRO_ACTION_SCALES = (DroidActionScale(0.03125, 0.125, 0.125),)
+
+# Once the fixed-joint attachment is live, gripper intent no longer controls
+# the approach scale. Preserve the authenticated active gripper target and let
+# the learned Cartesian transport use up to a 0.75-millimetre command; every
+# candidate still passes the ordinary IK, joint-delta, velocity, and workspace
+# gates before a drive target is written.
+CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES = tuple(
+    tuple(DroidActionScale(scale.translation, scale.rotation, 0.0) for scale in policy)
+    for policy in (
+        CONTACT_GRASP_ACTION_SCALES,
+        CONTACT_GRASP_FINE_ACTION_SCALES,
+        CONTACT_GRASP_ULTRAFINE_ACTION_SCALES,
+        CONTACT_GRASP_MICRO_ACTION_SCALES,
+    )
+)
+
+# The demonstration closes from 44 mm to 18 mm across the contact window. The
+# live controller preserves that learned direction but must keep Cartesian and
+# gripper motion independently bounded. These rosters use the 0.25 gripper
+# scale only when that produces at most a 1.5 mm width command; larger closure
+# remains on the exercised 0.125 scale.
+CONTACT_GRASP_CLOSING_ACTION_SCALE_POLICIES = tuple(
+    tuple(DroidActionScale(scale.translation, scale.rotation, 0.25) for scale in policy)
+    for policy in (
+        CONTACT_GRASP_ACTION_SCALES,
+        CONTACT_GRASP_FINE_ACTION_SCALES,
+        CONTACT_GRASP_ULTRAFINE_ACTION_SCALES,
+        CONTACT_GRASP_MICRO_ACTION_SCALES,
+    )
+)
+
+# These policies were exercised by earlier guarded contact-grasp checkpoints.
+# They remain reconstruction-only so their persisted negative evidence stays
+# readable after the magnitude-aware policy was introduced.
+LEGACY_CONTACT_GRASP_ACTION_SCALE_POLICIES = (
+    (
+        DroidActionScale(0.5, 0.125, 0.25),
+        DroidActionScale.uniform(0.25),
+        DroidActionScale.uniform(0.125),
+    ),
+    (
+        DroidActionScale(0.375, 0.125, 0.25),
+        DroidActionScale.uniform(0.25),
+        DroidActionScale.uniform(0.125),
+    ),
+    (
+        DroidActionScale(0.25, 0.125, 0.25),
+        DroidActionScale.uniform(0.25),
+        DroidActionScale.uniform(0.125),
+    ),
+    (
+        DroidActionScale(0.25, 0.125, 0.125),
+        DroidActionScale.uniform(0.25),
+        DroidActionScale.uniform(0.125),
+    ),
+    (
+        DroidActionScale.uniform(0.125),
+        DroidActionScale.uniform(0.25),
+        DroidActionScale.uniform(0.125),
+    ),
+)
+
+
+def contact_grasp_action_scales(
+    action: DroidAction,
+    *,
+    attachment_acquired: bool = False,
+) -> tuple[DroidActionScale, ...]:
+    """Bound approach motion and calibrate gripper closure independently."""
+
+    translation_norm = sqrt(sum(value * value for value in action.values[:3]))
+    if attachment_acquired:
+        for scales in CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES:
+            if (
+                translation_norm * scales[0].translation
+                <= MAXIMUM_CONTACT_GRASP_TRANSPORT_COMMAND_METERS
+            ):
+                return scales
+        return CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES[-1]
+
+    # Negative DROID gripper action decreases closedness and therefore opens the
+    # fingers. A live post-contact opening request jumped from 0.509 mm back to
+    # 0.943 mm as its raw norm crossed the magnitude boundary; realization
+    # remained 0.298 mm and the unchanged tracking gate correctly rolled it
+    # back. Reopening must not re-enlarge the approach step.
+    if action.values[6] < 0.0:
+        return CONTACT_GRASP_MICRO_ACTION_SCALES
+
+    policies = (
+        CONTACT_GRASP_ACTION_SCALES,
+        CONTACT_GRASP_FINE_ACTION_SCALES,
+        CONTACT_GRASP_ULTRAFINE_ACTION_SCALES,
+        CONTACT_GRASP_MICRO_ACTION_SCALES,
+    )
+    for index, scales in enumerate(policies):
+        if (
+            translation_norm * scales[0].translation
+            <= MAXIMUM_CONTACT_GRASP_TRANSLATION_COMMAND_METERS
+        ):
+            return (
+                CONTACT_GRASP_CLOSING_ACTION_SCALE_POLICIES[index]
+                if (
+                    action.values[6] > 0.0
+                    and action.values[6]
+                    * CONTACT_GRASP_CLOSING_ACTION_SCALE_POLICIES[index][0].gripper
+                    * MAX_GRIPPER_WIDTH_M
+                    <= MAXIMUM_CONTACT_GRASP_FINE_CLOSURE_COMMAND_METERS
+                )
+                else scales
+            )
+    return CONTACT_GRASP_MICRO_ACTION_SCALES
+
+
 ORIENTATION_HOLD_ACTION_SCALES = tuple(
-    DroidActionScale(scale.translation, 0.0, scale.gripper)
-    for scale in ACTION_SCALES
+    DroidActionScale(scale.translation, 0.0, scale.gripper) for scale in ACTION_SCALES
+)
+# One guarded retry briefly persisted these positional slices before the scale
+# roster was made genuinely magnitude-bounded. Retain them for reconstruction
+# only; current target policies never return either tuple.
+LEGACY_TRACKING_BOUNDED_ACTION_SCALES = ACTION_SCALES[1:]
+LEGACY_TRACKING_BOUNDED_ORIENTATION_HOLD_ACTION_SCALES = ORIENTATION_HOLD_ACTION_SCALES[
+    1:
+]
+TRACKING_BOUNDED_ACTION_SCALES = (
+    DroidActionScale(0.75, 0.1875, 0.75),
+    *(scale for scale in ACTION_SCALES if scale.translation <= 0.5),
+)
+TRACKING_BOUNDED_ORIENTATION_HOLD_ACTION_SCALES = (
+    DroidActionScale(0.75, 0.0, 0.75),
+    *(scale for scale in ORIENTATION_HOLD_ACTION_SCALES if scale.translation <= 0.5),
 )
 
 ACTION_SCALE_POLICIES = (ACTION_SCALES, LEGACY_ACTION_SCALES)
 INSERTION_ACTION_SCALE_POLICIES = (
     *ACTION_SCALE_POLICIES,
+    *CONTACT_GRASP_CLOSING_ACTION_SCALE_POLICIES,
+    CONTACT_GRASP_ACTION_SCALES,
+    CONTACT_GRASP_FINE_ACTION_SCALES,
+    CONTACT_GRASP_ULTRAFINE_ACTION_SCALES,
+    CONTACT_GRASP_MICRO_ACTION_SCALES,
+    *CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES,
+    *LEGACY_CONTACT_GRASP_ACTION_SCALE_POLICIES,
     ORIENTATION_HOLD_ACTION_SCALES,
+    LEGACY_TRACKING_BOUNDED_ACTION_SCALES,
+    LEGACY_TRACKING_BOUNDED_ORIENTATION_HOLD_ACTION_SCALES,
+    TRACKING_BOUNDED_ACTION_SCALES,
+    TRACKING_BOUNDED_ORIENTATION_HOLD_ACTION_SCALES,
 )
 
 
@@ -144,9 +321,13 @@ class SimulatorSafetyState:
 
     def __post_init__(self) -> None:
         for field in (
-            "observed_joint_positions", "current_joint_positions", "proposed_joint_positions"
+            "observed_joint_positions",
+            "current_joint_positions",
+            "proposed_joint_positions",
         ):
-            object.__setattr__(self, field, _finite_tuple(field, getattr(self, field), 7))
+            object.__setattr__(
+                self, field, _finite_tuple(field, getattr(self, field), 7)
+            )
         if (
             not isfinite(self.control_period_seconds)
             or self.control_period_seconds <= 0.0
@@ -300,6 +481,29 @@ class ProjectedTargetProgressPolicy:
             else ControlGateReason.TARGET_PROGRESS_INSUFFICIENT
         )
 
+    def translation_bound_can_satisfy(
+        self,
+        current: DroidPose,
+        target: DroidPose | None,
+        maximum_translation_meters: float,
+    ) -> bool:
+        """Whether an ideally directed bounded translation can pass this gate."""
+
+        if (
+            isinstance(maximum_translation_meters, bool)
+            or not isinstance(maximum_translation_meters, (int, float))
+            or not isfinite(maximum_translation_meters)
+            or maximum_translation_meters <= 0.0
+        ):
+            raise ValueError("target-progress translation bound is invalid")
+        if target is None:
+            return False
+        required_reduction = (
+            dist(current.values[:3], target.values[:3])
+            * self.minimum_translation_error_reduction_fraction
+        )
+        return required_reduction <= maximum_translation_meters + 1e-12
+
     def apply(
         self,
         decision: ControlGateDecision,
@@ -342,7 +546,9 @@ class ControlGateDecision:
             decision = cls(
                 observation_id=int(payload["observation_id"]),
                 next_pose=DroidPose(tuple(payload["next_pose"])),
-                reasons=tuple(ControlGateReason(reason) for reason in payload["reasons"]),
+                reasons=tuple(
+                    ControlGateReason(reason) for reason in payload["reasons"]
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("control gate decision is incomplete") from error
@@ -379,9 +585,7 @@ class SafetyProjectionAttempt:
         object.__setattr__(
             self,
             "proposed_joint_positions",
-            _finite_tuple(
-                "proposed joint positions", self.proposed_joint_positions, 7
-            ),
+            _finite_tuple("proposed joint positions", self.proposed_joint_positions, 7),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -490,4 +694,6 @@ class SimulatorControlGate:
             reasons.append(ControlGateReason.COLLISION_DETECTED)
         if state.contact_force_newtons > self.limits.maximum_contact_force_newtons:
             reasons.append(ControlGateReason.FORCE_LIMIT_EXCEEDED)
-        return ControlGateDecision(observation.observation_id, next_pose, tuple(reasons))
+        return ControlGateDecision(
+            observation.observation_id, next_pose, tuple(reasons)
+        )

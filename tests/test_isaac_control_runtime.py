@@ -10,7 +10,10 @@ from unittest.mock import Mock, patch
 import numpy as np
 
 from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimits
-from jepa_wm.insertion_refresh import ControlSafetySnapshot
+from jepa_wm.insertion_refresh import (
+    MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
+    ControlSafetySnapshot,
+)
 from jepa_wm.joint_drive import JointDriveTarget
 from sim.isaac_control_runtime import (
     ControlContactSensors,
@@ -21,6 +24,8 @@ from sim.isaac_control_runtime import (
     read_control_contact,
     refresh_live_control_runtime,
     synchronized_control_safety_snapshot,
+    synchronized_contact_grasp_execution_runtime,
+    synchronized_contact_grasp_safety_snapshot,
     synchronized_insertion_frame_capture,
     synchronized_insertion_safety_snapshot,
     synchronized_insertion_resolution_runtime,
@@ -32,6 +37,7 @@ class _Timeline:
     def __init__(self, *, playing: bool) -> None:
         self.playing = playing
         self.events: list[str] = []
+        self.auto_update = False
 
     def is_playing(self) -> bool:
         return self.playing
@@ -40,9 +46,29 @@ class _Timeline:
         self.playing = True
         self.events.append("play")
 
+    def set_auto_update(self, value: bool) -> None:
+        self.auto_update = value
+
     def pause(self) -> None:
         self.playing = False
         self.events.append("pause")
+
+
+class _DeferredPauseTimeline(_Timeline):
+    """Model Isaac applying pause on the next application update."""
+
+    def __init__(self) -> None:
+        super().__init__(playing=True)
+        self.pause_requested = False
+
+    def pause(self) -> None:
+        self.pause_requested = True
+        self.events.append("pause")
+
+    def commit_pending_pause(self) -> None:
+        if self.pause_requested:
+            self.playing = False
+            self.pause_requested = False
 
 
 class _Reading:
@@ -61,6 +87,116 @@ class _Sensor:
 
 
 class ContactReadingTest(unittest.TestCase):
+    def test_initial_contact_grasp_holds_stable_captured_state_despite_target_bias(
+        self,
+    ) -> None:
+        captured = ControlSafetySnapshot(
+            (0.003,) + (0.0,) * 6,
+            0.0402,
+            (0.0, 0.0, 0.0),
+            0.0,
+            False,
+            False,
+        )
+        live = ControlSafetySnapshot(
+            captured.joint_positions,
+            captured.gripper_width_m,
+            captured.plug_position,
+            0.0,
+            False,
+            False,
+        )
+        drive_target = JointDriveTarget((0.0,) * 7, 0.04)
+
+        live.validate_initial_contact_grasp_continuity(
+            captured,
+            maximum_gripper_error_meters=(
+                MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "active drive target"):
+            live.validate_followup_continuity(
+                captured,
+                drive_target,
+                maximum_gripper_error_meters=(
+                    MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+                ),
+            )
+
+        drifted = ControlSafetySnapshot(
+            captured.joint_positions,
+            captured.gripper_width_m + 3e-4,
+            captured.plug_position,
+            0.0,
+            False,
+            False,
+        )
+        with self.assertRaisesRegex(ValueError, "initial contact-grasp"):
+            drifted.validate_initial_contact_grasp_continuity(
+                captured,
+                maximum_gripper_error_meters=(
+                    MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+                ),
+            )
+
+    def test_contact_grasp_continuity_accepts_settling_to_unchanged_drive_target(
+        self,
+    ) -> None:
+        captured = ControlSafetySnapshot(
+            (0.003,) + (0.0,) * 6,
+            0.0402,
+            (0.0, 0.0, 0.0),
+            0.0,
+            False,
+            True,
+        )
+        live = ControlSafetySnapshot(
+            (0.0,) * 7,
+            0.04,
+            captured.plug_position,
+            0.0,
+            False,
+            True,
+        )
+        drive_target = JointDriveTarget((0.0,) * 7, 0.04)
+
+        live.validate_followup_continuity(
+            captured,
+            drive_target,
+            maximum_gripper_error_meters=(
+                MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+            ),
+        )
+
+    def test_contact_grasp_gripper_floor_does_not_weaken_insertion_continuity(self) -> None:
+        captured = ControlSafetySnapshot(
+            (0.0,) * 7,
+            0.04,
+            (0.0, 0.0, 0.0),
+            0.0,
+            False,
+            False,
+        )
+        live = ControlSafetySnapshot(
+            captured.joint_positions,
+            0.0402,
+            captured.plug_position,
+            0.0,
+            False,
+            False,
+        )
+
+        drive_target = JointDriveTarget(captured.joint_positions, 0.04)
+        with self.assertRaisesRegex(ValueError, "active drive target"):
+            live.validate_followup_continuity(captured, drive_target)
+        live.validate_followup_continuity(
+            captured,
+            drive_target,
+            maximum_gripper_error_meters=(
+                MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+            ),
+        )
+
     def test_insertion_interlock_aborts_immediately_on_attachment_loss(self) -> None:
         attachment = SimpleNamespace(attached=False)
         interlock = LiveInsertionInterlock(
@@ -72,6 +208,37 @@ class ContactReadingTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "attachment state changed"):
             interlock.observe()
+
+    def test_synchronized_snapshot_waits_for_deferred_pause_to_commit(self) -> None:
+        timeline = _DeferredPauseTimeline()
+        actuators = Mock()
+        attachment = Mock()
+        sensors = Mock()
+        snapshot = Mock()
+        updates: list[str] = []
+
+        async def advance() -> None:
+            updates.append("update")
+            timeline.commit_pending_pause()
+
+        with patch(
+            "sim.isaac_control_runtime._control_safety_snapshot",
+            return_value=snapshot,
+        ):
+            actual = asyncio.run(
+                synchronized_control_safety_snapshot(
+                    timeline,
+                    actuators,
+                    attachment,
+                    sensors,
+                    advance,
+                )
+            )
+
+        self.assertIs(actual, snapshot)
+        self.assertFalse(timeline.is_playing())
+        self.assertEqual(updates, ["update"])
+        self.assertEqual(timeline.events, ["pause"])
 
     def test_recreates_every_tensor_backed_runtime_wrapper(self) -> None:
         prims = ModuleType("isaacsim.core.experimental.prims")
@@ -157,9 +324,9 @@ class ContactReadingTest(unittest.TestCase):
         self.assertIs(refreshed.sensor, refreshed_sensors)
 
     def test_pauses_when_resuming_the_timeline_fails(self) -> None:
-        timeline = Mock()
-        timeline.is_playing.return_value = False
-        timeline.play.side_effect = RuntimeError("resume failed")
+        timeline = _Timeline(playing=False)
+        timeline.play = Mock(side_effect=RuntimeError("resume failed"))
+        timeline.pause = Mock()
 
         async def advance() -> None:
             raise AssertionError("failed resume must not advance")
@@ -305,6 +472,110 @@ class ContactReadingTest(unittest.TestCase):
         )
         self.assertEqual(timeline.events, ["play", "pause"])
 
+    def test_contact_grasp_refresh_accepts_target_relative_gripper_settling(
+        self,
+    ) -> None:
+        timeline = _Timeline(playing=False)
+        old_runtime = LiveControlRuntime(
+            "session", object(), Mock(), Mock(attached=False), Mock()
+        )
+        refreshed_runtime = LiveControlRuntime(
+            "session", old_runtime.stage, Mock(), Mock(attached=False), Mock()
+        )
+        captured = ControlSafetySnapshot(
+            (0.0,) * 7,
+            0.0325559638440609,
+            (0.0, 0.0, 0.0),
+            0.0,
+            False,
+            False,
+        )
+        live = ControlSafetySnapshot(
+            (8.8e-6,) + (0.0,) * 6,
+            0.03255075588822365,
+            (0.0, 0.0, 0.0),
+            0.0,
+            False,
+            False,
+        )
+        drive_target = JointDriveTarget((0.0,) * 7, 0.03242833912372589)
+
+        async def advance() -> None:
+            return None
+
+        with (
+            patch(
+                "sim.isaac_control_runtime.refresh_live_control_runtime",
+                return_value=refreshed_runtime,
+            ),
+            patch(
+                "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
+                return_value=(live, Mock(), drive_target),
+            ),
+            patch(
+                "sim.isaac_control_runtime.LiveContactInterlock.observe",
+                return_value=SimpleNamespace(
+                    collision_detected=False,
+                    force_newtons=0.0,
+                ),
+            ),
+        ):
+            synchronized = asyncio.run(
+                synchronized_contact_grasp_safety_snapshot(
+                    old_runtime,
+                    timeline,
+                    advance,
+                    captured,
+                    SimulatorSafetyLimits(),
+                    expected_active_drive_target=drive_target,
+                    operation="test contact-grasp refresh",
+                    maximum_gripper_error_meters=(
+                        MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+                    ),
+                )
+            )
+
+        self.assertIs(synchronized.safety, live)
+        self.assertEqual(synchronized.active_drive_target, drive_target)
+        self.assertEqual(timeline.events, ["play", "pause"])
+
+        execution_timeline = _Timeline(playing=False)
+        with (
+            patch(
+                "sim.isaac_control_runtime.refresh_live_control_runtime",
+                return_value=refreshed_runtime,
+            ),
+            patch(
+                "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
+                return_value=(live, Mock(), drive_target),
+            ),
+            patch(
+                "sim.isaac_control_runtime.LiveContactInterlock.observe",
+                return_value=SimpleNamespace(
+                    collision_detected=False,
+                    force_newtons=0.0,
+                ),
+            ),
+        ):
+            execution = asyncio.run(
+                synchronized_contact_grasp_execution_runtime(
+                    old_runtime,
+                    execution_timeline,
+                    advance,
+                    captured,
+                    SimulatorSafetyLimits(),
+                    expected_active_drive_target=drive_target,
+                    operation="test contact-grasp execution refresh",
+                    maximum_gripper_error_meters=(
+                        MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+                    ),
+                )
+            )
+
+        self.assertIs(execution.safety, live)
+        self.assertTrue(execution_timeline.is_playing())
+        self.assertEqual(execution_timeline.events, ["play"])
+
     def test_insertion_frame_capture_stays_live_and_interlocked_until_read(self) -> None:
         timeline = _Timeline(playing=False)
         old_runtime = LiveControlRuntime(
@@ -383,8 +654,9 @@ class ContactReadingTest(unittest.TestCase):
         self.assertIs(synchronized.safety, live)
         live.validate_followup_continuity.assert_called_once_with(
             captured,
-            drive_target.gripper_width_m,
+            drive_target,
             SimulatorSafetyLimits(),
+            maximum_gripper_error_meters=1e-6,
         )
         self.assertEqual(timeline.events, ["play", "pause"])
 
@@ -689,8 +961,8 @@ class ContactReadingTest(unittest.TestCase):
                     )
                 )
 
-        self.assertEqual(update_count, 25)
-        self.assertEqual(observe.call_count, 26)
+        self.assertEqual(update_count, 97)
+        self.assertEqual(observe.call_count, 98)
         self.assertFalse(camera_called)
         self.assertEqual(timeline.events, ["play", "pause"])
 

@@ -26,6 +26,7 @@ from jepa_wm.control_safety import (
     INSERTION_TARGET_PROGRESS,
     SafetyProjectionAttempt,
     SimulatorControlGate,
+    SimulatorSafetyLimits,
     SimulatorSafetyState,
 )
 from jepa_wm.control_tracking import ActionTrackingDecision, ActionTrackingLimits
@@ -33,6 +34,8 @@ from jepa_wm.joint_settlement import JointSettlementAttempt
 from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.direct_safety import DirectInsertionSafetyEvidence
 from jepa_wm.insertion_refresh import (
+    MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
+    MAXIMUM_SYNCHRONIZED_GRIPPER_ERROR_METERS,
     ControlSafetySnapshot,
     InsertionEvaluationRefresh,
 )
@@ -62,9 +65,17 @@ from jepa_wm.insertion_trial import (
     InsertionTrialSourceEvidence,
     insertion_trial_rollback_outcome_from_dict,
 )
+from jepa_wm.insertion_transition import (
+    InsertionProposalContinuation,
+    insertion_proposal_continuation_from_dict,
+    resolve_insertion_followup_proposal,
+)
 from jepa_wm.insertion_contract import (
+    CONTACT_INSERTION_RECORDING,
+    ContactInsertionSegment,
     INSERTION_TASK_ID,
     InsertionControlTargetPolicy,
+    InsertionTargetOrigin,
     insertion_control_target_policy,
 )
 from jepa_wm.target_progress import RealizedTargetProgressDecision
@@ -319,12 +330,14 @@ class ControlSessionState:
     def insertion_projection_scales(
         self,
         observation: ControlObservation,
+        proposed_action: DroidAction | None = None,
     ) -> tuple[DroidActionScale, ...]:
         if self.insertion_target_policy is None:
             return ACTION_SCALES
         return self.insertion_target_policy.projection_scales(
             observation.pose,
             observation.target_pose,
+            proposed_action,
         )
 
 
@@ -379,12 +392,17 @@ class PostActionEvidence:
         self,
         observation: ControlObservation,
         state: ControlSessionState,
+        *,
+        maximum_gripper_error_meters: float = (
+            MAXIMUM_SYNCHRONIZED_GRIPPER_ERROR_METERS
+        ),
     ) -> None:
         if state.active_drive_target is None:
             raise ValueError("follow-up capture has no active drive target")
         state.require_safety_snapshot().validate_followup_continuity(
             self.require_safety_snapshot(),
-            state.active_drive_target.gripper_width_m,
+            state.active_drive_target,
+            maximum_gripper_error_meters=maximum_gripper_error_meters,
         )
         drift = action_between(self.pose, observation.pose)
         limits = ActionTrackingLimits()
@@ -688,6 +706,36 @@ class ControlResult:
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("control result is incomplete") from error
 
+    def applied_drive_target(
+        self,
+        *,
+        held_gripper_width_m: float | None = None,
+    ) -> JointDriveTarget:
+        """Reconstruct the exact drive target of one applied generic action.
+
+        Contact-grasp motion holds the previously authenticated gripper target
+        after attachment while continuing to update the arm target.  Its source
+        state supplies that held width so reconstruction matches execution.
+        """
+
+        if (
+            self.status is not ControlResultStatus.APPLIED
+            or not self.projection_attempts
+            or not self.gate.passed
+            or self.gate.next_pose is None
+        ):
+            raise ValueError("control result has no applied drive target")
+        target = JointDriveTarget.for_command(
+            self.projection_attempts[-1].proposed_joint_positions,
+            (1.0 - self.gate.next_pose.values[6]) * MAX_GRIPPER_WIDTH_M,
+        )
+        if held_gripper_width_m is None:
+            return target
+        return JointDriveTarget(
+            target.joint_positions,
+            held_gripper_width_m,
+        )
+
 
 @dataclass(frozen=True)
 class InsertionFollowupLineage:
@@ -696,6 +744,7 @@ class InsertionFollowupLineage:
     observation: ControlObservation
     state: ControlSessionState
     result: ControlResult
+    next_maximum_steps: int | None = None
 
     def __post_init__(self) -> None:
         post_action = self.result.post_action
@@ -710,8 +759,7 @@ class InsertionFollowupLineage:
             or not is_insertion_trial_execution_policy(self.state.execution_policy)
         ):
             raise ValueError("follow-up lineage requires one safe applied insertion")
-        if not self.rollout_position.can_followup:
-            raise ValueError("insertion rollout reached its maximum step")
+        self.rollout_position.followup(self.next_maximum_steps)
 
     @property
     def rollout_position(self) -> InsertionRolloutPosition:
@@ -736,27 +784,112 @@ class InsertionFollowupLineage:
             raise ValueError("follow-up lineage has no progress evidence")
         return insertion_trial.realized_target_progress
 
+    @property
+    def followup_position(self) -> InsertionRolloutPosition:
+        return self.rollout_position.followup(self.next_maximum_steps)
+
     def validate_source(
         self,
         observation: ControlObservation,
         state: ControlSessionState,
+        *,
+        expected_proposal: Path,
     ) -> None:
         if (
             state.previous_session_id != self.result.session_id
             or observation.warmup_frames != self.observation.warmup_frames + 1
-            or observation.expected_proposal != self.observation.expected_proposal
+            or observation.expected_proposal != expected_proposal
             or state.reference_recording != self.state.reference_recording
             or state.seed != self.state.seed
-            or state.insertion_target_policy
-            != self.state.insertion_target_policy.for_followup()
+            or not self.state.insertion_target_policy.authorizes_followup(
+                state.insertion_target_policy
+            )
             or state.resolved_insertion_rollout_position()
-            != self.rollout_position.followup()
+            != self.followup_position
             or state.active_drive_target != self.active_drive_target
             or observation.previous_action
             != action_between(self.observation.pose, observation.pose)
         ):
             raise ValueError("insertion follow-up source lineage is invalid")
         self.post_action.validate_followup_capture(observation, state)
+
+
+@dataclass(frozen=True)
+class GraspToInsertionLineage:
+    """One applied contact-aware grasp authorized to start insertion."""
+
+    observation: ControlObservation
+    state: ControlSessionState
+    result: ControlResult
+
+    def __post_init__(self) -> None:
+        post_action = self.result.post_action
+        if (
+            self.result.session_id != self.state.session_id
+            or self.result.status is not ControlResultStatus.APPLIED
+            or self.state.execution_policy is not ControlExecutionPolicy.DIRECT
+            or self.state.insertion_target_policy is not None
+            or post_action is None
+            or not post_action.tracking.passed
+            or post_action.collision_detected
+            or post_action.contact_force_newtons
+            > SimulatorSafetyLimits().maximum_contact_force_newtons
+            or not post_action.plug_attached
+            or not self.result.projection_attempts
+            or not self.result.gate.passed
+        ):
+            raise ValueError(
+                "grasp-to-insertion lineage requires one safe applied grasp"
+            )
+
+    @property
+    def post_action(self) -> PostActionEvidence:
+        if self.result.post_action is None:
+            raise ValueError("grasp-to-insertion lineage has no post-action evidence")
+        return self.result.post_action
+
+    @property
+    def active_drive_target(self) -> JointDriveTarget:
+        return self.result.applied_drive_target(
+            held_gripper_width_m=(
+                self.state.active_drive_target.gripper_width_m
+                if self.state.plug_attached
+                and self.state.active_drive_target is not None
+                else None
+            )
+        )
+
+    def validate_source(
+        self,
+        observation: ControlObservation,
+        state: ControlSessionState,
+    ) -> None:
+        expected_context = CONTACT_INSERTION_RECORDING.start_index(
+            ContactInsertionSegment.GRASP_ATTACH
+        )
+        if (
+            state.previous_session_id != self.result.session_id
+            or state.execution_policy
+            is not ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION
+            or observation.warmup_frames != expected_context
+            or state.reference_recording != self.state.reference_recording
+            or state.seed != self.state.seed
+            or state.insertion_target_policy is None
+            or state.insertion_target_policy.target_origin
+            is not InsertionTargetOrigin.LIVE_OBSERVATION
+            or state.resolved_insertion_rollout_position().step_index != 1
+            or state.active_drive_target != self.active_drive_target
+            or observation.previous_action
+            != action_between(self.observation.pose, observation.pose)
+        ):
+            raise ValueError("grasp-to-insertion source lineage is invalid")
+        self.post_action.validate_followup_capture(
+            observation,
+            state,
+            maximum_gripper_error_meters=(
+                MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -852,6 +985,26 @@ class ControlSession:
     @property
     def insertion_trial_binding_path(self) -> Path:
         return self.path / "insertion_trial.json"
+
+    def insertion_proposal_handoff_path(self, followup_session_id: str) -> Path:
+        validate_recording_id(followup_session_id)
+        return self.path / f"proposal_handoff_{followup_session_id}.json"
+
+    def load_insertion_proposal_handoff(
+        self,
+        followup_session_id: str,
+    ) -> InsertionProposalContinuation:
+        try:
+            payload = json.loads(
+                self.insertion_proposal_handoff_path(
+                    followup_session_id
+                ).read_text()
+            )
+            return insertion_proposal_continuation_from_dict(payload)
+        except (FileNotFoundError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError(
+                f"insertion proposal handoff is invalid: {self.session_id}"
+            ) from error
 
     def create(self) -> None:
         if self.path.exists():
@@ -1025,27 +1178,72 @@ class ControlSession:
 
     def load_insertion_trial_source_evidence(self) -> InsertionTrialSourceEvidence:
         observation, state = self.load_capture()
-        if (
-            recording_task(
-                self.path.parent.parent / "recordings" / state.reference_recording
-            )
-            != INSERTION_TASK_ID
-        ):
+        reference_task = recording_task(
+            self.path.parent.parent / "recordings" / state.reference_recording
+        )
+        if reference_task != INSERTION_TASK_ID:
             raise ValueError("insertion trial source does not reference insertion evidence")
+        proposal_handoff = None
         if state.previous_session_id is not None:
             from jepa_wm.control_rollout import ControlStepSummary
 
             previous = ControlSession.at(self.path.parent, state.previous_session_id)
             previous_step = ControlStepSummary.from_session(previous)
-            InsertionFollowupLineage(
-                previous_step.observation,
-                previous_step.state,
-                previous_step.result,
-            ).validate_source(observation, state)
+            if (
+                previous_step.state.execution_policy
+                is ControlExecutionPolicy.DIRECT
+            ):
+                lineage = GraspToInsertionLineage(
+                    previous_step.observation,
+                    previous_step.state,
+                    previous_step.result,
+                )
+                lineage.validate_source(observation, state)
+            else:
+                lineage = InsertionFollowupLineage(
+                    previous_step.observation,
+                    previous_step.state,
+                    previous_step.result,
+                    (
+                        state.resolved_insertion_rollout_position().maximum_steps
+                        if state.resolved_insertion_rollout_position().maximum_steps
+                        != previous_step.state.resolved_insertion_rollout_position()
+                        .maximum_steps
+                        else None
+                    ),
+                )
+                proposal_changed = (
+                    previous_step.observation.expected_proposal
+                    != observation.expected_proposal
+                )
+                proposal_handoff = (
+                        previous.load_insertion_proposal_handoff(self.session_id)
+                    if proposal_changed
+                    else None
+                )
+                expected_proposal = resolve_insertion_followup_proposal(
+                    previous_step.observation.expected_proposal,
+                    observation.expected_proposal,
+                    previous_proposal_fingerprint=(
+                        previous_step.response.proposal_fingerprint
+                    ),
+                    handoff=proposal_handoff,
+                )
+                lineage.validate_source(
+                    observation,
+                    state,
+                    expected_proposal=expected_proposal,
+                )
+        direct_safety = self.load_direct_safety()
+        if (
+            proposal_handoff is not None
+            and direct_safety.proposal != proposal_handoff.requested
+        ):
+            raise ValueError("insertion proposal handoff parent evidence is invalid")
         return InsertionTrialSourceEvidence(
             self.trial_context(observation, state),
             self.load_response(),
-            self.load_direct_safety(),
+            direct_safety,
             state.active_drive_target,
         )
 
@@ -1292,7 +1490,10 @@ class ControlSession:
             )
         ):
             raise ValueError("direct insertion safety is not bound to its session")
-        expected_scales = state.insertion_projection_scales(observation)
+        expected_scales = state.insertion_projection_scales(
+            observation,
+            response.first_action,
+        )
         evaluation_observation = observation
         evaluation_response = response
         try:
@@ -1304,7 +1505,8 @@ class ControlSession:
                     state.require_safety_snapshot(),
                 )
                 expected_scales = state.insertion_projection_scales(
-                    evaluation_observation
+                    evaluation_observation,
+                    evaluation_response.first_action,
                 )
             else:
                 evidence.live_state.validate_continuity(

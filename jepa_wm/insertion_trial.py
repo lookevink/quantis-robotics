@@ -38,7 +38,8 @@ from sim.recording import validate_recording_id
 INSERTION_TRIAL_SCHEMA = "quantis.jepa_wm_insertion_trial.v1"
 INSERTION_ROLLBACK_GRIPPER_ERROR_METERS = 1e-3
 INSERTION_MAXIMUM_DRIVE_BIAS_RADIANS = 0.002
-INSERTION_TRIAL_SETTLEMENT_MAXIMUM_UPDATES = 48
+INSERTION_TRIAL_SETTLEMENT_MAXIMUM_UPDATES = 80
+INSERTION_TRIAL_SETTLEMENT_TRACKING_FRACTION = 0.05
 
 
 class InsertionTrialAuthority(str, Enum):
@@ -119,6 +120,9 @@ class InsertionTrialExecutionEvidence:
 @dataclass(frozen=True)
 class InsertionTrialPolicy:
     joint_settlement: TrackedJointSettlementPolicy = TrackedJointSettlementPolicy(
+        tracking_error_fraction_of_requested_motion=(
+            INSERTION_TRIAL_SETTLEMENT_TRACKING_FRACTION
+        ),
         maximum_updates=INSERTION_TRIAL_SETTLEMENT_MAXIMUM_UPDATES
     )
     realized_progress: RealizedTargetProgressPolicy = RealizedTargetProgressPolicy()

@@ -743,6 +743,14 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     fifth action. Full seating, unknown-start insertion, filming, and
     production authority remain false. Exact sessions and metrics are in the
     linked README checkpoint.
+    The first retained-stage grasp-to-insertion canary reached genuine
+    JEPA-powered grasp motion but failed the unchanged tracking and rollback
+    gates before attachment, so insertion never began. The workflow now owns
+    canonical contact-grasp context mapping, stable capture, exact live-state
+    refresh, proposal handoff, and an `8/8 + 4/4` terminal contract. A
+    contact-scene grasp proposal must pass a new disjoint offline gate before
+    another live chain; full grasp-to-insertion, filming, and production
+    authority remain false. Exact evidence is in the linked README checkpoint.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

@@ -38,6 +38,28 @@ class ControlSessionTest(unittest.TestCase):
             ControlSessionState.from_dict(malformed)
         with self.assertRaisesRegex(ValueError, "invalid"):
             InsertionRolloutPosition(1, 5)
+        self.assertEqual(
+            InsertionRolloutPosition(4, 4).followup(8),
+            InsertionRolloutPosition(5, 8),
+        )
+        self.assertEqual(
+            InsertionRolloutPosition(8, 8).followup(12),
+            InsertionRolloutPosition(9, 12),
+        )
+        self.assertEqual(
+            InsertionRolloutPosition(12, 12).followup(32),
+            InsertionRolloutPosition(13, 32),
+        )
+        self.assertEqual(
+            InsertionRolloutPosition(32, 32).followup(96),
+            InsertionRolloutPosition(33, 96),
+        )
+        with self.assertRaisesRegex(ValueError, "cap cannot change"):
+            InsertionRolloutPosition(3, 4).followup(8)
+        with self.assertRaisesRegex(ValueError, "cap cannot change"):
+            InsertionRolloutPosition(11, 12).followup(32)
+        with self.assertRaisesRegex(ValueError, "cap cannot change"):
+            InsertionRolloutPosition(31, 32).followup(96)
 
     def test_insertion_target_policy_is_persisted_and_required_for_its_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

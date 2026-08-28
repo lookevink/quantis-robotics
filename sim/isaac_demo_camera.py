@@ -195,6 +195,30 @@ class DemoRecorder:
 
         await self._capture(snapshot, advance=False, max_attempts=1)
 
+    async def prepare_current(
+        self,
+        observe_safety: Callable[[], Any],
+        *,
+        max_attempts: int = 8,
+    ) -> None:
+        """Warm newly attached cameras under an observer without writing a frame."""
+
+        import omni.kit.app
+
+        if max_attempts <= 0:
+            raise ValueError("camera preparation attempts must be positive")
+        app = omni.kit.app.get_app()
+
+        async def advance_and_observe() -> None:
+            await app.next_update_async()
+            observe_safety()
+
+        await _wait_for_rgb(
+            self._annotators,
+            advance_and_observe,
+            max_attempts=max_attempts,
+        )
+
     async def _capture(
         self,
         snapshot: RecordingSnapshot,

@@ -159,6 +159,49 @@ remote() {
   ssh "${ssh_options[@]}" "${ssh_user}@$(instance_ip)" "$@"
 }
 
+run_task_proposal_training() {
+  local task_name="$1"
+  local default_seed="$2"
+  shift 2
+  local recording_names="${1:-}"
+  local training_steps="${2:-3000}"
+  local proposal_name="${3:-}"
+  local hidden_dimension="${4:-256}"
+  local learning_rate="${5:-0.001}"
+  local weight_decay="${6:-0.0001}"
+  local training_seed="${7:-${default_seed}}"
+  is_safe_identifier_list "${recording_names}" || die "invalid recording list"
+  require_positive_integer "training steps" "${training_steps}" || exit 1
+  require_positive_integer "hidden dimension" "${hidden_dimension}" || exit 1
+  require_nonnegative_number "learning rate" "${learning_rate}" || exit 1
+  require_nonnegative_number "weight decay" "${weight_decay}" || exit 1
+  require_nonnegative_integer "training seed" "${training_seed}" || exit 1
+  is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+  sync_repo
+  remote "bash ~/quantis-robotics/ops/jepa_wm.sh ${task_name}-proposal-train --recordings '${recording_names}' --steps '${training_steps}' --proposal '${proposal_name}' --hidden-dimension '${hidden_dimension}' --learning-rate '${learning_rate}' --weight-decay '${weight_decay}' --seed '${training_seed}'"
+}
+
+run_task_proposal_evaluation() {
+  local task_name="$1"
+  local recording_name="$2"
+  local proposal_name="$3"
+  is_safe_identifier "${recording_name}" || die "invalid recording name"
+  is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+  sync_repo
+  remote "bash ~/quantis-robotics/ops/jepa_wm.sh ${task_name}-proposal-eval --recording '${recording_name}' --proposal '${proposal_name}'"
+}
+
+run_task_proposal_summary() {
+  local task_name="$1"
+  local recording_names="$2"
+  local proposal_name="$3"
+  is_safe_identifier_list "${recording_names}" \
+    || die "invalid held-out recording list"
+  is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+  sync_repo
+  remote "bash ~/quantis-robotics/ops/jepa_wm.sh ${task_name}-proposal-summarize --recordings '${recording_names}' --proposal '${proposal_name}'"
+}
+
 remote_with_config() {
   local remote_command="env"
   local name
@@ -263,8 +306,13 @@ validate_guarded_insertion_identifiers() {
 run_guarded_insertion_workflow() {
   local artifacts_name="$1"
   local workflow_command="$2"
+  local switch_worker="${3:-false}"
   local command_status=0
   sync_repo || command_status=$?
+  if (( command_status == 0 )) && [[ "${switch_worker}" == "true" ]]; then
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-stop" \
+      || command_status=$?
+  fi
   if (( command_status == 0 )); then
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --artifacts '${artifacts_name}'" \
       || command_status=$?
@@ -474,22 +522,37 @@ Commands:
   jepa-wm-plan-benchmark RECORDING [camera] [start] [count] [stride] [iterations] [samples] [elites] [adapter] [proposal]
   jepa-wm-proposal-train RECORDING[,RECORDING...] [camera] [steps] [proposal]
   jepa-wm-grasp-proposal-train RECORDING[,RECORDING...] [steps] PROPOSAL [hidden-dimension learning-rate weight-decay seed]
+  jepa-wm-contact-grasp-proposal-train RECORDING[,RECORDING...] [steps] PROPOSAL [hidden-dimension learning-rate weight-decay seed]
   jepa-wm-proposal-eval RECORDING [camera] [start] [count] [stride] [proposal]
   jepa-wm-proposal-summarize RECORDING[,RECORDING...] [camera] [start] [count] [stride] [proposal]
   jepa-wm-grasp-proposal-eval RECORDING PROPOSAL
   jepa-wm-grasp-proposal-summarize RECORDING[,RECORDING...] PROPOSAL
+  jepa-wm-contact-grasp-proposal-eval RECORDING PROPOSAL
+  jepa-wm-contact-grasp-proposal-summarize RECORDING[,RECORDING...] PROPOSAL
   jepa-wm-insertion-proposal-train RECORDING[,RECORDING...] [steps] PROPOSAL [hidden-dimension learning-rate weight-decay seed]
+  jepa-wm-insertion-transition-finetune SOURCE_SESSION PARENT_PROPOSAL OUTPUT_PROPOSAL [steps=500] [learning-rate=0.0001]
+  jepa-wm-insertion-transition-eval SOURCE_SESSION PROPOSAL OUTPUT
   jepa-wm-insertion-proposal-eval RECORDING PROPOSAL
   jepa-wm-insertion-proposal-summarize RECORDING[,RECORDING...] PROPOSAL EXPERIMENT BASE_SEED
   jepa-wm-control-infer-replay RECORDING [camera] [context-index] [proposal]
   jepa-wm-control-worker-configure NAME PROPOSAL ADAPTER [CALIBRATION] [translation-margin rotation-margin gripper-margin] [planner-seed iterations samples elites]
   jepa-wm-control-worker-start [artifacts] | jepa-wm-control-worker-status | jepa-wm-control-worker-stop
+  jepa-wm-control-worker-rebase-proposal SOURCE_ARTIFACTS NEW_ARTIFACTS PROPOSAL
   jepa-wm-control-step REFERENCE_RECORDING SEED [artifacts] [context-index]
   jepa-wm-insertion-safety REFERENCE_RECORDING SEED [artifacts] [context-index]
   jepa-wm-insertion-trial REFERENCE_RECORDING SEED ARTIFACTS SOURCE_SESSION [context-index]
   jepa-wm-insertion-followup REFERENCE_RECORDING SEED ARTIFACTS PREVIOUS_SESSION
+  jepa-wm-insertion-parent-followup REFERENCE_RECORDING SEED ARTIFACTS BRIDGE_SESSION [RUNTIME_OWNER_SESSION] [ROLLOUT_EXTENSION_PROFILE]
+  jepa-wm-insertion-segment-followup REFERENCE_RECORDING SEED ARTIFACTS PREVIOUS_SESSION [ROLLED_BACK_RUNTIME_SESSION]
+  jepa-wm-insertion-approach-followup REFERENCE_RECORDING SEED ARTIFACTS TERMINAL_DEMO_SESSION
+  jepa-wm-insertion-alignment-followup REFERENCE_RECORDING SEED ARTIFACTS TERMINAL_APPROACH_SESSION
+  jepa-wm-insertion-pre-insertion-followup REFERENCE_RECORDING SEED ARTIFACTS TERMINAL_ALIGNMENT_SESSION
+  jepa-wm-insertion-contact-followup REFERENCE_RECORDING SEED ARTIFACTS TERMINAL_PRE_INSERTION_SESSION
   jepa-wm-insertion-two-step REFERENCE_RECORDING SEED ARTIFACTS [context-index]
   jepa-wm-insertion-demo-rollout REFERENCE_RECORDING SEED ARTIFACTS [context-index]
+  jepa-wm-grasp-to-insertion REFERENCE_RECORDING SEED GRASP_ARTIFACTS INSERTION_ARTIFACTS
+  jepa-wm-grasp-transition-trial RUN_ID PREVIOUS_GRASP_SESSION REFERENCE_RECORDING SEED INSERTION_ARTIFACTS [ROLLED_BACK_SESSION]
+  jepa-wm-grasp-transition-milestone RUN_ID REFERENCE_RECORDING SEED GRASP_ARTIFACTS INSERTION_ARTIFACTS
   jepa-wm-insertion-resolution REFERENCE_RECORDING SEED [context-index] [attached|unloaded]
   jepa-wm-control-rollout REFERENCE_RECORDING SEED STEPS [artifacts] [context-index]
   jepa-wm-control-baseline REFERENCE_RECORDING SEED STEPS zero|scripted [context-index]
@@ -503,6 +566,7 @@ Commands:
   jepa-wm-control-apply SESSION
   jepa-wm-candidate-film STRICT_REPORT [recording]
   jepa-wm-grasp-film READINESS SEED [recording]
+  jepa-wm-insertion-demo-film SOURCE_RUN [recording]
   jepa-wm-summarize EXPERIMENT TRAINING_CSV HELD_OUT_CSV [camera] [count]
   jepa-wm-milestone [train-count] [held-out-count] [steps] [base-seed]
   jepa-wm-eval-adapted RECORDING [camera] [start-index] [count] [stride]
@@ -875,22 +939,7 @@ case "${command}" in
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh proposal-eval --recording '${recording_name}' --camera '${camera_name}' --start-index '${start_index}' --count '${rollout_count}' --stride '${rollout_stride}' --proposal '${proposal_name}'"
     ;;
   jepa-wm-grasp-proposal-train)
-    recording_names="${2:-}"
-    training_steps="${3:-3000}"
-    proposal_name="${4:-}"
-    hidden_dimension="${5:-256}"
-    learning_rate="${6:-0.001}"
-    weight_decay="${7:-0.0001}"
-    training_seed="${8:-234}"
-    is_safe_identifier_list "${recording_names}" || die "invalid recording list"
-    require_positive_integer "training steps" "${training_steps}" || exit 1
-    require_positive_integer "hidden dimension" "${hidden_dimension}" || exit 1
-    require_nonnegative_number "learning rate" "${learning_rate}" || exit 1
-    require_nonnegative_number "weight decay" "${weight_decay}" || exit 1
-    require_nonnegative_integer "training seed" "${training_seed}" || exit 1
-    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
-    sync_repo
-    remote "bash ~/quantis-robotics/ops/jepa_wm.sh grasp-proposal-train --recordings '${recording_names}' --steps '${training_steps}' --proposal '${proposal_name}' --hidden-dimension '${hidden_dimension}' --learning-rate '${learning_rate}' --weight-decay '${weight_decay}' --seed '${training_seed}'"
+    run_task_proposal_training grasp 234 "${@:2}"
     ;;
   jepa-wm-proposal-summarize)
     recording_names="${2:-}"
@@ -910,47 +959,51 @@ case "${command}" in
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh proposal-summarize --recordings '${recording_names}' --camera '${camera_name}' --start-index '${start_index}' --count '${rollout_count}' --stride '${rollout_stride}' --proposal '${proposal_name}'"
     ;;
   jepa-wm-grasp-proposal-eval)
-    recording_name="${2:-}"
-    proposal_name="${3:-}"
-    is_safe_identifier "${recording_name}" || die "invalid recording name"
-    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
-    sync_repo
-    remote "bash ~/quantis-robotics/ops/jepa_wm.sh grasp-proposal-eval --recording '${recording_name}' --proposal '${proposal_name}'"
+    run_task_proposal_evaluation grasp "${2:-}" "${3:-}"
     ;;
   jepa-wm-grasp-proposal-summarize)
-    recording_names="${2:-}"
-    proposal_name="${3:-}"
-    is_safe_identifier_list "${recording_names}" \
-      || die "invalid held-out recording list"
-    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
-    sync_repo
-    remote "bash ~/quantis-robotics/ops/jepa_wm.sh grasp-proposal-summarize --recordings '${recording_names}' --proposal '${proposal_name}'"
+    run_task_proposal_summary grasp "${2:-}" "${3:-}"
+    ;;
+  jepa-wm-contact-grasp-proposal-train)
+    run_task_proposal_training contact-grasp 2600 "${@:2}"
+    ;;
+  jepa-wm-contact-grasp-proposal-eval)
+    run_task_proposal_evaluation contact-grasp "${2:-}" "${3:-}"
+    ;;
+  jepa-wm-contact-grasp-proposal-summarize)
+    run_task_proposal_summary contact-grasp "${2:-}" "${3:-}"
     ;;
   jepa-wm-insertion-proposal-train)
-    recording_names="${2:-}"
-    training_steps="${3:-3000}"
+    run_task_proposal_training insertion 2600 "${@:2}"
+    ;;
+  jepa-wm-insertion-transition-finetune)
+    arm_guarded_insertion_workflow
+    source_session="${2:-}"
+    parent_name="${3:-}"
     proposal_name="${4:-}"
-    hidden_dimension="${5:-256}"
-    learning_rate="${6:-0.001}"
-    weight_decay="${7:-0.0001}"
-    training_seed="${8:-2600}"
-    is_safe_identifier_list "${recording_names}" || die "invalid recording list"
-    require_positive_integer "training steps" "${training_steps}" || exit 1
-    require_positive_integer "hidden dimension" "${hidden_dimension}" || exit 1
-    require_nonnegative_number "learning rate" "${learning_rate}" || exit 1
-    require_nonnegative_number "weight decay" "${weight_decay}" || exit 1
-    require_nonnegative_integer "training seed" "${training_seed}" || exit 1
-    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
+    training_steps="${5:-500}"
+    learning_rate="${6:-0.0001}"
+    validate_guarded_insertion_identifiers \
+      "${source_session}" "${parent_name}" "${proposal_name}"
+    require_positive_integer "transition training steps" "${training_steps}" || exit 1
+    require_nonnegative_number "transition learning rate" "${learning_rate}" || exit 1
     sync_repo
-    remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-proposal-train --recordings '${recording_names}' --steps '${training_steps}' --proposal '${proposal_name}' --hidden-dimension '${hidden_dimension}' --learning-rate '${learning_rate}' --weight-decay '${weight_decay}' --seed '${training_seed}'"
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-transition-finetune --source-session '${source_session}' --parent '${parent_name}' --proposal '${proposal_name}' --steps '${training_steps}' --learning-rate '${learning_rate}'"
+    guarded_insertion_summary="Transition proposal: ${proposal_name}"
+    ;;
+  jepa-wm-insertion-transition-eval)
+    arm_guarded_insertion_workflow
+    source_session="${2:-}"
+    proposal_name="${3:-}"
+    output_name="${4:-}"
+    validate_guarded_insertion_identifiers \
+      "${source_session}" "${proposal_name}" "${output_name}"
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-transition-eval --source-session '${source_session}' --proposal '${proposal_name}' --output '${output_name}'"
+    guarded_insertion_summary="Transition evaluation: ${output_name}"
     ;;
   jepa-wm-insertion-proposal-eval)
-    recording_name="${2:-}"
-    proposal_name="${3:-}"
-    is_safe_identifier "${recording_name}" || die "invalid recording name"
-    is_safe_identifier "${proposal_name}" || die "invalid proposal name"
-    sync_repo
-    remote "bash ~/quantis-robotics/ops/jepa_wm.sh insertion-proposal-eval --recording '${recording_name}' --proposal '${proposal_name}'"
+    run_task_proposal_evaluation insertion "${2:-}" "${3:-}"
     ;;
   jepa-wm-insertion-proposal-summarize)
     recording_names="${2:-}"
@@ -1025,6 +1078,18 @@ case "${command}" in
   jepa-wm-control-worker-stop)
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-stop"
     ;;
+  jepa-wm-control-worker-rebase-proposal)
+    arm_guarded_insertion_workflow
+    source_identity="${2:-}"
+    new_identity="${3:-}"
+    proposal_name="${4:-}"
+    validate_guarded_insertion_identifiers \
+      "${source_identity}" "${new_identity}" "${proposal_name}"
+    sync_repo
+    remote \
+      "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-rebase-proposal --source '${source_identity}' --name '${new_identity}' --proposal '${proposal_name}'"
+    guarded_insertion_summary="Control worker proposal: ${new_identity}"
+    ;;
   jepa-wm-control-step)
     reference_name="${2:-}"
     exploration_seed="${3:-}"
@@ -1097,7 +1162,7 @@ case "${command}" in
     printf 'Insertion trial session: %s\n' "${session_id}"
     exit "${command_status}"
     ;;
-  jepa-wm-insertion-followup)
+  jepa-wm-insertion-followup|jepa-wm-insertion-parent-followup|jepa-wm-insertion-segment-followup|jepa-wm-insertion-approach-followup|jepa-wm-insertion-alignment-followup|jepa-wm-insertion-pre-insertion-followup|jepa-wm-insertion-contact-followup)
     safety_session_id=""
     execution_session_id=""
     arm_guarded_insertion_workflow
@@ -1105,8 +1170,14 @@ case "${command}" in
     exploration_seed="${3:-}"
     artifacts_name="${4:-}"
     previous_session_id="${5:-}"
+    runtime_owner_session="${6:-}"
+    rollout_extension_profile="${7:-}"
     validate_guarded_insertion_identifiers \
       "${reference_name}" "${artifacts_name}" "${previous_session_id}"
+    if [[ -n "${runtime_owner_session}" ]]; then
+      is_safe_identifier "${runtime_owner_session}" \
+        || die "invalid insertion runtime owner session"
+    fi
     require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
     timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
     safety_session_id="insertion-followup-safety-${timestamp}-${exploration_seed}"
@@ -1114,9 +1185,26 @@ case "${command}" in
     printf -v guarded_insertion_summary \
       'Insertion follow-up safety session: %s\nInsertion follow-up trial session: %s' \
       "${safety_session_id}" "${execution_session_id}"
+    followup_report_arguments=""
+    switch_worker="false"
+    if [[ "${command}" == "jepa-wm-insertion-parent-followup" ]]; then
+      followup_report_arguments=" '${execution_session_id}' '1' '${previous_session_id}' 'true' '${runtime_owner_session}' '${rollout_extension_profile}'"
+      switch_worker="true"
+    elif [[ "${command}" == "jepa-wm-insertion-segment-followup" ]]; then
+      followup_report_arguments=" '${execution_session_id}' '1' '${previous_session_id}' 'false' '${runtime_owner_session}'"
+    elif [[ "${command}" == "jepa-wm-insertion-approach-followup" ]]; then
+      followup_report_arguments=" '${execution_session_id}' '1' '${previous_session_id}' 'false' '' 'approach'"
+    elif [[ "${command}" == "jepa-wm-insertion-alignment-followup" ]]; then
+      followup_report_arguments=" '${execution_session_id}' '1' '${previous_session_id}' 'false' '' 'alignment'"
+    elif [[ "${command}" == "jepa-wm-insertion-pre-insertion-followup" ]]; then
+      followup_report_arguments=" '${execution_session_id}' '1' '${previous_session_id}' 'false' '' 'pre-insertion'"
+    elif [[ "${command}" == "jepa-wm-insertion-contact-followup" ]]; then
+      followup_report_arguments=" '${execution_session_id}' '1' '${previous_session_id}' 'false' '' 'contact-insertion'"
+    fi
     command_status=0
     run_guarded_insertion_workflow "${artifacts_name}" \
-      "bash ~/quantis-robotics/ops/run_insertion_followup_trial.sh '${safety_session_id}' '${execution_session_id}' '${previous_session_id}' '${reference_name}' '${exploration_seed}' '${artifacts_name}'" \
+      "bash ~/quantis-robotics/ops/run_insertion_followup_trial.sh '${safety_session_id}' '${execution_session_id}' '${previous_session_id}' '${reference_name}' '${exploration_seed}' '${artifacts_name}'${followup_report_arguments}" \
+      "${switch_worker}" \
       || command_status=$?
     exit "${command_status}"
     ;;
@@ -1157,6 +1245,81 @@ case "${command}" in
       "bash ~/quantis-robotics/ops/run_insertion_demo_rollout.sh '${run_id}' '${reference_name}' '${exploration_seed}' '${artifacts_name}' '${context_index}'" \
       || command_status=$?
     exit "${command_status}"
+    ;;
+  jepa-wm-grasp-to-insertion)
+    run_id=""
+    arm_guarded_insertion_workflow
+    reference_name="${2:-}"
+    exploration_seed="${3:-}"
+    grasp_artifacts="${4:-}"
+    insertion_artifacts="${5:-}"
+    validate_guarded_insertion_identifiers \
+      "${reference_name}" "${grasp_artifacts}" "${insertion_artifacts}"
+    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+    timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    run_id="grasp-to-insertion-${timestamp}-${exploration_seed}"
+    guarded_insertion_summary="Grasp-to-insertion run: ${run_id}"
+    command_status=0
+    sync_repo || command_status=$?
+    if (( command_status == 0 )); then
+      remote \
+        "bash ~/quantis-robotics/ops/run_grasp_to_insertion_milestone.sh '${run_id}' '${reference_name}' '${exploration_seed}' '${grasp_artifacts}' '${insertion_artifacts}'" \
+        || command_status=$?
+    fi
+    exit "${command_status}"
+    ;;
+  jepa-wm-grasp-transition-trial)
+    arm_guarded_insertion_workflow
+    run_id="${2:-}"
+    previous_session="${3:-}"
+    reference_name="${4:-}"
+    exploration_seed="${5:-}"
+    insertion_identity="${6:-}"
+    rolled_back_session="${7:-}"
+    validate_guarded_insertion_identifiers \
+      "${run_id}" "${previous_session}" "${reference_name}" "${insertion_identity}"
+    if [[ -n "${rolled_back_session}" ]]; then
+      is_safe_identifier "${rolled_back_session}" \
+        || die "invalid rolled-back transition session"
+    fi
+    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+    command_status=0
+    sync_repo || command_status=$?
+    if (( command_status == 0 )); then
+      remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-stop" \
+        || command_status=$?
+    fi
+    if (( command_status == 0 )); then
+      remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --artifacts '${insertion_identity}'" \
+        || command_status=$?
+    fi
+    if (( command_status == 0 )); then
+      remote "bash ~/quantis-robotics/ops/run_grasp_transition_trial.sh '${run_id}' '${previous_session}' '${reference_name}' '${exploration_seed}' '${insertion_identity}' '${rolled_back_session}'" \
+        || command_status=$?
+    fi
+    guarded_insertion_summary="Grasp transition trial: ${run_id}"
+    (( command_status == 0 )) || exit "${command_status}"
+    ;;
+  jepa-wm-grasp-transition-milestone)
+    arm_guarded_insertion_workflow
+    run_id="${2:-}"
+    reference_name="${3:-}"
+    exploration_seed="${4:-}"
+    grasp_identity="${5:-}"
+    insertion_identity="${6:-}"
+    validate_guarded_insertion_identifiers \
+      "${run_id}" "${reference_name}" "${grasp_identity}" \
+      "${insertion_identity}"
+    require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+    guarded_insertion_summary="Grasp transition milestone: ${run_id}"
+    command_status=0
+    sync_repo || command_status=$?
+    if (( command_status == 0 )); then
+      remote \
+        "bash ~/quantis-robotics/ops/run_grasp_transition_milestone.sh '${run_id}' '${reference_name}' '${exploration_seed}' '${grasp_identity}' '${insertion_identity}'" \
+        || command_status=$?
+    fi
+    (( command_status == 0 )) || exit "${command_status}"
     ;;
   jepa-wm-insertion-resolution)
     reference_name="${2:-}"
@@ -1362,6 +1525,20 @@ case "${command}" in
     demo_python \
       "await demo.record_grasp_demo('${readiness_id}', ${exploration_seed}, '${recording_id}', '${proposal_fingerprint}')" 1800
     finish_demo_recording "${recording_id}"
+    ;;
+  jepa-wm-insertion-demo-film)
+    source_run="${2:-}"
+    recording_id="${3:-insertion-demo-film-$(date -u +%Y%m%dT%H%M%SZ)}"
+    is_safe_identifier "${source_run}" || die "invalid insertion demo source run"
+    is_safe_identifier "${recording_id}" || die "invalid recording name"
+    demo_python \
+      "await demo.record_insertion_demo('${source_run}', '${recording_id}')" 1800
+    remote "bash ~/quantis-robotics/ops/encode_demo_recording.sh '${recording_id}'"
+    printf 'Recording ID: %s\n' "${recording_id}"
+    printf 'Remote presentation video: %s/%s/presentation.mp4\n' \
+      "/home/ubuntu/docker/isaac-sim/data/quantis/recordings" "${recording_id}"
+    printf 'Remote wrist video: %s/%s/wrist.mp4\n' \
+      "/home/ubuntu/docker/isaac-sim/data/quantis/recordings" "${recording_id}"
     ;;
   jepa-wm-summarize)
     experiment_id="${2:-}"

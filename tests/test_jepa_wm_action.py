@@ -32,8 +32,10 @@ class DroidActionTest(unittest.TestCase):
         self.assertEqual(scaled.values, (1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0))
         with self.assertRaises(ValueError):
             DroidActionScale(0.0, 0.25, 1.0)
-        with self.assertRaises(ValueError):
-            DroidActionScale(1.0, 0.25, 0.0)
+        self.assertEqual(
+            DroidActionScale(1.0, 0.25, 0.0).apply(action).values[-1],
+            0.0,
+        )
 
     def test_round_trips_the_recording_contract(self) -> None:
         payload = ACTION_RECORDING_CONTRACT.to_dict()

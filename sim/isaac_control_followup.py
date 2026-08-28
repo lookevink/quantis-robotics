@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from base64 import b64decode
+import json
 from pathlib import Path
 from time import time
 from typing import TYPE_CHECKING, Any
@@ -17,28 +19,43 @@ from jepa_wm.control_policy import (
     is_insertion_trial_execution_policy,
 )
 from jepa_wm.insertion_contract import (
+    CONTACT_INSERTION_RECORDING,
     INSERTION_TASK_ID,
+    INSERTION_CONTROL_TARGET_POLICY,
+    ContactInsertionSegment,
     InsertionControlTargetPolicy,
 )
 from jepa_wm.insertion_rollout import (
     DEMO_INSERTION_ROLLOUT,
     TWO_STEP_INSERTION_ROLLOUT,
+    InsertionRolloutPosition,
     InsertionRolloutRoster,
 )
+from jepa_wm.insertion_trial import InsertionTrialRollbackEvidence
+from jepa_wm.insertion_transition import (
+    insertion_proposal_continuation_from_dict,
+    resolve_insertion_followup_proposal,
+)
+from jepa_wm.persistence import write_json_atomic
 from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.grasp_contract import GRASP_TASK_ID
 from jepa_wm.trajectory import load_rollout_at
 from sim.control_context import recording_task
-from jepa_wm.control_safety import SimulatorSafetyLimits
-from jepa_wm.insertion_refresh import ControlSafetySnapshot
+from jepa_wm.control_safety import ControlGateReason, SimulatorSafetyLimits
+from jepa_wm.insertion_refresh import (
+    MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
+    ControlSafetySnapshot,
+)
 from jepa_wm.control_tracking import ActionTrackingLimits
 from sim.control_session import (
     CONTROL_ROOT,
     QUANTIS_DATA_ROOT,
+    RECORDING_ROOT,
     ControlCaptureResult,
     ControlResultStatus,
     ControlSession,
     ControlSessionState,
+    GraspToInsertionLineage,
     InsertionFollowupLineage,
     PostActionEvidence,
 )
@@ -57,12 +74,205 @@ from sim.isaac_demo_runtime import (
     create_actuators,
     prepare_plug,
     recording_snapshot,
+    resume_live_simulation,
 )
 from sim.isaac_demo_scene import ROBOT_PATH
 from sim.recording import RecordingLabel, RecordingMoment, validate_recording_id
 
 if TYPE_CHECKING:
     from jepa_wm.control_rollout import ControlRolloutReport, ControlStepSummary
+
+
+def persist_insertion_proposal_handoff(
+    previous_session_id: str,
+    followup_session_id: str,
+    encoded_evidence: str,
+) -> dict[str, Any]:
+    """Persist host-authenticated proposal provenance as the Isaac owner."""
+
+    validate_recording_id(previous_session_id)
+    validate_recording_id(followup_session_id)
+    try:
+        payload = json.loads(b64decode(encoded_evidence, validate=True).decode())
+        handoff = insertion_proposal_continuation_from_dict(payload)
+    except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("insertion proposal handoff payload is invalid") from error
+    previous = ControlSession.at(CONTROL_ROOT, previous_session_id)
+    observation, _ = previous.load_capture()
+    response = previous.load_response()
+    handoff.resolve(
+        observation.expected_proposal,
+        response.proposal_fingerprint,
+        handoff.requested.path,
+    )
+    output = previous.insertion_proposal_handoff_path(followup_session_id)
+    if output.exists():
+        raise ValueError("insertion proposal handoff already exists")
+    write_json_atomic(output, handoff.to_dict())
+    return {
+        "status": "insertion_proposal_handoff_ready",
+        "previous_session_id": previous_session_id,
+        "followup_session_id": followup_session_id,
+        "previous": handoff.previous.to_dict(),
+        "requested": handoff.requested.to_dict(),
+    }
+
+
+def restore_insertion_no_actuation_retry(
+    previous_session_id: str,
+    failed_safety_session_id: str,
+    next_maximum_steps: int | None = None,
+) -> dict[str, Any]:
+    """Rebind a target-progress-only no-actuation capture to its predecessor."""
+
+    import omni.usd
+
+    previous = ControlSession.at(CONTROL_ROOT, previous_session_id)
+    failed = ControlSession.at(CONTROL_ROOT, failed_safety_session_id)
+    from jepa_wm.control_rollout import ControlStepSummary
+
+    previous_step = ControlStepSummary.from_session(previous)
+    lineage = InsertionFollowupLineage(
+        previous_step.observation,
+        previous_step.state,
+        previous_step.result,
+        next_maximum_steps,
+    )
+    observation, state = failed.load_capture()
+    response = failed.load_response()
+    safety = failed.load_direct_safety()
+    proposal_changed = (
+        previous_step.observation.expected_proposal
+        != observation.expected_proposal
+    )
+    handoff = (
+        previous.load_insertion_proposal_handoff(failed.session_id)
+        if proposal_changed
+        else None
+    )
+    expected_proposal = resolve_insertion_followup_proposal(
+        previous_step.observation.expected_proposal,
+        observation.expected_proposal,
+        previous_proposal_fingerprint=previous_step.response.proposal_fingerprint,
+        handoff=handoff,
+    )
+    lineage.validate_source(
+        observation,
+        state,
+        expected_proposal=expected_proposal,
+    )
+    if (
+        response.proposal != safety.proposal.path
+        or response.proposal_fingerprint != safety.proposal.fingerprint
+        or safety.proposal.path != expected_proposal
+        or safety.passed
+        or safety.selected_action_scale is not None
+        or any(
+            attempt.gate.reasons
+            != (ControlGateReason.TARGET_PROGRESS_INSUFFICIENT,)
+            for attempt in safety.attempts
+        )
+        or failed.execution_path.exists()
+        or failed.result_path.exists()
+    ):
+        raise ValueError("insertion no-actuation retry source is invalid")
+    stage = omni.usd.get_context().get_stage()
+    runtime = live_runtime_for(failed.session_id, stage)
+    runtime_owner_session_id = failed.session_id
+    if runtime is None:
+        runtime = live_runtime_for(previous.session_id, stage)
+        runtime_owner_session_id = previous.session_id
+    if runtime is None:
+        raise RuntimeError("insertion no-actuation retry runtime was lost")
+    bind_live_runtime(
+        previous.session_id,
+        stage,
+        runtime.actuators,
+        runtime.attachment,
+        runtime.sensor,
+    )
+    return {
+        "status": "insertion_no_actuation_retry_ready",
+        "previous_session_id": previous.session_id,
+        "failed_safety_session_id": failed.session_id,
+        "runtime_owner_session_id": runtime_owner_session_id,
+        "requested": safety.proposal.to_dict(),
+    }
+
+
+def restore_insertion_rollback_retry(
+    previous_session_id: str,
+    rolled_back_session_id: str,
+    next_maximum_steps: int | None = None,
+) -> dict[str, Any]:
+    """Return runtime ownership after an exact safe insertion rollback."""
+
+    import omni.usd
+    from jepa_wm.control_rollout import ControlStepSummary
+
+    previous = ControlStepSummary.from_session(
+        ControlSession.at(CONTROL_ROOT, previous_session_id)
+    )
+    lineage = InsertionFollowupLineage(
+        previous.observation,
+        previous.state,
+        previous.result,
+        next_maximum_steps,
+    )
+    rolled_back = ControlStepSummary.from_session(
+        ControlSession.at(CONTROL_ROOT, rolled_back_session_id)
+    )
+    rollback = rolled_back.result.insertion_trial_rollback
+    if (
+        rolled_back.result.status
+        not in (
+            ControlResultStatus.ROLLED_BACK_TRACKING,
+            ControlResultStatus.ROLLED_BACK_PROGRESS,
+        )
+        or rolled_back.state.previous_session_id != previous_session_id
+        or not isinstance(rollback, InsertionTrialRollbackEvidence)
+        or rollback.drive_target != lineage.active_drive_target
+        or not rollback.plug_attached
+    ):
+        raise ValueError("insertion rollback retry source is invalid")
+    stage = omni.usd.get_context().get_stage()
+    runtime = live_runtime_for(rolled_back_session_id, stage)
+    if runtime is None:
+        raise RuntimeError("live rolled-back insertion runtime was lost")
+    bind_live_runtime(
+        previous_session_id,
+        stage,
+        runtime.actuators,
+        runtime.attachment,
+        runtime.sensor,
+    )
+    return {
+        "status": "insertion_rollback_retry_ready",
+        "previous_session_id": previous_session_id,
+        "rolled_back_session_id": rolled_back_session_id,
+        "active_drive_target": lineage.active_drive_target.to_dict(),
+    }
+
+
+def restore_insertion_retry(
+    previous_session_id: str,
+    failed_session_id: str,
+    next_maximum_steps: int | None = None,
+) -> dict[str, Any]:
+    """Restore the exact runtime for either supported fail-closed retry."""
+
+    failed = ControlSession.at(CONTROL_ROOT, failed_session_id)
+    if failed.direct_safety_path.is_file():
+        return restore_insertion_no_actuation_retry(
+            previous_session_id,
+            failed_session_id,
+            next_maximum_steps,
+        )
+    return restore_insertion_rollback_retry(
+        previous_session_id,
+        failed_session_id,
+        next_maximum_steps,
+    )
 
 
 def build_insertion_followup_capture(
@@ -76,6 +286,7 @@ def build_insertion_followup_capture(
     current_pose: DroidPose,
     active_drive_target: JointDriveTarget,
     target_policy: InsertionControlTargetPolicy,
+    expected_proposal: Path,
 ) -> tuple[ControlObservation, ControlSessionState]:
     """Bind one no-actuation observation to an exact applied insertion result."""
 
@@ -92,7 +303,7 @@ def build_insertion_followup_capture(
         captured_at_unix_seconds=captured_at_unix_seconds,
         context_frame=context_frame,
         target=target,
-        expected_proposal=lineage.observation.expected_proposal,
+        expected_proposal=expected_proposal,
         pose=current_pose,
         previous_action=action_between(lineage.observation.pose, current_pose),
         warmup_frames=lineage.observation.warmup_frames + 1,
@@ -112,9 +323,13 @@ def build_insertion_followup_capture(
         current_gripper_width_m=current.gripper_width_m,
         insertion_target_policy=target_policy,
         active_drive_target=active_drive_target,
-        insertion_rollout_position=lineage.rollout_position.followup(),
+        insertion_rollout_position=lineage.followup_position,
     )
-    lineage.validate_source(observation, state)
+    lineage.validate_source(
+        observation,
+        state,
+        expected_proposal=expected_proposal,
+    )
     return observation, state
 
 
@@ -184,10 +399,81 @@ def verify_insertion_followup_source(session_id: str) -> dict[str, Any]:
     }
 
 
+def verify_grasp_to_insertion_source(session_id: str) -> dict[str, Any]:
+    """Require one applied attached contact-aware grasp endpoint."""
+
+    from jepa_wm.control_rollout import ControlStepSummary
+
+    session = ControlSession.at(CONTROL_ROOT, session_id)
+    step = ControlStepSummary.from_session(session)
+    lineage = GraspToInsertionLineage(
+        step.observation,
+        step.state,
+        step.result,
+    )
+    if recording_task(RECORDING_ROOT / step.state.reference_recording) != INSERTION_TASK_ID:
+        raise ValueError("grasp-to-insertion source is not contact-aware")
+    return {
+        "status": "grasp_to_insertion_ready",
+        "session_id": session_id,
+        "active_drive_target": lineage.active_drive_target.to_dict(),
+    }
+
+
+def restore_grasp_transition_retry(
+    grasp_session_id: str,
+    rolled_back_session_id: str,
+) -> dict[str, Any]:
+    """Return runtime ownership after one authenticated, settled tracking rollback."""
+
+    import omni.usd
+    from jepa_wm.control_rollout import ControlStepSummary
+
+    grasp = ControlStepSummary.from_session(
+        ControlSession.at(CONTROL_ROOT, grasp_session_id)
+    )
+    lineage = GraspToInsertionLineage(
+        grasp.observation,
+        grasp.state,
+        grasp.result,
+    )
+    rolled_back = ControlStepSummary.from_session(
+        ControlSession.at(CONTROL_ROOT, rolled_back_session_id)
+    )
+    rollback = rolled_back.result.insertion_trial_rollback
+    if (
+        rolled_back.result.status is not ControlResultStatus.ROLLED_BACK_TRACKING
+        or rolled_back.state.previous_session_id != grasp_session_id
+        or not isinstance(rollback, InsertionTrialRollbackEvidence)
+        or rollback.drive_target != lineage.active_drive_target
+        or not rollback.plug_attached
+    ):
+        raise ValueError("grasp transition retry source is invalid")
+    stage = omni.usd.get_context().get_stage()
+    runtime = live_runtime_for(rolled_back_session_id, stage)
+    if runtime is None:
+        raise RuntimeError("live rolled-back transition runtime was lost")
+    bind_live_runtime(
+        grasp_session_id,
+        stage,
+        runtime.actuators,
+        runtime.attachment,
+        runtime.sensor,
+    )
+    return {
+        "status": "grasp_transition_retry_ready",
+        "grasp_session_id": grasp_session_id,
+        "rolled_back_session_id": rolled_back_session_id,
+        "active_drive_target": lineage.active_drive_target.to_dict(),
+    }
+
+
 def _verify_insertion_rollout_result(
     roster: InsertionRolloutRoster,
     reference_name: str,
     exploration_seed: int,
+    *,
+    predecessor_session_id: str | None = None,
 ) -> ControlRolloutReport:
     """Reconstruct one exact bounded rollout and require every action applied."""
 
@@ -209,9 +495,78 @@ def _verify_insertion_rollout_result(
         seed=exploration_seed,
         proposal=steps[0].observation.expected_proposal,
         requested_steps=roster.maximum_steps,
+        predecessor_session_id=predecessor_session_id,
     )
     report.require_all_steps_applied()
     return report
+
+
+def verify_grasp_to_insertion_result(
+    run_id: str,
+    grasp_rollout_id: str,
+    insertion_session_roster: str,
+    reference_name: str,
+    exploration_seed: int,
+) -> dict[str, Any]:
+    """Reconstruct and persist one bounded task-terminal grasp plus four actions."""
+
+    from jepa_wm.control_rollout import ControlRolloutReport, ControlStepSummary
+    from jepa_wm.grasp_to_insertion import (
+        GRASP_ACTIONS,
+        GraspToInsertionReport,
+    )
+
+    validate_recording_id(run_id)
+    validate_recording_id(grasp_rollout_id)
+    prior_report_path = (
+        QUANTIS_DATA_ROOT / "control_rollouts" / grasp_rollout_id / "report.json"
+    )
+    prior_report = json.loads(prior_report_path.read_text())
+    reported_steps = prior_report.get("steps") if isinstance(prior_report, dict) else None
+    if (
+        not isinstance(reported_steps, list)
+        or not reported_steps
+        or not all(isinstance(step, dict) for step in reported_steps)
+    ):
+        raise ValueError("grasp rollout report has no session roster")
+    grasp_sessions = tuple(step.get("session") for step in reported_steps)
+    if (
+        not all(isinstance(session, str) for session in grasp_sessions)
+        or len(grasp_sessions) > GRASP_ACTIONS
+        or grasp_sessions
+        != tuple(
+            f"{grasp_rollout_id}-{index:02d}"
+            for index in range(len(grasp_sessions))
+        )
+    ):
+        raise ValueError("grasp rollout session roster is invalid")
+    first_grasp = ControlStepSummary.from_session(
+        ControlSession.at(CONTROL_ROOT, grasp_sessions[0])
+    )
+    grasp = ControlRolloutReport.from_sessions(
+        QUANTIS_DATA_ROOT,
+        grasp_rollout_id,
+        grasp_sessions,
+        reference_recording=reference_name,
+        seed=exploration_seed,
+        proposal=first_grasp.observation.expected_proposal,
+        requested_steps=GRASP_ACTIONS,
+    )
+    insertion_roster = InsertionRolloutRoster.from_csv(
+        insertion_session_roster,
+        DEMO_INSERTION_ROLLOUT.maximum_steps,
+    )
+    insertion = _verify_insertion_rollout_result(
+        insertion_roster,
+        reference_name,
+        exploration_seed,
+        predecessor_session_id=grasp_sessions[-1],
+    )
+    report = GraspToInsertionReport(run_id, grasp, insertion)
+    output = QUANTIS_DATA_ROOT / "control_rollouts" / run_id / "report.json"
+    output.parent.mkdir(parents=True, exist_ok=False)
+    write_json_atomic(output, report.to_dict())
+    return report.to_dict()
 
 
 def verify_insertion_two_step_result(
@@ -262,6 +617,241 @@ def verify_insertion_demo_rollout_result(
     }
 
 
+def _next_contact_grasp_target(
+    reference_path: Path,
+    context_index: int,
+) -> ControlTarget:
+    rollout = load_rollout_at(
+        reference_path,
+        camera="wrist",
+        context_index=context_index,
+        bounds=ActionSelectionBounds(minimum_action_norm=0.0),
+    )
+    return ControlTarget(
+        rollout.target.path.relative_to(QUANTIS_DATA_ROOT),
+        rollout.target_pose,
+    )
+
+
+async def _capture_contact_grasp_followup(
+    session: ControlSession,
+    previous_step: ControlStepSummary,
+) -> dict[str, Any]:
+    """Capture one interlocked direct grasp continuation on insertion geometry."""
+
+    import omni.kit.app
+    import omni.timeline
+    import omni.usd
+
+    previous = previous_step.result.post_action
+    if previous is None:
+        raise ValueError("contact grasp follow-up has no post-action evidence")
+    previous_state = previous_step.state
+    previous_observation = previous_step.observation
+    reference_path = (
+        QUANTIS_DATA_ROOT / "recordings" / previous_state.reference_recording
+    )
+    stage = omni.usd.get_context().get_stage()
+    runtime = live_runtime_for(previous_step.result.session_id, stage)
+    if runtime is None:
+        raise RuntimeError("live contact grasp runtime was lost before follow-up")
+    context_path = session.path / "context.png"
+
+    async def capture_frame(observe_safety) -> None:
+        await capture_camera_frame(
+            JEPA_WM_CAMERA_SPECS[0],
+            context_path,
+            observe_safety=observe_safety,
+        )
+
+    active_drive_target = previous_step.contact_grasp_drive_target()
+    synchronized = await synchronized_insertion_frame_capture(
+        runtime,
+        omni.timeline.get_timeline_interface(),
+        omni.kit.app.get_app().next_update_async,
+        previous.require_safety_snapshot(),
+        SimulatorSafetyLimits(),
+        capture_frame,
+        expected_active_drive_target=active_drive_target,
+        operation="contact grasp follow-up capture",
+        maximum_gripper_error_meters=(
+            MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+        ),
+    )
+    if synchronized.pose is None:
+        raise RuntimeError("contact grasp follow-up pose was not refreshed")
+    if synchronized.active_drive_target != active_drive_target:
+        raise RuntimeError("contact grasp follow-up drive target changed")
+    next_context_index = previous_observation.warmup_frames + 1
+    observation = ControlObservation(
+        observation_id=observation_id_for_session(session.session_id),
+        captured_at_unix_seconds=time(),
+        context_frame=context_path.relative_to(QUANTIS_DATA_ROOT),
+        target=_next_contact_grasp_target(reference_path, next_context_index),
+        expected_proposal=previous_observation.expected_proposal,
+        pose=synchronized.pose,
+        previous_action=action_between(previous_observation.pose, synchronized.pose),
+        warmup_frames=next_context_index,
+    )
+    state = ControlSessionState(
+        session_id=session.session_id,
+        reference_recording=previous_state.reference_recording,
+        seed=previous_state.seed,
+        recording=previous_state.recording,
+        current_joint_positions=synchronized.safety.joint_positions,
+        collision_detected=synchronized.safety.collision_detected,
+        contact_force_newtons=synchronized.safety.contact_force_newtons,
+        previous_session_id=previous_step.result.session_id,
+        execution_policy=ControlExecutionPolicy.DIRECT,
+        plug_position=synchronized.safety.plug_position,
+        plug_attached=synchronized.safety.plug_attached,
+        current_gripper_width_m=synchronized.safety.gripper_width_m,
+        active_drive_target=active_drive_target,
+    )
+    previous.validate_followup_capture(
+        observation,
+        state,
+        maximum_gripper_error_meters=(
+            MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+        ),
+    )
+    session.write_capture(observation, state)
+    bind_live_runtime(
+        session.session_id,
+        stage,
+        synchronized.runtime.actuators,
+        synchronized.runtime.attachment,
+        synchronized.runtime.sensor,
+    )
+    return ControlCaptureResult(
+        session.session_id,
+        observation,
+        session.request_path,
+        synchronized.safety.contact_force_newtons,
+        synchronized.safety.collision_detected,
+    ).to_dict()
+
+
+async def capture_insertion_transition_observation(
+    session_id: str,
+    previous_session_id: str,
+    proposal_name: str,
+    *,
+    maximum_steps: int = DEMO_INSERTION_ROLLOUT.maximum_steps,
+) -> dict[str, Any]:
+    """Capture the attached live grasp endpoint as insertion action one."""
+
+    import omni.kit.app
+    import omni.timeline
+    import omni.usd
+
+    validate_recording_id(proposal_name)
+    previous_session = ControlSession.at(CONTROL_ROOT, previous_session_id)
+    from jepa_wm.control_rollout import ControlStepSummary
+
+    previous_step = ControlStepSummary.from_session(previous_session)
+    lineage = GraspToInsertionLineage(
+        previous_step.observation,
+        previous_step.state,
+        previous_step.result,
+    )
+    reference_path = (
+        QUANTIS_DATA_ROOT
+        / "recordings"
+        / previous_step.state.reference_recording
+    )
+    if recording_task(reference_path) != INSERTION_TASK_ID:
+        raise ValueError("grasp-to-insertion transition requires insertion geometry")
+    session = ControlSession.at(CONTROL_ROOT, session_id)
+    if session.path.exists():
+        raise ValueError(f"control session already exists: {session_id}")
+    stage = omni.usd.get_context().get_stage()
+    runtime = live_runtime_for(previous_session_id, stage)
+    if runtime is None:
+        raise RuntimeError("live grasp runtime was lost before insertion transition")
+    context_path = session.path / "context.png"
+
+    async def capture_frame(observe_safety) -> None:
+        await capture_camera_frame(
+            JEPA_WM_CAMERA_SPECS[0],
+            context_path,
+            observe_safety=observe_safety,
+        )
+
+    synchronized = await synchronized_insertion_frame_capture(
+        runtime,
+        omni.timeline.get_timeline_interface(),
+        omni.kit.app.get_app().next_update_async,
+        lineage.post_action.require_safety_snapshot(),
+        SimulatorSafetyLimits(),
+        capture_frame,
+        expected_active_drive_target=lineage.active_drive_target,
+        operation="grasp-to-insertion transition capture",
+    )
+    if synchronized.pose is None:
+        raise RuntimeError("grasp-to-insertion transition pose was not refreshed")
+    if synchronized.active_drive_target != lineage.active_drive_target:
+        raise RuntimeError("grasp-to-insertion transition drive target changed")
+    context_index = CONTACT_INSERTION_RECORDING.start_index(
+        ContactInsertionSegment.GRASP_ATTACH
+    )
+    target_policy = INSERTION_CONTROL_TARGET_POLICY.for_followup()
+    selected = target_policy.select(
+        reference_path,
+        context_index=context_index,
+        current_pose=synchronized.pose,
+    )
+    observation = ControlObservation(
+        observation_id=observation_id_for_session(session_id),
+        captured_at_unix_seconds=time(),
+        context_frame=context_path.relative_to(QUANTIS_DATA_ROOT),
+        target=ControlTarget(
+            selected.target.path.relative_to(QUANTIS_DATA_ROOT),
+            selected.target_pose,
+        ),
+        expected_proposal=control_proposal_path(proposal_name),
+        pose=synchronized.pose,
+        previous_action=action_between(
+            previous_step.observation.pose,
+            synchronized.pose,
+        ),
+        warmup_frames=context_index,
+    )
+    state = ControlSessionState(
+        session_id=session_id,
+        reference_recording=previous_step.state.reference_recording,
+        seed=previous_step.state.seed,
+        recording=previous_step.state.recording,
+        current_joint_positions=synchronized.safety.joint_positions,
+        collision_detected=synchronized.safety.collision_detected,
+        contact_force_newtons=synchronized.safety.contact_force_newtons,
+        previous_session_id=previous_session_id,
+        execution_policy=ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION,
+        plug_position=synchronized.safety.plug_position,
+        plug_attached=synchronized.safety.plug_attached,
+        current_gripper_width_m=synchronized.safety.gripper_width_m,
+        insertion_target_policy=target_policy,
+        active_drive_target=lineage.active_drive_target,
+        insertion_rollout_position=InsertionRolloutPosition.initial(maximum_steps),
+    )
+    lineage.validate_source(observation, state)
+    session.write_capture(observation, state)
+    bind_live_runtime(
+        session_id,
+        stage,
+        synchronized.runtime.actuators,
+        synchronized.runtime.attachment,
+        synchronized.runtime.sensor,
+    )
+    return ControlCaptureResult(
+        session_id,
+        observation,
+        session.request_path,
+        synchronized.safety.contact_force_newtons,
+        synchronized.safety.collision_detected,
+    ).to_dict()
+
+
 async def _capture_generic_followup_observation(
     session: ControlSession,
     previous_step: ControlStepSummary,
@@ -285,7 +875,7 @@ async def _capture_generic_followup_observation(
     )
     next_context_index = previous_observation.warmup_frames + 1
     target = previous_observation.target
-    if recording_task(reference_path) == GRASP_TASK_ID:
+    if recording_task(reference_path) in (GRASP_TASK_ID, INSERTION_TASK_ID):
         reference_rollout = load_rollout_at(
             reference_path,
             camera="wrist",
@@ -301,7 +891,7 @@ async def _capture_generic_followup_observation(
     timeline = omni.timeline.get_timeline_interface()
     stage = omni.usd.get_context().get_stage()
     runtime = live_runtime_for(previous_session_id, stage)
-    timeline.play()
+    resume_live_simulation(timeline)
     try:
         if runtime is None:
             if SimulationManager.get_physics_sim_view() is None:
@@ -378,6 +968,7 @@ async def capture_followup_observation(
     session_id: str,
     previous_session_id: str,
     proposal_name: str,
+    next_maximum_steps: int | None = None,
 ) -> dict[str, Any]:
     """Persist the current live pose/frame as the next single-use request."""
 
@@ -395,21 +986,44 @@ async def capture_followup_observation(
     if previous_result.status is not ControlResultStatus.APPLIED:
         raise ValueError("follow-up control requires an applied previous step")
     expected_proposal = control_proposal_path(proposal_name)
-    if previous_observation.expected_proposal != expected_proposal:
-        raise ValueError("follow-up proposal differs from the rollout checkpoint")
+    proposal_changed = previous_observation.expected_proposal != expected_proposal
     next_context_index = previous_observation.warmup_frames + 1
     reference_path = QUANTIS_DATA_ROOT / "recordings" / previous_state.reference_recording
     reference_task = recording_task(reference_path)
     session = ControlSession.at(CONTROL_ROOT, session_id)
+    if (
+        reference_task == INSERTION_TASK_ID
+        and previous_state.execution_policy is ControlExecutionPolicy.DIRECT
+    ):
+        if proposal_changed:
+            return await capture_insertion_transition_observation(
+                session_id,
+                previous_session_id,
+                proposal_name,
+            )
+        return await _capture_contact_grasp_followup(session, previous_step)
     if reference_task != INSERTION_TASK_ID:
+        if proposal_changed:
+            raise ValueError("follow-up proposal differs from the rollout checkpoint")
         return await _capture_generic_followup_observation(
             session,
             previous_step,
         )
+    expected_proposal = resolve_insertion_followup_proposal(
+        previous_observation.expected_proposal,
+        expected_proposal,
+        previous_proposal_fingerprint=previous_step.response.proposal_fingerprint,
+        handoff=(
+            previous.load_insertion_proposal_handoff(session_id)
+            if proposal_changed
+            else None
+        ),
+    )
     lineage = InsertionFollowupLineage(
         previous_observation,
         previous_state,
         previous_result,
+        next_maximum_steps,
     )
     target_policy = previous_state.insertion_target_policy
     if target_policy is None:
@@ -447,7 +1061,7 @@ async def capture_followup_observation(
         raise RuntimeError("live insertion pose was not refreshed")
     if synchronized.active_drive_target is None:
         raise RuntimeError("live insertion drive target was not refreshed")
-    followup_target_policy = target_policy.for_followup()
+    followup_target_policy = target_policy.for_adaptive_followup()
     reference_rollout = followup_target_policy.select(
         reference_path,
         context_index=next_context_index,
@@ -467,6 +1081,7 @@ async def capture_followup_observation(
         current_pose=synchronized.pose,
         active_drive_target=synchronized.active_drive_target,
         target_policy=followup_target_policy,
+        expected_proposal=expected_proposal,
     )
     session.write_capture(observation, state)
     bind_live_runtime(

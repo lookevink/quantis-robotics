@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from math import isfinite
 from typing import Any
 
@@ -17,6 +18,7 @@ from sim.isaac_demo_runtime import (
     Actuators,
     PlugAttachment,
     create_actuators,
+    resume_live_simulation,
 )
 from sim.isaac_demo_runtime import ContactReading
 from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH, world_pose
@@ -24,7 +26,7 @@ from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH, world_pose
 
 CONTACT_SENSOR_NAME = "QuantisControlContact"
 CONNECTOR_CONTACT_SENSOR_NAME = "QuantisConnectorContact"
-MAXIMUM_INSERTION_FRAME_CAPTURE_SETTLEMENT_UPDATES = 24
+MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES = 96
 
 
 @dataclass(frozen=True)
@@ -133,6 +135,11 @@ class SynchronizedInsertionRuntime:
     active_drive_target: JointDriveTarget | None = None
 
 
+class _ContactGraspContinuity(Enum):
+    INITIAL_CAPTURE = "initial_capture"
+    ACTIVE_TARGET = "active_target"
+
+
 @dataclass(frozen=True)
 class _ControlSafetyHandles:
     actuators: Actuators
@@ -206,11 +213,12 @@ async def _settle_insertion_frame_capture_gripper(
     observe_safety: Any,
     expected_active_drive_target: JointDriveTarget,
     operation: str,
+    maximum_gripper_error_meters: float,
 ) -> None:
     """Wait bounded observed updates for the unchanged gripper drive target."""
 
     for update_index in range(
-        MAXIMUM_INSERTION_FRAME_CAPTURE_SETTLEMENT_UPDATES + 1
+        MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES + 1
     ):
         if _active_drive_target(runtime) != expected_active_drive_target:
             raise RuntimeError(f"{operation} active drive target changed")
@@ -220,10 +228,10 @@ async def _settle_insertion_frame_capture_gripper(
                 actual.gripper_width_m
                 - expected_active_drive_target.gripper_width_m
             )
-            <= MAXIMUM_SYNCHRONIZED_GRIPPER_ERROR_METERS
+            <= maximum_gripper_error_meters
         ):
             return
-        if update_index == MAXIMUM_INSERTION_FRAME_CAPTURE_SETTLEMENT_UPDATES:
+        if update_index == MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES:
             break
         await advance()
         observe_safety()
@@ -240,13 +248,14 @@ async def _synchronized_live_read(
     observe_after_advance: Any | None = None,
     observe_safety: Any | None = None,
     before_read: Any | None = None,
+    pause_on_success: bool = True,
 ) -> tuple[Any, Any]:
-    """Own the pause-sensitive resume, refresh, observe, read, pause lifecycle."""
+    """Own resume, refresh, observed read, and requested terminal lifecycle."""
 
-    resume = not timeline.is_playing()
+    completed = False
     try:
-        if resume:
-            timeline.play()
+        readiness_update = resume_live_simulation(timeline)
+        if readiness_update:
             await advance()
             if observe_after_advance is not None:
                 observe_after_advance(state)
@@ -263,9 +272,25 @@ async def _synchronized_live_read(
                     else None
                 ),
             )
-        return state, read(state)
+        result = state, read(state)
+        completed = True
+        return result
     finally:
-        timeline.pause()
+        if pause_on_success or not completed:
+            await pause_control_timeline(timeline, advance)
+
+
+async def pause_control_timeline(
+    timeline: Any,
+    advance: Any,
+) -> None:
+    """Pause Isaac and process a deferred pause before returning."""
+
+    timeline.pause()
+    if timeline.is_playing():
+        await advance()
+    if timeline.is_playing():
+        raise RuntimeError("control timeline did not pause")
 
 
 async def synchronized_control_safety_snapshot(
@@ -307,6 +332,7 @@ async def _synchronized_insertion_runtime(
     include_pose: bool = False,
     expected_attachment: bool | None = None,
     before_read: Any | None = None,
+    pause_on_success: bool = True,
 ) -> SynchronizedInsertionRuntime:
     """Own the shared paused insertion refresh and interlock lifecycle."""
 
@@ -361,6 +387,7 @@ async def _synchronized_insertion_runtime(
         observe_after_advance=observe_resumed_state,
         observe_safety=observe_safety,
         before_read=before_read,
+        pause_on_success=pause_on_success,
     )
     safety, pose, active_drive_target = live
     return SynchronizedInsertionRuntime(
@@ -371,7 +398,7 @@ async def _synchronized_insertion_runtime(
     )
 
 
-async def synchronized_insertion_safety_snapshot(
+async def _synchronized_insertion_safety_snapshot(
     runtime: LiveControlRuntime,
     timeline: Any,
     advance: Any,
@@ -379,6 +406,7 @@ async def synchronized_insertion_safety_snapshot(
     limits: SimulatorSafetyLimits,
     *,
     operation: str,
+    pause_on_success: bool = True,
 ) -> SynchronizedInsertionRuntime:
     """Refresh, interlock, and require strict capture continuity."""
 
@@ -390,12 +418,187 @@ async def synchronized_insertion_safety_snapshot(
         operation=operation,
         validate_resumed=captured.validate_contact_continuity,
         include_pose=True,
+        pause_on_success=pause_on_success,
     )
     try:
         synchronized.safety.validate_continuity(captured, limits)
     except ValueError as error:
+        if not pause_on_success:
+            await pause_control_timeline(timeline, advance)
         raise RuntimeError("live insertion state changed after capture") from error
     return synchronized
+
+
+async def synchronized_insertion_safety_snapshot(
+    runtime: LiveControlRuntime,
+    timeline: Any,
+    advance: Any,
+    captured: ControlSafetySnapshot,
+    limits: SimulatorSafetyLimits,
+    *,
+    operation: str,
+) -> SynchronizedInsertionRuntime:
+    """Read one strict insertion snapshot and commit the terminal pause."""
+
+    return await _synchronized_insertion_safety_snapshot(
+        runtime,
+        timeline,
+        advance,
+        captured,
+        limits,
+        operation=operation,
+    )
+
+
+async def synchronized_insertion_execution_runtime(
+    runtime: LiveControlRuntime,
+    timeline: Any,
+    advance: Any,
+    captured: ControlSafetySnapshot,
+    limits: SimulatorSafetyLimits,
+    *,
+    operation: str,
+) -> SynchronizedInsertionRuntime:
+    """Return a validated insertion runtime live for immediate execution."""
+
+    return await _synchronized_insertion_safety_snapshot(
+        runtime,
+        timeline,
+        advance,
+        captured,
+        limits,
+        operation=operation,
+        pause_on_success=False,
+    )
+
+
+async def _synchronized_contact_grasp_safety_snapshot(
+    runtime: LiveControlRuntime,
+    timeline: Any,
+    advance: Any,
+    captured: ControlSafetySnapshot,
+    limits: SimulatorSafetyLimits,
+    *,
+    expected_active_drive_target: JointDriveTarget,
+    operation: str,
+    maximum_gripper_error_meters: float,
+    continuity: _ContactGraspContinuity,
+    pause_on_success: bool = True,
+) -> SynchronizedInsertionRuntime:
+    """Refresh contact-grasp state relative to its unchanged drive target."""
+
+    synchronized = await _synchronized_insertion_runtime(
+        runtime,
+        timeline,
+        advance,
+        limits,
+        operation=operation,
+        validate_resumed=captured.validate_contact_continuity,
+        include_pose=True,
+        expected_attachment=captured.plug_attached,
+        pause_on_success=pause_on_success,
+    )
+    try:
+        if synchronized.active_drive_target != expected_active_drive_target:
+            raise ValueError("live contact-grasp drive target changed after capture")
+        if continuity is _ContactGraspContinuity.INITIAL_CAPTURE:
+            synchronized.safety.validate_initial_contact_grasp_continuity(
+                captured,
+                limits,
+                maximum_gripper_error_meters=maximum_gripper_error_meters,
+            )
+        else:
+            synchronized.safety.validate_followup_continuity(
+                captured,
+                expected_active_drive_target,
+                limits,
+                maximum_gripper_error_meters=maximum_gripper_error_meters,
+            )
+    except ValueError as error:
+        if not pause_on_success:
+            await pause_control_timeline(timeline, advance)
+        raise RuntimeError("live contact-grasp state changed after capture") from error
+    return synchronized
+
+
+async def synchronized_contact_grasp_safety_snapshot(
+    runtime: LiveControlRuntime,
+    timeline: Any,
+    advance: Any,
+    captured: ControlSafetySnapshot,
+    limits: SimulatorSafetyLimits,
+    *,
+    expected_active_drive_target: JointDriveTarget,
+    operation: str,
+    maximum_gripper_error_meters: float,
+) -> SynchronizedInsertionRuntime:
+    """Read one target-relative grasp snapshot and commit the terminal pause."""
+
+    return await _synchronized_contact_grasp_safety_snapshot(
+        runtime,
+        timeline,
+        advance,
+        captured,
+        limits,
+        expected_active_drive_target=expected_active_drive_target,
+        operation=operation,
+        maximum_gripper_error_meters=maximum_gripper_error_meters,
+        continuity=_ContactGraspContinuity.ACTIVE_TARGET,
+    )
+
+
+async def synchronized_initial_contact_grasp_execution_runtime(
+    runtime: LiveControlRuntime,
+    timeline: Any,
+    advance: Any,
+    captured: ControlSafetySnapshot,
+    limits: SimulatorSafetyLimits,
+    *,
+    expected_active_drive_target: JointDriveTarget,
+    operation: str,
+    maximum_gripper_error_meters: float,
+) -> SynchronizedInsertionRuntime:
+    """Return the initial captured-arm grasp runtime live for execution."""
+
+    return await _synchronized_contact_grasp_safety_snapshot(
+        runtime,
+        timeline,
+        advance,
+        captured,
+        limits,
+        expected_active_drive_target=expected_active_drive_target,
+        operation=operation,
+        maximum_gripper_error_meters=maximum_gripper_error_meters,
+        continuity=_ContactGraspContinuity.INITIAL_CAPTURE,
+        pause_on_success=False,
+    )
+
+
+async def synchronized_contact_grasp_execution_runtime(
+    runtime: LiveControlRuntime,
+    timeline: Any,
+    advance: Any,
+    captured: ControlSafetySnapshot,
+    limits: SimulatorSafetyLimits,
+    *,
+    expected_active_drive_target: JointDriveTarget,
+    operation: str,
+    maximum_gripper_error_meters: float,
+) -> SynchronizedInsertionRuntime:
+    """Return a validated grasp runtime live for immediate execution."""
+
+    return await _synchronized_contact_grasp_safety_snapshot(
+        runtime,
+        timeline,
+        advance,
+        captured,
+        limits,
+        expected_active_drive_target=expected_active_drive_target,
+        operation=operation,
+        maximum_gripper_error_meters=maximum_gripper_error_meters,
+        continuity=_ContactGraspContinuity.ACTIVE_TARGET,
+        pause_on_success=False,
+    )
 
 
 async def synchronized_insertion_frame_capture(
@@ -408,6 +611,9 @@ async def synchronized_insertion_frame_capture(
     *,
     expected_active_drive_target: JointDriveTarget,
     operation: str,
+    maximum_gripper_error_meters: float = (
+        MAXIMUM_SYNCHRONIZED_GRIPPER_ERROR_METERS
+    ),
 ) -> SynchronizedInsertionRuntime:
     """Render and read one interlocked insertion frame before pausing."""
 
@@ -423,6 +629,7 @@ async def synchronized_insertion_frame_capture(
             observe,
             expected_active_drive_target,
             operation,
+            maximum_gripper_error_meters,
         )
         await capture(observe)
 
@@ -442,8 +649,9 @@ async def synchronized_insertion_frame_capture(
             raise ValueError("live insertion drive target changed during frame capture")
         synchronized.safety.validate_followup_continuity(
             captured,
-            expected_active_drive_target.gripper_width_m,
+            expected_active_drive_target,
             limits,
+            maximum_gripper_error_meters=maximum_gripper_error_meters,
         )
     except ValueError as error:
         raise RuntimeError("live insertion state changed during frame capture") from error

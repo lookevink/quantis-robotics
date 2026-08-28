@@ -11,7 +11,7 @@ import numpy as np
 from jepa.contract import ObservationStage
 from jepa_wm.action import MAX_GRIPPER_WIDTH_M
 from jepa_wm.replay_verification import ReplayLimits, ReplayVerification
-from sim.isaac_control_runtime import read_contact
+from sim.isaac_control_runtime import read_control_contact
 from sim.isaac_demo_runtime import (
     Actuators,
     JointCommand,
@@ -95,7 +95,7 @@ class ReplayRuntime:
     def observe(self, expected: JointCommand) -> JointCommand:
         actual = self.actuators.actual_command()
         self.tracking.observe(actual, expected)
-        self.safety.observe(*read_contact(self.sensor))
+        self.safety.observe(*read_control_contact(self.sensor))
         return actual
 
     @property

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 isaac_control_capture_timeout_seconds=900
+isaac_insertion_trial_apply_timeout_seconds=600
 
 is_safe_identifier() {
   [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
@@ -84,6 +85,16 @@ insertion_rollout_profile_field() {
   (
     cd "${repository}"
     "${python_bin}" -m jepa_wm.insertion_rollout "${profile}" "${field}"
+  )
+}
+
+contact_grasp_maximum_actions() {
+  local repository="$1"
+  local python_bin="$2"
+  (
+    cd "${repository}"
+    "${python_bin}" -c \
+      'from jepa_wm.grasp_task import MAXIMUM_CONTACT_GRASP_ACTIONS; print(MAXIMUM_CONTACT_GRASP_ACTIONS)'
   )
 }
 
@@ -215,6 +226,7 @@ capture_and_respond_control_session() {
   local python_bin="$9"
   local source_session_id="${10:-}"
   local insertion_rollout_maximum_steps="${11:-}"
+  local context_purpose="${12:-standard}"
   local insertion_rollout_argument="None"
   local proposal_name
   for identifier in "${session_id}" "${reference_name}" "${control_identity}"; do
@@ -231,13 +243,17 @@ capture_and_respond_control_session() {
       "${insertion_rollout_maximum_steps}" || return 1
     insertion_rollout_argument="${insertion_rollout_maximum_steps}"
   fi
+  [[ "${context_purpose}" == "standard" || "${context_purpose}" == "contact_grasp" ]] || {
+    printf 'error: invalid control context purpose\n' >&2
+    return 1
+  }
   validate_control_policy "${policy}" || return 1
   cd "${repository}"
   proposal_name="$(control_proposal_from_identity \
     "${policy}" "${control_identity}" "${checkpoint_root}" "${python_bin}")" \
     || return 1
   isaac_server_call \
-    "await demo.capture_control_observation('${session_id}','${reference_name}',${exploration_seed},'${proposal_name}','${policy}',${context_index},${insertion_rollout_argument})" \
+    "await demo.capture_control_observation('${session_id}','${reference_name}',${exploration_seed},'${proposal_name}','${policy}',${context_index},${insertion_rollout_argument},'${context_purpose}')" \
     "${isaac_control_capture_timeout_seconds}" true
   respond_to_control_session \
     "${repository}" "${session_id}" "${policy}" "${source_session_id}"
@@ -285,7 +301,10 @@ run_reset_trial_control_session() {
   local prepare_function="${10}"
   local persist_function="${11}"
   local insertion_rollout_maximum_steps="${12:-}"
+  local apply_timeout_seconds="${13:-180}"
   local insertion_rollout_argument="None"
+  require_positive_integer "control apply timeout" "${apply_timeout_seconds}" \
+    || return 1
   if [[ -n "${insertion_rollout_maximum_steps}" ]]; then
     require_positive_integer \
       "insertion rollout maximum steps" \
@@ -306,7 +325,8 @@ run_reset_trial_control_session() {
     180
   RESET_TRIAL_PHASE="reset_trial_apply"
   isaac_server_call \
-    "await demo.apply_control_response('${RESET_TRIAL_SESSION_ID}')" 180
+    "await demo.apply_control_response('${RESET_TRIAL_SESSION_ID}')" \
+    "${apply_timeout_seconds}"
   RESET_TRIAL_PHASE="complete"
   finalize_reset_trial_control_session
 }
@@ -321,6 +341,11 @@ run_insertion_followup_trial() {
   local proposal_name="$7"
   local session_roster="${8:-${previous_session_id},${execution_session_id}}"
   local requested_steps="${9:-2}"
+  local predecessor_session_id="${10:-}"
+  local proposal_handoff="${11:-false}"
+  local runtime_owner_session="${12:-}"
+  local next_maximum_steps="${13:-}"
+  local reload_capture="true"
   local phase="followup_capture_01"
   local command_status=0
   local report_status=0
@@ -333,12 +358,50 @@ run_insertion_followup_trial() {
     --sessions "${session_roster}"
     --requested-steps "${requested_steps}"
   )
+  if [[ -n "${predecessor_session_id}" ]]; then
+    is_safe_identifier "${predecessor_session_id}" || return 1
+    report_arguments+=(--predecessor-session "${predecessor_session_id}")
+  fi
   require_positive_integer "requested rollout steps" "${requested_steps}" \
     || return 1
+  if [[ -n "${next_maximum_steps}" ]]; then
+    require_positive_integer "next insertion rollout maximum" \
+      "${next_maximum_steps}" || return 1
+  fi
+  if [[ "${proposal_handoff}" != "true" && "${proposal_handoff}" != "false" ]]; then
+    printf 'error: invalid insertion proposal handoff mode\n' >&2
+    return 1
+  fi
+  if [[ -n "${runtime_owner_session}" ]]; then
+    is_safe_identifier "${runtime_owner_session}" || return 1
+    local restore_maximum_argument=""
+    if [[ -n "${next_maximum_steps}" ]]; then
+      restore_maximum_argument=",${next_maximum_steps}"
+    fi
+    isaac_server_call \
+      "demo.restore_insertion_retry('${previous_session_id}','${runtime_owner_session}'${restore_maximum_argument})" \
+      180 true || return 1
+    reload_capture="false"
+  fi
+  if [[ "${proposal_handoff}" == "true" ]]; then
+    local encoded_handoff
+    encoded_handoff="$(
+      bash "${repository}/ops/jepa_wm.sh" insertion-transition-handoff \
+        "${previous_session_id}" "${proposal_name}" "${safety_session_id}"
+    )" || return 1
+    isaac_server_call \
+      "demo.persist_insertion_proposal_handoff('${previous_session_id}','${safety_session_id}','${encoded_handoff}')" \
+      180 "${reload_capture}" || return 1
+    reload_capture="false"
+  fi
 
+  local capture_maximum_argument=""
+  if [[ -n "${next_maximum_steps}" ]]; then
+    capture_maximum_argument=",${next_maximum_steps}"
+  fi
   isaac_server_call \
-    "await demo.capture_followup_observation('${safety_session_id}','${previous_session_id}','${proposal_name}')" \
-    180 true || command_status=$?
+    "await demo.capture_followup_observation('${safety_session_id}','${previous_session_id}','${proposal_name}'${capture_maximum_argument})" \
+    180 "${reload_capture}" || command_status=$?
   if (( command_status == 0 )); then
     phase="followup_inference_01"
     respond_to_control_session \
@@ -367,7 +430,7 @@ run_insertion_followup_trial() {
     phase="followup_apply_01"
     isaac_server_call \
       "await demo.apply_control_response('${execution_session_id}')" \
-      180 || command_status=$?
+      "${isaac_insertion_trial_apply_timeout_seconds}" || command_status=$?
   fi
   if (( command_status != 0 )); then
     report_arguments+=(
@@ -383,6 +446,30 @@ run_insertion_followup_trial() {
     command_status=${report_status}
   fi
   return "${command_status}"
+}
+
+require_control_rollout_applied() {
+  local python_bin="$1"
+  local report="$2"
+  "${python_bin}" -c \
+    'import json,sys; payload=json.load(open(sys.argv[1])); raise SystemExit(0 if payload.get("all_steps_applied") is True else "control rollout did not apply every requested step")' \
+    "${report}"
+}
+
+require_control_rollout_reach_and_grasp() {
+  local python_bin="$1"
+  local report="$2"
+  "${python_bin}" -c \
+    'import json,sys; p=json.load(open(sys.argv[1])); g=p.get("reach_and_grasp") or {}; ok=(g.get("passed") is True and p.get("orchestration_failure") is None and p.get("applied_steps")==p.get("complete_steps")); raise SystemExit(0 if ok else "control rollout did not establish a retained grasp")' \
+    "${report}"
+}
+
+control_rollout_terminal_session() {
+  local python_bin="$1"
+  local report="$2"
+  "${python_bin}" -c \
+    'import json,sys; p=json.load(open(sys.argv[1])); steps=p.get("steps") or []; assert steps, "control rollout has no terminal step"; print(steps[-1]["session"])' \
+    "${report}"
 }
 
 isaac_demo_code() {
@@ -437,4 +524,18 @@ capture_shadow_control_evidence() {
     printf 'warning: shadow safety evaluation failed for control session %s\n' \
       "${session_id}" >&2
   fi
+}
+
+control_rollout_shadow_session_roster() {
+  local context_purpose="$1"
+  local sessions="$2"
+  local first_session
+  local final_session
+  if [[ "${context_purpose}" != "contact_grasp" || "${sessions}" != *,* ]]; then
+    printf '%s\n' "${sessions}"
+    return
+  fi
+  first_session="${sessions%%,*}"
+  final_session="${sessions##*,}"
+  printf '%s,%s\n' "${first_session}" "${final_session}"
 }

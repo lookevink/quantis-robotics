@@ -538,8 +538,6 @@ def recording_snapshot(
     *,
     safety: RecordingSafetyTelemetry = RecordingSafetyTelemetry(),
 ) -> RecordingSnapshot:
-    import omni.timeline
-
     hand_position, hand_orientation = world_pose(attachment.hand_prim)
     robot = attachment.hand_prim.GetStage().GetPrimAtPath(ROBOT_PATH)
     base_position, base_orientation = world_pose(robot)
@@ -574,7 +572,7 @@ def recording_snapshot(
         ),
         end_effector_world_position=hand_position,
         gripper_frame_world_position=gripper_frame_position,
-        simulation_time_seconds=omni.timeline.get_timeline_interface().get_current_time(),
+        simulation_time_seconds=physics_simulation_time_seconds(),
         safety=safety,
     )
 
@@ -583,23 +581,39 @@ def _smoothstep(progress: float) -> float:
     return progress * progress * (3.0 - 2.0 * progress)
 
 
+def physics_simulation_time_seconds() -> float:
+    """Return the monotonic PhysX clock used by observed motion intervals."""
+
+    from isaacsim.core.simulation_manager import SimulationManager
+
+    return float(SimulationManager.get_simulation_time())
+
+
+def resume_live_simulation(timeline: Any) -> bool:
+    """Enable app-driven physics and report whether playback was resumed."""
+
+    timeline.set_auto_update(True)
+    resumed = not timeline.is_playing()
+    if resumed:
+        timeline.play()
+    return resumed
+
+
 async def _advance_sample(
     sample_period_seconds: float | None,
     observe_safety: Callable[[], ContactReading] | None = None,
 ) -> ContactReading:
     import omni.kit.app
-    import omni.timeline
 
     app = omni.kit.app.get_app()
-    timeline = omni.timeline.get_timeline_interface()
-    started_at = timeline.get_current_time()
+    started_at = physics_simulation_time_seconds()
     latest_safety = ContactReading()
     if sample_period_seconds is None:
         for _ in range(120):
             await app.next_update_async()
             if observe_safety is not None:
                 latest_safety = latest_safety.peak(observe_safety())
-            if timeline.get_current_time() > started_at:
+            if physics_simulation_time_seconds() > started_at:
                 return latest_safety
         raise RuntimeError("simulation did not advance within 120 updates")
     maximum_updates = max(120, ceil(sample_period_seconds * 1000))
@@ -607,7 +621,10 @@ async def _advance_sample(
         await app.next_update_async()
         if observe_safety is not None:
             latest_safety = latest_safety.peak(observe_safety())
-        if timeline.get_current_time() - started_at >= sample_period_seconds - 1e-6:
+        if (
+            physics_simulation_time_seconds() - started_at
+            >= sample_period_seconds - 1e-6
+        ):
             return latest_safety
     raise RuntimeError(
         f"simulation did not advance {sample_period_seconds:.3f}s "
@@ -683,8 +700,5 @@ async def move_joint_command(
         if snapshot.simulation_time_seconds is not None:
             sample_times.append(snapshot.simulation_time_seconds)
         if recorder is not None:
-            await recorder.capture(
-                snapshot,
-                advance=False,
-            )
+            await recorder.capture_current(snapshot)
     return tuple(sample_times)

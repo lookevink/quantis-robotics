@@ -10,6 +10,9 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 
+MAXIMUM_CONTACT_GRASP_ACTIONS = 52
+
+
 class ReachAndGraspFailure(str, Enum):
     NO_ATTACHMENT_TRANSITION = "no_attachment_transition"
     ATTACHMENT_LOST = "attachment_lost"

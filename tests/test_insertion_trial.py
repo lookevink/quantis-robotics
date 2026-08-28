@@ -16,16 +16,19 @@ from jepa_wm.control_safety import (
     ControlGateDecision,
     ControlGateReason,
     ORIENTATION_HOLD_ACTION_SCALES,
+    TRACKING_BOUNDED_ACTION_SCALES,
     SafetyProjectionAttempt,
     SimulatorSafetyLimits,
 )
 from jepa_wm.direct_safety import DirectInsertionSafetyEvidence
 from jepa_wm.insertion_refresh import (
+    MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
     ControlSafetySnapshot,
     InsertionEvaluationRefresh,
 )
 from jepa_wm.insertion_trial import (
     INSERTION_TRIAL_SETTLEMENT_MAXIMUM_UPDATES,
+    INSERTION_TRIAL_SETTLEMENT_TRACKING_FRACTION,
     InsertionTrialAuthority,
     InsertionTrialBinding,
     InsertionTrialExecutionEvidence,
@@ -273,6 +276,37 @@ class InsertionTrialBindingTest(unittest.TestCase):
                 captured_state,
             )
 
+    def test_target_relative_refresh_preserves_contact_grasp_settling(self) -> None:
+        captured = _observation(10)
+        response = ProposedControl(10, 100.1, _ACTIONS, _PROPOSAL, _FINGERPRINT)
+        captured_state = ControlSafetySnapshot(
+            _JOINTS,
+            0.03263233229517937,
+            (0.4, 0.0, 0.5),
+            0.0,
+            False,
+            False,
+        )
+        live_state = replace(
+            captured_state,
+            gripper_width_m=0.032604049891233444,
+        )
+        refresh = InsertionEvaluationRefresh(107.5, live_state, captured.pose)
+
+        with self.assertRaisesRegex(ValueError, "changed after capture"):
+            refresh.authorize(captured, response, captured_state)
+
+        observation, authorized = refresh.authorize_target_relative(
+            captured,
+            response,
+            captured_state,
+            JointDriveTarget(_JOINTS, 0.032482124865055084),
+            MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
+        )
+
+        self.assertEqual(observation.captured_at_unix_seconds, 107.5)
+        self.assertEqual(authorized.created_at_unix_seconds, 107.5)
+
     def test_rebinds_one_exact_passing_source_to_an_equivalent_reset(self) -> None:
         with self.assertRaisesRegex(ValueError, "selected exact proposal"):
             build_insertion_trial_response(
@@ -344,6 +378,11 @@ class InsertionTrialBindingTest(unittest.TestCase):
             binding.trial_policy.joint_settlement.maximum_updates,
             INSERTION_TRIAL_SETTLEMENT_MAXIMUM_UPDATES,
         )
+        self.assertEqual(
+            binding.trial_policy.joint_settlement
+            .tracking_error_fraction_of_requested_motion,
+            INSERTION_TRIAL_SETTLEMENT_TRACKING_FRACTION,
+        )
         self.assertEqual(binding.trial_policy.control_period_seconds, 0.25)
         with self.assertRaisesRegex(ValueError, "control period"):
             replace(binding.trial_policy, control_period_seconds=0.5)
@@ -385,6 +424,19 @@ class InsertionTrialBindingTest(unittest.TestCase):
         capped.validate_attempted_projection_scales((ACTION_SCALES[1],))
         with self.assertRaisesRegex(ValueError, "exceeded"):
             capped.validate_attempted_projection_scales((ACTION_SCALES[0],))
+
+        tracking_bounded = replace(
+            binding,
+            source_selected_action_scale=TRACKING_BOUNDED_ACTION_SCALES[0],
+        )
+        self.assertEqual(
+            tracking_bounded.allowed_projection_scales,
+            TRACKING_BOUNDED_ACTION_SCALES,
+        )
+        with self.assertRaisesRegex(ValueError, "exceeded"):
+            tracking_bounded.validate_attempted_projection_scales(
+                (ACTION_SCALES[0],)
+            )
 
         held = replace(
             binding,

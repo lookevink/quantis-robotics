@@ -57,8 +57,9 @@ class RuntimeLoaderTest(unittest.TestCase):
     def test_reloads_action_safety_and_shadow_contract_as_one_generation(self) -> None:
         source = """
 from sim.runtime_loader import reload_demo_runtime
-from jepa_wm import control_resolution_baseline, control_resolution_profile
+from jepa_wm import control_resolution_baseline, control_resolution_profile, insertion_transition
 from sim import isaac_control_runtime as old_control_runtime
+from sim import isaac_insertion_demo as old_insertion_demo
 stage = object()
 actuators = object()
 attachment = object()
@@ -68,9 +69,11 @@ old_control_runtime.bind_live_runtime(
 )
 del control_resolution_baseline.ControlResolutionBaselineAttempt
 del control_resolution_profile.ControlResolutionLoad
+del insertion_transition.resolve_insertion_followup_proposal
+del old_insertion_demo.record_insertion_demo
 reload_demo_runtime()
-from jepa_wm import action, control_resolution, control_resolution_baseline, control_resolution_profile, control_safety, direct_safety, experimental_candidate, insertion_contract, insertion_recording, insertion_trial, joint_drive, objective_calibration, shadow_planning, shadow_safety
-from sim import control_identity, control_session, demo_sequence, isaac_control_runtime, isaac_demo_kinematics, isaac_exploration, isaac_insertion_trial, recording, trial_source_cache
+from jepa_wm import action, control_resolution, control_resolution_baseline, control_resolution_profile, control_safety, direct_safety, experimental_candidate, insertion_contract, insertion_recording, insertion_refresh, insertion_transition, insertion_trial, joint_drive, objective_calibration, shadow_planning, shadow_safety, training_artifact
+from sim import control_identity, control_session, demo_sequence, isaac_control_runtime, isaac_demo, isaac_demo_kinematics, isaac_exploration, isaac_insertion_demo, isaac_insertion_trial, recording, trial_source_cache
 assert control_resolution_baseline.ControlResolutionLoad is control_resolution_profile.ControlResolutionLoad
 assert control_resolution.ControlResolutionLoad is control_resolution_profile.ControlResolutionLoad
 assert control_resolution.ControlResolutionBaselineAttempt is control_resolution_baseline.ControlResolutionBaselineAttempt
@@ -81,12 +84,15 @@ assert experimental_candidate.validate_recording_id is recording.validate_record
 assert control_identity.validate_recording_id is recording.validate_recording_id
 assert control_session.InsertionTrialBinding is insertion_trial.InsertionTrialBinding
 assert control_session.JointDriveTarget is joint_drive.JointDriveTarget
+assert insertion_refresh.JointDriveTarget is joint_drive.JointDriveTarget
+assert insertion_transition.ArtifactIdentity is training_artifact.ArtifactIdentity
 assert isaac_insertion_trial.InsertionTrialSourceEvidence is insertion_trial.InsertionTrialSourceEvidence
 assert trial_source_cache.ControlSession is control_session.ControlSession
 assert shadow_planning.TaskProgressObjective is objective_calibration.TaskProgressObjective
 assert isaac_demo_kinematics.build_demo_sequence is demo_sequence.build_demo_sequence
 assert isaac_exploration.INSERTION_TASK_ID == insertion_contract.INSERTION_TASK_ID
 assert insertion_recording.RECORDING_SCHEMA == recording.RECORDING_SCHEMA
+assert isaac_demo.record_insertion_demo is isaac_insertion_demo.record_insertion_demo
 restored_runtime = isaac_control_runtime.live_runtime_for("live-session", stage)
 assert isinstance(restored_runtime, isaac_control_runtime.LiveControlRuntime)
 assert restored_runtime.actuators is actuators
