@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+from types import ModuleType
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
 import numpy as np
+import sim.isaac_control_runtime as control_runtime
 
 from jepa_wm.control_safety import ControlInterlockEvidence, SimulatorSafetyLimits
 from jepa_wm.insertion_refresh import (
@@ -80,6 +83,36 @@ class _Sensor:
 
     def get_sensor_reading(self) -> _Reading:
         return self.reading
+
+
+def _retain_test_runtime():
+    """Keep focused tests independent of the Isaac articulation module."""
+
+    def refresh(runtime: LiveControlRuntime) -> LiveControlRuntime:
+        actuators = runtime.actuators
+        if not isinstance(actuators.arm_attributes, list):
+            actuators.arm_attributes = []
+        if not isinstance(actuators.finger_attributes, list):
+            actuators.finger_attributes = []
+        return LiveControlRuntime(
+            runtime.session_id,
+            runtime.stage,
+            SimpleNamespace(
+                articulation=object(),
+                arm_attributes=list(actuators.arm_attributes),
+                finger_attributes=list(actuators.finger_attributes),
+                current_command=actuators.current_command,
+                actual_command=actuators.actual_command,
+            ),
+            runtime.attachment,
+            runtime.sensor,
+        )
+
+    return patch.object(
+        control_runtime,
+        "refresh_live_control_articulation",
+        side_effect=refresh,
+    )
 
 
 class ContactReadingTest(unittest.TestCase):
@@ -296,15 +329,94 @@ class ContactReadingTest(unittest.TestCase):
         self.assertEqual(state.plug_position, (0.1, 0.2, 0.3))
         self.assertEqual(timeline.events, ["play", "pause"])
 
-    def test_insertion_preserves_retained_physics_wrappers_after_resume(self) -> None:
-        timeline = _Timeline(playing=False)
+    def test_recreates_only_the_tensor_backed_articulation_wrapper(self) -> None:
+        prims = ModuleType("isaacsim.core.experimental.prims")
+        articulation_token = object()
+        prims.Articulation = lambda path: (articulation_token, path)
+        isaacsim = ModuleType("isaacsim")
+        core = ModuleType("isaacsim.core")
+        experimental = ModuleType("isaacsim.core.experimental")
+        isaacsim.core = core
+        core.experimental = experimental
+        experimental.prims = prims
+
+        class Attribute:
+            def __init__(self, value: float) -> None:
+                self.value = value
+
+            def Get(self) -> float:
+                return self.value
+
+        arm_attributes = [Attribute(float(value)) for value in range(7)]
+        finger_attributes = [Attribute(0.01), Attribute(0.01)]
+        attachment = object()
+        sensor = object()
         old_runtime = LiveControlRuntime(
-            "session", object(), Mock(), Mock(), Mock()
+            "session",
+            object(),
+            control_runtime.Actuators(
+                articulation=object(),
+                arm_attributes=arm_attributes,
+                finger_attributes=finger_attributes,
+            ),
+            attachment,
+            sensor,
+        )
+
+        with patch.dict(
+            sys.modules,
+            {
+                "isaacsim": isaacsim,
+                "isaacsim.core": core,
+                "isaacsim.core.experimental": experimental,
+                "isaacsim.core.experimental.prims": prims,
+            },
+        ):
+            refreshed = control_runtime.refresh_live_control_articulation(
+                old_runtime
+            )
+
+        self.assertIsNot(refreshed, old_runtime)
+        self.assertEqual(
+            refreshed.actuators.articulation,
+            (articulation_token, "/World/Franka_R"),
+        )
+        for refreshed_attribute, old_attribute in zip(
+            refreshed.actuators.arm_attributes, arm_attributes
+        ):
+            self.assertIs(refreshed_attribute, old_attribute)
+        for refreshed_attribute, old_attribute in zip(
+            refreshed.actuators.finger_attributes, finger_attributes
+        ):
+            self.assertIs(refreshed_attribute, old_attribute)
+        self.assertIs(refreshed.attachment, attachment)
+        self.assertIs(refreshed.sensor, sensor)
+        self.assertEqual(
+            control_runtime._active_drive_target(refreshed),
+            control_runtime._active_drive_target(old_runtime),
+        )
+
+    def test_insertion_replaces_stale_articulation_after_resume(self) -> None:
+        timeline = _Timeline(playing=False)
+        events: list[str] = []
+        arm_attributes = [object() for _ in range(7)]
+        finger_attributes = [object(), object()]
+        old_articulation = object()
+        new_articulation = object()
+        actuators = SimpleNamespace(
+            articulation=old_articulation,
+            arm_attributes=arm_attributes,
+            finger_attributes=finger_attributes,
+        )
+        stage = object()
+        attachment = Mock()
+        sensor = Mock()
+        old_runtime = LiveControlRuntime(
+            "session", stage, actuators, attachment, sensor
         )
         captured = Mock()
         live = Mock()
         physics_ready = False
-        events: list[str] = []
 
         async def advance() -> None:
             nonlocal physics_ready
@@ -316,9 +428,19 @@ class ContactReadingTest(unittest.TestCase):
 
         def read(runtime):
             if not physics_ready:
-                raise RuntimeError("retained tensor view is not ready")
+                raise RuntimeError("physics backend is not ready")
+            if runtime is old_runtime:
+                raise Exception("Failed to get DOF positions from backend")
             events.append("read")
-            self.assertIs(runtime, old_runtime)
+            self.assertIs(runtime.actuators.articulation, new_articulation)
+            for refreshed_attribute, old_attribute in zip(
+                runtime.actuators.arm_attributes, arm_attributes
+            ):
+                self.assertIs(refreshed_attribute, old_attribute)
+            for refreshed_attribute, old_attribute in zip(
+                runtime.actuators.finger_attributes, finger_attributes
+            ):
+                self.assertIs(refreshed_attribute, old_attribute)
             return live, pose, drive_target
 
         def observe():
@@ -328,7 +450,30 @@ class ContactReadingTest(unittest.TestCase):
                 force_newtons=0.0,
             )
 
+        def articulation(path):
+            events.append("refresh")
+            self.assertEqual(path, "/World/Franka_R")
+            return new_articulation
+
+        prims = ModuleType("isaacsim.core.experimental.prims")
+        prims.Articulation = articulation
+        isaacsim = ModuleType("isaacsim")
+        core = ModuleType("isaacsim.core")
+        experimental = ModuleType("isaacsim.core.experimental")
+        isaacsim.core = core
+        core.experimental = experimental
+        experimental.prims = prims
+
         with (
+            patch.dict(
+                sys.modules,
+                {
+                    "isaacsim": isaacsim,
+                    "isaacsim.core": core,
+                    "isaacsim.core.experimental": experimental,
+                    "isaacsim.core.experimental.prims": prims,
+                },
+            ),
             patch(
                 "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
                 side_effect=read,
@@ -353,11 +498,20 @@ class ContactReadingTest(unittest.TestCase):
             events,
             [
                 "advance",
+                "refresh",
                 "observe live",
                 "read",
             ],
         )
-        self.assertIs(synchronized.runtime, old_runtime)
+        self.assertIsNot(synchronized.runtime, old_runtime)
+        self.assertEqual(synchronized.runtime.session_id, old_runtime.session_id)
+        self.assertIs(synchronized.runtime.stage, stage)
+        self.assertIs(synchronized.runtime.attachment, attachment)
+        self.assertIs(synchronized.runtime.sensor, sensor)
+        self.assertIs(
+            control_runtime.live_runtime_for("session", stage),
+            synchronized.runtime,
+        )
         self.assertIs(synchronized.safety, live)
         self.assertIs(synchronized.pose, pose)
         self.assertIs(synchronized.active_drive_target, drive_target)
@@ -368,6 +522,80 @@ class ContactReadingTest(unittest.TestCase):
             ControlInterlockEvidence(0.0, False)
         )
         self.assertEqual(timeline.events, ["play", "pause"])
+
+    def test_insertion_refresh_rejects_changed_live_ownership(self) -> None:
+        arm_attributes = [object() for _ in range(7)]
+        finger_attributes = [object(), object()]
+        runtime = LiveControlRuntime(
+            "session",
+            object(),
+            SimpleNamespace(
+                articulation=object(),
+                arm_attributes=arm_attributes,
+                finger_attributes=finger_attributes,
+            ),
+            Mock(),
+            Mock(),
+        )
+
+        async def advance() -> None:
+            return None
+
+        changed_runtimes = {
+            "no-op": runtime,
+            "session": LiveControlRuntime(
+                "different-session",
+                runtime.stage,
+                runtime.actuators,
+                runtime.attachment,
+                runtime.sensor,
+            ),
+            "drive attribute": LiveControlRuntime(
+                runtime.session_id,
+                runtime.stage,
+                SimpleNamespace(
+                    articulation=object(),
+                    arm_attributes=[object(), *arm_attributes[1:]],
+                    finger_attributes=finger_attributes,
+                ),
+                runtime.attachment,
+                runtime.sensor,
+            ),
+            "finger drive attribute": LiveControlRuntime(
+                runtime.session_id,
+                runtime.stage,
+                SimpleNamespace(
+                    articulation=object(),
+                    arm_attributes=arm_attributes,
+                    finger_attributes=[object(), finger_attributes[1]],
+                ),
+                runtime.attachment,
+                runtime.sensor,
+            ),
+        }
+
+        for name, changed_runtime in changed_runtimes.items():
+            with (
+                self.subTest(name=name),
+                patch.object(
+                    control_runtime,
+                    "refresh_live_control_articulation",
+                    return_value=changed_runtime,
+                ),
+                self.assertRaisesRegex(
+                    RuntimeError, "live insertion articulation refresh failed"
+                ),
+            ):
+                asyncio.run(
+                    synchronized_insertion_safety_snapshot(
+                        runtime,
+                        _Timeline(playing=False),
+                        advance,
+                        Mock(),
+                        SimulatorSafetyLimits(),
+                        operation="test rejected insertion refresh",
+                    )
+                )
 
     def test_contact_grasp_resume_accepts_target_relative_gripper_settling(
         self,
@@ -398,6 +626,7 @@ class ContactReadingTest(unittest.TestCase):
             return None
 
         with (
+            _retain_test_runtime(),
             patch(
                 "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
                 return_value=(live, Mock(), drive_target),
@@ -431,6 +660,7 @@ class ContactReadingTest(unittest.TestCase):
 
         execution_timeline = _Timeline(playing=False)
         with (
+            _retain_test_runtime(),
             patch(
                 "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
                 return_value=(live, Mock(), drive_target),
@@ -491,11 +721,15 @@ class ContactReadingTest(unittest.TestCase):
 
         def read(runtime: LiveControlRuntime):
             self.assertTrue(timeline.is_playing())
-            self.assertIs(runtime, old_runtime)
+            self.assertIsNot(runtime, old_runtime)
+            self.assertIs(runtime.stage, old_runtime.stage)
+            self.assertIs(runtime.attachment, old_runtime.attachment)
+            self.assertIs(runtime.sensor, old_runtime.sensor)
             events.append("read")
             return live, pose, drive_target
 
         with (
+            _retain_test_runtime(),
             patch(
                 "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
                 side_effect=read,
@@ -603,6 +837,7 @@ class ContactReadingTest(unittest.TestCase):
             return None
 
         with (
+            _retain_test_runtime(),
             patch(
                 "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
                 return_value=(live, Mock(), active_target),
@@ -733,6 +968,7 @@ class ContactReadingTest(unittest.TestCase):
             return snapshot, Mock(), active_target
 
         with (
+            _retain_test_runtime(),
             patch(
                 "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
                 side_effect=read,
@@ -796,6 +1032,7 @@ class ContactReadingTest(unittest.TestCase):
             camera_called = True
 
         with (
+            _retain_test_runtime(),
             patch(
                 "sim.isaac_control_runtime.LiveContactInterlock.observe",
                 return_value=SimpleNamespace(
@@ -835,6 +1072,7 @@ class ContactReadingTest(unittest.TestCase):
             return None
 
         with (
+            _retain_test_runtime(),
             patch(
                 "sim.isaac_control_runtime._control_safety_snapshot",
                 return_value=live,
@@ -858,7 +1096,10 @@ class ContactReadingTest(unittest.TestCase):
                 )
             )
 
-        self.assertIs(synchronized.runtime, old_runtime)
+        self.assertIsNot(synchronized.runtime, old_runtime)
+        self.assertIs(synchronized.runtime.stage, old_runtime.stage)
+        self.assertIs(synchronized.runtime.attachment, old_runtime.attachment)
+        self.assertIs(synchronized.runtime.sensor, old_runtime.sensor)
         self.assertIs(synchronized.safety, live)
         live.validate_continuity.assert_not_called()
         self.assertEqual(observe.call_count, 1)
@@ -873,6 +1114,7 @@ class ContactReadingTest(unittest.TestCase):
             return None
 
         with (
+            _retain_test_runtime(),
             patch(
                 "sim.isaac_control_runtime._control_safety_snapshot",
                 return_value=live,

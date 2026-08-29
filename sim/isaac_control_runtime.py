@@ -246,6 +246,7 @@ async def _synchronized_live_read(
     state: Any,
     read: Any,
     *,
+    refresh_after_resume: Any | None = None,
     observe_safety: Any | None = None,
     before_read: Any | None = None,
     pause_on_success: bool = True,
@@ -257,6 +258,8 @@ async def _synchronized_live_read(
         readiness_update = resume_live_simulation(timeline)
         if readiness_update:
             await advance()
+            if refresh_after_resume is not None:
+                state = refresh_after_resume(state)
         if observe_safety is not None:
             observe_safety(state)
         if before_read is not None:
@@ -350,9 +353,20 @@ async def _synchronized_insertion_runtime(
     live_interlock = interlock_for(runtime)
     continuity_validated = False
 
+    def refresh_after_resume(value: LiveControlRuntime) -> LiveControlRuntime:
+        refreshed = refresh_live_control_articulation(value)
+        if (
+            refreshed is value
+            or refreshed.actuators.articulation
+            is value.actuators.articulation
+            or not _retains_live_control_ownership(value, refreshed)
+        ):
+            raise RuntimeError("live insertion articulation refresh failed")
+        return refreshed
+
     def observe_safety(value: LiveControlRuntime) -> None:
         nonlocal continuity_validated
-        if value is not runtime:
+        if not _retains_live_control_ownership(runtime, value):
             raise RuntimeError("live insertion runtime identity changed")
         live_interlock.observe()
         if not continuity_validated and validate_resumed is not None:
@@ -377,6 +391,7 @@ async def _synchronized_insertion_runtime(
         advance,
         runtime,
         read,
+        refresh_after_resume=refresh_after_resume,
         observe_safety=observe_safety,
         before_read=before_read,
         pause_on_success=pause_on_success,
@@ -734,6 +749,58 @@ def restore_live_runtime_handoff(
             handoff.sensor.hand,
             handoff.sensor.connector,
         ),
+    )
+
+
+def refresh_live_control_articulation(
+    runtime: LiveControlRuntime,
+) -> LiveControlRuntime:
+    """Replace only the tensor-backed articulation after a paused resume."""
+
+    from isaacsim.core.experimental.prims import Articulation
+
+    return bind_live_runtime(
+        runtime.session_id,
+        runtime.stage,
+        Actuators(
+            Articulation(ROBOT_PATH),
+            list(runtime.actuators.arm_attributes),
+            list(runtime.actuators.finger_attributes),
+        ),
+        runtime.attachment,
+        runtime.sensor,
+    )
+
+
+def _retains_live_control_ownership(
+    original: LiveControlRuntime,
+    refreshed: LiveControlRuntime,
+) -> bool:
+    """Allow only the tensor-backed articulation owner to be replaced."""
+
+    original_arm = original.actuators.arm_attributes
+    refreshed_arm = refreshed.actuators.arm_attributes
+    original_fingers = original.actuators.finger_attributes
+    refreshed_fingers = refreshed.actuators.finger_attributes
+    return (
+        refreshed.session_id == original.session_id
+        and refreshed.stage is original.stage
+        and refreshed.attachment is original.attachment
+        and refreshed.sensor is original.sensor
+        and len(refreshed_arm) == len(original_arm)
+        and all(
+            refreshed_attribute is original_attribute
+            for refreshed_attribute, original_attribute in zip(
+                refreshed_arm, original_arm
+            )
+        )
+        and len(refreshed_fingers) == len(original_fingers)
+        and all(
+            refreshed_attribute is original_attribute
+            for refreshed_attribute, original_attribute in zip(
+                refreshed_fingers, original_fingers
+            )
+        )
     )
 
 
