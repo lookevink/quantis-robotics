@@ -279,6 +279,7 @@ control_rollout_shadow_session_roster standard 'direct-00,direct-01,direct-02'
             ops.mkdir(parents=True)
             shutil.copy(REPO_ROOT / "ops" / "run_grasp_to_insertion_milestone.sh", ops)
             log = home / "calls.log"
+            log.touch()
             (ops / "shell_helpers.sh").write_text(
                 """#!/usr/bin/env bash
 is_safe_identifier() { return 0; }
@@ -290,7 +291,11 @@ insertion_rollout_profile_field() {
 contact_grasp_maximum_actions() { printf '52\n'; }
 contact_grasp_initial_context() { printf '110\n'; }
 isaac_server_call() { printf 'isaac %s|%s\n' "$1" "${3:-false}" >> "${CALLS}"; }
-control_proposal_from_identity() { printf 'insertion-proposal\n'; }
+control_proposal_from_identity() {
+  printf 'proposal %s %s %s\n' "$1" "$2" "${PWD}" >> "${CALLS}"
+  [[ "${PWD}" == "${HOME}/quantis-robotics" ]] || return 91
+  printf 'insertion-proposal\n'
+}
 require_control_rollout_reach_and_grasp() { return 0; }
 control_rollout_terminal_session() { printf 'full-chain-grasp-12\n'; }
 validate_demo_run_spec() {
@@ -332,6 +337,8 @@ run_insertion_followup_trial() {
             self.assertEqual(
                 [line.split()[0] for line in calls],
                 [
+                    "proposal",
+                    "proposal",
                     "preflight",
                     "worker",
                     "worker",
@@ -349,21 +356,31 @@ run_insertion_followup_trial() {
                     "isaac",
                 ],
             )
+            self.assertEqual(
+                calls[:2],
+                [
+                    f"proposal direct grasp-worker {home / 'quantis-robotics'}",
+                    (
+                        "proposal insertion_followup_trial insertion-worker "
+                        f"{home / 'quantis-robotics'}"
+                    ),
+                ],
+            )
             self.assertIn(
                 "full-chain-grasp contact-reference 12401 52 grasp-worker direct 110 contact_grasp",
-                calls[3],
+                calls[5],
             )
             self.assertIn(
                 "verify_grasp_to_insertion_source('full-chain-grasp-12')",
-                calls[4],
+                calls[6],
             )
-            self.assertIn("demo-spec", calls[0])
-            self.assertIn("datacenter_demo.usda", calls[0])
-            self.assertIn("grasp-worker.worker.json", calls[0])
-            self.assertIn("insertion-worker.worker.json", calls[0])
-            self.assertIn("contact-reference 12401", calls[0])
-            self.assertIn("a" * 40, calls[0])
-            self.assertTrue(calls[0].endswith("52 4"))
+            self.assertIn("demo-spec", calls[2])
+            self.assertIn("datacenter_demo.usda", calls[2])
+            self.assertIn("grasp-worker.worker.json", calls[2])
+            self.assertIn("insertion-worker.worker.json", calls[2])
+            self.assertIn("contact-reference 12401", calls[2])
+            self.assertIn("a" * 40, calls[2])
+            self.assertTrue(calls[2].endswith("52 4"))
             followups = [line for line in calls if line.startswith("followup ")]
             self.assertEqual(len(followups), 4)
             self.assertIn(

@@ -41,6 +41,7 @@ grasp_steps="$(contact_grasp_maximum_actions \
   "${repo_dir}" "${venv_python}")"
 insertion_steps="$(insertion_rollout_profile_field \
   "${repo_dir}" "${venv_python}" demo maximum-steps)"
+cd "${repo_dir}"
 grasp_proposal="$(control_proposal_from_identity \
   direct "${grasp_identity}" "${checkpoint_dir}" "${venv_python}")"
 insertion_proposal="$(control_proposal_from_identity \
@@ -58,7 +59,6 @@ validate_demo_run_spec \
   "${run_id}" "${data_root}/demo_runs/${run_id}.binding.json" \
   "${grasp_steps}" "${insertion_steps}"
 
-cd "${repo_dir}"
 bash "${repo_dir}/ops/jepa_wm.sh" control-worker-stop
 bash "${repo_dir}/ops/jepa_wm.sh" \
   control-worker-start --artifacts "${grasp_identity}"
