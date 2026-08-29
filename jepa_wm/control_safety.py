@@ -59,6 +59,7 @@ ACTION_SCALES = (
 # noise floor, while bounding larger proposals to a one-millimetre command.
 MAXIMUM_CONTACT_GRASP_TRANSLATION_COMMAND_METERS = 0.001
 MAXIMUM_CONTACT_GRASP_FINE_CLOSURE_COMMAND_METERS = 0.0015
+MINIMUM_CONTACT_GRASP_TRANSPORT_COMMAND_METERS = 0.0005
 MAXIMUM_CONTACT_GRASP_TRANSPORT_COMMAND_METERS = 0.00075
 CONTACT_GRASP_ACTION_SCALES = (
     DroidActionScale(0.25, 0.125, 0.125),
@@ -93,18 +94,45 @@ CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES = tuple(
     for policy in CONTACT_GRASP_ACTION_SCALE_LEVELS
 )
 
-# The current transport profile keeps small authenticated JEPA translations
-# above the direction-tracking activity floor whenever the full proposal is
-# still inside the unchanged 0.75 mm command bound. Each suffix preserves the
-# ordinary ordered fallback to a smaller safe projection.
-CURRENT_CONTACT_GRASP_TRANSPORT_ACTION_SCALES = tuple(
+# This directional first-step roster remains reconstruction-only for v2
+# evidence. It made direction observable but predates the controller-resolution
+# floor enforced by the current horizon-aware contract.
+DIRECTIONAL_CONTACT_GRASP_TRANSPORT_ACTION_SCALES = tuple(
     DroidActionScale(translation, 0.125, 0.0)
     for translation in (1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125)
 )
-CURRENT_CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES = tuple(
-    CURRENT_CONTACT_GRASP_TRANSPORT_ACTION_SCALES[index:]
-    for index in range(len(CURRENT_CONTACT_GRASP_TRANSPORT_ACTION_SCALES))
+DIRECTIONAL_CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES = tuple(
+    DIRECTIONAL_CONTACT_GRASP_TRANSPORT_ACTION_SCALES[index:]
+    for index in range(len(DIRECTIONAL_CONTACT_GRASP_TRANSPORT_ACTION_SCALES))
 )
+
+
+def resolvable_contact_grasp_transport_action_scales(
+    translation_norm: float,
+) -> tuple[DroidActionScale, ...]:
+    """Project a horizon into three ordered commands inside the measured band."""
+
+    if (
+        not isfinite(translation_norm)
+        or translation_norm < MINIMUM_CONTACT_GRASP_TRANSPORT_COMMAND_METERS
+    ):
+        raise ValueError(
+            "contact-grasp transport proposal is below controller resolution"
+        )
+    maximum_scale = min(
+        1.0,
+        MAXIMUM_CONTACT_GRASP_TRANSPORT_COMMAND_METERS / translation_norm,
+    )
+    minimum_scale = min(
+        1.0,
+        MINIMUM_CONTACT_GRASP_TRANSPORT_COMMAND_METERS / translation_norm,
+    )
+    scales = tuple(
+        dict.fromkeys(
+            (maximum_scale, (maximum_scale + minimum_scale) / 2.0, minimum_scale)
+        )
+    )
+    return tuple(DroidActionScale(scale, 0.125, 0.0) for scale in scales)
 
 # The demonstration closes from 44 mm to 18 mm across the contact window. The
 # live controller preserves that learned direction but must keep Cartesian and
@@ -169,11 +197,20 @@ def contact_grasp_action_scales(
     *,
     attachment_acquired: bool = False,
     require_directional_transport_progress: bool = False,
+    require_resolvable_transport: bool = False,
 ) -> tuple[DroidActionScale, ...]:
     """Bound approach motion and calibrate gripper closure independently."""
 
     translation_norm = sqrt(sum(value * value for value in action.values[:3]))
     if attachment_acquired:
+        if require_resolvable_transport:
+            if not require_directional_transport_progress:
+                raise ValueError(
+                    "resolvable contact-grasp transport must be directional"
+                )
+            return resolvable_contact_grasp_transport_action_scales(
+                translation_norm
+            )
         if (
             require_directional_transport_progress
             and translation_norm
@@ -183,7 +220,7 @@ def contact_grasp_action_scales(
                 "contact-grasp transport proposal is below tracking activity"
             )
         policies = (
-            CURRENT_CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES
+            DIRECTIONAL_CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES
             if require_directional_transport_progress
             else CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES
         )
@@ -256,7 +293,7 @@ INSERTION_ACTION_SCALE_POLICIES = (
     ),
     *CONTACT_GRASP_ACTION_SCALE_LEVELS,
     *CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES,
-    *CURRENT_CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES,
+    *DIRECTIONAL_CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES,
     *LEGACY_CONTACT_GRASP_ACTION_SCALE_POLICIES,
     ORIENTATION_HOLD_ACTION_SCALES,
     LEGACY_TRACKING_BOUNDED_ACTION_SCALES,

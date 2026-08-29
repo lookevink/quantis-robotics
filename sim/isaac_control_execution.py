@@ -670,11 +670,21 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         contact_grasp_policy = (
             persisted_state.require_current_contact_grasp_policy()
         )
+        execution_action = contact_grasp_policy.action_for_execution(
+            proposal.actions,
+            plug_attached=persisted_state.plug_attached,
+        )
+        proposal = proposal.with_actions(
+            (execution_action, *proposal.actions[1:])
+        )
         action_scales = contact_grasp_action_scales(
-            proposal.first_action,
+            execution_action,
             attachment_acquired=persisted_state.plug_attached,
             require_directional_transport_progress=(
                 contact_grasp_policy.requires_directional_transport_progress
+            ),
+            require_resolvable_transport=(
+                contact_grasp_policy.uses_horizon_transport_action
             ),
         )
     session.claim_execution()

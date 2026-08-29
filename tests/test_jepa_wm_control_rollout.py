@@ -11,7 +11,13 @@ from unittest.mock import Mock
 
 import numpy as np
 
-from jepa_wm.action import DroidAction, DroidActionScale, DroidPose, action_between
+from jepa_wm.action import (
+    ACTION_RECORDING_CONTRACT,
+    DroidAction,
+    DroidActionScale,
+    DroidPose,
+    action_between,
+)
 from jepa_wm.action_prior import ActionPriorConfig
 from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
 from jepa_wm.control_policy import ControlExecutionPolicy
@@ -54,7 +60,7 @@ from jepa_wm.insertion_trial import (
     InsertionTrialRollbackFailure,
     InsertionTrialRollbackFailureReason,
 )
-from jepa_wm.insertion_refresh import InsertionEvaluationRefresh
+from jepa_wm.insertion_refresh import ControlSafetySnapshot, InsertionEvaluationRefresh
 from jepa_wm.insertion_contract import InsertionControlTargetPolicy
 from jepa_wm.planner import CEMConfig
 from jepa_wm.planner_readiness import FirstActionThresholds
@@ -127,6 +133,145 @@ class ControlRolloutTest(unittest.TestCase):
         self.assertIsNone(
             _contact_grasp_retained_direction((acquisition, retained))
         )
+
+    def test_current_contact_grasp_reconstructs_an_overlapping_dynamic_scale(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            session = ControlSession.at(root / "control_sessions", "session-1")
+            session.path.mkdir(parents=True)
+            reference = root / "recordings" / "reference"
+            reference.mkdir(parents=True)
+            wrist = reference / "wrist"
+            wrist.mkdir()
+            steps = []
+            for index in range(121):
+                frame = wrist / f"frame_{index:06d}.png"
+                frame.write_bytes(b"frame")
+                steps.append(
+                    {
+                        "index": index,
+                        "end_effector_pose": [
+                            0.4 + 0.0002 * index,
+                            0.0,
+                            0.5,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.75,
+                        ],
+                        "frames": {"wrist": f"wrist/{frame.name}"},
+                    }
+                )
+            (reference / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "metadata": {"task": "reach_and_insert"},
+                        "action": ACTION_RECORDING_CONTRACT.to_dict(),
+                        "cameras": ["wrist"],
+                        "frames": len(steps),
+                    }
+                )
+            )
+            (reference / "steps.jsonl").write_text(
+                "\n".join(json.dumps(step) for step in steps) + "\n"
+            )
+            pose = DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.75))
+            observation = ControlObservation(
+                101,
+                100.0,
+                Path("control_sessions/session-1/context.png"),
+                ControlTarget(
+                    Path("recordings/reference/wrist/frame_000116.png"),
+                    DroidPose((0.4232, 0.0, 0.5, 0.0, 0.0, 0.0, 0.75)),
+                ),
+                Path("/tmp/proposal.pth"),
+                pose,
+                DroidAction((0.0,) * 7),
+                113,
+            )
+            actions = (
+                DroidAction((0.0002, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+            ) * 3
+            response = ProposedControl(
+                101,
+                100.2,
+                actions,
+                Path("/tmp/proposal.pth"),
+            )
+            joints = (0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5)
+            drive_target = JointDriveTarget(joints, 0.02)
+            state = ControlSessionState(
+                "session-1",
+                "reference",
+                12601,
+                "control-recording",
+                joints,
+                False,
+                0.0,
+                "session-0",
+                plug_position=(0.0, 0.0, 1.0),
+                plug_attached=True,
+                current_gripper_width_m=0.02,
+                active_drive_target=drive_target,
+                contact_grasp_target_policy=CONTACT_GRASP_TARGET_POLICY,
+            )
+            live_state = ControlSafetySnapshot(
+                joints,
+                0.02,
+                (0.0, 0.0, 1.0),
+                0.0,
+                False,
+                True,
+            )
+            refresh = InsertionEvaluationRefresh(100.3, live_state, pose)
+            raw = CONTACT_GRASP_TARGET_POLICY.action_for_execution(
+                actions,
+                plug_attached=True,
+            )
+            scale = DroidActionScale(1.0, 0.125, 0.0)
+            commanded = scale.apply(raw)
+            post_pose = pose.applied(commanded)
+            gate = ControlGateDecision(101, post_pose, ())
+            actual = action_between(pose, post_pose)
+            tracking = evaluate_action_tracking(commanded, actual)
+            result = ControlResult(
+                ControlResultStatus.APPLIED,
+                "session-1",
+                gate,
+                (SafetyProjectionAttempt(scale, gate, 0.0, joints),),
+                scale,
+                0.01,
+                0.0,
+                0.0,
+                0.0,
+                PostActionEvidence(
+                    raw,
+                    commanded,
+                    actual,
+                    tracking,
+                    post_pose,
+                    joints,
+                    0.0,
+                    0.0,
+                    False,
+                    {"path": "/tmp/post.png", "shape": [512, 512, 4]},
+                    (0.0, 0.0, 1.0),
+                    True,
+                ),
+                execution_interlock=ControlInterlockEvidence(0.0, False),
+                insertion_trial_refresh=refresh,
+            )
+            session.request_path.write_text(json.dumps(observation.to_dict()))
+            session.response_path.write_text(json.dumps(response.to_dict()))
+            session.state_path.write_text(json.dumps(state.to_dict()))
+            session.result_path.write_text(json.dumps(result.to_dict()))
+
+            summary = ControlStepSummary.from_session(session)
+
+        self.assertEqual(summary.result.selected_action_scale, scale)
+        self.assertEqual(summary.result.post_action.raw_proposed_action, raw)
 
     def test_parses_reset_trial_preflight_failure(self) -> None:
         failure = OrchestrationFailure.parse(

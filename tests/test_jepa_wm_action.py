@@ -13,10 +13,33 @@ from jepa_wm.action import (
     DroidActionScale,
     DroidPose,
     action_between,
+    compose_actions,
 )
 
 
 class DroidActionTest(unittest.TestCase):
+    def test_composes_a_native_action_horizon(self) -> None:
+        actions = (
+            DroidAction((0.001, 0.0, 0.0, 0.01, 0.0, 0.0, 0.1)),
+            DroidAction((0.0, 0.002, 0.0, 0.0, 0.02, 0.0, -0.05)),
+            DroidAction((0.0, 0.0, 0.003, 0.0, 0.0, 0.03, 0.02)),
+        )
+
+        composed = compose_actions(actions)
+        expected = DroidPose((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5))
+        for action in actions:
+            expected = expected.applied(action)
+
+        np.testing.assert_allclose(
+            DroidPose((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5))
+            .applied(composed)
+            .values,
+            expected.values,
+            atol=1e-12,
+        )
+        with self.assertRaisesRegex(ValueError, "non-empty"):
+            compose_actions(())
+
     def test_scales_translation_rotation_and_gripper_independently(self) -> None:
         action = DroidAction((1.0,) * 7)
 

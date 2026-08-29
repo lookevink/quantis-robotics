@@ -41,7 +41,6 @@ from jepa_wm.control_safety import (
     ControlGateReason,
     SimulatorSafetyLimits,
     contact_grasp_action_scales,
-    insertion_projection_policy_for_attempts,
 )
 from jepa_wm.insertion_trial import (
     InsertionTrialOutcomeObservation,
@@ -568,23 +567,31 @@ class ControlStepSummary:
                     f"insertion trial rollback settlement is missing: {session.session_id}"
                 )
         elif contact_grasp_execution:
-            try:
-                projection_policy = insertion_projection_policy_for_attempts(
-                    tuple(attempt.scale for attempt in result.projection_attempts)
-                )
-            except ValueError as error:
-                raise ValueError(
-                    f"contact grasp projection policy is invalid: {session.session_id}"
-                ) from error
+            contact_grasp_policy = (
+                state.require_current_contact_grasp_policy()
+            )
+            execution_action = contact_grasp_policy.action_for_execution(
+                response.actions,
+                plug_attached=state.plug_attached,
+            )
             expected_projection_policy = contact_grasp_action_scales(
-                response.first_action,
+                execution_action,
                 attachment_acquired=state.plug_attached,
                 require_directional_transport_progress=(
-                    state.require_current_contact_grasp_policy()
-                    .requires_directional_transport_progress
+                    contact_grasp_policy.requires_directional_transport_progress
+                ),
+                require_resolvable_transport=(
+                    contact_grasp_policy.uses_horizon_transport_action
                 ),
             )
-            if projection_policy != expected_projection_policy:
+            attempted_projection_policy = tuple(
+                attempt.scale for attempt in result.projection_attempts
+            )
+            if (
+                not attempted_projection_policy
+                or attempted_projection_policy
+                != expected_projection_policy[: len(attempted_projection_policy)]
+            ):
                 raise ValueError(
                     f"contact grasp projection phase is invalid: {session.session_id}"
                 )
@@ -667,7 +674,15 @@ class ControlStepSummary:
                 f"control step identity or freshness is invalid: {session.session_id}"
             )
         if result.selected_action_scale is not None:
-            commanded = result.selected_action_scale.apply(response.first_action)
+            response_action = (
+                state.require_current_contact_grasp_policy().action_for_execution(
+                    response.actions,
+                    plug_attached=state.plug_attached,
+                )
+                if contact_grasp_execution
+                else response.first_action
+            )
+            commanded = result.selected_action_scale.apply(response_action)
             expected_pose = observation.pose.applied(commanded)
             if not np.allclose(
                 expected_pose.values,
@@ -679,7 +694,7 @@ class ControlStepSummary:
                     f"control gate pose is not bound to its response: {session.session_id}"
                 )
             if result.post_action is not None and (
-                result.post_action.raw_proposed_action != response.first_action
+                result.post_action.raw_proposed_action != response_action
                 or result.post_action.commanded_action != commanded
             ):
                 raise ValueError(

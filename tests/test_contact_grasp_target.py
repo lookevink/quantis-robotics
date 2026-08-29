@@ -6,9 +6,12 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
+
 from jepa_wm.action import ACTION_RECORDING_CONTRACT, DroidAction, DroidPose
 from jepa_wm.contact_grasp_target import (
     CONTACT_GRASP_TARGET_POLICY,
+    DIRECTIONAL_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     ContactGraspTargetPolicy,
 )
@@ -129,13 +132,52 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
         legacy = ContactGraspTargetPolicy.from_dict(
             {"schema": LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA}
         )
+        directional = ContactGraspTargetPolicy.from_dict(
+            {"schema": DIRECTIONAL_CONTACT_GRASP_TARGET_POLICY_SCHEMA}
+        )
         self.assertFalse(legacy.requires_directional_transport_progress)
+        self.assertTrue(directional.requires_directional_transport_progress)
+        self.assertFalse(directional.uses_horizon_transport_action)
         self.assertEqual(
             ContactGraspTargetPolicy.from_dict(legacy.to_dict()), legacy
         )
         self.assertTrue(
             CONTACT_GRASP_TARGET_POLICY.requires_directional_transport_progress
         )
+        self.assertTrue(CONTACT_GRASP_TARGET_POLICY.uses_horizon_transport_action)
+
+    def test_current_attached_transport_composes_the_native_horizon(self) -> None:
+        actions = (
+            DroidAction((-0.000233, -0.000201, 0.000132, 0.0, 0.0, 0.0, 0.02)),
+            DroidAction((-0.000154, -0.000068, 0.000115, 0.0, 0.0, 0.0, 0.01)),
+            DroidAction((-0.000365, -0.000190, 0.000202, 0.0, 0.0, 0.0, 0.0)),
+        )
+
+        transport = CONTACT_GRASP_TARGET_POLICY.action_for_execution(
+            actions,
+            plug_attached=True,
+        )
+        acquisition = CONTACT_GRASP_TARGET_POLICY.action_for_execution(
+            actions,
+            plug_attached=False,
+        )
+        directional = ContactGraspTargetPolicy(
+            DIRECTIONAL_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+        ).action_for_execution(actions, plug_attached=True)
+
+        np.testing.assert_allclose(
+            transport.values[:3],
+            (-0.000752, -0.000459, 0.000449),
+            rtol=0.0,
+            atol=1e-12,
+        )
+        self.assertEqual(acquisition, actions[0])
+        self.assertEqual(directional, actions[0])
+        with self.assertRaisesRegex(ValueError, "action horizon"):
+            CONTACT_GRASP_TARGET_POLICY.action_for_execution(
+                actions[:2],
+                plug_attached=True,
+            )
 
     def test_rejects_target_substitution_and_incomplete_reference_poses(self) -> None:
         with self.assertRaisesRegex(ValueError, "previous target"):

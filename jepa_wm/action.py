@@ -177,6 +177,28 @@ class DroidAction:
         return DroidActionScale.uniform(scale).apply(self)
 
 
+def compose_actions(actions: Sequence[DroidAction]) -> DroidAction:
+    """Compose a non-empty base-frame action horizon into one delta action."""
+
+    sequence = tuple(actions)
+    if not sequence or any(not isinstance(action, DroidAction) for action in sequence):
+        raise ValueError("action composition requires a non-empty action sequence")
+    translation = np.sum(
+        np.asarray([action.values[:3] for action in sequence], dtype=np.float64),
+        axis=0,
+    )
+    rotation = Rotation.identity()
+    for action in sequence:
+        rotation = Rotation.from_euler("xyz", action.values[3:6]) * rotation
+    return DroidAction(
+        (
+            *translation.tolist(),
+            *rotation.as_euler("xyz").tolist(),
+            sum(action.values[6] for action in sequence),
+        )
+    )
+
+
 @dataclass(frozen=True)
 class DroidActionScale:
     """Independent safety scales for translation, rotation, and gripper."""

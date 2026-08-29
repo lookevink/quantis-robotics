@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from jepa_wm.action import ActionSelectionBounds, DroidPose
+from jepa_wm.action import ActionSelectionBounds, DroidAction, DroidPose, compose_actions
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.insertion_contract import (
     CONTACT_INSERTION_RECORDING,
@@ -19,8 +19,11 @@ from jepa_wm.trajectory import DROID_ROLLOUT_PROTOCOL, RecordedRollout, load_rol
 LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v1"
 )
-CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+DIRECTIONAL_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v2"
+)
+CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+    "quantis.jepa_wm_contact_grasp_target_policy.v3"
 )
 
 
@@ -59,13 +62,40 @@ class ContactGraspTargetPolicy:
     def __post_init__(self) -> None:
         if self.schema not in (
             LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            DIRECTIONAL_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         ):
             raise ValueError("contact-grasp target policy is invalid")
 
     @property
     def requires_directional_transport_progress(self) -> bool:
+        return self.schema in (
+            DIRECTIONAL_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+        )
+
+    @property
+    def uses_horizon_transport_action(self) -> bool:
         return self.schema == CONTACT_GRASP_TARGET_POLICY_SCHEMA
+
+    def action_for_execution(
+        self,
+        actions: Sequence[DroidAction],
+        *,
+        plug_attached: bool,
+    ) -> DroidAction:
+        """Resolve historical first-step or current horizon transport intent."""
+
+        sequence = tuple(actions)
+        if (
+            len(sequence) != DROID_ROLLOUT_PROTOCOL.action_horizon
+            or any(not isinstance(action, DroidAction) for action in sequence)
+            or not isinstance(plug_attached, bool)
+        ):
+            raise ValueError("contact-grasp proposal action horizon is invalid")
+        if plug_attached and self.uses_horizon_transport_action:
+            return compose_actions(sequence)
+        return sequence[0]
 
     @property
     def acquisition_target_index(self) -> int:
@@ -347,6 +377,7 @@ class ContactGraspTargetPolicy:
             or payload["schema"]
             not in (
                 LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                DIRECTIONAL_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             )
         ):

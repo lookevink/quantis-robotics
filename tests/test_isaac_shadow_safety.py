@@ -11,11 +11,11 @@ from jepa_wm.control_safety import (
     CONTACT_GRASP_FINE_ACTION_SCALES,
     CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES,
     CONTACT_GRASP_ULTRAFINE_ACTION_SCALES,
+    DIRECTIONAL_CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES,
     LEGACY_ACTION_SCALES,
     LEGACY_TRACKING_BOUNDED_ACTION_SCALES,
     ORIENTATION_HOLD_ACTION_SCALES,
     TRACKING_BOUNDED_ACTION_SCALES,
-    CURRENT_CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES,
     ControlGateDecision,
     ControlGateReason,
     SafetyProjectionAttempt,
@@ -121,7 +121,7 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
             scales,
         )
 
-    def test_current_attached_transport_keeps_small_actions_direction_active(
+    def test_directional_v2_keeps_small_actions_direction_active(
         self,
     ) -> None:
         action = DroidAction(
@@ -136,7 +136,7 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
 
         self.assertEqual(
             scales,
-            CURRENT_CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES[0],
+            DIRECTIONAL_CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES[0],
         )
         self.assertEqual(scales[0], DroidActionScale(1.0, 0.125, 0.0))
         translation_norm = sum(
@@ -148,7 +148,7 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
             insertion_projection_policy_for_attempts((scales[0],)), scales
         )
 
-    def test_current_attached_transport_rejects_sub_tracking_action(self) -> None:
+    def test_directional_v2_rejects_sub_tracking_action(self) -> None:
         action = DroidAction(
             (9e-5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.02)
         )
@@ -167,6 +167,53 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
             ),
             CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES[0],
         )
+
+    def test_current_transport_projects_horizon_inside_controller_band(self) -> None:
+        action = DroidAction(
+            (-0.000752, -0.000459, 0.000449, 0.0, 0.0, 0.0, 0.03)
+        )
+
+        scales = contact_grasp_action_scales(
+            action,
+            attachment_acquired=True,
+            require_directional_transport_progress=True,
+            require_resolvable_transport=True,
+        )
+
+        projected_norms = tuple(
+            sum(value * value for value in scale.apply(action).values[:3]) ** 0.5
+            for scale in scales
+        )
+        self.assertEqual(len(scales), 3)
+        self.assertTrue(
+            all(
+                0.0005 - 1e-12 <= norm <= 0.00075 + 1e-12
+                for norm in projected_norms
+            )
+        )
+        self.assertEqual(scales[0].apply(action).values[-1], 0.0)
+
+    def test_current_transport_derives_a_valid_scale_across_old_roster_gap(self) -> None:
+        action = DroidAction((0.0061, 0.0, 0.0, 0.0, 0.0, 0.0, 0.02))
+
+        scales = contact_grasp_action_scales(
+            action,
+            attachment_acquired=True,
+            require_directional_transport_progress=True,
+            require_resolvable_transport=True,
+        )
+
+        self.assertAlmostEqual(scales[0].translation * 0.0061, 0.00075)
+        self.assertAlmostEqual(scales[-1].translation * 0.0061, 0.0005)
+
+    def test_current_transport_rejects_a_sub_resolution_horizon(self) -> None:
+        with self.assertRaisesRegex(ValueError, "below controller resolution"):
+            contact_grasp_action_scales(
+                DroidAction((0.00049, 0.0, 0.0, 0.0, 0.0, 0.0, 0.02)),
+                attachment_acquired=True,
+                require_directional_transport_progress=True,
+                require_resolvable_transport=True,
+            )
 
     def test_contact_grasp_closure_uses_independent_gripper_calibration(
         self,
