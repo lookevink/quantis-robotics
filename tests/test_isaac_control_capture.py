@@ -15,6 +15,7 @@ from sim.isaac_control_capture import (
     ControlKnownStart,
     ControlKnownStartAuthority,
     control_capture_schedule,
+    control_context_recording_label,
     control_warmup_plan,
     recorded_control_context,
     requires_stable_insertion_capture,
@@ -23,9 +24,31 @@ from sim.isaac_control_capture import (
     validated_control_reference,
 )
 from sim.control_context import ControlContextPurpose, RecordedControlStep
+from sim.demo_sequence import Phase
+from sim.recording import RecordingLabel, RecordingMoment
 
 
 class ControlCaptureContractTest(unittest.TestCase):
+    def test_unattached_known_start_retains_its_ready_task_phase(self) -> None:
+        self.assertEqual(
+            control_context_recording_label(False, 110),
+            RecordingLabel(RecordingMoment.MOTION, Phase.READY),
+        )
+
+    def test_initialization_label_preserves_reset_and_attachment_semantics(
+        self,
+    ) -> None:
+        self.assertEqual(
+            control_context_recording_label(False, 0),
+            RecordingLabel(RecordingMoment.INITIAL),
+        )
+        self.assertEqual(
+            control_context_recording_label(True, 110),
+            RecordingLabel(RecordingMoment.ATTACHED, Phase.GRASP),
+        )
+        with self.assertRaisesRegex(ValueError, "task index"):
+            control_context_recording_label(False, -1)
+
     def test_known_start_timing_budget_fits_the_client_bound(self) -> None:
         schedule = control_capture_schedule(
             ControlExecutionPolicy.DIRECT,

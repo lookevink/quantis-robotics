@@ -259,6 +259,25 @@ def _report_control_capture_progress(
         progress(phase, completed_units, total_units)
 
 
+def control_context_recording_label(
+    plug_attached: bool,
+    task_index: int,
+) -> RecordingLabel:
+    """Resolve one task-indexed control context's evidence label."""
+
+    if (
+        isinstance(task_index, bool)
+        or not isinstance(task_index, int)
+        or task_index < 0
+    ):
+        raise ValueError("control context task index is invalid")
+    if plug_attached:
+        return RecordingLabel(RecordingMoment.ATTACHED, Phase.GRASP)
+    if task_index == 0:
+        return RecordingLabel(RecordingMoment.INITIAL)
+    return RecordingLabel(RecordingMoment.MOTION, Phase.READY)
+
+
 async def _capture_stable_control_frame(
     *,
     session: ControlSession,
@@ -579,13 +598,9 @@ async def capture_control_observation(
                 known_start.fingerprint,
             )
         initialization_frame = warmup_plan[schedule.initialization_task_index]
-        initialization_phase = RecordingLabel(
-            (
-                RecordingMoment.ATTACHED
-                if initialization_step.plug_attached
-                else RecordingMoment.INITIAL
-            ),
-            Phase.GRASP if initialization_step.plug_attached else Phase.READY,
+        initialization_phase = control_context_recording_label(
+            initialization_step.plug_attached,
+            initialization_step.index,
         )
         initialization_stage = (
             ObservationStage.CABLE_GRASPED
@@ -651,13 +666,9 @@ async def capture_control_observation(
                 np.asarray(step.arm_positions),
                 step.gripper_width_m,
             )
-            recording_phase = RecordingLabel(
-                (
-                    RecordingMoment.ATTACHED
-                    if step.plug_attached
-                    else RecordingMoment.MOTION
-                ),
-                Phase.GRASP if step.plug_attached else Phase.READY,
+            recording_phase = control_context_recording_label(
+                step.plug_attached,
+                step.index,
             )
             recording_stage = (
                 ObservationStage.CABLE_GRASPED
