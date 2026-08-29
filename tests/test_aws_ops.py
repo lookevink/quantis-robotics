@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 AWS_SCRIPT = REPO_ROOT / "ops" / "aws.sh"
 CW_AGENT_CONFIG = REPO_ROOT / "ops" / "cloudwatch-agent.json"
 REMOTE_BOOTSTRAP = REPO_ROOT / "ops" / "remote_bootstrap.sh"
+ISAAC_CONTAINER = REPO_ROOT / "ops" / "isaac_container.sh"
 ENCODE_RECORDING = REPO_ROOT / "ops" / "encode_demo_recording.sh"
 BACKUP_STATE = REPO_ROOT / "ops" / "backup_state.sh"
 
@@ -58,6 +59,56 @@ def write_fake_findmnt(path: Path) -> Path:
 
 
 class AwsLifecycleTests(unittest.TestCase):
+    def run_isaac_container(
+        self,
+        command: str,
+        arguments: tuple[str, ...] = (),
+        *,
+        fail_checkpoint_preflight: bool = False,
+    ):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            log_path = root / "calls.log"
+            (root / "docker/jepa-wm/checkpoints").mkdir(parents=True)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_curl = fake_bin / "curl"
+            fake_curl.write_text("#!/usr/bin/env bash\nprintf '203.0.113.10'\n")
+            fake_curl.chmod(0o755)
+            fake_sudo = fake_bin / "sudo"
+            fake_sudo.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    printf '%s\\n' "$*" >> "${FAKE_ISAAC_LOG}"
+                    if [[ "${FAKE_CHECKPOINT_PREFLIGHT_FAILURE:-0}" == 1 \
+                      && " $* " == *" docker run --rm "* \
+                      && " $* " == *" test -r "* ]]; then
+                      exit 17
+                    fi
+                    """
+                )
+            )
+            fake_sudo.chmod(0o755)
+            result = subprocess.run(
+                [str(ISAAC_CONTAINER), command, *arguments],
+                env={
+                    **os.environ,
+                    "HOME": str(root),
+                    "FAKE_ISAAC_LOG": str(log_path),
+                    "FAKE_CHECKPOINT_PREFLIGHT_FAILURE": (
+                        "1" if fail_checkpoint_preflight else "0"
+                    ),
+                    "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            calls = log_path.read_text() if log_path.exists() else ""
+            return result, calls, root
+
     def run_command(
         self,
         command: str,
@@ -203,6 +254,44 @@ class AwsLifecycleTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ops/isaac_container.sh status", calls)
+
+    def test_isaac_container_mounts_checkpoints_read_only_for_runtime_user(self):
+        result, calls, root = self.run_isaac_container("start")
+
+        checkpoint_dir = root / "docker/jepa-wm/checkpoints"
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"--group-add {os.getgid()}", calls)
+        self.assertIn(
+            f"-v {checkpoint_dir}:{checkpoint_dir}:ro",
+            calls,
+        )
+        self.assertIn(" test -r ", calls)
+        self.assertIn("docker run -d", calls)
+
+    def test_isaac_container_refuses_start_when_checkpoints_are_unreadable(self):
+        result, calls, _ = self.run_isaac_container(
+            "start",
+            fail_checkpoint_preflight=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("checkpoint directory is unreadable", result.stderr)
+        self.assertNotIn("docker run -d", calls)
+
+    def test_isaac_container_checks_exact_proposal_and_metadata_readability(self):
+        result, calls, root = self.run_isaac_container(
+            "checkpoint-readable",
+            ("contact-grasp-v1",),
+        )
+
+        checkpoint = root / "docker/jepa-wm/checkpoints/contact-grasp-v1.pth"
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            f"docker exec quantis-isaac-sim test -r {checkpoint}", calls
+        )
+        self.assertIn(
+            f"docker exec quantis-isaac-sim test -r {checkpoint}.json", calls
+        )
 
     def test_backup_state_syncs_and_runs_on_the_remote_host(self):
         result, calls = self.run_command("backup-state")

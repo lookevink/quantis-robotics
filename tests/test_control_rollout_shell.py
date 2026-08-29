@@ -294,7 +294,11 @@ isaac_server_call() { printf 'isaac %s|%s\n' "$1" "${3:-false}" >> "${CALLS}"; }
 control_proposal_from_identity() {
   printf 'proposal %s %s %s\n' "$1" "$2" "${PWD}" >> "${CALLS}"
   [[ "${PWD}" == "${HOME}/quantis-robotics" ]] || return 91
-  printf 'insertion-proposal\n'
+  case "$2" in
+    grasp-worker) printf 'grasp-proposal\n' ;;
+    insertion-worker) printf 'insertion-proposal\n' ;;
+    *) return 92 ;;
+  esac
 }
 require_control_rollout_reach_and_grasp() { return 0; }
 control_rollout_terminal_session() { printf 'full-chain-grasp-12\n'; }
@@ -311,6 +315,9 @@ run_insertion_followup_trial() {
             )
             (ops / "run_control_rollout.sh").write_text(
                 '#!/usr/bin/env bash\nprintf \'grasp %s\\n\' "$*" >> "${CALLS}"\n'
+            )
+            (ops / "isaac_container.sh").write_text(
+                '#!/usr/bin/env bash\nprintf \'checkpoint %s\\n\' "$*" >> "${CALLS}"\n'
             )
 
             result = subprocess.run(
@@ -340,6 +347,8 @@ run_insertion_followup_trial() {
                     "proposal",
                     "proposal",
                     "preflight",
+                    "checkpoint",
+                    "checkpoint",
                     "worker",
                     "worker",
                     "grasp",
@@ -368,11 +377,11 @@ run_insertion_followup_trial() {
             )
             self.assertIn(
                 "full-chain-grasp contact-reference 12401 52 grasp-worker direct 110 contact_grasp",
-                calls[5],
+                calls[7],
             )
             self.assertIn(
                 "verify_grasp_to_insertion_source('full-chain-grasp-12')",
-                calls[6],
+                calls[8],
             )
             self.assertIn("demo-spec", calls[2])
             self.assertIn("datacenter_demo.usda", calls[2])
@@ -381,6 +390,13 @@ run_insertion_followup_trial() {
             self.assertIn("contact-reference 12401", calls[2])
             self.assertIn("a" * 40, calls[2])
             self.assertTrue(calls[2].endswith("52 4"))
+            self.assertEqual(
+                calls[3:5],
+                [
+                    "checkpoint checkpoint-readable grasp-proposal",
+                    "checkpoint checkpoint-readable insertion-proposal",
+                ],
+            )
             followups = [line for line in calls if line.startswith("followup ")]
             self.assertEqual(len(followups), 4)
             self.assertIn(

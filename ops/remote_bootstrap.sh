@@ -115,7 +115,9 @@ download_assets() {
 
 verify_isaac_runtime() {
   sudo docker pull "${isaac_image}"
-  sudo docker run --rm --entrypoint bash --user 1234:1234 --gpus all --network=host \
+  sudo docker run --rm --entrypoint bash \
+    "${isaac_checkpoint_access_args[@]}" \
+    --gpus all --network=host \
     -e ACCEPT_EULA=Y \
     -e NVIDIA_DRIVER_CAPABILITIES=all \
     -e PYTHONDONTWRITEBYTECODE=1 \

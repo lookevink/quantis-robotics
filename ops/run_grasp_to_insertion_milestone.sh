@@ -58,6 +58,10 @@ validate_demo_run_spec \
   "${reference_name}" "${exploration_seed}" \
   "${run_id}" "${data_root}/demo_runs/${run_id}.binding.json" \
   "${grasp_steps}" "${insertion_steps}"
+bash "${repo_dir}/ops/isaac_container.sh" \
+  checkpoint-readable "${grasp_proposal}"
+bash "${repo_dir}/ops/isaac_container.sh" \
+  checkpoint-readable "${insertion_proposal}"
 
 bash "${repo_dir}/ops/jepa_wm.sh" control-worker-stop
 bash "${repo_dir}/ops/jepa_wm.sh" \
