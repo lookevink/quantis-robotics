@@ -6,11 +6,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from jepa_wm.action import ACTION_RECORDING_CONTRACT, DROID_FPS
+from jepa_wm.action import ACTION_RECORDING_CONTRACT, DROID_FPS, DroidAction
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
 from sim.control_identity import observation_id_for_session
 from sim.isaac_control_capture import (
+    control_warmup_plan,
+    recorded_control_context,
     requires_stable_insertion_capture,
     validated_control_reference,
 )
@@ -18,6 +20,74 @@ from sim.control_context import ControlContextPurpose
 
 
 class ControlCaptureContractTest(unittest.TestCase):
+    def test_contact_grasp_replays_every_state_but_records_only_terminal_rgb(
+        self,
+    ) -> None:
+        context_index = 110
+
+        plan = control_warmup_plan(
+            ControlExecutionPolicy.DIRECT,
+            insertion_control=True,
+            context_index=context_index,
+            context_purpose=ControlContextPurpose.CONTACT_GRASP,
+        )
+
+        self.assertEqual(
+            tuple(frame.task_index for frame in plan),
+            tuple(range(context_index + 1)),
+        )
+        self.assertEqual(
+            tuple(frame.task_index for frame in plan if frame.record_rgb),
+            (context_index,),
+        )
+        self.assertEqual(
+            tuple(frame.task_index for frame in plan if frame.stabilize),
+            (context_index,),
+        )
+        self.assertTrue(all(frame.observe_safety for frame in plan[1:]))
+        stable_previous_action = DroidAction((0.0,) * 7)
+        frame_index, context_step, previous_action = recorded_control_context(
+            ({"index": 0, "action_from_previous": None},),
+            plan,
+            stable_previous_action,
+        )
+        self.assertEqual(frame_index, 0)
+        self.assertEqual(context_step["index"], 0)
+        self.assertEqual(previous_action, stable_previous_action)
+
+    def test_standard_capture_preserves_every_warmup_rgb(self) -> None:
+        context_index = 4
+
+        plan = control_warmup_plan(
+            ControlExecutionPolicy.DIRECT,
+            insertion_control=False,
+            context_index=context_index,
+            context_purpose=ControlContextPurpose.STANDARD,
+        )
+
+        self.assertEqual(
+            tuple(frame.task_index for frame in plan if frame.record_rgb),
+            tuple(range(context_index + 1)),
+        )
+        self.assertFalse(any(frame.stabilize for frame in plan))
+        self.assertFalse(any(frame.observe_safety for frame in plan))
+        action = DroidAction((0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+        frame_index, _, previous_action = recorded_control_context(
+            tuple(
+                {
+                    "index": step_index,
+                    "action_from_previous": (
+                        None if step_index == 0 else list(action.values)
+                    ),
+                }
+                for step_index in range(context_index + 1)
+            ),
+            plan,
+            None,
+        )
+        self.assertEqual(frame_index, context_index)
+        self.assertEqual(previous_action, action)
+
     def test_stabilizes_every_insertion_capture_that_can_lead_to_motion(self) -> None:
         for policy in (
             ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION,

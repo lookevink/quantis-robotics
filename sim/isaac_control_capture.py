@@ -209,6 +209,86 @@ def requires_stable_insertion_capture(
     )
 
 
+def should_record_control_warmup_frame(
+    *,
+    context_purpose: ControlContextPurpose,
+    step_index: int,
+    context_index: int,
+) -> bool:
+    """Persist only the RGB frames that the control observation can consume."""
+
+    if step_index < 0 or context_index < 0 or step_index > context_index:
+        raise ValueError("control warm-up frame index is invalid")
+    return (
+        context_purpose is not ControlContextPurpose.CONTACT_GRASP
+        or step_index == context_index
+    )
+
+
+@dataclass(frozen=True)
+class ControlWarmupFramePlan:
+    task_index: int
+    record_rgb: bool
+    stabilize: bool
+    observe_safety: bool
+
+
+def control_warmup_plan(
+    policy: ControlExecutionPolicy,
+    *,
+    insertion_control: bool,
+    context_index: int,
+    context_purpose: ControlContextPurpose,
+) -> tuple[ControlWarmupFramePlan, ...]:
+    """Plan every replay state independently from sparse RGB persistence."""
+
+    return tuple(
+        ControlWarmupFramePlan(
+            task_index=step_index,
+            record_rgb=should_record_control_warmup_frame(
+                context_purpose=context_purpose,
+                step_index=step_index,
+                context_index=context_index,
+            ),
+            stabilize=requires_stable_insertion_capture(
+                policy,
+                insertion_control=insertion_control,
+                step_index=step_index,
+                context_index=context_index,
+                context_purpose=context_purpose,
+            ),
+            observe_safety=insertion_control,
+        )
+        for step_index in range(context_index + 1)
+    )
+
+
+def recorded_control_context(
+    steps: tuple[dict[str, Any], ...],
+    warmup_plan: tuple[ControlWarmupFramePlan, ...],
+    stable_previous_action: DroidAction | None,
+) -> tuple[int, dict[str, Any], DroidAction]:
+    """Resolve the terminal task context inside a sparse live recording."""
+
+    expected_frames = sum(frame.record_rgb for frame in warmup_plan)
+    if expected_frames <= 0 or len(steps) != expected_frames:
+        raise RuntimeError("control warm-up recording has an unexpected frame count")
+    context_frame_index = expected_frames - 1
+    context_step = steps[context_frame_index]
+    if context_step.get("index") != context_frame_index:
+        raise RuntimeError("control warm-up telemetry is incomplete")
+    if stable_previous_action is not None:
+        previous_action = stable_previous_action
+    else:
+        try:
+            previous_action = DroidAction(
+                tuple(context_step["action_from_previous"])
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise RuntimeError("control warm-up telemetry is incomplete") from error
+    return context_frame_index, context_step, previous_action
+
+
 async def capture_control_observation(
     session_id: str,
     reference_recording: str,
@@ -252,6 +332,19 @@ async def capture_control_observation(
         plan,
         capture_purpose,
     )
+    warmup_plan = control_warmup_plan(
+        policy,
+        insertion_control=insertion_control,
+        context_index=context_index,
+        context_purpose=capture_purpose,
+    )
+    if tuple(step.index for step in context_steps) != tuple(
+        frame.task_index for frame in warmup_plan
+    ):
+        raise RuntimeError("control warm-up plan does not match its context")
+    recorded_task_indices = tuple(
+        frame.task_index for frame in warmup_plan if frame.record_rgb
+    )
     target_policy = insertion_control_target_policy(policy)
     reference_rollout = (
         target_policy.select(
@@ -276,16 +369,21 @@ async def capture_control_observation(
         else prepare_plug(stage)
     )
     recording_id = f"control-{session_id}"
+    recording_metadata = {
+        **plan.metadata(),
+        "control_session": session_id,
+        "control_context_index": context_index,
+    }
+    if capture_purpose is ControlContextPurpose.CONTACT_GRASP:
+        recording_metadata["control_recorded_task_indices"] = list(
+            recorded_task_indices
+        )
     recorder = DemoRecorder(
         recording_id,
         fps=DROID_FPS,
         minimum_stage_frames=0,
         camera_specs=JEPA_WM_CAMERA_SPECS,
-        metadata={
-            **plan.metadata(),
-            "control_session": session_id,
-            "control_context_index": context_index,
-        },
+        metadata=recording_metadata,
     )
     timeline = omni.timeline.get_timeline_interface()
     original_rendering_dt = RenderingManager.get_dt()
@@ -335,13 +433,14 @@ async def capture_control_observation(
             origin,
             attachment,
         )
-        await recorder.capture(initial, advance=False)
+        if warmup_plan[0].record_rgb:
+            await recorder.capture(initial, advance=False)
         current = origin
         collision_enabled = False
         collision_start = CONTACT_INSERTION_RECORDING.start_index(
             ContactInsertionSegment.ALIGN
         )
-        for step in context_steps[1:]:
+        for step, frame_plan in zip(context_steps[1:], warmup_plan[1:]):
             if insertion_control and not collision_enabled and step.index >= collision_start:
                 attachment.set_collisions(True)
                 collision_enabled = True
@@ -366,13 +465,7 @@ async def capture_control_observation(
                 if step.plug_attached
                 else ObservationStage.APPROACHING_CABLE
             )
-            strict_current_capture = requires_stable_insertion_capture(
-                policy,
-                insertion_control=insertion_control,
-                step_index=step.index,
-                context_index=context_index,
-                context_purpose=capture_purpose,
-            )
+            strict_current_capture = frame_plan.stabilize
             await move_joint_command(
                 actuators,
                 current,
@@ -381,10 +474,14 @@ async def capture_control_observation(
                 frame_count=1,
                 phase=recording_phase,
                 stage=recording_stage,
-                recorder=None if strict_current_capture else recorder,
+                recorder=(
+                    None
+                    if strict_current_capture or not frame_plan.record_rgb
+                    else recorder
+                ),
                 sample_period_seconds=plan.sample_period_seconds,
                 observe_safety=(
-                    warmup_interlock.observe if insertion_control else None
+                    warmup_interlock.observe if frame_plan.observe_safety else None
                 ),
             )
             if strict_current_capture:
@@ -484,31 +581,24 @@ async def capture_control_observation(
         for line in (output / "steps.jsonl").read_text().splitlines()
         if line
     )
-    if len(steps) != context_index + 1:
-        raise RuntimeError("control warm-up recording has an unexpected frame count")
-    context_step = steps[context_index]
-    if (
-        context_step.get("index") != context_index
-        or context_step.get("action_from_previous") is None
-    ):
-        raise RuntimeError("control warm-up telemetry is incomplete")
+    context_frame_index, context_step, previous_action = recorded_control_context(
+        steps,
+        warmup_plan,
+        stable_previous_action,
+    )
     target = reference_rollout.target.path
     observation = ControlObservation(
         observation_id=observation_id_for_session(session_id),
         captured_at_unix_seconds=time(),
-        context_frame=(output / "wrist" / f"frame_{context_index:06d}.png").relative_to(
-            QUANTIS_DATA_ROOT
-        ),
+        context_frame=(
+            output / "wrist" / f"frame_{context_frame_index:06d}.png"
+        ).relative_to(QUANTIS_DATA_ROOT),
         target=ControlTarget(
             target.relative_to(QUANTIS_DATA_ROOT), reference_rollout.target_pose
         ),
         expected_proposal=control_proposal_path(proposal_name),
         pose=DroidPose(tuple(context_step["end_effector_pose"])),
-        previous_action=(
-            stable_previous_action
-            if stable_previous_action is not None
-            else DroidAction(tuple(context_step["action_from_previous"]))
-        ),
+        previous_action=previous_action,
         warmup_frames=context_index,
     )
     active_command = actuators.current_command() if insertion_control else None
