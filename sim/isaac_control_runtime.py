@@ -246,6 +246,7 @@ async def _synchronized_live_read(
     state: Any,
     read: Any,
     *,
+    prepare_resume: Any | None = None,
     refresh_after_resume: Any | None = None,
     observe_safety: Any | None = None,
     before_read: Any | None = None,
@@ -255,6 +256,8 @@ async def _synchronized_live_read(
 
     completed = False
     try:
+        if not timeline.is_playing() and prepare_resume is not None:
+            prepare_resume()
         readiness_update = resume_live_simulation(timeline)
         if readiness_update:
             await advance()
@@ -353,6 +356,9 @@ async def _synchronized_insertion_runtime(
     live_interlock = interlock_for(runtime)
     continuity_validated = False
 
+    def prepare_resume() -> None:
+        repair_invalid_live_control_physics_view()
+
     def refresh_after_resume(value: LiveControlRuntime) -> LiveControlRuntime:
         refreshed = refresh_live_control_articulation(value)
         if (
@@ -360,6 +366,7 @@ async def _synchronized_insertion_runtime(
             or refreshed.actuators.articulation
             is value.actuators.articulation
             or not _retains_live_control_ownership(value, refreshed)
+            or not refreshed.actuators.articulation.is_physics_tensor_entity_valid()
         ):
             raise RuntimeError("live insertion articulation refresh failed")
         return refreshed
@@ -391,6 +398,7 @@ async def _synchronized_insertion_runtime(
         advance,
         runtime,
         read,
+        prepare_resume=prepare_resume,
         refresh_after_resume=refresh_after_resume,
         observe_safety=observe_safety,
         before_read=before_read,
@@ -770,6 +778,16 @@ def refresh_live_control_articulation(
         runtime.attachment,
         runtime.sensor,
     )
+
+
+def repair_invalid_live_control_physics_view() -> None:
+    """Force normal play warmup when Isaac retains an invalid tensor view."""
+
+    from isaacsim.core.simulation_manager import SimulationManager
+
+    view = SimulationManager.get_physics_simulation_view()
+    if view is not None and not view.is_valid:
+        SimulationManager.invalidate_physics()
 
 
 def _retains_live_control_ownership(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 import sys
 from types import ModuleType
 from types import SimpleNamespace
@@ -85,6 +86,7 @@ class _Sensor:
         return self.reading
 
 
+@contextmanager
 def _retain_test_runtime():
     """Keep focused tests independent of the Isaac articulation module."""
 
@@ -98,7 +100,9 @@ def _retain_test_runtime():
             runtime.session_id,
             runtime.stage,
             SimpleNamespace(
-                articulation=object(),
+                articulation=SimpleNamespace(
+                    is_physics_tensor_entity_valid=lambda: True
+                ),
                 arm_attributes=list(actuators.arm_attributes),
                 finger_attributes=list(actuators.finger_attributes),
                 current_command=actuators.current_command,
@@ -108,11 +112,18 @@ def _retain_test_runtime():
             runtime.sensor,
         )
 
-    return patch.object(
-        control_runtime,
-        "refresh_live_control_articulation",
-        side_effect=refresh,
-    )
+    with (
+        patch.object(
+            control_runtime,
+            "repair_invalid_live_control_physics_view",
+        ),
+        patch.object(
+            control_runtime,
+            "refresh_live_control_articulation",
+            side_effect=refresh,
+        ),
+    ):
+        yield
 
 
 class ContactReadingTest(unittest.TestCase):
@@ -396,13 +407,40 @@ class ContactReadingTest(unittest.TestCase):
             control_runtime._active_drive_target(old_runtime),
         )
 
+    def test_live_physics_repair_leaves_a_valid_view_untouched(self) -> None:
+        view = SimpleNamespace(is_valid=True)
+
+        class SimulationManager:
+            invalidate_physics = Mock()
+
+            @classmethod
+            def get_physics_simulation_view(cls):
+                return view
+
+        simulation_manager = ModuleType("isaacsim.core.simulation_manager")
+        simulation_manager.SimulationManager = SimulationManager
+
+        with patch.dict(
+            sys.modules,
+            {"isaacsim.core.simulation_manager": simulation_manager},
+        ):
+            control_runtime.repair_invalid_live_control_physics_view()
+
+        SimulationManager.invalidate_physics.assert_not_called()
+
     def test_insertion_replaces_stale_articulation_after_resume(self) -> None:
         timeline = _Timeline(playing=False)
         events: list[str] = []
         arm_attributes = [object() for _ in range(7)]
         finger_attributes = [object(), object()]
         old_articulation = object()
-        new_articulation = object()
+        view = SimpleNamespace(is_valid=False)
+
+        class NewArticulation:
+            def is_physics_tensor_entity_valid(self) -> bool:
+                return view.is_valid
+
+        new_articulation = NewArticulation()
         actuators = SimpleNamespace(
             articulation=old_articulation,
             arm_attributes=arm_attributes,
@@ -421,6 +459,7 @@ class ContactReadingTest(unittest.TestCase):
         async def advance() -> None:
             nonlocal physics_ready
             events.append("advance")
+            view.is_valid = True
             physics_ready = True
 
         pose = Mock()
@@ -453,15 +492,29 @@ class ContactReadingTest(unittest.TestCase):
         def articulation(path):
             events.append("refresh")
             self.assertEqual(path, "/World/Franka_R")
+            self.assertTrue(view.is_valid)
             return new_articulation
+
+        class SimulationManager:
+            @classmethod
+            def get_physics_simulation_view(cls):
+                return view
+
+            @classmethod
+            def invalidate_physics(cls) -> None:
+                events.append("invalidate")
+                view.is_valid = False
 
         prims = ModuleType("isaacsim.core.experimental.prims")
         prims.Articulation = articulation
+        simulation_manager = ModuleType("isaacsim.core.simulation_manager")
+        simulation_manager.SimulationManager = SimulationManager
         isaacsim = ModuleType("isaacsim")
         core = ModuleType("isaacsim.core")
         experimental = ModuleType("isaacsim.core.experimental")
         isaacsim.core = core
         core.experimental = experimental
+        core.simulation_manager = simulation_manager
         experimental.prims = prims
 
         with (
@@ -472,6 +525,7 @@ class ContactReadingTest(unittest.TestCase):
                     "isaacsim.core": core,
                     "isaacsim.core.experimental": experimental,
                     "isaacsim.core.experimental.prims": prims,
+                    "isaacsim.core.simulation_manager": simulation_manager,
                 },
             ),
             patch(
@@ -497,6 +551,7 @@ class ContactReadingTest(unittest.TestCase):
         self.assertEqual(
             events,
             [
+                "invalidate",
                 "advance",
                 "refresh",
                 "observe live",
@@ -572,6 +627,19 @@ class ContactReadingTest(unittest.TestCase):
                 runtime.attachment,
                 runtime.sensor,
             ),
+            "invalid articulation": LiveControlRuntime(
+                runtime.session_id,
+                runtime.stage,
+                SimpleNamespace(
+                    articulation=SimpleNamespace(
+                        is_physics_tensor_entity_valid=lambda: False
+                    ),
+                    arm_attributes=arm_attributes,
+                    finger_attributes=finger_attributes,
+                ),
+                runtime.attachment,
+                runtime.sensor,
+            ),
         }
 
         for name, changed_runtime in changed_runtimes.items():
@@ -581,6 +649,10 @@ class ContactReadingTest(unittest.TestCase):
                     control_runtime,
                     "refresh_live_control_articulation",
                     return_value=changed_runtime,
+                ),
+                patch.object(
+                    control_runtime,
+                    "repair_invalid_live_control_physics_view",
                 ),
                 self.assertRaisesRegex(
                     RuntimeError, "live insertion articulation refresh failed"
