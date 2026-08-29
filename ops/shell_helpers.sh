@@ -275,11 +275,90 @@ capture_and_respond_control_session() {
   proposal_name="$(control_proposal_from_identity \
     "${policy}" "${control_identity}" "${checkpoint_root}" "${python_bin}")" \
     || return 1
-  isaac_server_call \
-    "await demo.capture_control_observation('${session_id}','${reference_name}',${exploration_seed},'${proposal_name}','${policy}',${context_index},${insertion_rollout_argument},'${context_purpose}')" \
+  start_and_wait_control_capture \
+    "${session_id}" "${reference_name}" "${exploration_seed}" \
+    "${proposal_name}" "${policy}" "${context_index}" \
+    "${insertion_rollout_argument}" "${context_purpose}" \
     "${isaac_control_capture_timeout_seconds}" true
   respond_to_control_session \
     "${repository}" "${session_id}" "${policy}" "${source_session_id}"
+}
+
+start_and_wait_control_capture() {
+  local session_id="$1"
+  local reference_name="$2"
+  local exploration_seed="$3"
+  local proposal_name="$4"
+  local policy="$5"
+  local context_index="$6"
+  local insertion_rollout_argument="$7"
+  local context_purpose="$8"
+  local timeout_seconds="$9"
+  local reload_runtime="${10:-false}"
+  local job_id="control-${session_id}"
+  isaac_server_call \
+    "demo.start_control_capture('${session_id}','${reference_name}',${exploration_seed},'${proposal_name}','${policy}',${context_index},${insertion_rollout_argument},'${context_purpose}')" \
+    60 "${reload_runtime}"
+  wait_control_capture_job "${job_id}" "${timeout_seconds}"
+}
+
+wait_control_capture_job() {
+  local job_id="$1"
+  local timeout_seconds="$2"
+  local job_file="${HOME}/docker/isaac-sim/data/quantis/recording_jobs/${job_id}.json"
+  local deadline=$((SECONDS + timeout_seconds))
+  local status=""
+  local next_notice
+  is_safe_identifier "${job_id}" || {
+    printf 'error: invalid control capture job ID: %s\n' "${job_id}" >&2
+    return 1
+  }
+  require_positive_integer "control capture timeout" "${timeout_seconds}" \
+    || return 1
+  while (( SECONDS < deadline )); do
+    status="$(control_capture_job_status "${job_file}")" || return 1
+    if [[ "${status}" == "complete" || "${status}" == "error" ]]; then
+      cat "${job_file}"
+      [[ "${status}" == "complete" ]]
+      return
+    fi
+    sleep 1
+  done
+  printf 'error: control capture job timed out: %s\n' "${job_id}" >&2
+  while ! isaac_server_call "demo.cancel_recording_job('${job_id}')" 30; do
+    status="$(control_capture_job_status "${job_file}")" || return 1
+    if [[ "${status}" == "complete" || "${status}" == "error" ]]; then
+      cat "${job_file}" >&2
+      return 124
+    fi
+    printf 'waiting to deliver cancellation for control capture job: %s\n' \
+      "${job_id}" >&2
+    sleep 30
+  done
+  next_notice=$((SECONDS + 30))
+  while true; do
+    status="$(control_capture_job_status "${job_file}")" || return 1
+    if [[ "${status}" == "complete" || "${status}" == "error" ]]; then
+      cat "${job_file}" >&2
+      return 124
+    fi
+    if (( SECONDS >= next_notice )); then
+      printf 'waiting for cancelled control capture job to terminalize: %s\n' \
+        "${job_id}" >&2
+      next_notice=$((SECONDS + 30))
+    fi
+    sleep 1
+  done
+}
+
+control_capture_job_status() {
+  local job_file="$1"
+  if [[ ! -f "${job_file}" ]]; then
+    return 0
+  fi
+  python3 -c \
+    'import json,sys; status=json.load(open(sys.argv[1])).get("status"); print(status if isinstance(status,str) else "")' \
+    "${job_file}"
 }
 
 finalize_reset_trial_control_session() {
@@ -339,9 +418,11 @@ run_reset_trial_control_session() {
   isaac_server_call \
     "demo.${prepare_function}('${source_session_id}')" 180 true
   RESET_TRIAL_PHASE="reset_trial_capture"
-  isaac_server_call \
-    "await demo.capture_control_observation('${RESET_TRIAL_SESSION_ID}','${RESET_TRIAL_REFERENCE}',${RESET_TRIAL_SEED},'${RESET_TRIAL_PROPOSAL}','${RESET_TRIAL_POLICY}',${context_index},${insertion_rollout_argument})" \
-    "${capture_timeout}"
+  start_and_wait_control_capture \
+    "${RESET_TRIAL_SESSION_ID}" "${RESET_TRIAL_REFERENCE}" \
+    "${RESET_TRIAL_SEED}" "${RESET_TRIAL_PROPOSAL}" \
+    "${RESET_TRIAL_POLICY}" "${context_index}" \
+    "${insertion_rollout_argument}" standard "${capture_timeout}" false
   RESET_TRIAL_PHASE="reset_trial_binding"
   isaac_server_call \
     "demo.${persist_function}('${RESET_TRIAL_SESSION_ID}','${source_session_id}')" \

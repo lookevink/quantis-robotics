@@ -35,8 +35,10 @@ require_positive_integer \
   "${measurement_timeout_seconds}" || exit 1
 
 cd "${repo_dir}"
-isaac_server_call \
-  "await demo.capture_control_observation('${session_id}','${reference_name}',${exploration_seed},'control-resolution-measurement','insertion_resolution_measurement',${context_index})" \
+start_and_wait_control_capture \
+  "${session_id}" "${reference_name}" "${exploration_seed}" \
+  control-resolution-measurement insertion_resolution_measurement \
+  "${context_index}" None standard \
   "${isaac_control_capture_timeout_seconds}" true
 isaac_server_call \
   "await demo.measure_insertion_control_resolution('${session_id}','${load_mode}')" \

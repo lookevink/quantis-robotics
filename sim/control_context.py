@@ -43,6 +43,8 @@ class RecordedControlStep:
     arm_positions: tuple[float, ...]
     gripper_width_m: float
     plug_attached: bool
+    plug_position: tuple[float, ...]
+    plug_orientation_wxyz: tuple[float, ...]
 
     @classmethod
     def from_dict(cls, payload: object) -> RecordedControlStep:
@@ -54,6 +56,8 @@ class RecordedControlStep:
                 tuple(float(value) for value in payload["arm_positions"]),
                 float(payload["gripper_width_m"]),
                 payload["plug_attached"],
+                tuple(float(value) for value in payload["plug_position"]),
+                tuple(float(value) for value in payload["plug_orientation_wxyz"]),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("recorded control step is incomplete") from error
@@ -64,9 +68,24 @@ class RecordedControlStep:
             or not isfinite(step.gripper_width_m)
             or not 0.0 <= step.gripper_width_m <= 0.08
             or not isinstance(step.plug_attached, bool)
+            or len(step.plug_position) != 3
+            or not all(isfinite(value) for value in step.plug_position)
+            or len(step.plug_orientation_wxyz) != 4
+            or not all(isfinite(value) for value in step.plug_orientation_wxyz)
+            or sum(value * value for value in step.plug_orientation_wxyz) <= 0.0
         ):
             raise ValueError("recorded control step is invalid")
         return step
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "index": self.index,
+            "arm_positions": list(self.arm_positions),
+            "gripper_width_m": self.gripper_width_m,
+            "plug_attached": self.plug_attached,
+            "plug_position": list(self.plug_position),
+            "plug_orientation_wxyz": list(self.plug_orientation_wxyz),
+        }
 
 
 def load_control_context(
@@ -95,7 +114,9 @@ def load_control_context(
             context_index in EXPLORATION_CONTEXT_BOUNDARIES
             or GRASP_TASK_CONTEXT_START <= context_index <= GRASP_TASK_CONTEXT_END
         ):
-            raise ValueError("grasp control context is outside a complete task boundary")
+            raise ValueError(
+                "grasp control context is outside a complete task boundary"
+            )
     else:
         exploration_prefix(plan, context_index)
     steps = tuple(
@@ -103,10 +124,12 @@ def load_control_context(
         for line in (recording / "steps.jsonl").read_text().splitlines()
         if line
     )
-    if context_index >= len(steps) - 3 or tuple(
-        step.index for step in steps
-    ) != tuple(range(len(steps))):
-        raise ValueError("recorded control context cannot provide a three-action target")
+    if context_index >= len(steps) - 3 or tuple(step.index for step in steps) != tuple(
+        range(len(steps))
+    ):
+        raise ValueError(
+            "recorded control context cannot provide a three-action target"
+        )
     if steps[0].plug_attached:
         raise ValueError("recorded control context starts with an attached plug")
     return steps[: context_index + 1]

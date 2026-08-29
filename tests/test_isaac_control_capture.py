@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from math import cos, sin
 from pathlib import Path
 import tempfile
 import unittest
@@ -11,16 +12,170 @@ from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
 from sim.control_identity import observation_id_for_session
 from sim.isaac_control_capture import (
+    ControlKnownStart,
+    ControlKnownStartAuthority,
+    control_capture_schedule,
     control_warmup_plan,
     recorded_control_context,
     requires_stable_insertion_capture,
+    validate_known_start_collision_configuration,
+    validate_known_start_pose,
     validated_control_reference,
 )
-from sim.control_context import ControlContextPurpose
+from sim.control_context import ControlContextPurpose, RecordedControlStep
 
 
 class ControlCaptureContractTest(unittest.TestCase):
-    def test_contact_grasp_replays_every_state_but_records_only_terminal_rgb(
+    def test_known_start_timing_budget_fits_the_client_bound(self) -> None:
+        schedule = control_capture_schedule(
+            ControlExecutionPolicy.DIRECT,
+            insertion_control=True,
+            context_index=110,
+            context_purpose=ControlContextPurpose.CONTACT_GRASP,
+        )
+
+        budget = schedule.timing_budget
+        self.assertIsNotNone(budget)
+        assert budget is not None
+        self.assertEqual(budget.maximum_total_seconds, 900)
+        self.assertLessEqual(
+            sum(seconds for _, seconds in budget.phases),
+            budget.maximum_total_seconds,
+        )
+        budget.validate_elapsed("terminal_camera_and_stabilization", 600.0)
+        with self.assertRaisesRegex(ValueError, "exceeded"):
+            budget.validate_elapsed("terminal_camera_and_stabilization", 600.001)
+
+    def test_known_start_pose_and_collision_bounds_fail_closed(self) -> None:
+        expected_position = (-0.1, 0.0, 1.0)
+        expected_orientation = (1.0, 0.0, 0.0, 0.0)
+        validate_known_start_pose(
+            "connector",
+            expected_position,
+            tuple(-value for value in expected_orientation),
+            expected_position,
+            expected_orientation,
+        )
+        with self.assertRaisesRegex(RuntimeError, "position"):
+            validate_known_start_pose(
+                "connector",
+                (-0.09998, 0.0, 1.0),
+                expected_orientation,
+                expected_position,
+                expected_orientation,
+            )
+        with self.assertRaisesRegex(RuntimeError, "orientation"):
+            validate_known_start_pose(
+                "connector",
+                expected_position,
+                (cos(0.001), sin(0.001), 0.0, 0.0),
+                expected_position,
+                expected_orientation,
+            )
+
+        target = {
+            "connector_collisions_enabled": True,
+            "compliant_collision_parts": ["StrainRelief"],
+        }
+        configuration = (
+            ("/World/RJ45_Plug/Body", True),
+            ("/World/RJ45_Plug/StrainRelief", False),
+        )
+        validate_known_start_collision_configuration(
+            target,
+            ("StrainRelief",),
+            configuration,
+        )
+        with self.assertRaisesRegex(RuntimeError, "collision configuration"):
+            validate_known_start_collision_configuration(
+                target,
+                ("StrainRelief",),
+                (("/World/RJ45_Plug/Body", False),),
+            )
+
+    def test_contact_grasp_uses_a_fingerprinted_known_start_without_replay(
+        self,
+    ) -> None:
+        schedule = control_capture_schedule(
+            ControlExecutionPolicy.DIRECT,
+            insertion_control=True,
+            context_index=110,
+            context_purpose=ControlContextPurpose.CONTACT_GRASP,
+        )
+
+        self.assertEqual(schedule.initialization_task_index, 110)
+        self.assertEqual(schedule.replay_frames, ())
+        self.assertTrue(schedule.defer_camera_activation)
+        self.assertEqual(schedule.progress_units, 5)
+        self.assertEqual(schedule.recorded_task_indices, (110,))
+        self.assertEqual(len(schedule.fingerprint), 64)
+        self.assertEqual(schedule, type(schedule).from_dict(schedule.to_dict()))
+        authority = ControlKnownStartAuthority(*("0" * 64,) * 6)
+        step = RecordedControlStep(
+            110,
+            (0.0,) * 7,
+            0.04,
+            False,
+            (-0.1, 0.0, 1.0),
+            (1.0, 0.0, 0.0, 0.0),
+        )
+        known_start = ControlKnownStart.from_context(
+            "contact-held-01",
+            12601,
+            step,
+            (-0.2, 0.0, 1.0),
+            (1.0, 0.0, 0.0, 0.0),
+            schedule,
+            authority,
+        )
+        self.assertEqual(known_start.task_index, 110)
+        self.assertEqual(len(known_start.fingerprint), 64)
+        self.assertEqual(
+            known_start.fingerprint,
+            ControlKnownStart.from_context(
+                "contact-held-01",
+                12601,
+                step,
+                (-0.2, 0.0, 1.0),
+                (1.0, 0.0, 0.0, 0.0),
+                schedule,
+                authority,
+            ).fingerprint,
+        )
+        changed_authority = ControlKnownStartAuthority(
+            "1" * 64,
+            *("0" * 64,) * 5,
+        )
+        self.assertNotEqual(
+            known_start.fingerprint,
+            ControlKnownStart.from_context(
+                "contact-held-01",
+                12601,
+                step,
+                (-0.2, 0.0, 1.0),
+                (1.0, 0.0, 0.0, 0.0),
+                schedule,
+                changed_authority,
+            ).fingerprint,
+        )
+
+    def test_standard_capture_keeps_prefix_replay_and_eager_camera(self) -> None:
+        schedule = control_capture_schedule(
+            ControlExecutionPolicy.DIRECT,
+            insertion_control=False,
+            context_index=4,
+            context_purpose=ControlContextPurpose.STANDARD,
+        )
+
+        self.assertEqual(schedule.initialization_task_index, 0)
+        self.assertEqual(
+            tuple(frame.task_index for frame in schedule.replay_frames),
+            (1, 2, 3, 4),
+        )
+        self.assertFalse(schedule.defer_camera_activation)
+        self.assertEqual(schedule.recorded_task_indices, (0, 1, 2, 3, 4))
+
+    def test_contact_grasp_plan_preserves_context_with_terminal_rgb(
         self,
     ) -> None:
         context_index = 110
@@ -197,7 +352,9 @@ class ControlCaptureContractTest(unittest.TestCase):
                         ControlExecutionPolicy.DIRECT,
                     )
 
-    def test_training_references_require_the_calibration_collection_policy(self) -> None:
+    def test_training_references_require_the_calibration_collection_policy(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             recording = self._recording(root, seed=1400, split="train")
@@ -218,9 +375,7 @@ class ControlCaptureContractTest(unittest.TestCase):
     def test_contact_insertion_reference_requires_strict_raw_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            recording = self._recording(
-                root, seed=52600, task=INSERTION_TASK_ID
-            )
+            recording = self._recording(root, seed=52600, task=INSERTION_TASK_ID)
             with (
                 patch("sim.isaac_control_capture.RECORDING_ROOT", root),
                 patch(

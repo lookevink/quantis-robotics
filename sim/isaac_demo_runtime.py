@@ -304,6 +304,20 @@ class PlugCollisionPolicy:
             )
         )
 
+    @property
+    def configuration(self) -> tuple[tuple[str, bool], ...]:
+        """Return the complete authored connector collision state."""
+
+        return tuple(
+            sorted(
+                (
+                    str(attribute.GetPath().GetPrimPath()),
+                    bool(attribute.Get()),
+                )
+                for attribute in self.collision_attributes
+            )
+        )
+
     def set_collisions(self, enabled: bool) -> None:
         for attribute in self.collision_attributes:
             prim_path = str(attribute.GetPath().GetPrimPath())
@@ -331,6 +345,10 @@ class PlugAttachment:
     def compliant_collision_parts(self) -> tuple[str, ...]:
         return self.collisions.compliant_collision_parts
 
+    @property
+    def collision_configuration(self) -> tuple[tuple[str, bool], ...]:
+        return self.collisions.configuration
+
     def world_pose(self) -> tuple[np.ndarray, np.ndarray]:
         return self.motion.world_pose()
 
@@ -351,6 +369,7 @@ class PlugAttachment:
 
     def set_collisions(self, enabled: bool) -> None:
         self.collisions.set_collisions(enabled)
+
 
 @dataclass(frozen=True)
 class FixedJointPlugPreparation:
@@ -627,8 +646,7 @@ def _interpolated_joint_command(
     blend = _smoothstep(progress)
     return JointCommand(
         start.arm_positions + (end.arm_positions - start.arm_positions) * blend,
-        start.gripper_width_m
-        + (end.gripper_width_m - start.gripper_width_m) * blend,
+        start.gripper_width_m + (end.gripper_width_m - start.gripper_width_m) * blend,
     )
 
 

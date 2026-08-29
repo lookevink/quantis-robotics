@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from time import time
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -37,7 +39,21 @@ from jepa_wm.insertion_rollout import (
 from jepa_wm.insertion_recording import ContactInsertionEvidence
 from jepa_wm.persistence import write_json_atomic
 from jepa_wm.control_safety import SimulatorSafetyLimits
+from jepa_wm.training_artifact import artifact_fingerprint
 from jepa_wm.trajectory import load_rollout_at
+from sim.control_capture_schedule import (
+    ControlCaptureSchedule,
+    ControlKnownStart,
+    ControlKnownStartAuthority,
+    ControlWarmupFramePlan,
+    canonical_control_fingerprint,
+    control_capture_schedule,
+    control_reference_fingerprint,
+    control_warmup_plan,
+    requires_stable_insertion_capture,
+    validate_known_start_collision_configuration,
+    validate_known_start_pose,
+)
 from sim.control_session import (
     CONTROL_ROOT,
     QUANTIS_DATA_ROOT,
@@ -78,7 +94,13 @@ from sim.isaac_demo_runtime import (
     reset_stage,
     resume_live_simulation,
 )
-from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH, world_pose
+from sim.isaac_demo_scene import (
+    PLUG_PATH,
+    ROBOT_PATH,
+    SOCKET_PATH,
+    STAGE_PATH,
+    world_pose,
+)
 from sim.isaac_exploration import (
     ExplorationRecordingMode,
     ExplorationRecordingProfile,
@@ -118,7 +140,10 @@ def validated_control_reference(
             f"reference seed {reference.seed} does not match live variant seed {seed}"
         )
     manifest = json.loads((reference.path / "manifest.json").read_text())
-    if ActionRecordingContract.from_mapping(manifest.get("action")) != ACTION_RECORDING_CONTRACT:
+    if (
+        ActionRecordingContract.from_mapping(manifest.get("action"))
+        != ACTION_RECORDING_CONTRACT
+    ):
         raise ValueError("control reference does not use the DROID action contract")
     if manifest.get("fps") != DROID_FPS:
         raise ValueError("control reference does not use the DROID frame rate")
@@ -187,82 +212,6 @@ async def stabilize_resolution_capture(
     )
 
 
-def requires_stable_insertion_capture(
-    policy: ControlExecutionPolicy,
-    *,
-    insertion_control: bool,
-    step_index: int,
-    context_index: int,
-    context_purpose: ControlContextPurpose = ControlContextPurpose.STANDARD,
-) -> bool:
-    """Require a strict stable frame before insertion safety or execution."""
-
-    return (
-        insertion_control
-        and step_index == context_index
-        and (
-            context_purpose is ControlContextPurpose.CONTACT_GRASP
-            or
-            policy is ControlExecutionPolicy.INSERTION_RESOLUTION_MEASUREMENT
-            or insertion_control_target_policy(policy) is not None
-        )
-    )
-
-
-def should_record_control_warmup_frame(
-    *,
-    context_purpose: ControlContextPurpose,
-    step_index: int,
-    context_index: int,
-) -> bool:
-    """Persist only the RGB frames that the control observation can consume."""
-
-    if step_index < 0 or context_index < 0 or step_index > context_index:
-        raise ValueError("control warm-up frame index is invalid")
-    return (
-        context_purpose is not ControlContextPurpose.CONTACT_GRASP
-        or step_index == context_index
-    )
-
-
-@dataclass(frozen=True)
-class ControlWarmupFramePlan:
-    task_index: int
-    record_rgb: bool
-    stabilize: bool
-    observe_safety: bool
-
-
-def control_warmup_plan(
-    policy: ControlExecutionPolicy,
-    *,
-    insertion_control: bool,
-    context_index: int,
-    context_purpose: ControlContextPurpose,
-) -> tuple[ControlWarmupFramePlan, ...]:
-    """Plan every replay state independently from sparse RGB persistence."""
-
-    return tuple(
-        ControlWarmupFramePlan(
-            task_index=step_index,
-            record_rgb=should_record_control_warmup_frame(
-                context_purpose=context_purpose,
-                step_index=step_index,
-                context_index=context_index,
-            ),
-            stabilize=requires_stable_insertion_capture(
-                policy,
-                insertion_control=insertion_control,
-                step_index=step_index,
-                context_index=context_index,
-                context_purpose=context_purpose,
-            ),
-            observe_safety=insertion_control,
-        )
-        for step_index in range(context_index + 1)
-    )
-
-
 def recorded_control_context(
     steps: tuple[dict[str, Any], ...],
     warmup_plan: tuple[ControlWarmupFramePlan, ...],
@@ -281,12 +230,123 @@ def recorded_control_context(
         previous_action = stable_previous_action
     else:
         try:
-            previous_action = DroidAction(
-                tuple(context_step["action_from_previous"])
-            )
+            previous_action = DroidAction(tuple(context_step["action_from_previous"]))
         except (KeyError, TypeError, ValueError) as error:
             raise RuntimeError("control warm-up telemetry is incomplete") from error
     return context_frame_index, context_step, previous_action
+
+
+ControlCaptureProgress = Callable[[str, int, int], None]
+
+
+def _reference_target_fingerprint(reference_rollout: Any) -> str:
+    return canonical_control_fingerprint(
+        {
+            "frame_fingerprint": artifact_fingerprint(reference_rollout.target.path),
+            "target_pose": list(reference_rollout.target_pose.values),
+            "actions": [list(action.values) for action in reference_rollout.actions],
+        }
+    )
+
+
+def _report_control_capture_progress(
+    progress: ControlCaptureProgress | None,
+    phase: str,
+    completed_units: int,
+    total_units: int,
+) -> None:
+    if progress is not None:
+        progress(phase, completed_units, total_units)
+
+
+async def _capture_stable_control_frame(
+    *,
+    session: ControlSession,
+    session_id: str,
+    reference_recording: str,
+    seed: int,
+    context_index: int,
+    policy: ControlExecutionPolicy,
+    capture_purpose: ControlContextPurpose,
+    stage: Any,
+    actuators: Any,
+    attachment: Any,
+    sensor: Any,
+    command: JointCommand,
+    recorder: DemoRecorder,
+    recording_phase: RecordingLabel,
+    recording_stage: ObservationStage,
+    warmup_interlock: LiveContactInterlock,
+) -> DroidAction:
+    from jepa_wm.control_resolution import CONTROL_RESOLUTION_PROTOCOL
+    from jepa_wm.control_resolution_baseline import (
+        ControlResolutionCaptureAttemptIdentity,
+        ControlResolutionCaptureFailureEvidence,
+        ControlResolutionCaptureSourceIdentity,
+    )
+    from jepa_wm.control_resolution_profile import ControlResolutionLoad
+    from sim.isaac_control_resolution import UnstableControlResolutionBaseline
+
+    if not recorder.cameras_active:
+        recorder.activate_cameras()
+        await recorder.prepare_current(warmup_interlock.observe)
+    capture_runtime = LiveControlRuntime(
+        session_id,
+        stage,
+        actuators,
+        attachment,
+        sensor,
+    )
+    baseline_policy = CONTROL_RESOLUTION_PROTOCOL.baseline_policy
+    if baseline_policy is None:
+        raise RuntimeError("control resolution capture has no baseline policy")
+    capture_contract = ControlResolutionCaptureBaselineContract(
+        baseline_policy,
+        CONTROL_RESOLUTION_PROTOCOL.safety_limits,
+        (
+            ControlResolutionLoad.UNLOADED
+            if capture_purpose is ControlContextPurpose.CONTACT_GRASP
+            else ControlResolutionLoad.ATTACHED
+        ),
+    )
+    try:
+        stabilized_capture = await stabilize_resolution_capture(
+            capture_runtime,
+            command,
+            capture_contract,
+        )
+    except UnstableControlResolutionBaseline as error:
+        if policy is ControlExecutionPolicy.INSERTION_RESOLUTION_MEASUREMENT:
+            failure = ControlResolutionCaptureFailureEvidence(
+                identity=ControlResolutionCaptureAttemptIdentity(
+                    session_id,
+                    ControlResolutionCaptureSourceIdentity(
+                        reference_recording,
+                        seed,
+                        context_index,
+                    ),
+                ),
+                failed_at_unix_seconds=time(),
+                contract=capture_contract,
+                baseline_attempt=error.attempt,
+                error=f"{type(error).__name__}: {error}",
+            )
+            session.create()
+            write_json_atomic(
+                session.resolution_capture_failure_path,
+                failure.to_dict(),
+            )
+        raise
+    await recorder.capture_current(
+        recording_snapshot(
+            recording_phase,
+            recording_stage,
+            command,
+            attachment,
+            safety=stabilized_capture.safety,
+        ),
+    )
+    return stabilized_capture.previous_action
 
 
 async def capture_control_observation(
@@ -298,8 +358,9 @@ async def capture_control_observation(
     context_index: int = 4,
     insertion_rollout_maximum_steps: int | None = None,
     context_purpose: str = ControlContextPurpose.STANDARD.value,
+    progress: ControlCaptureProgress | None = None,
 ) -> dict[str, Any]:
-    """Replay a seeded segment prefix and persist one live wrist observation."""
+    """Initialize or replay a context and persist one live wrist observation."""
 
     import omni.kit.app
     import omni.timeline
@@ -317,9 +378,7 @@ async def capture_control_observation(
     reference = validated_control_reference(reference_recording, seed, policy)
     insertion_control = recording_task(reference.path) == INSERTION_TASK_ID
     insertion_profile = (
-        ExplorationRecordingProfile.for_mode(
-            ExplorationRecordingMode.CONTACT_INSERTION
-        )
+        ExplorationRecordingProfile.for_mode(ExplorationRecordingMode.CONTACT_INSERTION)
         if insertion_control
         else None
     )
@@ -332,19 +391,18 @@ async def capture_control_observation(
         plan,
         capture_purpose,
     )
-    warmup_plan = control_warmup_plan(
+    schedule = control_capture_schedule(
         policy,
         insertion_control=insertion_control,
         context_index=context_index,
         context_purpose=capture_purpose,
     )
+    warmup_plan = schedule.frames
     if tuple(step.index for step in context_steps) != tuple(
         frame.task_index for frame in warmup_plan
     ):
         raise RuntimeError("control warm-up plan does not match its context")
-    recorded_task_indices = tuple(
-        frame.task_index for frame in warmup_plan if frame.record_rgb
-    )
+    recorded_task_indices = schedule.recorded_task_indices
     target_policy = insertion_control_target_policy(policy)
     reference_rollout = (
         target_policy.select(
@@ -359,6 +417,30 @@ async def capture_control_observation(
             bounds=ActionSelectionBounds(minimum_action_norm=0.0),
         )
     )
+    target_metadata = reference.manifest.get("metadata", {}).get("insertion_target")
+    known_start_inputs: dict[str, Any] | None = None
+    if schedule.defer_camera_activation:
+        if not isinstance(target_metadata, dict):
+            raise ValueError("known-start reference has no insertion target")
+        known_start_inputs = {
+            "socket_position": tuple(
+                float(value) for value in target_metadata["socket_position"]
+            ),
+            "socket_orientation_wxyz": tuple(
+                float(value) for value in target_metadata["socket_orientation_wxyz"]
+            ),
+            "reference_fingerprint": control_reference_fingerprint(reference.path),
+            "stage_asset_fingerprint": artifact_fingerprint(Path(STAGE_PATH)),
+            "exploration_plan_fingerprint": canonical_control_fingerprint(
+                plan.metadata()
+            ),
+            "context_fingerprint": canonical_control_fingerprint(
+                [step.to_dict() for step in context_steps]
+            ),
+            "target_fingerprint": _reference_target_fingerprint(reference_rollout),
+        }
+    total_units = schedule.progress_units
+    _report_control_capture_progress(progress, "reset", 0, total_units)
     await reset_stage()
     stage = omni.usd.get_context().get_stage()
     stage.SetEditTarget(stage.GetSessionLayer())
@@ -373,6 +455,8 @@ async def capture_control_observation(
         **plan.metadata(),
         "control_session": session_id,
         "control_context_index": context_index,
+        "control_capture_schedule": schedule.to_dict(),
+        "control_capture_schedule_fingerprint": schedule.fingerprint,
     }
     if capture_purpose is ControlContextPurpose.CONTACT_GRASP:
         recording_metadata["control_recorded_task_indices"] = list(
@@ -384,11 +468,13 @@ async def capture_control_observation(
         minimum_stage_frames=0,
         camera_specs=JEPA_WM_CAMERA_SPECS,
         metadata=recording_metadata,
+        defer_camera_activation=schedule.defer_camera_activation,
     )
     timeline = omni.timeline.get_timeline_interface()
     original_rendering_dt = RenderingManager.get_dt()
     completed = False
     stable_previous_action: DroidAction | None = None
+    known_start: ControlKnownStart | None = None
     try:
         await recorder.initialize()
         RenderingManager.set_dt(plan.sample_period_seconds)
@@ -416,32 +502,145 @@ async def capture_control_observation(
             else attachment_preparation
         )
         actuators = create_actuators(stage, Articulation(ROBOT_PATH))
+        initialization_step = context_steps[schedule.initialization_task_index]
+        if schedule.defer_camera_activation and initialization_step.plug_attached:
+            raise ValueError("known-start control capture must begin unattached")
         origin = JointCommand(
-            np.asarray(context_steps[0].arm_positions),
-            context_steps[0].gripper_width_m,
+            np.asarray(initialization_step.arm_positions),
+            initialization_step.gripper_width_m,
         )
         resume_live_simulation(timeline)
+        _report_control_capture_progress(
+            progress,
+            "known_start" if schedule.defer_camera_activation else "initialization",
+            1,
+            total_units,
+        )
         actuators.set_reset_state(origin)
         if insertion_control:
             await advance_physics_updates(16, warmup_interlock.observe)
         else:
             for _ in range(16):
                 await omni.kit.app.get_app().next_update_async()
-        initial = recording_snapshot(
-            RecordingLabel(RecordingMoment.INITIAL),
-            ObservationStage.APPROACHING_CABLE,
-            origin,
-            attachment,
-        )
-        if warmup_plan[0].record_rgb:
-            await recorder.capture(initial, advance=False)
-        current = origin
-        collision_enabled = False
         collision_start = CONTACT_INSERTION_RECORDING.start_index(
             ContactInsertionSegment.ALIGN
         )
-        for step, frame_plan in zip(context_steps[1:], warmup_plan[1:]):
-            if insertion_control and not collision_enabled and step.index >= collision_start:
+        collision_enabled = False
+        if insertion_control and initialization_step.index >= collision_start:
+            attachment.set_collisions(True)
+            collision_enabled = True
+        if schedule.defer_camera_activation:
+            if known_start_inputs is None:
+                raise RuntimeError("contact grasp capture has no known-start inputs")
+            collision_configuration = attachment.collision_configuration
+            validate_known_start_collision_configuration(
+                target_metadata,
+                attachment.compliant_collision_parts,
+                collision_configuration,
+            )
+            plug_position, plug_orientation = attachment.world_pose()
+            socket_position, socket_orientation = world_pose(
+                stage.GetPrimAtPath(SOCKET_PATH)
+            )
+            validate_known_start_pose(
+                "connector",
+                tuple(float(value) for value in plug_position),
+                tuple(float(value) for value in plug_orientation),
+                initialization_step.plug_position,
+                initialization_step.plug_orientation_wxyz,
+            )
+            validate_known_start_pose(
+                "socket",
+                tuple(float(value) for value in socket_position),
+                tuple(float(value) for value in socket_orientation),
+                known_start_inputs["socket_position"],
+                known_start_inputs["socket_orientation_wxyz"],
+            )
+            authority = ControlKnownStartAuthority(
+                known_start_inputs["reference_fingerprint"],
+                known_start_inputs["stage_asset_fingerprint"],
+                known_start_inputs["exploration_plan_fingerprint"],
+                known_start_inputs["context_fingerprint"],
+                known_start_inputs["target_fingerprint"],
+                canonical_control_fingerprint(collision_configuration),
+            )
+            known_start = ControlKnownStart.from_context(
+                reference_recording,
+                seed,
+                initialization_step,
+                known_start_inputs["socket_position"],
+                known_start_inputs["socket_orientation_wxyz"],
+                schedule,
+                authority,
+            )
+            recorder.set_metadata("control_known_start", known_start.to_dict())
+            recorder.set_metadata(
+                "control_known_start_fingerprint",
+                known_start.fingerprint,
+            )
+        initialization_frame = warmup_plan[schedule.initialization_task_index]
+        initialization_phase = RecordingLabel(
+            (
+                RecordingMoment.ATTACHED
+                if initialization_step.plug_attached
+                else RecordingMoment.INITIAL
+            ),
+            Phase.GRASP if initialization_step.plug_attached else Phase.READY,
+        )
+        initialization_stage = (
+            ObservationStage.CABLE_GRASPED
+            if initialization_step.plug_attached
+            else ObservationStage.APPROACHING_CABLE
+        )
+        if initialization_frame.stabilize:
+            _report_control_capture_progress(
+                progress,
+                "terminal_camera_and_stabilization",
+                2,
+                total_units,
+            )
+            stable_previous_action = await _capture_stable_control_frame(
+                session=session,
+                session_id=session_id,
+                reference_recording=reference_recording,
+                seed=seed,
+                context_index=context_index,
+                policy=policy,
+                capture_purpose=capture_purpose,
+                stage=stage,
+                actuators=actuators,
+                attachment=attachment,
+                sensor=sensor,
+                command=origin,
+                recorder=recorder,
+                recording_phase=initialization_phase,
+                recording_stage=initialization_stage,
+                warmup_interlock=warmup_interlock,
+            )
+        elif initialization_frame.record_rgb:
+            await recorder.capture(
+                recording_snapshot(
+                    initialization_phase,
+                    initialization_stage,
+                    origin,
+                    attachment,
+                ),
+                advance=False,
+            )
+        current = origin
+        for replay_index, frame_plan in enumerate(schedule.replay_frames, start=1):
+            step = context_steps[frame_plan.task_index]
+            _report_control_capture_progress(
+                progress,
+                "replay",
+                1 + replay_index,
+                total_units,
+            )
+            if (
+                insertion_control
+                and not collision_enabled
+                and step.index >= collision_start
+            ):
                 attachment.set_collisions(True)
                 collision_enabled = True
             if step.plug_attached and not attachment.attached:
@@ -485,81 +684,31 @@ async def capture_control_observation(
                 ),
             )
             if strict_current_capture:
-                from jepa_wm.control_resolution import CONTROL_RESOLUTION_PROTOCOL
-                from jepa_wm.control_resolution_baseline import (
-                    ControlResolutionCaptureAttemptIdentity,
-                    ControlResolutionCaptureFailureEvidence,
-                    ControlResolutionCaptureSourceIdentity,
+                stable_previous_action = await _capture_stable_control_frame(
+                    session=session,
+                    session_id=session_id,
+                    reference_recording=reference_recording,
+                    seed=seed,
+                    context_index=context_index,
+                    policy=policy,
+                    capture_purpose=capture_purpose,
+                    stage=stage,
+                    actuators=actuators,
+                    attachment=attachment,
+                    sensor=sensor,
+                    command=command,
+                    recorder=recorder,
+                    recording_phase=recording_phase,
+                    recording_stage=recording_stage,
+                    warmup_interlock=warmup_interlock,
                 )
-                from jepa_wm.control_resolution_profile import ControlResolutionLoad
-                from sim.isaac_control_resolution import (
-                    UnstableControlResolutionBaseline,
-                )
-
-                capture_runtime = LiveControlRuntime(
-                    session_id,
-                    stage,
-                    actuators,
-                    attachment,
-                    sensor,
-                )
-                baseline_policy = CONTROL_RESOLUTION_PROTOCOL.baseline_policy
-                if baseline_policy is None:
-                    raise RuntimeError(
-                        "control resolution capture has no baseline policy"
-                    )
-                capture_contract = ControlResolutionCaptureBaselineContract(
-                    baseline_policy,
-                    CONTROL_RESOLUTION_PROTOCOL.safety_limits,
-                    (
-                        ControlResolutionLoad.UNLOADED
-                        if capture_purpose
-                        is ControlContextPurpose.CONTACT_GRASP
-                        else ControlResolutionLoad.ATTACHED
-                    ),
-                )
-                try:
-                    stabilized_capture = await stabilize_resolution_capture(
-                        capture_runtime,
-                        command,
-                        capture_contract,
-                    )
-                except UnstableControlResolutionBaseline as error:
-                    if (
-                        policy
-                        is ControlExecutionPolicy.INSERTION_RESOLUTION_MEASUREMENT
-                    ):
-                        failure = ControlResolutionCaptureFailureEvidence(
-                            identity=ControlResolutionCaptureAttemptIdentity(
-                                session_id,
-                                ControlResolutionCaptureSourceIdentity(
-                                    reference_recording,
-                                    seed,
-                                    context_index,
-                                ),
-                            ),
-                            failed_at_unix_seconds=time(),
-                            contract=capture_contract,
-                            baseline_attempt=error.attempt,
-                            error=f"{type(error).__name__}: {error}",
-                        )
-                        session.create()
-                        write_json_atomic(
-                            session.resolution_capture_failure_path,
-                            failure.to_dict(),
-                        )
-                    raise
-                await recorder.capture_current(
-                    recording_snapshot(
-                        recording_phase,
-                        recording_stage,
-                        command,
-                        attachment,
-                        safety=stabilized_capture.safety,
-                    ),
-                )
-                stable_previous_action = stabilized_capture.previous_action
             current = command
+        _report_control_capture_progress(
+            progress,
+            "terminal_snapshot",
+            total_units - 1,
+            total_units,
+        )
         captured_state = await synchronized_control_safety_snapshot(
             timeline,
             actuators,
@@ -567,7 +716,16 @@ async def capture_control_observation(
             sensor,
             omni.kit.app.get_app().next_update_async,
         )
+        _report_control_capture_progress(
+            progress,
+            "complete",
+            total_units,
+            total_units,
+        )
         completed = True
+    except asyncio.CancelledError:
+        recorder.abort()
+        raise
     except Exception:
         recorder.abort()
         raise
@@ -617,10 +775,7 @@ async def capture_control_observation(
         insertion_target_policy=target_policy,
         active_drive_target=(
             JointDriveTarget(
-                tuple(
-                    float(value)
-                    for value in active_command.arm_positions
-                ),
+                tuple(float(value) for value in active_command.arm_positions),
                 active_command.gripper_width_m,
             )
             if active_command is not None

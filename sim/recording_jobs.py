@@ -40,7 +40,9 @@ def job_is_quarantinable(payload: dict[str, Any]) -> bool:
 class RecordingJobManager:
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
-        self._tasks: set[asyncio.Task[None]] = set()
+        self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._run_ids: dict[str, str] = {}
+        self._progress: dict[str, dict[str, Any]] = {}
 
     def start(
         self, recording_id: str, recording_factory: RecordingFactory
@@ -49,17 +51,68 @@ class RecordingJobManager:
         if path.exists():
             raise ValueError(f"recording job already exists: {recording_id}")
         run_id = uuid4().hex
+        self._run_ids[recording_id] = run_id
         self._write_running(recording_id, run_id)
-        task = asyncio.ensure_future(
-            self._run(recording_id, run_id, recording_factory)
+        task = asyncio.ensure_future(self._run(recording_id, run_id, recording_factory))
+        self._tasks[recording_id] = task
+        task.add_done_callback(
+            lambda completed, identity=recording_id: self._forget(identity, completed)
         )
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
         return {
             "status": "recording",
             "recording_id": recording_id,
             "job": str(path),
         }
+
+    def progress(
+        self,
+        recording_id: str,
+        *,
+        phase: str,
+        completed_units: int,
+        total_units: int,
+    ) -> None:
+        """Persist bounded progress for one running background operation."""
+
+        if (
+            recording_id not in self._tasks
+            or not phase
+            or isinstance(completed_units, bool)
+            or not isinstance(completed_units, int)
+            or isinstance(total_units, bool)
+            or not isinstance(total_units, int)
+            or completed_units < 0
+            or total_units <= 0
+            or completed_units > total_units
+        ):
+            raise ValueError("recording job progress is invalid")
+        self._progress[recording_id] = {
+            "phase": phase,
+            "completed_units": completed_units,
+            "total_units": total_units,
+            "progress_unix_seconds": time(),
+        }
+        self._write_running(recording_id, self._run_ids[recording_id])
+
+    def cancel(self, recording_id: str) -> dict[str, Any]:
+        """Request cancellation of one live task by its persisted identity."""
+
+        validate_recording_id(recording_id)
+        task = self._tasks.get(recording_id)
+        if task is None or task.done():
+            raise ValueError(f"recording job is not running: {recording_id}")
+        task.cancel()
+        return {"status": "cancelling", "recording_id": recording_id}
+
+    def _forget(
+        self,
+        recording_id: str,
+        completed: asyncio.Task[None],
+    ) -> None:
+        if self._tasks.get(recording_id) is completed:
+            self._tasks.pop(recording_id, None)
+            self._run_ids.pop(recording_id, None)
+            self._progress.pop(recording_id, None)
 
     def path_for(self, recording_id: str) -> Path:
         validate_recording_id(recording_id)
@@ -94,7 +147,15 @@ class RecordingJobManager:
                 await heartbeat
             except asyncio.CancelledError:
                 pass
-        self._write(recording_id, payload)
+        self._write(
+            recording_id,
+            {
+                "recording_id": recording_id,
+                "run_id": run_id,
+                **self._progress.get(recording_id, {}),
+                **payload,
+            },
+        )
         if cancelled:
             raise asyncio.CancelledError
 
@@ -111,6 +172,7 @@ class RecordingJobManager:
                 "recording_id": recording_id,
                 "run_id": run_id,
                 "heartbeat_unix_seconds": time(),
+                **self._progress.get(recording_id, {}),
             },
         )
 

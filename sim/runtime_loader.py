@@ -231,6 +231,7 @@ def reload_demo_runtime() -> ModuleType:
         "jepa_wm.calibration_sessions",
         "jepa_wm.candidate_trial",
         "sim.isaac_replay",
+        "sim.control_capture_schedule",
         "sim.isaac_control_capture",
         "sim.isaac_control_execution",
         "sim.isaac_control_resolution",

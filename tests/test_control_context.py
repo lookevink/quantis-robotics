@@ -32,6 +32,8 @@ class RecordedControlContextTest(unittest.TestCase):
                             "arm_positions": [index / 1000.0] * 7,
                             "gripper_width_m": 0.018 if index >= 85 else 0.07,
                             "plug_attached": index >= 89,
+                            "plug_position": [-0.1, 0.0, 1.0],
+                            "plug_orientation_wxyz": [1.0, 0.0, 0.0, 0.0],
                         }
                     )
                     + "\n"
@@ -102,7 +104,9 @@ class RecordedControlContextTest(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "insertion command window"):
                         load_control_context(recording, context_index, plan)
 
-    def test_contact_grasp_purpose_admits_only_the_canonical_pre_grasp_context(self) -> None:
+    def test_contact_grasp_purpose_admits_only_the_canonical_pre_grasp_context(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             recording = self._recording(
                 Path(temp_dir),

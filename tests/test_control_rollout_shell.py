@@ -14,6 +14,50 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ControlRolloutShellTest(unittest.TestCase):
+    def test_control_capture_timeout_cancels_the_owned_isaac_job(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir)
+            ops = home / "quantis-robotics" / "ops"
+            jobs = home / "docker" / "isaac-sim" / "data" / "quantis" / "recording_jobs"
+            ops.mkdir(parents=True)
+            jobs.mkdir(parents=True)
+            shutil.copy(REPO_ROOT / "ops" / "shell_helpers.sh", ops)
+            job = jobs / "control-timeout-session.json"
+            job.write_text('{"status":"running"}\n')
+            log = home / "calls.log"
+            runner = home / "run.sh"
+            runner.write_text(
+                """#!/usr/bin/env bash
+set -u
+source "${HOME}/quantis-robotics/ops/shell_helpers.sh"
+isaac_server_call() {
+  printf '%s\n' "$1" >> "${CALLS}"
+  (
+    sleep 0.2
+    printf '{"status":"error","error":"recording task was cancelled"}\n' \
+      > "${HOME}/docker/isaac-sim/data/quantis/recording_jobs/control-timeout-session.json"
+  ) &
+}
+wait_control_capture_job control-timeout-session 1
+printf '%s\n' "$?" >> "${CALLS}"
+exit 0
+"""
+            )
+
+            result = subprocess.run(
+                ["bash", str(runner)],
+                env={**os.environ, "HOME": str(home), "CALLS": str(log)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            calls = log.read_text().splitlines()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("cancel_recording_job", calls[0])
+            self.assertEqual(calls[-1], "124")
+            self.assertIn("recording task was cancelled", result.stderr)
+
     def test_insertion_context_resolver_uses_the_canonical_layout(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             runner = Path(temp_dir) / "run.sh"
@@ -36,9 +80,7 @@ class ControlRolloutShellTest(unittest.TestCase):
         self.assertEqual(
             result.stdout.splitlines(),
             [
-                str(
-                    CONTACT_INSERTION_LAYOUT.insertion_command_context_indices[0]
-                ),
+                str(CONTACT_INSERTION_LAYOUT.insertion_command_context_indices[0]),
                 "43",
             ],
         )
@@ -50,9 +92,7 @@ class ControlRolloutShellTest(unittest.TestCase):
             home = Path(temp_dir)
             ops = home / "quantis-robotics" / "ops"
             ops.mkdir(parents=True)
-            shutil.copy(
-                REPO_ROOT / "ops" / "run_grasp_transition_milestone.sh", ops
-            )
+            shutil.copy(REPO_ROOT / "ops" / "run_grasp_transition_milestone.sh", ops)
             log = home / "calls.log"
             (ops / "shell_helpers.sh").write_text(
                 """#!/usr/bin/env bash
@@ -66,13 +106,13 @@ isaac_server_call() { printf 'isaac %s\n' "$1" >> "${CALLS}"; }
 """
             )
             (ops / "jepa_wm.sh").write_text(
-                "#!/usr/bin/env bash\nprintf 'worker %s\\n' \"$*\" >> \"${CALLS}\"\n"
+                '#!/usr/bin/env bash\nprintf \'worker %s\\n\' "$*" >> "${CALLS}"\n'
             )
             (ops / "run_control_rollout.sh").write_text(
-                "#!/usr/bin/env bash\nprintf 'grasp %s\\n' \"$*\" >> \"${CALLS}\"\n"
+                '#!/usr/bin/env bash\nprintf \'grasp %s\\n\' "$*" >> "${CALLS}"\n'
             )
             (ops / "run_grasp_transition_trial.sh").write_text(
-                "#!/usr/bin/env bash\nprintf 'transition %s\\n' \"$*\" >> \"${CALLS}\"\n"
+                '#!/usr/bin/env bash\nprintf \'transition %s\\n\' "$*" >> "${CALLS}"\n'
             )
 
             result = subprocess.run(
@@ -95,7 +135,15 @@ isaac_server_call() { printf 'isaac %s\n' "$1" >> "${CALLS}"; }
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(
                 [line.split()[0] for line in calls],
-                ["worker", "worker", "grasp", "isaac", "worker", "worker", "transition"],
+                [
+                    "worker",
+                    "worker",
+                    "grasp",
+                    "isaac",
+                    "worker",
+                    "worker",
+                    "transition",
+                ],
             )
             self.assertIn("grasp-control", calls[1])
             self.assertIn("milestone-grasp-42", calls[3])
@@ -180,14 +228,14 @@ control_rollout_shadow_session_roster standard 'direct-00,direct-01,direct-02'
                 ["grasp-00,grasp-39", "direct-00,direct-01,direct-02"],
             )
 
-    def test_grasp_to_insertion_runs_one_task_terminal_grasp_plus_four_chain(self) -> None:
+    def test_grasp_to_insertion_runs_one_task_terminal_grasp_plus_four_chain(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             home = Path(temp_dir)
             ops = home / "quantis-robotics" / "ops"
             ops.mkdir(parents=True)
-            shutil.copy(
-                REPO_ROOT / "ops" / "run_grasp_to_insertion_milestone.sh", ops
-            )
+            shutil.copy(REPO_ROOT / "ops" / "run_grasp_to_insertion_milestone.sh", ops)
             log = home / "calls.log"
             (ops / "shell_helpers.sh").write_text(
                 """#!/usr/bin/env bash
@@ -209,10 +257,10 @@ run_insertion_followup_trial() {
 """
             )
             (ops / "jepa_wm.sh").write_text(
-                "#!/usr/bin/env bash\nprintf 'worker %s\\n' \"$*\" >> \"${CALLS}\"\n"
+                '#!/usr/bin/env bash\nprintf \'worker %s\\n\' "$*" >> "${CALLS}"\n'
             )
             (ops / "run_control_rollout.sh").write_text(
-                "#!/usr/bin/env bash\nprintf 'grasp %s\\n' \"$*\" >> \"${CALLS}\"\n"
+                '#!/usr/bin/env bash\nprintf \'grasp %s\\n\' "$*" >> "${CALLS}"\n'
             )
 
             result = subprocess.run(
@@ -302,7 +350,7 @@ isaac_server_call() { printf 'verify %s\n' "$1" >> "${CALLS}"; }
             ):
                 (ops / name).write_text(
                     "#!/usr/bin/env bash\nprintf '%s %s\\n' "
-                    f"'{name}' \"$*\" >> \"${{CALLS}}\"\n"
+                    f'\'{name}\' "$*" >> "${{CALLS}}"\n'
                 )
 
             result = subprocess.run(
@@ -382,7 +430,7 @@ isaac_server_call() {
             ):
                 (ops / name).write_text(
                     "#!/usr/bin/env bash\nprintf '%s %s\\n' "
-                    f"'{name}' \"$*\" >> \"${{CALLS}}\"\n"
+                    f'\'{name}\' "$*" >> "${{CALLS}}"\n'
                 )
 
             arguments = (
@@ -467,7 +515,7 @@ isaac_server_call() {
             shutil.copy(REPO_ROOT / "ops" / "shell_helpers.sh", ops)
             log = home / "calls.log"
             (ops / "jepa_wm.sh").write_text(
-                "#!/usr/bin/env bash\nprintf 'report %s\\n' \"$*\" >> \"${CALLS}\"\n"
+                '#!/usr/bin/env bash\nprintf \'report %s\\n\' "$*" >> "${CALLS}"\n'
             )
             runner = home / "run.sh"
             runner.write_text(
@@ -494,7 +542,9 @@ run_insertion_followup_trial \
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("capture_followup_observation", calls[0])
             self.assertTrue(calls[0].endswith("|true"))
-            self.assertEqual(calls[1], "respond followup-safety insertion_safety_evaluation")
+            self.assertEqual(
+                calls[1], "respond followup-safety insertion_safety_evaluation"
+            )
             self.assertIn("evaluate_direct_insertion_candidate", calls[2])
             self.assertIn("prepare_insertion_trial_source", calls[3])
             self.assertIn("persist_insertion_followup_response", calls[4])
@@ -512,7 +562,7 @@ run_insertion_followup_trial \
             shutil.copy(REPO_ROOT / "ops" / "shell_helpers.sh", ops)
             log = home / "calls.log"
             (ops / "jepa_wm.sh").write_text(
-                "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"${CALLS}\"\n"
+                '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "${CALLS}"\n'
             )
             runner = home / "run.sh"
             runner.write_text(
@@ -594,7 +644,7 @@ run_insertion_followup_trial \
             shutil.copy(REPO_ROOT / "ops" / "shell_helpers.sh", ops)
             log = home / "calls.log"
             (ops / "jepa_wm.sh").write_text(
-                "#!/usr/bin/env bash\nprintf '%s\n' \"$*\" >> \"${CALLS}\"\n"
+                '#!/usr/bin/env bash\nprintf \'%s\n\' "$*" >> "${CALLS}"\n'
             )
             runner = home / "run.sh"
             runner.write_text(
@@ -631,7 +681,7 @@ run_reset_trial_control_session \
             shutil.copy(REPO_ROOT / "ops" / "shell_helpers.sh", ops)
             log = home / "calls.log"
             (ops / "jepa_wm.sh").write_text(
-                "#!/usr/bin/env bash\nprintf 'report %s\n' \"$*\" >> \"${CALLS}\"\n"
+                '#!/usr/bin/env bash\nprintf \'report %s\n\' "$*" >> "${CALLS}"\n'
             )
             runner = home / "run.sh"
             runner.write_text(
@@ -639,6 +689,7 @@ run_reset_trial_control_session \
 set -euo pipefail
 source "${HOME}/quantis-robotics/ops/shell_helpers.sh"
 isaac_server_call() { printf '%s|%s\n' "$1" "$2" >> "${CALLS}"; }
+wait_control_capture_job() { printf 'wait %s|%s\n' "$1" "$2" >> "${CALLS}"; }
 run_reset_trial_control_session \
   "${HOME}/quantis-robotics" trial-session insertion-held-00 52600 \
   proposal-test insertion_reset_trial safety-session 43 900 \
@@ -657,11 +708,12 @@ run_reset_trial_control_session \
             calls = log.read_text().splitlines()
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("prepare_insertion_trial_source", calls[0])
-            self.assertIn("capture_control_observation", calls[1])
-            self.assertIn("persist_insertion_trial_response", calls[2])
-            self.assertIn("apply_control_response", calls[3])
-            self.assertTrue(calls[3].endswith("|180"), calls[3])
-            self.assertIn("--requested-steps 1", calls[4])
+            self.assertIn("start_control_capture", calls[1])
+            self.assertEqual(calls[2], "wait control-trial-session|900")
+            self.assertIn("persist_insertion_trial_response", calls[3])
+            self.assertIn("apply_control_response", calls[4])
+            self.assertTrue(calls[4].endswith("|180"), calls[4])
+            self.assertIn("--requested-steps 1", calls[5])
 
     def test_insertion_reset_trial_delegates_to_shared_one_action_flow(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -803,11 +855,9 @@ capture_shadow_control_evidence() { return 0; }
             ops.mkdir(parents=True)
             shutil.copy(REPO_ROOT / "ops" / "run_control_rollout.sh", ops)
             shutil.copy(REPO_ROOT / "ops" / "shell_helpers.sh", ops)
-            (ops / "run_control_step.sh").write_text(
-                "#!/usr/bin/env bash\nexit 7\n"
-            )
+            (ops / "run_control_step.sh").write_text("#!/usr/bin/env bash\nexit 7\n")
             (ops / "jepa_wm.sh").write_text(
-                "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"${ROLLOUT_LOG}\"\n"
+                '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "${ROLLOUT_LOG}"\n'
             )
             venv = home / ".venvs" / "quantis-jepa-wm" / "bin"
             venv.mkdir(parents=True)

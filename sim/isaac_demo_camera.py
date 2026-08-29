@@ -124,6 +124,7 @@ class DemoRecorder:
         minimum_stage_frames: int = DEFAULT_FRAMES,
         camera_specs: tuple[CameraSpec, ...] = CAMERA_SPECS,
         metadata: Mapping[str, Any] | None = None,
+        defer_camera_activation: bool = False,
     ) -> None:
         import omni.replicator.core as rep
 
@@ -140,9 +141,22 @@ class DemoRecorder:
         )
         self._render_products: dict[str, Any] = {}
         self._annotators: dict[str, Any] = {}
-        for spec in camera_specs:
-            render_product = rep.create.render_product(spec.path, spec.resolution)
-            annotator = rep.AnnotatorRegistry.get_annotator("rgb")
+        self._camera_specs = camera_specs
+        if not defer_camera_activation:
+            self.activate_cameras()
+
+    @property
+    def cameras_active(self) -> bool:
+        return bool(self._annotators)
+
+    def activate_cameras(self) -> None:
+        """Attach render products only when the caller is ready to acquire RGB."""
+
+        if self.cameras_active:
+            return
+        for spec in self._camera_specs:
+            render_product = self._rep.create.render_product(spec.path, spec.resolution)
+            annotator = self._rep.AnnotatorRegistry.get_annotator("rgb")
             annotator.attach([render_product])
             self._render_products[spec.label] = render_product
             self._annotators[spec.label] = annotator

@@ -445,3 +445,47 @@ def start_contact_insertion_recording(
             dataset_split,
         ),
     )
+
+
+def start_control_capture(
+    session_id: str,
+    reference_recording: str,
+    seed: int,
+    proposal_name: str,
+    execution_policy: str,
+    context_index: int,
+    insertion_rollout_maximum_steps: int | None,
+    context_purpose: str,
+) -> dict[str, Any]:
+    """Start one cancellable control capture with persisted phase progress."""
+
+    job_id = f"control-{session_id}"
+
+    def progress(phase: str, completed: int, total: int) -> None:
+        _RECORDING_JOBS.progress(
+            job_id,
+            phase=phase,
+            completed_units=completed,
+            total_units=total,
+        )
+
+    return _RECORDING_JOBS.start(
+        job_id,
+        lambda _job_id: capture_control_observation(
+            session_id,
+            reference_recording,
+            seed,
+            proposal_name,
+            execution_policy,
+            context_index,
+            insertion_rollout_maximum_steps,
+            context_purpose,
+            progress,
+        ),
+    )
+
+
+def cancel_recording_job(recording_id: str) -> dict[str, Any]:
+    """Cancel one live simulator job through its owning manager."""
+
+    return _RECORDING_JOBS.cancel(recording_id)
