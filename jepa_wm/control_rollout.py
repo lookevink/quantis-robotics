@@ -579,6 +579,10 @@ class ControlStepSummary:
             expected_projection_policy = contact_grasp_action_scales(
                 response.first_action,
                 attachment_acquired=state.plug_attached,
+                require_directional_transport_progress=(
+                    state.require_current_contact_grasp_policy()
+                    .requires_directional_transport_progress
+                ),
             )
             if projection_policy != expected_projection_policy:
                 raise ValueError(
@@ -900,6 +904,34 @@ def _contact_grasp_target_steps(
     )
 
 
+def _contact_grasp_retained_direction(
+    steps: Sequence[ControlStepSummary],
+) -> tuple[float, float, float] | None:
+    policy = _contact_grasp_target_policy(steps)
+    if policy is None or not policy.requires_directional_transport_progress:
+        return None
+    acquisition_step = next(
+        (
+            step
+            for step in steps
+            if not step.state.plug_attached
+            and step.result.post_action is not None
+            and step.result.post_action.plug_attached
+        ),
+        None,
+    )
+    if acquisition_step is None:
+        return (0.0, 0.0, 0.0)
+    acquisition_target = acquisition_step.observation.target_pose
+    retained_target = steps[-1].observation.target_pose
+    if acquisition_target is None or retained_target is None:
+        return (0.0, 0.0, 0.0)
+    return tuple(
+        retained_target.values[axis] - acquisition_target.values[axis]
+        for axis in range(3)
+    )
+
+
 @dataclass(frozen=True)
 class ControlRolloutReport:
     rollout_id: str
@@ -1143,7 +1175,17 @@ class ControlRolloutReport:
                     post_action.contact_force_newtons,
                 )
             )
-        return evaluate_reach_and_grasp(tuple(evidence)) if evidence else None
+        retained_direction = _contact_grasp_retained_direction(
+            self.complete_steps
+        )
+        return (
+            evaluate_reach_and_grasp(
+                tuple(evidence),
+                retained_direction=retained_direction,
+            )
+            if evidence
+            else None
+        )
 
     def to_dict(self) -> dict[str, Any]:
         initial = self.initial_goal_error

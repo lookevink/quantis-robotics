@@ -667,9 +667,15 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         and persisted_state.insertion_target_policy is None
     )
     if contact_grasp_execution:
+        contact_grasp_policy = (
+            persisted_state.require_current_contact_grasp_policy()
+        )
         action_scales = contact_grasp_action_scales(
             proposal.first_action,
             attachment_acquired=persisted_state.plug_attached,
+            require_directional_transport_progress=(
+                contact_grasp_policy.requires_directional_transport_progress
+            ),
         )
     session.claim_execution()
     stage = omni.usd.get_context().get_stage()

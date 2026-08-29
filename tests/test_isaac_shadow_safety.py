@@ -15,6 +15,7 @@ from jepa_wm.control_safety import (
     LEGACY_TRACKING_BOUNDED_ACTION_SCALES,
     ORIENTATION_HOLD_ACTION_SCALES,
     TRACKING_BOUNDED_ACTION_SCALES,
+    CURRENT_CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES,
     ControlGateDecision,
     ControlGateReason,
     SafetyProjectionAttempt,
@@ -118,6 +119,53 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
         self.assertEqual(
             insertion_projection_policy_for_attempts((scales[0],)),
             scales,
+        )
+
+    def test_current_attached_transport_keeps_small_actions_direction_active(
+        self,
+    ) -> None:
+        action = DroidAction(
+            (-0.000236, -0.000198, 0.000125, 0.0, 0.0, 0.0, 0.02)
+        )
+
+        scales = contact_grasp_action_scales(
+            action,
+            attachment_acquired=True,
+            require_directional_transport_progress=True,
+        )
+
+        self.assertEqual(
+            scales,
+            CURRENT_CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES[0],
+        )
+        self.assertEqual(scales[0], DroidActionScale(1.0, 0.125, 0.0))
+        translation_norm = sum(
+            value * value for value in scales[0].apply(action).values[:3]
+        ) ** 0.5
+        self.assertGreaterEqual(translation_norm, 1e-4)
+        self.assertLessEqual(translation_norm, 0.00075)
+        self.assertEqual(
+            insertion_projection_policy_for_attempts((scales[0],)), scales
+        )
+
+    def test_current_attached_transport_rejects_sub_tracking_action(self) -> None:
+        action = DroidAction(
+            (9e-5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.02)
+        )
+
+        with self.assertRaisesRegex(ValueError, "below tracking activity"):
+            contact_grasp_action_scales(
+                action,
+                attachment_acquired=True,
+                require_directional_transport_progress=True,
+            )
+
+        self.assertEqual(
+            contact_grasp_action_scales(
+                action,
+                attachment_acquired=True,
+            ),
+            CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES[0],
         )
 
     def test_contact_grasp_closure_uses_independent_gripper_calibration(

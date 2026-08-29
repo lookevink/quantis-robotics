@@ -15,6 +15,7 @@ from jepa_wm.action import (
     DroidPose,
 )
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
+from jepa_wm.control_tracking import ActionTrackingLimits
 from jepa_wm.planner import PlannerActionBounds
 
 
@@ -92,6 +93,19 @@ CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES = tuple(
     for policy in CONTACT_GRASP_ACTION_SCALE_LEVELS
 )
 
+# The current transport profile keeps small authenticated JEPA translations
+# above the direction-tracking activity floor whenever the full proposal is
+# still inside the unchanged 0.75 mm command bound. Each suffix preserves the
+# ordinary ordered fallback to a smaller safe projection.
+CURRENT_CONTACT_GRASP_TRANSPORT_ACTION_SCALES = tuple(
+    DroidActionScale(translation, 0.125, 0.0)
+    for translation in (1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125)
+)
+CURRENT_CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES = tuple(
+    CURRENT_CONTACT_GRASP_TRANSPORT_ACTION_SCALES[index:]
+    for index in range(len(CURRENT_CONTACT_GRASP_TRANSPORT_ACTION_SCALES))
+)
+
 # The demonstration closes from 44 mm to 18 mm across the contact window. The
 # live controller preserves that learned direction but must keep Cartesian and
 # gripper motion independently bounded. These rosters use the 0.25 gripper
@@ -154,18 +168,32 @@ def contact_grasp_action_scales(
     action: DroidAction,
     *,
     attachment_acquired: bool = False,
+    require_directional_transport_progress: bool = False,
 ) -> tuple[DroidActionScale, ...]:
     """Bound approach motion and calibrate gripper closure independently."""
 
     translation_norm = sqrt(sum(value * value for value in action.values[:3]))
     if attachment_acquired:
-        for scales in CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES:
+        if (
+            require_directional_transport_progress
+            and translation_norm
+            < ActionTrackingLimits().translation_activity_meters
+        ):
+            raise ValueError(
+                "contact-grasp transport proposal is below tracking activity"
+            )
+        policies = (
+            CURRENT_CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES
+            if require_directional_transport_progress
+            else CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES
+        )
+        for scales in policies:
             if (
                 translation_norm * scales[0].translation
                 <= MAXIMUM_CONTACT_GRASP_TRANSPORT_COMMAND_METERS
             ):
                 return scales
-        return CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES[-1]
+        return policies[-1]
 
     # Negative DROID gripper action decreases closedness and therefore opens the
     # fingers. A live post-contact opening request jumped from 0.509 mm back to
@@ -228,6 +256,7 @@ INSERTION_ACTION_SCALE_POLICIES = (
     ),
     *CONTACT_GRASP_ACTION_SCALE_LEVELS,
     *CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES,
+    *CURRENT_CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES,
     *LEGACY_CONTACT_GRASP_ACTION_SCALE_POLICIES,
     ORIENTATION_HOLD_ACTION_SCALES,
     LEGACY_TRACKING_BOUNDED_ACTION_SCALES,

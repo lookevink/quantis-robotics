@@ -55,6 +55,30 @@ class ReachAndGraspGateTest(unittest.TestCase):
             decision.failures,
         )
 
+    def test_directional_retention_rejects_orthogonal_or_reverse_drift(self) -> None:
+        for name, terminal in (
+            ("orthogonal", GraspTaskStep((0.0, 0.03, 0.0), True, True, False, 0.0)),
+            ("reverse", GraspTaskStep((-0.03, 0.0, 0.0), True, True, False, 0.0)),
+        ):
+            with self.subTest(name=name):
+                decision = evaluate_reach_and_grasp(
+                    (
+                        _step(0.0, attached=False),
+                        _step(0.0, attached=True),
+                        terminal,
+                    ),
+                    retained_direction=(1.0, 0.0, 0.0),
+                )
+
+                self.assertFalse(decision.passed)
+                self.assertEqual(
+                    decision.maximum_retained_displacement_meters, 0.0
+                )
+                self.assertIn(
+                    ReachAndGraspFailure.INSUFFICIENT_LIFT,
+                    decision.failures,
+                )
+
     def test_rejects_lost_attachment_and_unsafe_motion(self) -> None:
         decision = evaluate_reach_and_grasp(
             (

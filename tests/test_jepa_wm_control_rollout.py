@@ -4,6 +4,7 @@ from dataclasses import replace
 from copy import deepcopy
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import Mock
@@ -19,6 +20,12 @@ from jepa_wm.control_rollout import (
     ControlStepSummary,
     OrchestrationFailure,
     OrchestrationOperation,
+    _contact_grasp_retained_direction,
+)
+from jepa_wm.contact_grasp_target import (
+    CONTACT_GRASP_TARGET_POLICY,
+    LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+    ContactGraspTargetPolicy,
 )
 from jepa_wm.control_safety import (
     ACTION_SCALES,
@@ -75,6 +82,52 @@ from sim.control_session import (
 
 
 class ControlRolloutTest(unittest.TestCase):
+    def test_current_contact_grasp_derives_reference_transport_direction(self) -> None:
+        acquisition = SimpleNamespace(
+            state=SimpleNamespace(
+                plug_attached=False,
+                contact_grasp_target_policy=CONTACT_GRASP_TARGET_POLICY,
+            ),
+            result=SimpleNamespace(
+                post_action=SimpleNamespace(plug_attached=True)
+            ),
+            observation=SimpleNamespace(
+                target_pose=DroidPose(
+                    (0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)
+                )
+            ),
+        )
+        retained = SimpleNamespace(
+            state=SimpleNamespace(
+                plug_attached=True,
+                contact_grasp_target_policy=CONTACT_GRASP_TARGET_POLICY,
+            ),
+            result=SimpleNamespace(
+                post_action=SimpleNamespace(plug_attached=True)
+            ),
+            observation=SimpleNamespace(
+                target_pose=DroidPose(
+                    (0.43, 0.01, 0.5, 0.0, 0.0, 0.0, 0.5)
+                )
+            ),
+        )
+
+        np.testing.assert_allclose(
+            _contact_grasp_retained_direction((acquisition, retained)),
+            (0.03, 0.01, 0.0),
+            rtol=0.0,
+            atol=1e-12,
+        )
+
+        legacy = ContactGraspTargetPolicy(
+            LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+        )
+        acquisition.state.contact_grasp_target_policy = legacy
+        retained.state.contact_grasp_target_policy = legacy
+        self.assertIsNone(
+            _contact_grasp_retained_direction((acquisition, retained))
+        )
+
     def test_parses_reset_trial_preflight_failure(self) -> None:
         failure = OrchestrationFailure.parse(
             "reset_trial_source_preflight:exit_7"

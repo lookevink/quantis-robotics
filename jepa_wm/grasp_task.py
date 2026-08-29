@@ -119,8 +119,16 @@ class ReachAndGraspDecision:
 def evaluate_reach_and_grasp(
     steps: Sequence[GraspTaskStep],
     limits: GraspTaskLimits = GraspTaskLimits(),
+    *,
+    retained_direction: tuple[float, float, float] | None = None,
 ) -> ReachAndGraspDecision:
     """Require acquisition, continuous retention, lift, tracking, and safety."""
+
+    if retained_direction is not None and (
+        len(retained_direction) != 3
+        or not all(isfinite(value) for value in retained_direction)
+    ):
+        raise ValueError("retained grasp direction is invalid")
 
     acquisition_index = next(
         (
@@ -143,13 +151,33 @@ def evaluate_reach_and_grasp(
         if len(retained) < limits.minimum_attached_observations:
             failures.append(ReachAndGraspFailure.INSUFFICIENT_RETENTION)
         origin = np.asarray(steps[acquisition_index].plug_position)
-        displacement = max(
-            (
-                float(np.linalg.norm(np.asarray(step.plug_position) - origin))
-                for step in retained
-            ),
-            default=0.0,
-        )
+        if retained_direction is None:
+            displacement = max(
+                (
+                    float(np.linalg.norm(np.asarray(step.plug_position) - origin))
+                    for step in retained
+                ),
+                default=0.0,
+            )
+        else:
+            direction = np.asarray(retained_direction, dtype=np.float64)
+            norm = float(np.linalg.norm(direction))
+            displacement = (
+                max(
+                    0.0,
+                    *(
+                        float(
+                            np.dot(
+                                np.asarray(step.plug_position) - origin,
+                                direction / norm,
+                            )
+                        )
+                        for step in retained
+                    ),
+                )
+                if norm > 1e-12
+                else 0.0
+            )
         if displacement < limits.minimum_retained_displacement_meters:
             failures.append(ReachAndGraspFailure.INSUFFICIENT_LIFT)
     if any(not step.tracking_passed for step in steps):

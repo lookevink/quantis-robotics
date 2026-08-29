@@ -9,6 +9,7 @@ from pathlib import Path
 from jepa_wm.action import ACTION_RECORDING_CONTRACT, DroidAction, DroidPose
 from jepa_wm.contact_grasp_target import (
     CONTACT_GRASP_TARGET_POLICY,
+    LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     ContactGraspTargetPolicy,
 )
 from jepa_wm.joint_drive import JointDriveTarget
@@ -124,6 +125,17 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "target policy"):
             ContactGraspTargetPolicy.from_dict({"schema": "legacy"})
+
+        legacy = ContactGraspTargetPolicy.from_dict(
+            {"schema": LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA}
+        )
+        self.assertFalse(legacy.requires_directional_transport_progress)
+        self.assertEqual(
+            ContactGraspTargetPolicy.from_dict(legacy.to_dict()), legacy
+        )
+        self.assertTrue(
+            CONTACT_GRASP_TARGET_POLICY.requires_directional_transport_progress
+        )
 
     def test_rejects_target_substitution_and_incomplete_reference_poses(self) -> None:
         with self.assertRaisesRegex(ValueError, "previous target"):
