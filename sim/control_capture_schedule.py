@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
+from enum import Enum
 from hashlib import sha256
 from math import acos, isfinite, sqrt
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, TypeVar
 
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.insertion_contract import insertion_control_target_policy
@@ -24,53 +26,98 @@ CONTROL_KNOWN_START_SCHEMA = "quantis.control_known_start.v1"
 CONTROL_CAPTURE_CLIENT_TIMEOUT_SECONDS = 900
 KNOWN_START_POSITION_TOLERANCE_METERS = 1e-5
 KNOWN_START_ORIENTATION_TOLERANCE_RADIANS = 1e-3
+_CapturePhaseResult = TypeVar("_CapturePhaseResult")
+
+
+class ControlCapturePhase(str, Enum):
+    RESET = "reset"
+    KNOWN_START = "known_start"
+    INITIALIZATION = "initialization"
+    TERMINAL_CAMERA_AND_STABILIZATION = "terminal_camera_and_stabilization"
+    REPLAY = "replay"
+    TERMINAL_SNAPSHOT = "terminal_snapshot"
+    COMPLETE = "complete"
 
 
 @dataclass(frozen=True)
 class ControlCaptureTimingBudget:
     """Synthetic wall-clock budget for each externally visible capture phase."""
 
-    phases: tuple[tuple[str, int], ...]
-    maximum_total_seconds: int = CONTROL_CAPTURE_CLIENT_TIMEOUT_SECONDS
+    phases: tuple[tuple[ControlCapturePhase, float], ...]
+    maximum_total_seconds: float = CONTROL_CAPTURE_CLIENT_TIMEOUT_SECONDS
 
     def __post_init__(self) -> None:
         if (
             not self.phases
             or len({phase for phase, _ in self.phases}) != len(self.phases)
-            or any(not phase or seconds <= 0 for phase, seconds in self.phases)
+            or any(
+                not isinstance(phase, ControlCapturePhase)
+                or isinstance(seconds, bool)
+                or not isinstance(seconds, (int, float))
+                or not isfinite(seconds)
+                or seconds <= 0
+                for phase, seconds in self.phases
+            )
+            or isinstance(self.maximum_total_seconds, bool)
+            or not isinstance(self.maximum_total_seconds, (int, float))
+            or not isfinite(self.maximum_total_seconds)
+            or self.maximum_total_seconds <= 0
             or sum(seconds for _, seconds in self.phases) > self.maximum_total_seconds
         ):
             raise ValueError("control capture timing budget is invalid")
 
-    def phase_seconds(self, phase: str) -> int:
+    def phase_seconds(self, phase: ControlCapturePhase) -> float:
         try:
             return dict(self.phases)[phase]
         except KeyError as error:
             raise ValueError(
-                f"control capture phase is not budgeted: {phase}"
+                f"control capture phase is not budgeted: {phase.value}"
             ) from error
 
-    def validate_elapsed(self, phase: str, elapsed_seconds: float) -> None:
+    def validate_elapsed(
+        self,
+        phase: ControlCapturePhase,
+        elapsed_seconds: float,
+    ) -> None:
         if (
             not isfinite(elapsed_seconds)
             or elapsed_seconds < 0.0
             or elapsed_seconds > self.phase_seconds(phase)
         ):
-            raise ValueError(f"control capture phase exceeded its budget: {phase}")
+            raise ValueError(
+                f"control capture phase exceeded its budget: {phase.value}"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "maximum_total_seconds": self.maximum_total_seconds,
-            "phases": {phase: seconds for phase, seconds in self.phases},
+            "phases": {phase.value: seconds for phase, seconds in self.phases},
         }
+
+
+async def run_control_capture_phase(
+    budget: ControlCaptureTimingBudget | None,
+    phase: ControlCapturePhase,
+    operation: Awaitable[_CapturePhaseResult],
+) -> _CapturePhaseResult:
+    """Run one owned async phase and cancel it when its deadline expires."""
+
+    if budget is None:
+        return await operation
+    try:
+        return await asyncio.wait_for(operation, timeout=budget.phase_seconds(phase))
+    except asyncio.TimeoutError as error:
+        raise RuntimeError(
+            f"control capture phase exceeded its deadline: {phase.value}"
+        ) from error
 
 
 KNOWN_START_CAPTURE_TIMING_BUDGET = ControlCaptureTimingBudget(
     (
-        ("reset", 120),
-        ("known_start", 60),
-        ("terminal_camera_and_stabilization", 600),
-        ("terminal_snapshot", 60),
+        (ControlCapturePhase.RESET, 120),
+        (ControlCapturePhase.KNOWN_START, 60),
+        (ControlCapturePhase.TERMINAL_CAMERA_AND_STABILIZATION, 600),
+        (ControlCapturePhase.TERMINAL_SNAPSHOT, 60),
     )
 )
 

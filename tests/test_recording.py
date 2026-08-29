@@ -35,9 +35,12 @@ class RecordingWriterTest(unittest.TestCase):
         for label, expected in labels:
             with self.subTest(expected=expected):
                 self.assertEqual(label.value, expected)
+                self.assertEqual(RecordingLabel.from_value(expected), label)
 
         with self.assertRaises(ValueError):
             RecordingLabel(RecordingMoment.SETTLE)
+        with self.assertRaisesRegex(ValueError, "recording label"):
+            RecordingLabel.from_value("unknown")
 
     def test_writes_synchronized_frames_steps_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

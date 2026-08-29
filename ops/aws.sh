@@ -550,7 +550,7 @@ Commands:
   jepa-wm-insertion-contact-followup REFERENCE_RECORDING SEED ARTIFACTS TERMINAL_PRE_INSERTION_SESSION
   jepa-wm-insertion-two-step REFERENCE_RECORDING SEED ARTIFACTS [context-index]
   jepa-wm-insertion-demo-rollout REFERENCE_RECORDING SEED ARTIFACTS [context-index]
-  jepa-wm-grasp-to-insertion REFERENCE_RECORDING SEED GRASP_ARTIFACTS INSERTION_ARTIFACTS
+  jepa-wm-grasp-to-insertion REFERENCE_RECORDING SEED GRASP_ARTIFACTS INSERTION_ARTIFACTS DEMO_SPEC_ID DEMO_SPEC_FINGERPRINT
   jepa-wm-grasp-transition-trial RUN_ID PREVIOUS_GRASP_SESSION REFERENCE_RECORDING SEED INSERTION_ARTIFACTS [ROLLED_BACK_SESSION]
   jepa-wm-grasp-transition-milestone RUN_ID REFERENCE_RECORDING SEED GRASP_ARTIFACTS INSERTION_ARTIFACTS
   jepa-wm-insertion-resolution REFERENCE_RECORDING SEED [context-index] [attached|unloaded]
@@ -1257,8 +1257,13 @@ case "${command}" in
     exploration_seed="${3:-}"
     grasp_artifacts="${4:-}"
     insertion_artifacts="${5:-}"
+    demo_spec_id="${6:-}"
+    demo_spec_fingerprint="${7:-}"
     validate_guarded_insertion_identifiers \
-      "${reference_name}" "${grasp_artifacts}" "${insertion_artifacts}"
+      "${reference_name}" "${grasp_artifacts}" "${insertion_artifacts}" \
+      "${demo_spec_id}"
+    [[ "${demo_spec_fingerprint}" =~ ^[0-9a-f]{64}$ ]] \
+      || die "invalid frozen demo run fingerprint"
     require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
     timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
     run_id="grasp-to-insertion-${timestamp}-${exploration_seed}"
@@ -1267,7 +1272,7 @@ case "${command}" in
     sync_repo || command_status=$?
     if (( command_status == 0 )); then
       remote \
-        "bash ~/quantis-robotics/ops/run_grasp_to_insertion_milestone.sh '${run_id}' '${reference_name}' '${exploration_seed}' '${grasp_artifacts}' '${insertion_artifacts}'" \
+        "bash ~/quantis-robotics/ops/run_grasp_to_insertion_milestone.sh '${run_id}' '${reference_name}' '${exploration_seed}' '${grasp_artifacts}' '${insertion_artifacts}' '${demo_spec_id}' '${demo_spec_fingerprint}'" \
         || command_status=$?
     fi
     exit "${command_status}"

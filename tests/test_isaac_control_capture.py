@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+import asyncio
 
 from jepa_wm.action import ACTION_RECORDING_CONTRACT, DROID_FPS, DroidAction
 from jepa_wm.control_policy import ControlExecutionPolicy
@@ -23,12 +24,56 @@ from sim.isaac_control_capture import (
     validate_known_start_pose,
     validated_control_reference,
 )
+from sim.control_capture_schedule import (
+    ControlCapturePhase,
+    ControlCaptureTimingBudget,
+    run_control_capture_phase,
+)
 from sim.control_context import ControlContextPurpose, RecordedControlStep
 from sim.demo_sequence import Phase
 from sim.recording import RecordingLabel, RecordingMoment
 
 
 class ControlCaptureContractTest(unittest.TestCase):
+    def test_capture_phase_deadline_cancels_the_owned_operation(self) -> None:
+        cancelled = False
+
+        async def exercise() -> None:
+            nonlocal cancelled
+
+            async def blocked() -> None:
+                nonlocal cancelled
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cancelled = True
+
+            budget = ControlCaptureTimingBudget(
+                ((ControlCapturePhase.KNOWN_START, 0.001),), 1
+            )
+            with self.assertRaisesRegex(RuntimeError, "deadline.*known_start"):
+                await run_control_capture_phase(
+                    budget,
+                    ControlCapturePhase.KNOWN_START,
+                    blocked(),
+                )
+
+        asyncio.run(exercise())
+        self.assertTrue(cancelled)
+
+    def test_unbudgeted_capture_path_runs_without_a_deadline(self) -> None:
+        async def exercise() -> str:
+            async def complete() -> str:
+                return "complete"
+
+            return await run_control_capture_phase(
+                None,
+                ControlCapturePhase.REPLAY,
+                complete(),
+            )
+
+        self.assertEqual(asyncio.run(exercise()), "complete")
+
     def test_unattached_known_start_retains_its_ready_task_phase(self) -> None:
         self.assertEqual(
             control_context_recording_label(False, 110),
@@ -65,9 +110,15 @@ class ControlCaptureContractTest(unittest.TestCase):
             sum(seconds for _, seconds in budget.phases),
             budget.maximum_total_seconds,
         )
-        budget.validate_elapsed("terminal_camera_and_stabilization", 600.0)
+        budget.validate_elapsed(
+            ControlCapturePhase.TERMINAL_CAMERA_AND_STABILIZATION,
+            600.0,
+        )
         with self.assertRaisesRegex(ValueError, "exceeded"):
-            budget.validate_elapsed("terminal_camera_and_stabilization", 600.001)
+            budget.validate_elapsed(
+                ControlCapturePhase.TERMINAL_CAMERA_AND_STABILIZATION,
+                600.001,
+            )
 
     def test_known_start_pose_and_collision_bounds_fail_closed(self) -> None:
         expected_position = (-0.1, 0.0, 1.0)

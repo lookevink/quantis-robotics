@@ -29,6 +29,8 @@ def validate_recording_id(recording_id: str) -> None:
         raise ValueError(
             "recording_id must contain only letters, numbers, dot, dash, or underscore"
         ) from error
+
+
 class RecordingMoment(str, Enum):
     INITIAL = "initial"
     MOTION = "motion"
@@ -59,6 +61,22 @@ class RecordingLabel:
         if self.moment == RecordingMoment.MOTION:
             return self.phase.value
         return f"{self.phase.value}_{self.moment.value}"
+
+    @classmethod
+    def from_value(cls, value: str) -> RecordingLabel:
+        """Parse the persisted value through the same phase/moment vocabulary."""
+
+        if value == RecordingMoment.INITIAL.value:
+            return cls(RecordingMoment.INITIAL)
+        for phase in Phase:
+            if value == phase.value:
+                return cls(RecordingMoment.MOTION, phase)
+            for moment in RecordingMoment:
+                if moment not in (RecordingMoment.INITIAL, RecordingMoment.MOTION) and (
+                    value == f"{phase.value}_{moment.value}"
+                ):
+                    return cls(moment, phase)
+        raise ValueError("recording label value is invalid")
 
 
 @dataclass(frozen=True)

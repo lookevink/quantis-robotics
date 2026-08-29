@@ -22,6 +22,9 @@ RECORDING_JOB_ROOT = "/isaac-sim/.local/share/ov/data/quantis/recording_jobs"
 DEMO_RESOLUTION = (1920, 1080)
 JEPA_WM_RESOLUTION = (512, 512)
 DEMO_FPS = 12
+WRIST_CAMERA_TRANSLATION_METERS = (0.16, 0.08, -0.20)
+WRIST_CAMERA_TARGET_METERS = (0.0, 0.0, 0.10)
+WRIST_CAMERA_UP_AXIS = (1.0, 0.0, 0.0)
 
 
 @dataclass(frozen=True)
@@ -95,10 +98,14 @@ def configure_wrist_camera(
     offset = np.asarray(translation_offset, dtype=np.float64)
     if offset.shape != (3,) or not np.all(np.isfinite(offset)):
         raise ValueError("wrist camera offset must contain three finite values")
-    translation = np.array([0.16, 0.08, -0.20], dtype=np.float64) + offset
-    gripper_center = np.array([0.0, 0.0, 0.10], dtype=np.float64)
+    translation = np.asarray(WRIST_CAMERA_TRANSLATION_METERS, dtype=np.float64) + offset
+    gripper_center = np.asarray(WRIST_CAMERA_TARGET_METERS, dtype=np.float64)
     orientation = matrix_to_wxyz(
-        _look_at_rotation(translation, gripper_center, np.array([1.0, 0.0, 0.0]))
+        _look_at_rotation(
+            translation,
+            gripper_center,
+            np.asarray(WRIST_CAMERA_UP_AXIS, dtype=np.float64),
+        )
     )
 
     xform = UsdGeom.Xformable(camera)

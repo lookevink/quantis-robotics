@@ -577,6 +577,8 @@ class AwsLifecycleTests(unittest.TestCase):
                 "12401",
                 "grasp-control",
                 "insertion-control",
+                "demo-spec",
+                "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
             ),
         )
 
@@ -585,6 +587,7 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("contact-reference", calls)
         self.assertIn("grasp-control", calls)
         self.assertIn("insertion-control", calls)
+        self.assertIn("demo-spec", calls)
         self.assertIn("ops/backup_state.sh", calls)
 
     def test_grasp_transition_switches_worker_before_the_guarded_trial(self):
@@ -876,8 +879,7 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("rsync ", calls)
         self.assertIn(
-            "ops/jepa_wm.sh insertion-plan-summarize "
-            "--fresh-roster-base64 '",
+            "ops/jepa_wm.sh insertion-plan-summarize " "--fresh-roster-base64 '",
             calls,
         )
         self.assertIn("--proposal 'insertion-proposal'", calls)
@@ -1598,8 +1600,7 @@ class AwsLifecycleTests(unittest.TestCase):
         ssh_call = next(
             line
             for line in calls.splitlines()
-            if line.startswith("ssh ")
-            and "ops/run_insertion_demo_rollout.sh" in line
+            if line.startswith("ssh ") and "ops/run_insertion_demo_rollout.sh" in line
         )
         interval_match = re.search(r"ServerAliveInterval=(\d+)", ssh_call)
         count_match = re.search(r"ServerAliveCountMax=(\d+)", ssh_call)

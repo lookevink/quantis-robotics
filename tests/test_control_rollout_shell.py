@@ -251,6 +251,9 @@ isaac_server_call() { printf 'isaac %s|%s\n' "$1" "${3:-false}" >> "${CALLS}"; }
 control_proposal_from_identity() { printf 'insertion-proposal\n'; }
 require_control_rollout_reach_and_grasp() { return 0; }
 control_rollout_terminal_session() { printf 'full-chain-grasp-12\n'; }
+validate_demo_run_spec() {
+  printf 'preflight %s\n' "$*" >> "${CALLS}"
+}
 run_insertion_followup_trial() {
   printf 'followup %s\n' "$*" >> "${CALLS}"
 }
@@ -272,6 +275,8 @@ run_insertion_followup_trial() {
                     "12401",
                     "grasp-worker",
                     "insertion-worker",
+                    "demo-spec",
+                    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
                 ],
                 env={**os.environ, "HOME": str(home), "CALLS": str(log)},
                 text=True,
@@ -284,6 +289,7 @@ run_insertion_followup_trial() {
             self.assertEqual(
                 [line.split()[0] for line in calls],
                 [
+                    "preflight",
                     "worker",
                     "worker",
                     "grasp",
@@ -302,12 +308,18 @@ run_insertion_followup_trial() {
             )
             self.assertIn(
                 "full-chain-grasp contact-reference 12401 52 grasp-worker direct 110 contact_grasp",
-                calls[2],
+                calls[3],
             )
             self.assertIn(
                 "verify_grasp_to_insertion_source('full-chain-grasp-12')",
-                calls[3],
+                calls[4],
             )
+            self.assertIn("demo-spec", calls[0])
+            self.assertIn("datacenter_demo.usda", calls[0])
+            self.assertIn("grasp-worker.worker.json", calls[0])
+            self.assertIn("insertion-worker.worker.json", calls[0])
+            self.assertIn("contact-reference 12401", calls[0])
+            self.assertTrue(calls[0].endswith("52 4"))
             followups = [line for line in calls if line.startswith("followup ")]
             self.assertEqual(len(followups), 4)
             self.assertIn(

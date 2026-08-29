@@ -8,6 +8,7 @@ import json
 from math import isfinite
 from pathlib import Path
 
+from jepa.contract import ObservationStage
 from jepa_wm.grasp_contract import GRASP_TASK_ID
 from jepa_wm.insertion_contract import (
     CONTACT_INSERTION_RECORDING,
@@ -16,6 +17,7 @@ from jepa_wm.insertion_contract import (
 )
 from jepa_wm.task_windows import CONTACT_GRASP_PROPOSAL_WINDOW
 from sim.exploration import ExplorationPlan, exploration_prefix
+from sim.recording import RecordingLabel
 
 
 GRASP_TASK_CONTEXT_START = 69
@@ -45,6 +47,8 @@ class RecordedControlStep:
     plug_attached: bool
     plug_position: tuple[float, ...]
     plug_orientation_wxyz: tuple[float, ...]
+    phase: RecordingLabel | None = None
+    stage: ObservationStage | None = None
 
     @classmethod
     def from_dict(cls, payload: object) -> RecordedControlStep:
@@ -58,6 +62,16 @@ class RecordedControlStep:
                 payload["plug_attached"],
                 tuple(float(value) for value in payload["plug_position"]),
                 tuple(float(value) for value in payload["plug_orientation_wxyz"]),
+                (
+                    RecordingLabel.from_value(payload["phase"])
+                    if isinstance(payload.get("phase"), str)
+                    else None
+                ),
+                (
+                    ObservationStage(payload["stage"])
+                    if isinstance(payload.get("stage"), str)
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("recorded control step is incomplete") from error
@@ -73,12 +87,13 @@ class RecordedControlStep:
             or len(step.plug_orientation_wxyz) != 4
             or not all(isfinite(value) for value in step.plug_orientation_wxyz)
             or sum(value * value for value in step.plug_orientation_wxyz) <= 0.0
+            or (step.phase is None) != (step.stage is None)
         ):
             raise ValueError("recorded control step is invalid")
         return step
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "index": self.index,
             "arm_positions": list(self.arm_positions),
             "gripper_width_m": self.gripper_width_m,
@@ -86,6 +101,10 @@ class RecordedControlStep:
             "plug_position": list(self.plug_position),
             "plug_orientation_wxyz": list(self.plug_orientation_wxyz),
         }
+        if self.phase is not None and self.stage is not None:
+            payload["phase"] = self.phase.value
+            payload["stage"] = self.stage.value
+        return payload
 
 
 def load_control_context(

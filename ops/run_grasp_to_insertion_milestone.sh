@@ -9,16 +9,24 @@ reference_name="${2:-}"
 exploration_seed="${3:-}"
 grasp_identity="${4:-}"
 insertion_identity="${5:-}"
+demo_spec_id="${6:-}"
+demo_spec_fingerprint="${7:-}"
 checkpoint_dir="${HOME}/docker/jepa-wm/checkpoints"
+data_root="${HOME}/docker/isaac-sim/data/quantis"
 venv_python="${HOME}/.venvs/quantis-jepa-wm/bin/python"
 
 for identifier in \
-  "${run_id}" "${reference_name}" "${grasp_identity}" "${insertion_identity}"; do
+  "${run_id}" "${reference_name}" "${grasp_identity}" "${insertion_identity}" \
+  "${demo_spec_id}"; do
   is_safe_identifier "${identifier}" || {
     printf 'error: invalid grasp-to-insertion identifier\n' >&2
     exit 1
   }
 done
+[[ "${demo_spec_fingerprint}" =~ ^[0-9a-f]{64}$ ]] || {
+  printf 'error: invalid frozen demo run fingerprint\n' >&2
+  exit 1
+}
 require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
 
 grasp_rollout_id="${run_id}-grasp"
@@ -28,6 +36,22 @@ grasp_steps="$(contact_grasp_maximum_actions \
   "${repo_dir}" "${venv_python}")"
 insertion_steps="$(insertion_rollout_profile_field \
   "${repo_dir}" "${venv_python}" demo maximum-steps)"
+grasp_proposal="$(control_proposal_from_identity \
+  direct "${grasp_identity}" "${checkpoint_dir}" "${venv_python}")"
+insertion_proposal="$(control_proposal_from_identity \
+  insertion_followup_trial "${insertion_identity}" \
+  "${checkpoint_dir}" "${venv_python}")"
+validate_demo_run_spec \
+  "${repo_dir}" "${venv_python}" \
+  "${data_root}/demo_runs/${demo_spec_id}.json" \
+  "${demo_spec_fingerprint}" "${data_root}/recordings" \
+  "${data_root}/scenes/datacenter_demo.usda" \
+  "${grasp_identity}" "${checkpoint_dir}/${grasp_identity}.worker.json" \
+  "${insertion_identity}" \
+  "${checkpoint_dir}/${insertion_identity}.worker.json" \
+  "${reference_name}" "${exploration_seed}" \
+  "${run_id}" "${data_root}/demo_runs/${run_id}.binding.json" \
+  "${grasp_steps}" "${insertion_steps}"
 
 cd "${repo_dir}"
 bash "${repo_dir}/ops/jepa_wm.sh" control-worker-stop
@@ -47,10 +71,6 @@ isaac_server_call \
 bash "${repo_dir}/ops/jepa_wm.sh" control-worker-stop
 bash "${repo_dir}/ops/jepa_wm.sh" \
   control-worker-start --artifacts "${insertion_identity}"
-insertion_proposal="$(control_proposal_from_identity \
-  insertion_followup_trial "${insertion_identity}" \
-  "${checkpoint_dir}" "${venv_python}")"
-
 declare -a safety_sessions=()
 declare -a action_sessions=()
 for ((step=1; step<=insertion_steps; step++)); do

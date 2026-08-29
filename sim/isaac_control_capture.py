@@ -43,6 +43,7 @@ from jepa_wm.training_artifact import artifact_fingerprint
 from jepa_wm.trajectory import load_rollout_at
 from sim.control_capture_schedule import (
     ControlCaptureSchedule,
+    ControlCapturePhase,
     ControlKnownStart,
     ControlKnownStartAuthority,
     ControlWarmupFramePlan,
@@ -51,6 +52,7 @@ from sim.control_capture_schedule import (
     control_reference_fingerprint,
     control_warmup_plan,
     requires_stable_insertion_capture,
+    run_control_capture_phase,
     validate_known_start_collision_configuration,
     validate_known_start_pose,
 )
@@ -67,8 +69,16 @@ from sim.control_context import (
     load_control_context,
     recording_task,
 )
-from sim.control_identity import control_proposal_path, observation_id_for_session
-from sim.demo_sequence import Phase
+from sim.control_identity import (
+    ControlProposalRef,
+    control_proposal_path,
+    observation_id_for_session,
+    requires_authenticated_control_proposal,
+)
+from sim.control_timeline import (
+    ControlTaskTimeline,
+    control_context_recording_label,
+)
 from sim.exploration import (
     DatasetSplit,
     build_exploration_plan,
@@ -108,7 +118,6 @@ from sim.isaac_exploration import (
 )
 from sim.recording import (
     RecordingLabel,
-    RecordingMoment,
     RecordingSafetyTelemetry,
     validate_recording_id,
 )
@@ -259,25 +268,6 @@ def _report_control_capture_progress(
         progress(phase, completed_units, total_units)
 
 
-def control_context_recording_label(
-    plug_attached: bool,
-    task_index: int,
-) -> RecordingLabel:
-    """Resolve one task-indexed control context's evidence label."""
-
-    if (
-        isinstance(task_index, bool)
-        or not isinstance(task_index, int)
-        or task_index < 0
-    ):
-        raise ValueError("control context task index is invalid")
-    if plug_attached:
-        return RecordingLabel(RecordingMoment.ATTACHED, Phase.GRASP)
-    if task_index == 0:
-        return RecordingLabel(RecordingMoment.INITIAL)
-    return RecordingLabel(RecordingMoment.MOTION, Phase.READY)
-
-
 async def _capture_stable_control_frame(
     *,
     session: ControlSession,
@@ -381,6 +371,19 @@ async def capture_control_observation(
 ) -> dict[str, Any]:
     """Initialize or replay a context and persist one live wrist observation."""
 
+    validate_recording_id(proposal_name)
+    policy = ControlExecutionPolicy(execution_policy)
+    proposal_ref = (
+        ControlProposalRef.from_name(proposal_name)
+        if requires_authenticated_control_proposal(policy)
+        else None
+    )
+    expected_proposal = (
+        proposal_ref.path
+        if proposal_ref is not None
+        else control_proposal_path(proposal_name)
+    )
+
     import omni.kit.app
     import omni.timeline
     import omni.usd
@@ -388,8 +391,6 @@ async def capture_control_observation(
     from isaacsim.core.rendering_manager import RenderingManager
     from isaacsim.core.simulation_manager import SimulationManager
 
-    validate_recording_id(proposal_name)
-    policy = ControlExecutionPolicy(execution_policy)
     capture_purpose = ControlContextPurpose(context_purpose)
     session = ControlSession.at(CONTROL_ROOT, session_id)
     if session.path.exists():
@@ -417,10 +418,7 @@ async def capture_control_observation(
         context_purpose=capture_purpose,
     )
     warmup_plan = schedule.frames
-    if tuple(step.index for step in context_steps) != tuple(
-        frame.task_index for frame in warmup_plan
-    ):
-        raise RuntimeError("control warm-up plan does not match its context")
+    task_timeline = ControlTaskTimeline.from_context(context_steps, schedule)
     recorded_task_indices = schedule.recorded_task_indices
     target_policy = insertion_control_target_policy(policy)
     reference_rollout = (
@@ -460,7 +458,11 @@ async def capture_control_observation(
         }
     total_units = schedule.progress_units
     _report_control_capture_progress(progress, "reset", 0, total_units)
-    await reset_stage()
+    await run_control_capture_phase(
+        schedule.timing_budget,
+        ControlCapturePhase.RESET,
+        reset_stage(),
+    )
     stage = omni.usd.get_context().get_stage()
     stage.SetEditTarget(stage.GetSessionLayer())
     apply_variant(stage, plan)
@@ -477,6 +479,8 @@ async def capture_control_observation(
         "control_capture_schedule": schedule.to_dict(),
         "control_capture_schedule_fingerprint": schedule.fingerprint,
     }
+    if proposal_ref is not None:
+        recording_metadata["control_proposal_ref"] = proposal_ref.to_dict()
     if capture_purpose is ControlContextPurpose.CONTACT_GRASP:
         recording_metadata["control_recorded_task_indices"] = list(
             recorded_task_indices
@@ -537,7 +541,11 @@ async def capture_control_observation(
         )
         actuators.set_reset_state(origin)
         if insertion_control:
-            await advance_physics_updates(16, warmup_interlock.observe)
+            await run_control_capture_phase(
+                schedule.timing_budget,
+                ControlCapturePhase.KNOWN_START,
+                advance_physics_updates(16, warmup_interlock.observe),
+            )
         else:
             for _ in range(16):
                 await omni.kit.app.get_app().next_update_async()
@@ -597,40 +605,38 @@ async def capture_control_observation(
                 "control_known_start_fingerprint",
                 known_start.fingerprint,
             )
-        initialization_frame = warmup_plan[schedule.initialization_task_index]
-        initialization_phase = control_context_recording_label(
-            initialization_step.plug_attached,
-            initialization_step.index,
-        )
-        initialization_stage = (
-            ObservationStage.CABLE_GRASPED
-            if initialization_step.plug_attached
-            else ObservationStage.APPROACHING_CABLE
-        )
+        initialization_state = task_timeline.initialization
+        initialization_frame = initialization_state.frame_plan
+        initialization_phase = initialization_state.recording_label
+        initialization_stage = initialization_state.observation_stage
         if initialization_frame.stabilize:
             _report_control_capture_progress(
                 progress,
-                "terminal_camera_and_stabilization",
+                ControlCapturePhase.TERMINAL_CAMERA_AND_STABILIZATION,
                 2,
                 total_units,
             )
-            stable_previous_action = await _capture_stable_control_frame(
-                session=session,
-                session_id=session_id,
-                reference_recording=reference_recording,
-                seed=seed,
-                context_index=context_index,
-                policy=policy,
-                capture_purpose=capture_purpose,
-                stage=stage,
-                actuators=actuators,
-                attachment=attachment,
-                sensor=sensor,
-                command=origin,
-                recorder=recorder,
-                recording_phase=initialization_phase,
-                recording_stage=initialization_stage,
-                warmup_interlock=warmup_interlock,
+            stable_previous_action = await run_control_capture_phase(
+                schedule.timing_budget,
+                ControlCapturePhase.TERMINAL_CAMERA_AND_STABILIZATION,
+                _capture_stable_control_frame(
+                    session=session,
+                    session_id=session_id,
+                    reference_recording=reference_recording,
+                    seed=seed,
+                    context_index=context_index,
+                    policy=policy,
+                    capture_purpose=capture_purpose,
+                    stage=stage,
+                    actuators=actuators,
+                    attachment=attachment,
+                    sensor=sensor,
+                    command=origin,
+                    recorder=recorder,
+                    recording_phase=initialization_phase,
+                    recording_stage=initialization_stage,
+                    warmup_interlock=warmup_interlock,
+                ),
             )
         elif initialization_frame.record_rgb:
             await recorder.capture(
@@ -643,8 +649,9 @@ async def capture_control_observation(
                 advance=False,
             )
         current = origin
-        for replay_index, frame_plan in enumerate(schedule.replay_frames, start=1):
-            step = context_steps[frame_plan.task_index]
+        for replay_index, task_state in enumerate(task_timeline.replay, start=1):
+            frame_plan = task_state.frame_plan
+            step = context_steps[task_state.task_index]
             _report_control_capture_progress(
                 progress,
                 "replay",
@@ -666,15 +673,8 @@ async def capture_control_observation(
                 np.asarray(step.arm_positions),
                 step.gripper_width_m,
             )
-            recording_phase = control_context_recording_label(
-                step.plug_attached,
-                step.index,
-            )
-            recording_stage = (
-                ObservationStage.CABLE_GRASPED
-                if step.plug_attached
-                else ObservationStage.APPROACHING_CABLE
-            )
+            recording_phase = task_state.recording_label
+            recording_stage = task_state.observation_stage
             strict_current_capture = frame_plan.stabilize
             await move_joint_command(
                 actuators,
@@ -695,37 +695,45 @@ async def capture_control_observation(
                 ),
             )
             if strict_current_capture:
-                stable_previous_action = await _capture_stable_control_frame(
-                    session=session,
-                    session_id=session_id,
-                    reference_recording=reference_recording,
-                    seed=seed,
-                    context_index=context_index,
-                    policy=policy,
-                    capture_purpose=capture_purpose,
-                    stage=stage,
-                    actuators=actuators,
-                    attachment=attachment,
-                    sensor=sensor,
-                    command=command,
-                    recorder=recorder,
-                    recording_phase=recording_phase,
-                    recording_stage=recording_stage,
-                    warmup_interlock=warmup_interlock,
+                stable_previous_action = await run_control_capture_phase(
+                    schedule.timing_budget,
+                    ControlCapturePhase.TERMINAL_CAMERA_AND_STABILIZATION,
+                    _capture_stable_control_frame(
+                        session=session,
+                        session_id=session_id,
+                        reference_recording=reference_recording,
+                        seed=seed,
+                        context_index=context_index,
+                        policy=policy,
+                        capture_purpose=capture_purpose,
+                        stage=stage,
+                        actuators=actuators,
+                        attachment=attachment,
+                        sensor=sensor,
+                        command=command,
+                        recorder=recorder,
+                        recording_phase=recording_phase,
+                        recording_stage=recording_stage,
+                        warmup_interlock=warmup_interlock,
+                    ),
                 )
             current = command
         _report_control_capture_progress(
             progress,
-            "terminal_snapshot",
+            ControlCapturePhase.TERMINAL_SNAPSHOT,
             total_units - 1,
             total_units,
         )
-        captured_state = await synchronized_control_safety_snapshot(
-            timeline,
-            actuators,
-            attachment,
-            sensor,
-            omni.kit.app.get_app().next_update_async,
+        captured_state = await run_control_capture_phase(
+            schedule.timing_budget,
+            ControlCapturePhase.TERMINAL_SNAPSHOT,
+            synchronized_control_safety_snapshot(
+                timeline,
+                actuators,
+                attachment,
+                sensor,
+                omni.kit.app.get_app().next_update_async,
+            ),
         )
         _report_control_capture_progress(
             progress,
@@ -765,7 +773,7 @@ async def capture_control_observation(
         target=ControlTarget(
             target.relative_to(QUANTIS_DATA_ROOT), reference_rollout.target_pose
         ),
-        expected_proposal=control_proposal_path(proposal_name),
+        expected_proposal=expected_proposal,
         pose=DroidPose(tuple(context_step["end_effector_pose"])),
         previous_action=previous_action,
         warmup_frames=context_index,

@@ -203,6 +203,45 @@ control_proposal_from_identity() {
   printf '%s\n' "${proposal_name}"
 }
 
+validate_demo_run_spec() {
+  local repository="$1"
+  local python_bin="$2"
+  local spec_path="$3"
+  local spec_fingerprint="$4"
+  local recording_root="$5"
+  local stage_asset="$6"
+  local grasp_identity="$7"
+  local grasp_manifest="$8"
+  local insertion_identity="$9"
+  local insertion_manifest="${10}"
+  local reference_recording="${11}"
+  local exploration_seed="${12}"
+  local run_id="${13}"
+  local binding_output="${14}"
+  local grasp_actions="${15}"
+  local insertion_actions="${16}"
+  local source_revision
+  local container_image_digest
+  source_revision="$(git -C "${repository}" rev-parse HEAD)" || return 1
+  container_image_digest="$(sudo docker inspect --format '{{.Image}}' quantis-isaac-sim)" \
+    || return 1
+  "${python_bin}" -m sim.demo_run_cli verify \
+    --spec "${spec_path}" \
+    --fingerprint "${spec_fingerprint}" \
+    --recording-root "${recording_root}" \
+    --source-revision "${source_revision}" \
+    --container-image-digest "${container_image_digest}" \
+    --run-id "${run_id}" \
+    --binding-output "${binding_output}" \
+    --grasp-actions "${grasp_actions}" \
+    --insertion-actions "${insertion_actions}" \
+    --reference-recording "${reference_recording}" \
+    --exploration-seed "${exploration_seed}" \
+    --artifact "stage_asset=${stage_asset}" \
+    --worker "grasp=${grasp_identity}=${grasp_manifest}" \
+    --worker "insertion=${insertion_identity}=${insertion_manifest}"
+}
+
 respond_to_control_session() {
   local repository="$1"
   local session_id="$2"
