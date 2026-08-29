@@ -274,6 +274,20 @@ sync_repo() {
     "${repo_root}/" "${ssh_user}@$(instance_ip):~/quantis-robotics/"
 }
 
+deployment_source_revision() {
+  local source_status
+  local source_revision
+  source_status="$(git -C "${repo_root}" status --porcelain --untracked-files=all)" \
+    || die "cannot inspect local source tree"
+  [[ -z "${source_status}" ]] \
+    || die "source tree must be clean before freezing a demo run"
+  source_revision="$(git -C "${repo_root}" rev-parse HEAD)" \
+    || die "cannot resolve local source revision"
+  [[ "${source_revision}" =~ ^[0-9a-f]{40}$ ]] \
+    || die "invalid local source revision"
+  printf '%s\n' "${source_revision}"
+}
+
 guarded_insertion_summary=""
 
 finalize_guarded_insertion_workflow() {
@@ -1265,6 +1279,7 @@ case "${command}" in
     [[ "${demo_spec_fingerprint}" =~ ^[0-9a-f]{64}$ ]] \
       || die "invalid frozen demo run fingerprint"
     require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
+    source_revision="$(deployment_source_revision)"
     timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
     run_id="grasp-to-insertion-${timestamp}-${exploration_seed}"
     guarded_insertion_summary="Grasp-to-insertion run: ${run_id}"
@@ -1272,7 +1287,7 @@ case "${command}" in
     sync_repo || command_status=$?
     if (( command_status == 0 )); then
       remote \
-        "bash ~/quantis-robotics/ops/run_grasp_to_insertion_milestone.sh '${run_id}' '${reference_name}' '${exploration_seed}' '${grasp_artifacts}' '${insertion_artifacts}' '${demo_spec_id}' '${demo_spec_fingerprint}'" \
+        "bash ~/quantis-robotics/ops/run_grasp_to_insertion_milestone.sh '${run_id}' '${reference_name}' '${exploration_seed}' '${grasp_artifacts}' '${insertion_artifacts}' '${demo_spec_id}' '${demo_spec_fingerprint}' '${source_revision}'" \
         || command_status=$?
     fi
     exit "${command_status}"

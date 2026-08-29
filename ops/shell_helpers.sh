@@ -204,7 +204,7 @@ control_proposal_from_identity() {
 }
 
 validate_demo_run_spec() {
-  local repository="$1"
+  local source_revision="$1"
   local python_bin="$2"
   local spec_path="$3"
   local spec_fingerprint="$4"
@@ -220,9 +220,11 @@ validate_demo_run_spec() {
   local binding_output="${14}"
   local grasp_actions="${15}"
   local insertion_actions="${16}"
-  local source_revision
   local container_image_digest
-  source_revision="$(git -C "${repository}" rev-parse HEAD)" || return 1
+  [[ "${source_revision}" =~ ^[0-9a-f]{40}$ ]] || {
+    printf 'error: invalid deployed source revision\n' >&2
+    return 1
+  }
   container_image_digest="$(sudo docker inspect --format '{{.Image}}' quantis-isaac-sim)" \
     || return 1
   "${python_bin}" -m sim.demo_run_cli verify \

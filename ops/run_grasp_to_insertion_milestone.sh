@@ -11,6 +11,7 @@ grasp_identity="${4:-}"
 insertion_identity="${5:-}"
 demo_spec_id="${6:-}"
 demo_spec_fingerprint="${7:-}"
+source_revision="${8:-}"
 checkpoint_dir="${HOME}/docker/jepa-wm/checkpoints"
 data_root="${HOME}/docker/isaac-sim/data/quantis"
 venv_python="${HOME}/.venvs/quantis-jepa-wm/bin/python"
@@ -25,6 +26,10 @@ for identifier in \
 done
 [[ "${demo_spec_fingerprint}" =~ ^[0-9a-f]{64}$ ]] || {
   printf 'error: invalid frozen demo run fingerprint\n' >&2
+  exit 1
+}
+[[ "${source_revision}" =~ ^[0-9a-f]{40}$ ]] || {
+  printf 'error: invalid deployed source revision\n' >&2
   exit 1
 }
 require_nonnegative_integer "exploration seed" "${exploration_seed}" || exit 1
@@ -42,7 +47,7 @@ insertion_proposal="$(control_proposal_from_identity \
   insertion_followup_trial "${insertion_identity}" \
   "${checkpoint_dir}" "${venv_python}")"
 validate_demo_run_spec \
-  "${repo_dir}" "${venv_python}" \
+  "${source_revision}" "${venv_python}" \
   "${data_root}/demo_runs/${demo_spec_id}.json" \
   "${demo_spec_fingerprint}" "${data_root}/recordings" \
   "${data_root}/scenes/datacenter_demo.usda" \

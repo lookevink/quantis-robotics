@@ -14,6 +14,48 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ControlRolloutShellTest(unittest.TestCase):
+    def test_demo_preflight_accepts_forwarded_revision_in_gitless_deployment(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repository = root / "quantis-robotics"
+            ops = repository / "ops"
+            ops.mkdir(parents=True)
+            shutil.copy(REPO_ROOT / "ops" / "shell_helpers.sh", ops)
+            calls = root / "calls.log"
+            fake_python = root / "python"
+            fake_python.write_text(
+                "#!/usr/bin/env bash\n"
+                "printf '%s\\n' \"$*\" >> \"${CALLS}\"\n"
+            )
+            fake_python.chmod(0o755)
+            source_revision = "a" * 40
+            runner = root / "run.sh"
+            runner.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                f"source '{ops / 'shell_helpers.sh'}'\n"
+                "sudo() { printf 'sha256:%064d\\n' 0; }\n"
+                "validate_demo_run_spec \\\n"
+                f"  '{source_revision}' '{fake_python}' /tmp/spec {'f' * 64} \\\n"
+                "  /tmp/recordings /tmp/stage grasp /tmp/grasp.worker.json \\\n"
+                "  insertion /tmp/insertion.worker.json reference 12601 run \\\n"
+                "  /tmp/binding.json 52 4\n"
+            )
+
+            result = subprocess.run(
+                ["bash", str(runner)],
+                env={**os.environ, "CALLS": str(calls)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertFalse((repository / ".git").exists())
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(f"--source-revision {source_revision}", calls.read_text())
+
     def test_control_capture_timeout_cancels_the_owned_isaac_job(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             home = Path(temp_dir)
@@ -277,6 +319,7 @@ run_insertion_followup_trial() {
                     "insertion-worker",
                     "demo-spec",
                     "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 ],
                 env={**os.environ, "HOME": str(home), "CALLS": str(log)},
                 text=True,
@@ -319,6 +362,7 @@ run_insertion_followup_trial() {
             self.assertIn("grasp-worker.worker.json", calls[0])
             self.assertIn("insertion-worker.worker.json", calls[0])
             self.assertIn("contact-reference 12401", calls[0])
+            self.assertIn("a" * 40, calls[0])
             self.assertTrue(calls[0].endswith("52 4"))
             followups = [line for line in calls if line.startswith("followup ")]
             self.assertEqual(len(followups), 4)

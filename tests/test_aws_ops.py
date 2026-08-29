@@ -109,6 +109,23 @@ class AwsLifecycleTests(unittest.TestCase):
                     "fi\n"
                 )
                 fake_command.chmod(0o755)
+            fake_git = temp_path / "git"
+            fake_git.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    if [[ " $* " == *" status --porcelain --untracked-files=all "* ]]; then
+                      printf '%s' "${FAKE_GIT_STATUS:-}"
+                    elif [[ " $* " == *" rev-parse HEAD "* ]]; then
+                      printf '%s\n' "${FAKE_GIT_REVISION}"
+                    else
+                      exit 9
+                    fi
+                    """
+                )
+            )
+            fake_git.chmod(0o755)
             fake_curl = temp_path / "curl"
             fake_curl.write_text("#!/usr/bin/env bash\nprintf '203.0.113.10'\n")
             fake_curl.chmod(0o755)
@@ -121,6 +138,7 @@ class AwsLifecycleTests(unittest.TestCase):
                 "FAKE_AWS_ACCOUNT": account,
                 "FAKE_AWS_LOG": str(log_path),
                 "FAKE_AWS_STATE": state,
+                "FAKE_GIT_REVISION": "1" * 40,
                 "PATH": f"{temp_dir}:{os.environ['PATH']}",
                 **(extra_env or {}),
             }
@@ -570,6 +588,7 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertNotIn("ops/render_demo_dashboard.sh", calls)
 
     def test_grasp_to_insertion_runs_one_guarded_phase_chain(self):
+        source_revision = "a" * 40
         result, calls = self.run_command(
             "jepa-wm-grasp-to-insertion",
             arguments=(
@@ -580,6 +599,7 @@ class AwsLifecycleTests(unittest.TestCase):
                 "demo-spec",
                 "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
             ),
+            extra_env={"FAKE_GIT_REVISION": source_revision},
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -588,7 +608,26 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("grasp-control", calls)
         self.assertIn("insertion-control", calls)
         self.assertIn("demo-spec", calls)
+        self.assertIn(source_revision, calls)
         self.assertIn("ops/backup_state.sh", calls)
+
+    def test_grasp_to_insertion_refuses_a_dirty_source_tree_before_sync(self):
+        result, calls = self.run_command(
+            "jepa-wm-grasp-to-insertion",
+            arguments=(
+                "contact-reference",
+                "12401",
+                "grasp-control",
+                "insertion-control",
+                "demo-spec",
+                "f" * 64,
+            ),
+            extra_env={"FAKE_GIT_STATUS": " M ops/aws.sh\n"},
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("source tree must be clean", result.stderr)
+        self.assertNotIn("rsync ", calls)
 
     def test_grasp_transition_switches_worker_before_the_guarded_trial(self):
         result, calls = self.run_command(
