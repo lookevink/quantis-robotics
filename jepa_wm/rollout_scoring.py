@@ -7,6 +7,7 @@ from typing import Any, Sequence
 
 import torch
 
+from jepa_wm.action_conditioning import action_regime_context
 from jepa_wm.objective import terminal_l2_energy
 from jepa_wm.trajectory import RecordedRollout
 
@@ -29,8 +30,12 @@ def score_actions(
     context: torch.Tensor,
     target: torch.Tensor,
     actions: torch.Tensor,
+    regimes: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    return terminal_l2_energy(model.unroll(context, actions), target)
+    if regimes is None:
+        return terminal_l2_energy(model.unroll(context, actions), target)
+    with action_regime_context(model, regimes):
+        return terminal_l2_energy(model.unroll(context, actions), target)
 
 
 def rollout_action_tensor(
@@ -50,10 +55,17 @@ def score_recorded_against_zero(
     context: torch.Tensor,
     target: torch.Tensor,
     actions: torch.Tensor,
+    regimes: torch.Tensor | None = None,
 ) -> RolloutEnergies:
     return RolloutEnergies(
-        recorded=score_actions(model, context, target, actions),
-        zero=score_actions(model, context, target, torch.zeros_like(actions)),
+        recorded=score_actions(model, context, target, actions, regimes),
+        zero=score_actions(
+            model,
+            context,
+            target,
+            torch.zeros_like(actions),
+            regimes,
+        ),
     )
 
 
@@ -63,10 +75,17 @@ def score_recorded_against_mismatched(
     target: torch.Tensor,
     actions: torch.Tensor,
     mismatched_actions: torch.Tensor,
+    regimes: torch.Tensor | None = None,
 ) -> ContrastiveRolloutEnergies:
     if mismatched_actions.shape != actions.shape:
         raise ValueError("mismatched actions must match recorded actions")
-    baseline = score_recorded_against_zero(model, context, target, actions)
+    baseline = score_recorded_against_zero(
+        model,
+        context,
+        target,
+        actions,
+        regimes,
+    )
     return ContrastiveRolloutEnergies(
         recorded=baseline.recorded,
         zero=baseline.zero,
@@ -75,5 +94,6 @@ def score_recorded_against_mismatched(
             context,
             target,
             mismatched_actions,
+            regimes,
         ),
     )

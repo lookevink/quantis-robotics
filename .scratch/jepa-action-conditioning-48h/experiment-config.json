@@ -1,0 +1,129 @@
+{
+  "schema": "quantis.jepa_wm_action_conditioning_experiment.v1",
+  "experiment_id": "contact-insertion-v10-drive-slow-2600-action-conditioning-v1",
+  "authority": "offline adapter training and offline evaluation only",
+  "base_model": {
+    "model_id": "jepa_wm_droid",
+    "source_revision": "13cf1d9c7e476f53c17714d2e0f1dc239a883ce0",
+    "checkpoint_fingerprint": "daa69198aef764932f1cb809239a4e19c71da20a93c6a0b9f3869cb30a13f4aa",
+    "frozen_encoder": true,
+    "frozen_predictor": true
+  },
+  "corpus": {
+    "roster_experiment_id": "contact-insertion-v10-drive-slow-2600",
+    "training_recordings": [
+      "contact-insertion-v10-drive-slow-2600-train-00",
+      "contact-insertion-v10-drive-slow-2600-train-01",
+      "contact-insertion-v10-drive-slow-2600-train-02",
+      "contact-insertion-v10-drive-slow-2600-train-03",
+      "contact-insertion-v10-drive-slow-2600-train-04",
+      "contact-insertion-v10-drive-slow-2600-train-05",
+      "contact-insertion-v10-drive-slow-2600-train-06",
+      "contact-insertion-v10-drive-slow-2600-train-07",
+      "contact-insertion-v10-drive-slow-2600-train-08",
+      "contact-insertion-v10-drive-slow-2600-train-09",
+      "contact-insertion-v10-drive-slow-2600-train-10",
+      "contact-insertion-v10-drive-slow-2600-train-11"
+    ],
+    "development_canary": "contact-insertion-v10-drive-slow-72600-held-00",
+    "canonical_held_out": [
+      "contact-insertion-v10-drive-slow-2600-held-00",
+      "contact-insertion-v10-drive-slow-2600-held-01"
+    ],
+    "camera": "wrist",
+    "window": {"start_index": 113, "count": 168, "stride": 1},
+    "action_horizon": 3
+  },
+  "training": {
+    "steps": 2016,
+    "batch_size": 1,
+    "encoding_batch_size": 4,
+    "learning_rate": 0.001,
+    "optimizer": "AdamW",
+    "weight_decay": 0.01,
+    "seed": 234,
+    "sampler": {
+      "strategy": "alternating_seeded_shuffled_strata",
+      "retained_context_indices": {"start": 113, "stop_inclusive": 165},
+      "post_context_indices": {"start": 166, "stop_inclusive": 280},
+      "samples_per_stratum": 1008
+    },
+    "objective": {
+      "terminal": "terminal_latent_l2",
+      "zero_negative": {"weight": 1.0, "margin": 0.001},
+      "mismatched_negative": {"weight": 1.0, "margin": 0.001},
+      "candidate_negative": {"weight": 1.0, "margin": 0.001},
+      "signed_x_zero_negative": {"weight": 1.0, "margin": 0.001},
+      "signed_x_opposed_negative": {"weight": 1.0, "margin": 0.001},
+      "signed_x_activity_threshold": 0.001
+    },
+    "candidate_mining": {
+      "candidates_per_rollout": 4,
+      "scoring_batch_size": 2,
+      "noise_scale": 0.25,
+      "minimum_goal_cosine": null,
+      "bounds": {
+        "maximum_translation_norm": 0.02,
+        "maximum_rotation_norm": 0.08,
+        "maximum_gripper_delta": 0.25
+      },
+      "first_action_activity": {
+        "translation_norm": 0.001,
+        "rotation_norm": 0.005,
+        "gripper_delta": 0.02
+      }
+    }
+  },
+  "treatments": {
+    "A": {
+      "kind": "existing_global_linear_control",
+      "artifact_fingerprint": "e2fea116de2aca46bb9a3e72e3d971e49dfc64936f8fc27469353da102ffa0ed",
+      "train": false,
+      "promotion_eligible": false
+    },
+    "B": {
+      "kind": "balanced_global_linear",
+      "initialize_from": "official_checkpoint_action_encoder",
+      "promotion_eligible": true
+    },
+    "C": {
+      "kind": "balanced_global_linear_plus_nonlinear_residual",
+      "initialize_from": "official_checkpoint_action_encoder",
+      "residual": {
+        "input_dimension": 7,
+        "hidden_dimension": 32,
+        "output_dimension": 1024,
+        "activation": "SiLU",
+        "output_zero_initialized": true
+      },
+      "promotion_eligible": true
+    },
+    "D": {
+      "kind": "balanced_oracle_regime_linear_residuals",
+      "initialize_from": "official_checkpoint_action_encoder",
+      "routes": ["retained", "post"],
+      "residual_output_zero_initialized": true,
+      "promotion_eligible": false
+    }
+  },
+  "canary_selection": {
+    "required_repository_gate": {
+      "finite_metrics": true,
+      "positive_mean_improvement": true,
+      "minimum_win_rate": 0.75
+    },
+    "minimum_overall_win_rate": 0.90,
+    "minimum_retained_win_rate": 0.85,
+    "minimum_post_win_rate": 0.95,
+    "require_positive_mean_improvement_each_semantic_segment": true,
+    "minimum_retreat_signed_order_fraction": 0.75,
+    "minimum_alignment_signed_order_fraction": 0.75,
+    "tie_breaker": ["B", "C"]
+  },
+  "stopping_rules": {
+    "no_canary_retuning": true,
+    "one_canary_evaluation_per_treatment": true,
+    "canonical_evaluation_only_for_selected_B_or_C": true,
+    "no_live_action_or_filming_authority": true
+  }
+}

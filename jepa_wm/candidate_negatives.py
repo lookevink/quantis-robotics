@@ -209,6 +209,7 @@ def mine_lowest_energy_candidates(
     candidates: torch.Tensor,
     *,
     scoring_batch_size: int,
+    regimes: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Select the current model's most deceptive candidate for each rollout."""
 
@@ -221,20 +222,34 @@ def mine_lowest_energy_candidates(
         raise ValueError("candidate batch does not match context and target batches")
     if scoring_batch_size <= 0:
         raise ValueError("candidate scoring batch size must be positive")
+    if regimes is not None and regimes.shape != (batch,):
+        raise ValueError("candidate regimes must match the rollout batch")
     flattened = candidates.reshape(horizon, batch * candidate_count, ACTION_DIMENSIONS)
     repeated_context = context.repeat_interleave(candidate_count, dim=0)
     repeated_target = target.repeat_interleave(candidate_count, dim=0)
+    repeated_regimes = (
+        regimes.repeat_interleave(candidate_count) if regimes is not None else None
+    )
     with torch.no_grad():
-        energy_chunks = tuple(
-            score_actions(
+        energy_chunks = []
+        for start in range(0, batch * candidate_count, scoring_batch_size):
+            arguments = (
                 model,
                 repeated_context[start : start + scoring_batch_size],
                 repeated_target[start : start + scoring_batch_size],
                 flattened[:, start : start + scoring_batch_size],
             )
-            for start in range(0, batch * candidate_count, scoring_batch_size)
-        )
-        energies = torch.cat(energy_chunks).reshape(batch, candidate_count)
+            energy_chunks.append(
+                score_actions(
+                    *arguments,
+                    **(
+                        {"regimes": repeated_regimes[start : start + scoring_batch_size]}
+                        if repeated_regimes is not None
+                        else {}
+                    ),
+                )
+            )
+        energies = torch.cat(tuple(energy_chunks)).reshape(batch, candidate_count)
         selected_indices = energies.argmin(dim=1)
     by_rollout = candidates.permute(1, 2, 0, 3)
     selected = by_rollout[
