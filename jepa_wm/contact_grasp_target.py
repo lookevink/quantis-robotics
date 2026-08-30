@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from jepa_wm.action import ActionSelectionBounds, DroidAction, DroidPose, compose_actions
+from jepa_wm.action import (
+    ActionSelectionBounds,
+    DroidAction,
+    DroidPose,
+    compose_actions,
+    compose_transport_action,
+)
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.insertion_contract import (
     CONTACT_INSERTION_RECORDING,
@@ -22,9 +29,44 @@ LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
 DIRECTIONAL_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v2"
 )
-CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+HORIZON_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v3"
 )
+CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+    "quantis.jepa_wm_contact_grasp_target_policy.v4"
+)
+
+
+class _TransportComposition(str, Enum):
+    FIRST_ACTION = "first_action"
+    FULL_HORIZON = "full_horizon"
+    TRANSLATION_HORIZON = "translation_horizon"
+
+
+@dataclass(frozen=True)
+class _PolicyCapabilities:
+    directional_progress: bool
+    transport_composition: _TransportComposition
+
+
+_POLICY_CAPABILITIES = {
+    LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA: _PolicyCapabilities(
+        False,
+        _TransportComposition.FIRST_ACTION,
+    ),
+    DIRECTIONAL_CONTACT_GRASP_TARGET_POLICY_SCHEMA: _PolicyCapabilities(
+        True,
+        _TransportComposition.FIRST_ACTION,
+    ),
+    HORIZON_CONTACT_GRASP_TARGET_POLICY_SCHEMA: _PolicyCapabilities(
+        True,
+        _TransportComposition.FULL_HORIZON,
+    ),
+    CONTACT_GRASP_TARGET_POLICY_SCHEMA: _PolicyCapabilities(
+        True,
+        _TransportComposition.TRANSLATION_HORIZON,
+    ),
+}
 
 
 def _frame_index(path: Path) -> int:
@@ -60,23 +102,19 @@ class ContactGraspTargetPolicy:
     schema: str = CONTACT_GRASP_TARGET_POLICY_SCHEMA
 
     def __post_init__(self) -> None:
-        if self.schema not in (
-            LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
-            DIRECTIONAL_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
-            CONTACT_GRASP_TARGET_POLICY_SCHEMA,
-        ):
+        if self.schema not in _POLICY_CAPABILITIES:
             raise ValueError("contact-grasp target policy is invalid")
 
     @property
     def requires_directional_transport_progress(self) -> bool:
-        return self.schema in (
-            DIRECTIONAL_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
-            CONTACT_GRASP_TARGET_POLICY_SCHEMA,
-        )
+        return _POLICY_CAPABILITIES[self.schema].directional_progress
 
     @property
     def uses_horizon_transport_action(self) -> bool:
-        return self.schema == CONTACT_GRASP_TARGET_POLICY_SCHEMA
+        return (
+            _POLICY_CAPABILITIES[self.schema].transport_composition
+            is not _TransportComposition.FIRST_ACTION
+        )
 
     def action_for_execution(
         self,
@@ -93,7 +131,13 @@ class ContactGraspTargetPolicy:
             or not isinstance(plug_attached, bool)
         ):
             raise ValueError("contact-grasp proposal action horizon is invalid")
-        if plug_attached and self.uses_horizon_transport_action:
+        composition = _POLICY_CAPABILITIES[self.schema].transport_composition
+        if (
+            plug_attached
+            and composition is _TransportComposition.TRANSLATION_HORIZON
+        ):
+            return compose_transport_action(sequence)
+        if plug_attached and composition is _TransportComposition.FULL_HORIZON:
             return compose_actions(sequence)
         return sequence[0]
 
@@ -374,12 +418,7 @@ class ContactGraspTargetPolicy:
         if (
             not isinstance(payload, dict)
             or set(payload) != {"schema"}
-            or payload["schema"]
-            not in (
-                LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
-                DIRECTIONAL_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
-                CONTACT_GRASP_TARGET_POLICY_SCHEMA,
-            )
+            or payload["schema"] not in _POLICY_CAPABILITIES
         ):
             raise ValueError("contact-grasp target policy is invalid")
         return cls(str(payload["schema"]))

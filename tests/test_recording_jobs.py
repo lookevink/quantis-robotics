@@ -4,12 +4,124 @@ import asyncio
 import json
 import tempfile
 import unittest
+from unittest.mock import AsyncMock, patch
 from pathlib import Path
 
 from sim.recording_jobs import RecordingJobManager
 
 
 class RecordingJobManagerTest(unittest.TestCase):
+    def test_facade_capture_paths_share_the_operation_interlock(self) -> None:
+        from sim import isaac_demo
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = RecordingJobManager(Path(temp_dir))
+
+            async def exercise() -> None:
+                release = asyncio.Event()
+
+                async def foreground() -> dict[str, str]:
+                    await release.wait()
+                    return {"status": "complete"}
+
+                task = asyncio.create_task(
+                    manager.run_exclusive("active-motion", foreground)
+                )
+                await asyncio.sleep(0)
+                with (
+                    patch.object(isaac_demo, "_RECORDING_JOBS", manager),
+                    patch.object(
+                        isaac_demo,
+                        "_capture_followup_observation",
+                        new=AsyncMock(),
+                    ),
+                    patch.object(
+                        isaac_demo,
+                        "_capture_cameras",
+                        new=AsyncMock(),
+                    ),
+                    patch.object(
+                        isaac_demo,
+                        "_persist_insertion_followup_response",
+                    ),
+                ):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "another simulator operation",
+                    ):
+                        await isaac_demo.capture_followup_observation(
+                            "next-session",
+                            "previous-session",
+                            "proposal",
+                        )
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "another simulator operation",
+                    ):
+                        await isaac_demo.capture_cameras()
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "another simulator operation",
+                    ):
+                        isaac_demo.persist_insertion_followup_response(
+                            "execution-session",
+                            "safety-session",
+                        )
+                release.set()
+                await task
+
+            asyncio.run(exercise())
+
+    def test_rejects_a_second_concurrent_simulator_job(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = RecordingJobManager(Path(temp_dir))
+
+            async def exercise() -> None:
+                async def record(recording_id: str) -> dict[str, str]:
+                    del recording_id
+                    await asyncio.Event().wait()
+                    raise AssertionError("unreachable")
+
+                manager.start("first-job", record)
+                await asyncio.sleep(0)
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "another simulator operation",
+                ):
+                    manager.start("second-job", record)
+
+            asyncio.run(exercise())
+
+    def test_foreground_action_interlocks_background_recording(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = RecordingJobManager(Path(temp_dir))
+
+            async def exercise() -> None:
+                release = asyncio.Event()
+
+                async def foreground() -> dict[str, str]:
+                    await release.wait()
+                    return {"status": "complete"}
+
+                async def record(recording_id: str) -> dict[str, str]:
+                    return {"recording_id": recording_id}
+
+                task = asyncio.create_task(
+                    manager.run_exclusive("foreground-action", foreground)
+                )
+                await asyncio.sleep(0)
+                self.assertEqual(manager.active_operation_id(), "foreground-action")
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "another simulator operation",
+                ):
+                    manager.start("blocked-recording", record)
+                release.set()
+                self.assertEqual(await task, {"status": "complete"})
+                self.assertIsNone(manager.active_operation_id())
+
+            asyncio.run(exercise())
+
     def test_persists_success_after_returning_the_background_job(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = RecordingJobManager(Path(temp_dir))

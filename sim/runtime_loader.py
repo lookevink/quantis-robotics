@@ -157,9 +157,40 @@ def _reload_project_module_from_source(module_name: str) -> ModuleType:
     return module
 
 
+def _resident_simulator_operation_id(manager: Any) -> str | None:
+    """Read both current and pre-interlock resident job managers safely."""
+
+    current = getattr(manager, "active_operation_id", None)
+    if callable(current):
+        try:
+            return current()
+        except Exception:
+            return "unknown-resident-simulator-operation"
+    tasks = getattr(manager, "_tasks", None)
+    if not isinstance(tasks, dict):
+        return "unknown-resident-simulator-operation"
+    for identity, task in tasks.items():
+        try:
+            if not task.done():
+                return str(identity)
+        except Exception:
+            return "unknown-resident-simulator-operation"
+    return None
+
+
 def reload_demo_runtime() -> ModuleType:
     """Refresh a persistent Python server without mixing class generations."""
 
+    resident_demo = sys.modules.get("sim.isaac_demo")
+    resident_jobs = getattr(resident_demo, "_RECORDING_JOBS", None)
+    if (
+        resident_demo is not None
+        and resident_jobs is not None
+        and _resident_simulator_operation_id(resident_jobs) is not None
+    ):
+        # Reloading the facade would orphan its asyncio task/interlock. Keep the
+        # resident generation until the one simulator operation terminalizes.
+        return resident_demo
     control_runtime = sys.modules.get("sim.isaac_control_runtime")
     runtime_handoff = _resident_live_runtime_handoff(control_runtime)
     # The Isaac Python server retains sys.modules across repository syncs.

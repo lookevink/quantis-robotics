@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from math import ceil
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -15,37 +16,40 @@ from sim.isaac_demo_camera import (
     DEMO_FPS,
     RECORDING_JOB_ROOT,
     DemoRecorder,
-    capture_cameras,
+    capture_cameras as _capture_cameras,
 )
-from sim.isaac_demo_kinematics import preflight_report, solve_waypoints
+from sim.isaac_demo_kinematics import (
+    preflight_report as _preflight_report,
+    solve_waypoints as _solve_waypoints,
+)
 from sim.isaac_control_bridge import (
-    apply_control_response,
-    capture_control_observation,
-    capture_followup_observation,
-    capture_insertion_transition_observation,
+    apply_control_response as _apply_control_response,
+    capture_control_observation as _capture_control_observation,
+    capture_followup_observation as _capture_followup_observation,
+    capture_insertion_transition_observation as _capture_insertion_transition_observation,
     persist_insertion_proposal_handoff,
-    restore_insertion_no_actuation_retry,
-    restore_insertion_retry,
-    restore_insertion_rollback_retry,
-    restore_grasp_transition_retry,
+    restore_insertion_no_actuation_retry as _restore_insertion_no_actuation_retry,
+    restore_insertion_retry as _restore_insertion_retry,
+    restore_insertion_rollback_retry as _restore_insertion_rollback_retry,
+    restore_grasp_transition_retry as _restore_grasp_transition_retry,
     verify_grasp_to_insertion_result,
     verify_grasp_to_insertion_source,
     verify_insertion_demo_rollout_result,
     verify_insertion_followup_source,
     verify_insertion_two_step_result,
-    evaluate_direct_insertion_candidate,
-    measure_insertion_control_resolution,
-    evaluate_shadow_candidate,
+    evaluate_direct_insertion_candidate as _evaluate_direct_insertion_candidate,
+    measure_insertion_control_resolution as _measure_insertion_control_resolution,
+    evaluate_shadow_candidate as _evaluate_shadow_candidate,
     persist_experimental_candidate_response,
-    persist_insertion_followup_response,
+    persist_insertion_followup_response as _persist_insertion_followup_response,
     persist_insertion_trial_response,
     prepare_experimental_candidate_source,
     prepare_insertion_trial_source,
     persist_baseline_response,
 )
-from sim.isaac_candidate_demo import record_candidate_demo
-from sim.isaac_grasp_demo import record_grasp_demo
-from sim.isaac_insertion_demo import record_insertion_demo
+from sim.isaac_candidate_demo import record_candidate_demo as _record_candidate_demo
+from sim.isaac_grasp_demo import record_grasp_demo as _record_grasp_demo
+from sim.isaac_insertion_demo import record_insertion_demo as _record_insertion_demo
 from sim.isaac_demo_runtime import (
     Actuators,
     JointCommand,
@@ -74,10 +78,282 @@ from sim.recording_jobs import RecordingJobManager
 _RECORDING_JOBS = RecordingJobManager(RECORDING_JOB_ROOT)
 
 
-async def reset_demo() -> dict[str, Any]:
+def preflight_report() -> dict[str, Any]:
+    """Read the live stage only while the simulator runtime is unowned."""
+
+    return _RECORDING_JOBS.run_exclusive_sync("preflight-report", _preflight_report)
+
+
+async def capture_cameras(
+    output_dir: str = "/isaac-sim/.local/share/ov/data/quantis/captures",
+) -> dict[str, Any]:
+    """Capture cameras under the shared simulator-operation interlock."""
+
+    return await _RECORDING_JOBS.run_exclusive(
+        "capture-cameras",
+        lambda: _capture_cameras(output_dir),
+    )
+
+
+async def capture_followup_observation(
+    session_id: str,
+    previous_session_id: str,
+    proposal_name: str,
+    insertion_rollout_maximum_steps: int | None = None,
+) -> dict[str, Any]:
+    """Capture one follow-up without overlapping another simulator operation."""
+
+    return await _RECORDING_JOBS.run_exclusive(
+        f"control-followup-{session_id}",
+        lambda: _capture_followup_observation(
+            session_id,
+            previous_session_id,
+            proposal_name,
+            insertion_rollout_maximum_steps,
+        ),
+    )
+
+
+async def capture_insertion_transition_observation(
+    session_id: str,
+    previous_session_id: str,
+    proposal_name: str,
+    insertion_rollout_maximum_steps: int | None = None,
+) -> dict[str, Any]:
+    """Capture a transition without overlapping another simulator operation."""
+
+    if insertion_rollout_maximum_steps is None:
+        operation = lambda: _capture_insertion_transition_observation(
+            session_id,
+            previous_session_id,
+            proposal_name,
+        )
+    else:
+        operation = lambda: _capture_insertion_transition_observation(
+            session_id,
+            previous_session_id,
+            proposal_name,
+            maximum_steps=insertion_rollout_maximum_steps,
+        )
+    return await _RECORDING_JOBS.run_exclusive(
+        f"control-transition-{session_id}",
+        operation,
+    )
+
+
+async def evaluate_direct_insertion_candidate(session_id: str) -> dict[str, Any]:
+    """Refresh live safety state under the simulator-operation interlock."""
+
+    return await _RECORDING_JOBS.run_exclusive(
+        f"insertion-safety-{session_id}",
+        lambda: _evaluate_direct_insertion_candidate(session_id),
+    )
+
+
+async def evaluate_shadow_candidate(session_id: str) -> dict[str, Any]:
+    """Read shadow safety state under the simulator-operation interlock."""
+
+    return await _RECORDING_JOBS.run_exclusive(
+        f"shadow-safety-{session_id}",
+        lambda: _evaluate_shadow_candidate(session_id),
+    )
+
+
+def restore_insertion_no_actuation_retry(
+    previous_session_id: str,
+    failed_safety_session_id: str,
+    next_maximum_steps: int | None = None,
+) -> dict[str, Any]:
+    """Restore runtime ownership under the simulator-operation interlock."""
+
+    return _RECORDING_JOBS.run_exclusive_sync(
+        f"restore-insertion-{failed_safety_session_id}",
+        lambda: _restore_insertion_no_actuation_retry(
+            previous_session_id,
+            failed_safety_session_id,
+            next_maximum_steps,
+        ),
+    )
+
+
+def restore_insertion_rollback_retry(
+    previous_session_id: str,
+    rolled_back_session_id: str,
+    next_maximum_steps: int | None = None,
+) -> dict[str, Any]:
+    """Restore rollback ownership under the simulator-operation interlock."""
+
+    return _RECORDING_JOBS.run_exclusive_sync(
+        f"restore-insertion-{rolled_back_session_id}",
+        lambda: _restore_insertion_rollback_retry(
+            previous_session_id,
+            rolled_back_session_id,
+            next_maximum_steps,
+        ),
+    )
+
+
+def restore_insertion_retry(
+    previous_session_id: str,
+    failed_session_id: str,
+    next_maximum_steps: int | None = None,
+) -> dict[str, Any]:
+    """Restore either retry kind under the simulator-operation interlock."""
+
+    return _RECORDING_JOBS.run_exclusive_sync(
+        f"restore-insertion-{failed_session_id}",
+        lambda: _restore_insertion_retry(
+            previous_session_id,
+            failed_session_id,
+            next_maximum_steps,
+        ),
+    )
+
+
+def restore_grasp_transition_retry(
+    grasp_session_id: str,
+    rolled_back_session_id: str,
+) -> dict[str, Any]:
+    """Restore grasp ownership under the simulator-operation interlock."""
+
+    return _RECORDING_JOBS.run_exclusive_sync(
+        f"restore-grasp-{rolled_back_session_id}",
+        lambda: _restore_grasp_transition_retry(
+            grasp_session_id,
+            rolled_back_session_id,
+        ),
+    )
+
+
+def persist_insertion_followup_response(
+    session_id: str,
+    source_session_id: str,
+    *,
+    control_root: Path | None = None,
+) -> dict[str, Any]:
+    """Rebind follow-up ownership under the simulator-operation interlock."""
+
+    if control_root is None:
+        operation = lambda: _persist_insertion_followup_response(
+            session_id,
+            source_session_id,
+        )
+    else:
+        operation = lambda: _persist_insertion_followup_response(
+            session_id,
+            source_session_id,
+            control_root=control_root,
+        )
+    return _RECORDING_JOBS.run_exclusive_sync(
+        f"bind-insertion-{session_id}",
+        operation,
+    )
+
+
+async def apply_control_response(session_id: str) -> dict[str, Any]:
+    """Apply one response under the shared simulator-operation interlock."""
+
+    return await _RECORDING_JOBS.run_exclusive(
+        f"control-apply-{session_id}",
+        lambda: _apply_control_response(session_id),
+    )
+
+
+async def measure_insertion_control_resolution(
+    session_id: str,
+    load: str = "attached",
+    protocol: Any | None = None,
+) -> dict[str, Any]:
+    """Measure drive resolution without overlapping another simulator action."""
+
+    if protocol is None:
+        operation = lambda: _measure_insertion_control_resolution(session_id, load)
+    else:
+        operation = lambda: _measure_insertion_control_resolution(
+            session_id,
+            load,
+            protocol,
+        )
+    return await _RECORDING_JOBS.run_exclusive(
+        f"control-resolution-{session_id}",
+        operation,
+    )
+
+
+async def record_candidate_demo(
+    candidate_report_id: str,
+    recording_id: str,
+    *,
+    motion_frames: int = 36,
+    hold_frames: int = 12,
+) -> dict[str, Any]:
+    """Render a candidate only while the simulator runtime is unowned."""
+
+    return await _RECORDING_JOBS.run_exclusive(
+        f"candidate-demo-{recording_id}",
+        lambda: _record_candidate_demo(
+            candidate_report_id,
+            recording_id,
+            motion_frames=motion_frames,
+            hold_frames=hold_frames,
+        ),
+    )
+
+
+async def record_grasp_demo(
+    readiness_id: str,
+    exploration_seed: int,
+    recording_id: str,
+    proposal_fingerprint: str,
+    *,
+    frames_per_action: int = 8,
+    hold_frames: int = 12,
+) -> dict[str, Any]:
+    """Render a grasp only while the simulator runtime is unowned."""
+
+    return await _RECORDING_JOBS.run_exclusive(
+        f"grasp-demo-{recording_id}",
+        lambda: _record_grasp_demo(
+            readiness_id,
+            exploration_seed,
+            recording_id,
+            proposal_fingerprint,
+            frames_per_action=frames_per_action,
+            hold_frames=hold_frames,
+        ),
+    )
+
+
+async def record_insertion_demo(
+    source_run_id: str,
+    recording_id: str,
+    *,
+    frames_per_action: int = 18,
+    hold_frames: int = 18,
+) -> dict[str, Any]:
+    """Render insertion only while the simulator runtime is unowned."""
+
+    return await _RECORDING_JOBS.run_exclusive(
+        f"insertion-demo-{recording_id}",
+        lambda: _record_insertion_demo(
+            source_run_id,
+            recording_id,
+            frames_per_action=frames_per_action,
+            hold_frames=hold_frames,
+        ),
+    )
+
+
+async def _reset_demo() -> dict[str, Any]:
     """Stop physics and reopen the saved reusable starting stage."""
 
     return await reset_stage()
+
+
+async def reset_demo() -> dict[str, Any]:
+    """Reset only while no other simulator operation owns the runtime."""
+
+    return await _RECORDING_JOBS.run_exclusive("reset-demo", _reset_demo)
 
 
 async def _settle_at_target(
@@ -122,7 +398,7 @@ async def _fill_stage_observations(
         await recorder.capture(snapshot)
 
 
-async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
+async def _run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
     """Execute the preflighted sequence and export its final visual state."""
 
     import omni.kit.app
@@ -132,7 +408,7 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
     from isaacsim.core.simulation_manager import SimulationManager
 
     stage = omni.usd.get_context().get_stage()
-    solved = solve_waypoints()
+    solved = _solve_waypoints()
     stage.SetEditTarget(stage.GetSessionLayer())
     attachment = prepare_plug(stage)
 
@@ -306,13 +582,22 @@ async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
     }
 
 
+async def run_demo(recorder: DemoRecorder | None = None) -> dict[str, Any]:
+    """Run the scripted demo under the one-operation simulator interlock."""
+
+    return await _RECORDING_JOBS.run_exclusive(
+        "run-demo",
+        lambda: _run_demo(recorder=recorder),
+    )
+
+
 async def _record_demo(
     recording_id: str,
     *,
     fps: int,
     minimum_stage_frames: int,
 ) -> dict[str, Any]:
-    await reset_demo()
+    await _reset_demo()
     recorder = DemoRecorder(
         recording_id,
         fps=fps,
@@ -320,7 +605,7 @@ async def _record_demo(
     )
     try:
         await recorder.initialize()
-        result = await run_demo(recorder=recorder)
+        result = await _run_demo(recorder=recorder)
     except Exception:
         recorder.abort()
         raise
@@ -471,7 +756,7 @@ def start_control_capture(
 
     return _RECORDING_JOBS.start(
         job_id,
-        lambda _job_id: capture_control_observation(
+        lambda _job_id: _capture_control_observation(
             session_id,
             reference_recording,
             seed,

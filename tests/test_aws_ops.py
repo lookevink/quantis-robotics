@@ -255,6 +255,15 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ops/isaac_container.sh status", calls)
 
+    def test_ssh_forwards_an_explicit_remote_command(self):
+        result, calls = self.run_command(
+            "ssh",
+            arguments=("printf", "remote-ok"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ubuntu@198.51.100.42 printf remote-ok", calls)
+
     def test_isaac_container_mounts_checkpoints_read_only_for_runtime_user(self):
         result, calls, root = self.run_isaac_container("start")
 

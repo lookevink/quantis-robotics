@@ -177,16 +177,25 @@ class DroidAction:
         return DroidActionScale.uniform(scale).apply(self)
 
 
-def compose_actions(actions: Sequence[DroidAction]) -> DroidAction:
-    """Compose a non-empty base-frame action horizon into one delta action."""
-
+def _action_sequence(actions: Sequence[DroidAction]) -> tuple[DroidAction, ...]:
     sequence = tuple(actions)
     if not sequence or any(not isinstance(action, DroidAction) for action in sequence):
         raise ValueError("action composition requires a non-empty action sequence")
-    translation = np.sum(
+    return sequence
+
+
+def _summed_translation(sequence: Sequence[DroidAction]) -> np.ndarray:
+    return np.sum(
         np.asarray([action.values[:3] for action in sequence], dtype=np.float64),
         axis=0,
     )
+
+
+def compose_actions(actions: Sequence[DroidAction]) -> DroidAction:
+    """Compose all dimensions for reconstruction of historical evidence."""
+
+    sequence = _action_sequence(actions)
+    translation = _summed_translation(sequence)
     rotation = Rotation.identity()
     for action in sequence:
         rotation = Rotation.from_euler("xyz", action.values[3:6]) * rotation
@@ -195,6 +204,19 @@ def compose_actions(actions: Sequence[DroidAction]) -> DroidAction:
             *translation.tolist(),
             *rotation.as_euler("xyz").tolist(),
             sum(action.values[6] for action in sequence),
+        )
+    )
+
+
+def compose_transport_action(actions: Sequence[DroidAction]) -> DroidAction:
+    """Compose horizon translation without amplifying unresolved dimensions."""
+
+    sequence = _action_sequence(actions)
+    translation = _summed_translation(sequence)
+    return DroidAction(
+        (
+            *translation.tolist(),
+            *sequence[0].values[3:],
         )
     )
 

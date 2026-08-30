@@ -37,7 +37,9 @@ DROID pose deltas. Control additionally requires:
 - rolling the predictor forward;
 - scoring rollouts against a goal latent;
 - cross-entropy-method refinement;
-- applying only the first action and replanning;
+- resolving one versioned command and replanning: normally the first action,
+  with the contact-grasp v4 attached-transport policy summing only the native
+  three-action translation while retaining first-action rotation and gripper;
 - enforcing workspace, velocity, collision, and force limits.
 
 The repository now tests the official checkpoint through:

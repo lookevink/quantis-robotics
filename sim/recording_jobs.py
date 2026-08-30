@@ -14,6 +14,8 @@ from sim.recording import validate_recording_id
 
 
 RecordingFactory = Callable[[str], Awaitable[dict[str, Any]]]
+SimulatorOperation = Callable[[], Awaitable[dict[str, Any]]]
+SimulatorSyncOperation = Callable[[], dict[str, Any]]
 RECORDING_HEARTBEAT_INTERVAL_SECONDS = 5.0
 RECORDING_HEARTBEAT_TIMEOUT_SECONDS = 30.0
 
@@ -43,6 +45,52 @@ class RecordingJobManager:
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._run_ids: dict[str, str] = {}
         self._progress: dict[str, dict[str, Any]] = {}
+        self._active_operation_id: str | None = None
+
+    def active_operation_id(self) -> str | None:
+        """Return the one simulator operation owned by this runtime."""
+
+        return self._active_operation_id
+
+    def _claim_operation(self, operation_id: str) -> None:
+        if not isinstance(operation_id, str) or not operation_id:
+            raise ValueError("simulator operation identity is invalid")
+        if self._active_operation_id is not None:
+            raise ValueError(
+                "another simulator operation is already running: "
+                f"{self._active_operation_id}"
+            )
+        self._active_operation_id = operation_id
+
+    def _release_operation(self, operation_id: str) -> None:
+        if self._active_operation_id == operation_id:
+            self._active_operation_id = None
+
+    async def run_exclusive(
+        self,
+        operation_id: str,
+        operation: SimulatorOperation,
+    ) -> dict[str, Any]:
+        """Run one foreground simulator operation under the shared interlock."""
+
+        self._claim_operation(operation_id)
+        try:
+            return await operation()
+        finally:
+            self._release_operation(operation_id)
+
+    def run_exclusive_sync(
+        self,
+        operation_id: str,
+        operation: SimulatorSyncOperation,
+    ) -> dict[str, Any]:
+        """Run one synchronous simulator operation under the shared interlock."""
+
+        self._claim_operation(operation_id)
+        try:
+            return operation()
+        finally:
+            self._release_operation(operation_id)
 
     def start(
         self, recording_id: str, recording_factory: RecordingFactory
@@ -50,10 +98,18 @@ class RecordingJobManager:
         path = self.path_for(recording_id)
         if path.exists():
             raise ValueError(f"recording job already exists: {recording_id}")
+        self._claim_operation(recording_id)
         run_id = uuid4().hex
         self._run_ids[recording_id] = run_id
-        self._write_running(recording_id, run_id)
-        task = asyncio.ensure_future(self._run(recording_id, run_id, recording_factory))
+        try:
+            self._write_running(recording_id, run_id)
+            task = asyncio.ensure_future(
+                self._run(recording_id, run_id, recording_factory)
+            )
+        except Exception:
+            self._run_ids.pop(recording_id, None)
+            self._release_operation(recording_id)
+            raise
         self._tasks[recording_id] = task
         task.add_done_callback(
             lambda completed, identity=recording_id: self._forget(identity, completed)
@@ -113,6 +169,7 @@ class RecordingJobManager:
             self._tasks.pop(recording_id, None)
             self._run_ids.pop(recording_id, None)
             self._progress.pop(recording_id, None)
+            self._release_operation(recording_id)
 
     def path_for(self, recording_id: str) -> Path:
         validate_recording_id(recording_id)
@@ -156,6 +213,9 @@ class RecordingJobManager:
                 **payload,
             },
         )
+        # A terminal artifact means the simulator operation is over. Release
+        # before clients observe that artifact and request the next action.
+        self._release_operation(recording_id)
         if cancelled:
             raise asyncio.CancelledError
 

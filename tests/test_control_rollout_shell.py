@@ -363,6 +363,7 @@ run_insertion_followup_trial() {
                     "isaac",
                     "followup",
                     "isaac",
+                    "worker",
                 ],
             )
             self.assertEqual(
@@ -409,7 +410,62 @@ run_insertion_followup_trial() {
             )
             self.assertIn(
                 "verify_grasp_to_insertion_result('full-chain','full-chain-grasp','full-chain-action1,full-chain-action2,full-chain-action3,full-chain-action4','contact-reference',12401)",
-                calls[-1],
+                calls[-2],
+            )
+            self.assertEqual(calls[-1], "worker control-worker-stop")
+
+    def test_grasp_to_insertion_stops_its_worker_after_a_grasp_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir)
+            ops = home / "quantis-robotics" / "ops"
+            ops.mkdir(parents=True)
+            shutil.copy(REPO_ROOT / "ops" / "run_grasp_to_insertion_milestone.sh", ops)
+            log = home / "calls.log"
+            (ops / "shell_helpers.sh").write_text(
+                """#!/usr/bin/env bash
+is_safe_identifier() { return 0; }
+require_nonnegative_integer() { return 0; }
+insertion_rollout_profile_field() { printf '4\n'; }
+contact_grasp_maximum_actions() { printf '52\n'; }
+contact_grasp_initial_context() { printf '110\n'; }
+control_proposal_from_identity() { printf '%s-proposal\n' "$2"; }
+validate_demo_run_spec() { return 0; }
+require_control_rollout_reach_and_grasp() { return 23; }
+"""
+            )
+            (ops / "jepa_wm.sh").write_text(
+                '#!/usr/bin/env bash\nprintf \'worker %s\\n\' "$*" >> "${CALLS}"\n'
+            )
+            (ops / "run_control_rollout.sh").write_text(
+                "#!/usr/bin/env bash\nprintf 'grasp\\n' >> \"${CALLS}\"\n"
+            )
+            (ops / "isaac_container.sh").write_text(
+                "#!/usr/bin/env bash\nexit 0\n"
+            )
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(ops / "run_grasp_to_insertion_milestone.sh"),
+                    "failed-chain",
+                    "contact-reference",
+                    "12401",
+                    "grasp-worker",
+                    "insertion-worker",
+                    "demo-spec",
+                    "f" * 64,
+                    "a" * 40,
+                ],
+                env={**os.environ, "HOME": str(home), "CALLS": str(log)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 23, result.stderr)
+            self.assertEqual(
+                log.read_text().splitlines()[-1],
+                "worker control-worker-stop",
             )
 
     def test_insertion_demo_rollout_runs_exactly_four_verified_actions(self) -> None:

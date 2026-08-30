@@ -47,7 +47,7 @@ frozen V-JEPA 2 encoder → goal-progress/stage model
 DINOv3 + current pose + previous action → bounded 3×7D proposal
               │
               ▼
-    resident Unix-socket worker → safety gate → first-action receding-horizon control
+    resident Unix-socket worker → safety gate → versioned receding-horizon control
 ```
 
 The bootstrap proves the simulation, capture, stage-recognition, and base
@@ -55,10 +55,14 @@ JEPA-WM runtimes. The separate offline workflow additionally proves native
 three-action rollouts and persistent lightweight action adaptation. A
 whole-seed domain experiment clears both the action-conditioning and
 inverse-action proposal gates. A simulator-only bridge now repeatedly captures,
-infers, executes only the first fresh bounded proposal, measures the outcome,
-and replans after workspace, joint, velocity, collision, force, and tracking
-interlocks. It does not yet use JEPA-WM candidate-energy search or control the
-cable task.
+infers, executes one fresh bounded command, measures the outcome, and replans
+after workspace, joint, velocity, collision, force, and tracking interlocks.
+Ordinary policies execute the first proposal action. After authenticated
+contact-grasp attachment, the version-4 policy instead sums only the native
+three-action translation while retaining the first action's rotation and
+gripper command. This narrow, schema-bound exception clears measured
+translation resolution without amplifying unqualified axes; every resulting
+command still passes the same gates before execution.
 
 ## 1. AWS EC2 instance
 

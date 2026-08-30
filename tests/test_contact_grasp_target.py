@@ -12,8 +12,46 @@ from jepa_wm.action import ACTION_RECORDING_CONTRACT, DroidAction, DroidPose
 from jepa_wm.contact_grasp_target import (
     CONTACT_GRASP_TARGET_POLICY,
     DIRECTIONAL_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+    HORIZON_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     ContactGraspTargetPolicy,
+)
+
+
+_TERMINAL_V3_ACTIONS = (
+    DroidAction(
+        (
+            -0.0005394376930780709,
+            0.0003137695020996034,
+            -0.0005303949001245201,
+            -0.0024283351376652718,
+            0.001132694655098021,
+            -0.0017445380799472332,
+            0.010228123515844345,
+        )
+    ),
+    DroidAction(
+        (
+            -0.0005975229432806373,
+            -0.00005648603109875694,
+            0.0009232184966094792,
+            -0.0025696740485727787,
+            0.0017236964777112007,
+            -0.006025914568454027,
+            0.019305793568491936,
+        )
+    ),
+    DroidAction(
+        (
+            -0.0013235784135758877,
+            -0.00016435707220807672,
+            0.0006800679257139564,
+            -0.0033748429268598557,
+            -0.0024368693120777607,
+            0.007257508113980293,
+            0.005395814776420593,
+        )
+    ),
 )
 from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.control_protocol import ControlObservation
@@ -178,6 +216,45 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
                 actions[:2],
                 plug_attached=True,
             )
+
+    def test_current_transport_does_not_amplify_unresolved_rotation(self) -> None:
+        transport = CONTACT_GRASP_TARGET_POLICY.action_for_execution(
+            _TERMINAL_V3_ACTIONS,
+            plug_attached=True,
+        )
+
+        np.testing.assert_allclose(
+            transport.values[:3],
+            np.sum([action.values[:3] for action in _TERMINAL_V3_ACTIONS], axis=0),
+            rtol=0.0,
+            atol=1e-12,
+        )
+        np.testing.assert_allclose(
+            transport.values[3:],
+            _TERMINAL_V3_ACTIONS[0].values[3:],
+            rtol=0.0,
+            atol=1e-12,
+        )
+
+    def test_v3_reconstructs_the_historical_full_horizon(self) -> None:
+        historical = ContactGraspTargetPolicy(
+            HORIZON_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+        ).action_for_execution(_TERMINAL_V3_ACTIONS, plug_attached=True)
+
+        np.testing.assert_allclose(
+            historical.values,
+            (
+                -0.002460539049934596,
+                0.00009292639879276976,
+                0.0010728915221989155,
+                -0.008356807610833177,
+                0.00038885656032716653,
+                -0.0005254051070068032,
+                0.034929731860756874,
+            ),
+            rtol=0.0,
+            atol=1e-12,
+        )
 
     def test_rejects_target_substitution_and_incomplete_reference_poses(self) -> None:
         with self.assertRaisesRegex(ValueError, "previous target"):

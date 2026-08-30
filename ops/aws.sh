@@ -610,7 +610,8 @@ case "${command}" in
     ;;
   ssh)
     require_private_key
-    exec ssh "${ssh_options[@]}" "${ssh_user}@$(instance_ip)"
+    shift
+    exec ssh "${ssh_options[@]}" "${ssh_user}@$(instance_ip)" "$@"
     ;;
   sync)
     sync_repo

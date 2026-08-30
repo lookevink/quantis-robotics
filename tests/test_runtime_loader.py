@@ -7,11 +7,40 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import ModuleType
+from unittest.mock import Mock, patch
 
-from sim.runtime_loader import _reload_project_module_from_source
+from sim.runtime_loader import (
+    _reload_project_module_from_source,
+    _resident_simulator_operation_id,
+    reload_demo_runtime,
+)
 
 
 class RuntimeLoaderTest(unittest.TestCase):
+    def test_reads_active_and_idle_pre_interlock_managers(self) -> None:
+        active_task = Mock(done=Mock(return_value=False))
+        complete_task = Mock(done=Mock(return_value=True))
+        active_legacy = Mock(spec=[])
+        active_legacy._tasks = {"legacy-recording": active_task}
+        idle_legacy = Mock(spec=[])
+        idle_legacy._tasks = {"finished-recording": complete_task}
+
+        self.assertEqual(
+            _resident_simulator_operation_id(active_legacy),
+            "legacy-recording",
+        )
+        self.assertIsNone(_resident_simulator_operation_id(idle_legacy))
+
+    def test_keeps_the_resident_facade_while_a_simulator_operation_runs(self) -> None:
+        resident = ModuleType("sim.isaac_demo")
+        resident._RECORDING_JOBS = Mock(  # type: ignore[attr-defined]
+            active_operation_id=Mock(return_value="active-recording")
+        )
+
+        with patch.dict(sys.modules, {"sim.isaac_demo": resident}):
+            self.assertIs(reload_demo_runtime(), resident)
+
     def test_reload_discovers_a_new_source_after_a_cached_miss(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -118,7 +147,7 @@ assert shadow_planning.TaskProgressObjective is objective_calibration.TaskProgre
 assert isaac_demo_kinematics.build_demo_sequence is demo_sequence.build_demo_sequence
 assert isaac_exploration.INSERTION_TASK_ID == insertion_contract.INSERTION_TASK_ID
 assert insertion_recording.RECORDING_SCHEMA == recording.RECORDING_SCHEMA
-assert isaac_demo.record_insertion_demo is isaac_insertion_demo.record_insertion_demo
+assert isaac_demo._record_insertion_demo is isaac_insertion_demo.record_insertion_demo
 restored_runtime = isaac_control_runtime.live_runtime_for("live-session", stage)
 assert isinstance(restored_runtime, isaac_control_runtime.LiveControlRuntime)
 assert isinstance(restored_runtime.actuators, isaac_demo_runtime.Actuators)

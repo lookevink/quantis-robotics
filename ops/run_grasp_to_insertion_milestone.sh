@@ -63,6 +63,19 @@ bash "${repo_dir}/ops/isaac_container.sh" \
 bash "${repo_dir}/ops/isaac_container.sh" \
   checkpoint-readable "${insertion_proposal}"
 
+cleanup_control_worker() {
+  local exit_status=$?
+  local cleanup_status=0
+  trap - EXIT
+  bash "${repo_dir}/ops/jepa_wm.sh" control-worker-stop \
+    || cleanup_status=$?
+  if (( exit_status == 0 && cleanup_status != 0 )); then
+    exit_status=${cleanup_status}
+  fi
+  exit "${exit_status}"
+}
+trap cleanup_control_worker EXIT
+
 bash "${repo_dir}/ops/jepa_wm.sh" control-worker-stop
 bash "${repo_dir}/ops/jepa_wm.sh" \
   control-worker-start --artifacts "${grasp_identity}"
