@@ -46,9 +46,27 @@ require_nonnegative_number() {
   }
 }
 
-# The fixed insertion corpus has 12 TRAIN recordings with 88 rollouts each.
+insertion_training_contract_field() {
+  local repository="$1"
+  local python_bin="${2:-python3}"
+  local field="$3"
+  [[ -d "${repository}/jepa_wm" ]] || {
+    printf 'error: insertion training repository does not exist: %s\n' \
+      "${repository}" >&2
+    return 1
+  }
+  (
+    cd "${repository}"
+    "${python_bin}" -m jepa_wm.insertion_training_contract "${field}"
+  )
+}
+
 insertion_epoch_steps() {
-  printf '1056\n'
+  insertion_training_contract_field "$1" "${2:-python3}" epoch-steps
+}
+
+insertion_training_batch_size() {
+  insertion_training_contract_field "$1" "${2:-python3}" batch-size
 }
 
 insertion_planner_profile_field() {

@@ -24,19 +24,20 @@ backup_on_exit() {
 trap backup_on_exit EXIT
 
 source_base_seed="${1:-2600}"
-source_experiment="${2:-contact-insertion-v9-${source_base_seed}}"
+source_experiment="${2:-contact-insertion-v10-drive-slow-${source_base_seed}}"
 fresh_base_seed="${3:-22600}"
 evaluation_id="${4:-${source_experiment}-fresh-${fresh_base_seed}}"
-adapter_name="${5:-${source_experiment}_insertion_adapter_goal_aligned_relative_finetune_s1056}"
+epoch_steps="$(insertion_epoch_steps "${repo_root}" python3)"
+adapter_name="${5:-${source_experiment}_insertion_adapter_goal_aligned_relative_finetune_s${epoch_steps}}"
 adapter_profile="${6:-goal_aligned_relative_finetune}"
-adapter_fingerprint="${7:-396496bfdd03b88a46f854dabcdf4801ffe60e563b953da627b68ad1e184fadc}"
+adapter_fingerprint="${7:-}"
 require_nonnegative_integer "source base seed" "${source_base_seed}" || exit 1
 require_nonnegative_integer "fresh base seed" "${fresh_base_seed}" || exit 1
 is_safe_identifier "${source_experiment}" || die "source experiment ID must be safe"
 is_safe_identifier "${evaluation_id}" || die "evaluation ID must be safe"
 is_safe_identifier "${adapter_name}" || die "adapter name must be safe"
 [[ "${adapter_fingerprint}" =~ ^[0-9a-f]{64}$ ]] \
-  || die "adapter fingerprint must be a lowercase SHA-256"
+  || die "the frozen adapter fingerprint must be supplied as a lowercase SHA-256"
 cd "${repo_root}"
 python3 -m jepa_wm.insertion_adapter_profile \
   "${adapter_profile}" artifact-stem >/dev/null

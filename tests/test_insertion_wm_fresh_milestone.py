@@ -12,6 +12,35 @@ MILESTONE = REPO_ROOT / "ops" / "jepa_wm_insertion_wm_fresh_milestone.sh"
 
 
 class InsertionWorldModelFreshMilestoneTest(unittest.TestCase):
+    def test_requires_the_current_frozen_adapter_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            calls = root / "calls.log"
+            fake_aws = root / "aws"
+            fake_aws.write_text(
+                "#!/usr/bin/env bash\n"
+                "printf 'aws %s\\n' \"$*\" >> \"${CALLS}\"\n"
+            )
+            fake_aws.chmod(0o755)
+
+            result = subprocess.run(
+                [str(MILESTONE)],
+                cwd=root,
+                env={
+                    **os.environ,
+                    "AWS_WORKFLOW": str(fake_aws),
+                    "CALLS": str(calls),
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            invoked = calls.read_text().splitlines()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("frozen adapter fingerprint must be supplied", result.stderr)
+        self.assertEqual(invoked, ["aws backup-state"])
+
     def test_early_profile_failure_still_backs_up(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -32,6 +61,7 @@ class InsertionWorldModelFreshMilestoneTest(unittest.TestCase):
                     "contact-insertion-v9-2600-fresh-22600",
                     "adapter",
                     "invalid-profile",
+                    "a" * 64,
                 ],
                 cwd=root,
                 env={
@@ -67,7 +97,7 @@ class InsertionWorldModelFreshMilestoneTest(unittest.TestCase):
             fake_aws.chmod(0o755)
 
             result = subprocess.run(
-                [str(MILESTONE)],
+                [str(MILESTONE), "", "", "", "", "", "", "a" * 64],
                 cwd=root,
                 env={
                     **os.environ,
@@ -82,10 +112,10 @@ class InsertionWorldModelFreshMilestoneTest(unittest.TestCase):
             invoked = calls.read_text().splitlines()
 
         adapter = (
-            "contact-insertion-v9-2600_"
-            "insertion_adapter_goal_aligned_relative_finetune_s1056"
+            "contact-insertion-v10-drive-slow-2600_"
+            "insertion_adapter_goal_aligned_relative_finetune_s2016"
         )
-        evaluation = "contact-insertion-v9-2600-fresh-22600"
+        evaluation = "contact-insertion-v10-drive-slow-2600-fresh-22600"
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertEqual(
             invoked[:2],

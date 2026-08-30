@@ -269,7 +269,7 @@ sync_repo() {
   done
   rsync -az --delete \
     --exclude .git --exclude .env --exclude .runtime --exclude .agents \
-    --exclude data --exclude outputs \
+    --exclude data --exclude outputs --exclude supabase \
     -e "${remote_shell}" \
     "${repo_root}/" "${ssh_user}@$(instance_ip):~/quantis-robotics/"
 }
@@ -813,7 +813,7 @@ case "${command}" in
     ;;
   jepa-wm-insertion-adapt)
     recording_names="${2:-}"
-    training_steps="${3:-$(insertion_epoch_steps)}"
+    training_steps="${3:-$(insertion_epoch_steps "${repo_root}" python3)}"
     adapter_name="${4:-}"
     adapter_profile="${5:-generic}"
     is_safe_identifier_list "${recording_names}" \

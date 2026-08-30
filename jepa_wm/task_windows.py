@@ -5,25 +5,25 @@ from __future__ import annotations
 import argparse
 from typing import Sequence
 
-from jepa_wm.insertion_contract import (
-    CONTACT_INSERTION_RECORDING,
+from jepa_wm.insertion_layout import (
+    CONTACT_INSERTION_LAYOUT,
     ContactInsertionSegment,
 )
-from jepa_wm.trajectory import DROID_ROLLOUT_PROTOCOL, RolloutWindow
+from jepa_wm.rollout_protocol import DROID_ROLLOUT_PROTOCOL, RolloutWindow
 
 
 GRASP_PROPOSAL_WINDOW = RolloutWindow(69, 30, 1)
 _CONTACT_GRASP_START = (
-    CONTACT_INSERTION_RECORDING.start_index(ContactInsertionSegment.GRASP_ATTACH)
+    CONTACT_INSERTION_LAYOUT.start_index(ContactInsertionSegment.GRASP_ATTACH)
     - DROID_ROLLOUT_PROTOCOL.action_horizon
 )
 CONTACT_GRASP_PROPOSAL_WINDOW = RolloutWindow(_CONTACT_GRASP_START, 8, 1)
-_INSERTION_START = CONTACT_INSERTION_RECORDING.start_index(
+_INSERTION_START = CONTACT_INSERTION_LAYOUT.start_index(
     ContactInsertionSegment.GRASP_ATTACH
 )
 INSERTION_PROPOSAL_WINDOW = RolloutWindow(
     _INSERTION_START,
-    CONTACT_INSERTION_RECORDING.frame_count
+    CONTACT_INSERTION_LAYOUT.frame_count
     - DROID_ROLLOUT_PROTOCOL.context_frames
     - DROID_ROLLOUT_PROTOCOL.action_horizon
     + 1

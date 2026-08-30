@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Sequence
 
 from jepa_wm.action_activity import DroidActionActivityThresholds
 from jepa_wm.candidate_policy import CandidateNoisePolicy
+from jepa_wm.insertion_training_contract import INSERTION_EPOCH_STEPS
 
 if TYPE_CHECKING:
     from jepa_wm.candidate_negatives import CandidateMiningConfig
@@ -99,7 +100,7 @@ INSERTION_ADAPTER_PROFILES = {
             noise_policy=GOAL_ALIGNED_RELATIVE_NOISE,
             learning_rate=1e-4,
             initial_profile=InsertionAdapterProfile.GENERIC,
-            required_training_steps=1056,
+            required_training_steps=INSERTION_EPOCH_STEPS,
         )
     ),
 }

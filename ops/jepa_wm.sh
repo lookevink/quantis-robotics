@@ -334,13 +334,20 @@ adapt_insertion_world_model() {
   parse_named_options options "recordings steps adapter profile" "$@"
   local candidate_profile="${options[profile]:-generic}"
   local window_start window_count window_stride
+  local training_batch_size
   read -r window_start window_count window_stride \
     <<<"$(task_proposal_window insertion)"
+  training_batch_size="$(
+    insertion_training_batch_size "${repo_dir}" "${venv_dir}/bin/python"
+  )"
   adapt_recording_set \
     "${options[recordings]:-}" wrist \
-    "${options[steps]:-$(insertion_epoch_steps)}" \
+    "${options[steps]:-$(
+      insertion_epoch_steps "${repo_dir}" "${venv_dir}/bin/python"
+    )}" \
     "${options[adapter]:-}" \
-    "${window_start}" "${window_count}" "${window_stride}" 1 \
+    "${window_start}" "${window_count}" "${window_stride}" \
+    "${training_batch_size}" \
     "${candidate_profile}"
 }
 

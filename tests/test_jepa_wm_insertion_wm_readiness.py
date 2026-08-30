@@ -255,16 +255,16 @@ class InsertionWorldModelReadinessTest(unittest.TestCase):
             root = Path(temporary_directory)
             parent = self._adapter(
                 root,
-                filename="experiment_insertion_adapter_s1056.pth",
+                filename="experiment_insertion_adapter_s2016.pth",
                 learning_rate=1e-3,
-                training_steps=1056,
+                training_steps=2016,
             )
             parent_identity = ArtifactIdentity.from_artifact(parent)
             child = self._adapter(
                 root,
                 filename=(
                     "experiment_"
-                    "insertion_adapter_goal_aligned_relative_finetune_s1056.pth"
+                    "insertion_adapter_goal_aligned_relative_finetune_s2016.pth"
                 ),
                 minimum_goal_cosine=0.95,
                 noise_policy={
@@ -277,7 +277,7 @@ class InsertionWorldModelReadinessTest(unittest.TestCase):
                 },
                 learning_rate=1e-4,
                 initial_adapter=parent_identity,
-                training_steps=1056,
+                training_steps=2016,
             )
 
             evidence = validate_insertion_adapter(

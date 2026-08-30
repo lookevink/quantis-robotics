@@ -42,7 +42,12 @@ class InsertionWorldModelMilestoneTest(unittest.TestCase):
             fake_aws.chmod(0o755)
 
             result = subprocess.run(
-                [str(MILESTONE), "500", "2600", "contact-insertion-v9-2600"],
+                [
+                    str(MILESTONE),
+                    "",
+                    "2600",
+                    "",
+                ],
                 cwd=root,
                 env={
                     **os.environ,
@@ -56,26 +61,29 @@ class InsertionWorldModelMilestoneTest(unittest.TestCase):
 
             invoked = calls.read_text().splitlines()
             training = ",".join(
-                f"contact-insertion-v9-2600-train-{index:02d}"
+                f"contact-insertion-v10-drive-slow-2600-train-{index:02d}"
                 for index in range(12)
             )
-            adapter = "contact-insertion-v9-2600_insertion_adapter_s500"
+            adapter = (
+                "contact-insertion-v10-drive-slow-2600_"
+                "insertion_adapter_s2016"
+            )
             self.assertEqual(result.returncode, 2, result.stderr)
             self.assertIn(
-                f"aws jepa-wm-insertion-adapt {training} 500 {adapter} generic",
+                f"aws jepa-wm-insertion-adapt {training} 2016 {adapter} generic",
                 invoked,
             )
             self.assertIn("aws jepa-wm-control-worker-stop", invoked)
             self.assertIn(
                 f"aws jepa-wm-insertion-wm-eval "
-                f"contact-insertion-v9-2600-held-00 {adapter}",
+                f"contact-insertion-v10-drive-slow-2600-held-00 {adapter}",
                 invoked,
             )
             self.assertIn(
                 f"aws jepa-wm-insertion-wm-summarize "
-                f"contact-insertion-v9-2600-held-00,"
-                f"contact-insertion-v9-2600-held-01 {adapter} "
-                "contact-insertion-v9-2600 2600 generic",
+                f"contact-insertion-v10-drive-slow-2600-held-00,"
+                f"contact-insertion-v10-drive-slow-2600-held-01 {adapter} "
+                "contact-insertion-v10-drive-slow-2600 2600 generic",
                 invoked,
             )
             self.assertEqual(invoked[-1], "aws backup-state")
@@ -192,26 +200,26 @@ class InsertionWorldModelMilestoneTest(unittest.TestCase):
         from jepa_wm.insertion_adapter_profile import InsertionAdapterProfile
 
         output = Path(
-            "/tmp/contact-insertion-v9-2600_"
-            "insertion_adapter_goal_aligned_relative_finetune_s1056.pth"
+            "/tmp/contact-insertion-v10-drive-slow-2600_"
+            "insertion_adapter_goal_aligned_relative_finetune_s2016.pth"
         )
 
         initial = (
             InsertionAdapterProfile.GOAL_ALIGNED_RELATIVE_FINETUNE
-            .descriptor.initial_adapter_path(output, 1056)
+            .descriptor.initial_adapter_path(output, 2016)
         )
 
         self.assertEqual(
             initial,
             Path(
-                "/tmp/contact-insertion-v9-2600_"
-                "insertion_adapter_s1056.pth"
+                "/tmp/contact-insertion-v10-drive-slow-2600_"
+                "insertion_adapter_s2016.pth"
             ).resolve(),
         )
         with self.assertRaisesRegex(ValueError, "exact training epoch"):
             (
                 InsertionAdapterProfile.GOAL_ALIGNED_RELATIVE_FINETUNE
-                .descriptor.initial_adapter_path(output, 500)
+                .descriptor.initial_adapter_path(output, 1056)
             )
 
 

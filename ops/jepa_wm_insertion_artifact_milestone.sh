@@ -29,7 +29,7 @@ configure_artifact() {
       include_seed=true
       ;;
     world_model)
-      default_steps="$(insertion_epoch_steps)"
+      default_steps="$(insertion_epoch_steps "${repo_root}" python3)"
       artifact_label="Adapter"
       summary_profile="${INSERTION_WORLD_MODEL_PROFILE:-generic}"
       artifact_stem="$(
@@ -54,7 +54,7 @@ configure_artifact "${artifact_kind}"
 
 training_steps="${1:-${default_steps}}"
 base_seed="${2:-2600}"
-experiment_id="${3:-contact-insertion-v9-${base_seed}}"
+experiment_id="${3:-contact-insertion-v10-drive-slow-${base_seed}}"
 require_positive_integer "training steps" "${training_steps}" || exit 1
 require_nonnegative_integer "base seed" "${base_seed}" || exit 1
 (( training_steps <= 5000 )) || die "training steps must not exceed 5000"
