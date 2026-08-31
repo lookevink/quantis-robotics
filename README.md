@@ -2055,6 +2055,62 @@ canary because seed 72600 informed the design. Same-reset causal captures are
 deferred unless that observable router fails. This checkpoint grants no new
 JEPA action, filming, hardware, or production authority.
 
+### Runtime-command routing checkpoint
+
+The frozen three-path follow-up used configuration
+`98fc2af503919d52a3853d3181bf007d56360136e5c1d27cd1a08a4db18bf66d`.
+It retained the authenticated global action map bitwise, added one
+zero-initialized linear residual for active negative-X horizons and one for
+active positive-X horizons, and sent neutral or active non-X commands through
+the unchanged base. Runtime routing used only the complete candidate 7D
+command; phase, context index, and seed were unavailable. The exact TRAIN
+roster contained 564 negative-X, 1,296 positive-X, 106 neutral-base, and 50
+active-non-X-base rollouts. Training drew 1,008 deterministic updates from
+each learned route and no base-route updates.
+
+Fresh noncanonical canary
+`contact-insertion-v10-drive-slow-72601-held-00` was captured once at seed
+72601. It independently validates as 284 contact-aware frames with `0 N`
+maximum force, `7.728 mrad` maximum arm tracking error, `1.936 mm` maximum
+gripper error, four seated observations, `0.0101 mm` depth error, `0.1261 mm`
+lateral error, and `0.905 mrad` orientation error. Its selected insertion
+inputs bind to fingerprint
+`056b08827e26b1925a3ca4d1cd96f6ed6ea0a879d6231f9cab17c1ad29b8505e`.
+
+The one permitted router trained for 2,016 updates without changing the base
+map. Loss fell from `0.021449` to `0.013905` (minimum `0.008303`); artifact
+fingerprint is
+`45326210f5a47f74a9008670e9bf0be03b3ef40955b3c9af79017588d9b79c30`.
+The control and router were then evaluated once on the same canary bytes:
+
+| Treatment | Overall win | Retained win | Post win | Retreat win | Retreat signed order | Align signed order | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| control A | 0.702381 | 0.056604 | 1.000000 | 0.000000 | 0.000000 | 1.000000 | retained retreat fails |
+| router R | 0.988095 | 0.962264 | 1.000000 | 0.979167 | 0.000000 | 0.020833 | signed counterfactual gate fails |
+
+R therefore solved the main retreat-versus-forward win-rate conflict and made
+every semantic segment's mean improvement positive, but it did not learn the
+required direction ordering. On retreat, recorded action beat both X-zero and
+X-opposed in `47/48` cases, yet X-zero never beat X-opposed. On alignment and
+insertion, recorded action always beat X-zero but beat X-opposed in only
+`1/48` and `4/64` cases. The training objective imposed separate margins from
+recorded to X-zero and recorded to X-opposed; it did not directly impose the
+gate's `recorded < X-zero < X-opposed` ordering. Candidate-dependent routing
+also sends an opposed-X counterfactual through the opposite residual expert,
+so the counterfactual changes both the command and the learned map. This is a
+training-objective/architecture negative, not a representation-insufficiency
+result and not an Isaac/controller regression.
+
+The authenticated summary fingerprint is
+`3469d4e73cbed26d63aad4751bf0ebf88b31d651b34feb7a5a678d02a2dc93a4`;
+it records `router_failed`, selects no artifact, and keeps canonical offline
+and live-action authority false. Canonical seeds `12600-12601` remained sealed
+from model evaluation. All terminal artifacts match the verified 16 GB
+recovery copy. Per the stopping rule, no canary retuning, second training run,
+canonical evaluation, JEPA action, filming, hardware, or production step
+followed. Diagnosis and any revised counterfactual objective belong to a new
+milestone.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

@@ -780,6 +780,23 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     motion, and a neutral shared-base hold path. Because seed 72600 informed
     that design, selection requires a fresh noncanonical scripted canary. No
     JEPA action, filming, hardware, or production authority is open.
+    That frozen router was then implemented and trained exactly once on the
+    authenticated 12-TRAIN corpus. Fresh scripted seed 72601 passed the
+    284-frame contact-aware contract at `0 N` and was recovery-backed before
+    evaluation. The router improved overall action wins from `0.702381` to
+    `0.988095`, retained wins from `0.056604` to `0.962264`, and retreat wins
+    from `0` to `0.979167`, while preserving `1.0` post wins and a bitwise
+    unchanged base map. It nevertheless failed the unchanged signed
+    counterfactual gate: retreat signed order was `0`, alignment was
+    `0.020833`, and aggregate was `0.053571`. The objective trained recorded
+    action against X-zero and X-opposed separately but did not train the
+    required `recorded < X-zero < X-opposed` ordering; flipping X also changed
+    the selected residual expert. The authenticated terminal summary is
+    `router_failed`, no artifact was selected, canonical seeds `12600-12601`
+    remained sealed from model evaluation, and the recovery copy matches.
+    This new training-objective/architecture failure ends the experiment.
+    Diagnosis or a revised objective belongs to a separate milestone; no
+    retraining, JEPA action, filming, hardware, or production authority opens.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one
