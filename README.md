@@ -2186,6 +2186,37 @@ feasibility evidence only: a separately frozen bounded-residual training
 experiment may now be proposed, but residual training, held-out access, live
 JEPA action, and filming remain unauthorized.
 
+### Physical-state bounded residual checkpoint
+
+The separately frozen TRAIN-only run fit the final physical router once and
+trained only two hard-bounded residual matrices for 2,016 alternating updates.
+The router reached `0.992560` accuracy, `0.026290` fail-closed fraction, and
+zero owned-route activations in all semantic holds. The base map and router
+remained bitwise unchanged. Artifact fingerprint is
+`7f3cb2a9...7db51`; loss fell from `0.0205321` to `0.0115631`.
+
+The one terminal TRAIN evaluation reached `0.982143` aggregate,
+`0.943396` retained, and `1.0` post recorded-action wins. Grasp attachment,
+retreat, alignment, and insertion all had positive mean improvement; their
+signed-order fractions were `1.0`, `0.958333`, `1.0`, and `1.0`. Every
+semantic hold used the exact base map and the physical router retained its
+gate.
+
+The literal report nevertheless terminalized as
+`physical_state_residual_train_failed` because the bounded ratio computed as
+`0.15000002086162567`: the experiment's explicit check allowed numerical
+epsilon, but the inherited shared gate also compared raw `<= 0.15`. This is a
+harness floating-point-boundary negative, not evidence that the residuals or
+representation failed. Terminal evaluation fingerprint is
+`a5527c50...d6bdd`; all six evidence files match the verified 16 GiB recovery
+copy from `2026-08-31T18:47:21Z`.
+
+Per the stopping rule, no patch-and-rerun, retraining, held-out evaluation,
+JEPA action, or filming followed. Exact evidence is in
+[`RESULT.md`](.scratch/jepa-physical-state-residual-v1/RESULT.md). The next
+milestone must separately regression-test a tolerance-consistent shared gate
+and adjudicate this immutable report without retraining or rescoring.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

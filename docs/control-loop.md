@@ -825,6 +825,23 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     recovery copy. This opens only the design of a separately frozen bounded-
     residual training experiment. Residual training and every live/held-out
     authority remain closed.
+    The separately frozen bounded-residual experiment then fit the final
+    physical router once and trained only two residual matrices on all 2,016
+    authenticated TRAIN transitions. Aggregate, retained, and post win rates
+    reached `0.982143`, `0.943396`, and `1.0`; grasp attachment, retreat,
+    alignment, and insertion all had positive mean improvement and passed
+    signed ordering. The base and router remained bitwise frozen, semantic
+    holds used the exact base map, and the effective residual ratio reached
+    `0.15000002086162567` under the encoder's `0.15` clamp. The terminal report
+    is nevertheless false because an inherited helper compared that
+    floating-point value directly with `0.15` while the experiment's own check
+    allowed numerical epsilon. This is a recovery-backed harness-boundary
+    negative, not a representation failure. The stopping rule forbids a patch
+    and retry inside this milestone. A separate remediation must regression-
+    test a tolerance-consistent predicate and adjudicate the immutable report
+    without retraining or rescoring; held-out evaluation, JEPA action, filming,
+    hardware, and production authority remain closed. Exact identities and
+    metrics are in the linked README checkpoint.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one
