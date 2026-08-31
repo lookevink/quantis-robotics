@@ -860,6 +860,17 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     verified recovery copy. Retry, retraining, Isaac, live action, filming,
     hardware, and production authority remain closed; no repair or second
     evaluation occurred in this milestone.
+    A separate no-recording remediation reproduced the failure with a bare
+    Python model load and proved that the invocation had bypassed the runtime
+    wrapper, leaving `JEPAWM_HOME` unset. DINO and JEPA artifacts were intact.
+    The repaired boundary now authenticates exact checkpoint content, clean
+    pinned source revisions, aliases/cache, and runtime roots before model
+    construction; smoke also runs from the repository module boundary. One
+    exclusive CUDA preflight loaded the full frozen model in `11.729 s` with
+    no recording, canonical, training, Isaac, or live-action access. Its report
+    and claim match the verified recovery copy. This opens only a separately
+    frozen proposal for a new offline gate; it does not reopen canonical or
+    live authority.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

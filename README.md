@@ -2244,6 +2244,23 @@ false. The access claim (`b36c174f...b358`) and failure
 evaluation followed. Exact evidence is in
 [`RESULT.md`](.scratch/jepa-physical-state-held-out-v1/RESULT.md).
 
+The separate deployment-remediation milestone then reproduced the same model
+load without any recording and proved the cause: the held-out invocation had
+bypassed `ops/jepa_wm.sh`, leaving `JEPAWM_HOME` unset, so upstream fell back
+to `/home/ubuntu/dinov3`. The DINO source, weights, cache, and JEPA checkpoint
+were intact. The old smoke command also had a repository-working-directory
+import defect and could not catch this condition.
+
+The repaired runtime now content-authenticates both checkpoints, exact clean
+source revisions, DINO aliases/cache, and mutually consistent roots before
+model construction. One exclusive CUDA preflight loaded the full frozen model
+in `11.729 s` with `1.983 GiB` peak allocation and no recording access. Report
+`55f6786b...0179` and claim `782afe7d...b38f` match the verified 16 GiB
+recovery copy from `2026-08-31T21:21:35Z`. The previous canonical claim and
+failure remain unchanged. This is deployment readiness only; a new canonical
+gate remains separately closed. Exact evidence is in
+[`RESULT.md`](.scratch/jepa-dinov3-runtime-remediation-v1/RESULT.md).
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded
