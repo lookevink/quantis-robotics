@@ -64,7 +64,7 @@ class PhysicalResidualHeldOutTest(unittest.TestCase):
 
         self.assertEqual(
             FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
-            "53882191d63b6408297b78b5780337902eaeb7d444e0cdc80cd94a43f2b2c18a",
+            "a54841a6cb59e00bafff4ad1902e46dff4b401edaf3ddd537ff4699c400701c4",
         )
         self.assertEqual([item["seed"] for item in recordings], [12600, 12601])
         self.assertEqual(len({item["manifest_fingerprint"] for item in recordings}), 2)
