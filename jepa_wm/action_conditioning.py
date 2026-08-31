@@ -443,6 +443,13 @@ class ObservedContextResidualActionEncoder(torch.nn.Module):
         )
         self._active_weights: torch.Tensor | None = None
 
+    def residual_for_route(self, route: int) -> torch.nn.Linear:
+        if route == NEGATIVE_X_COMMAND_ROUTE:
+            return self.residuals[0]
+        if route == POSITIVE_X_COMMAND_ROUTE:
+            return self.residuals[1]
+        raise ValueError("observed-context residual route must be negative or positive")
+
     @contextmanager
     def use_observed_actions(self, previous_actions: torch.Tensor) -> Iterator[None]:
         if self._active_weights is not None:
@@ -466,10 +473,12 @@ class ObservedContextResidualActionEncoder(torch.nn.Module):
             )
         output = self.base(actions)
         weight_shape = (weights.shape[0],) + (1,) * (output.ndim - 1)
-        for residual_index in range(2):
+        for residual_index, route in enumerate(
+            (NEGATIVE_X_COMMAND_ROUTE, POSITIVE_X_COMMAND_ROUTE)
+        ):
             output = output + weights[:, residual_index].reshape(
                 weight_shape
-            ) * self.residuals[residual_index](actions)
+            ) * self.residual_for_route(route)(actions)
         return output
 
 

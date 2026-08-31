@@ -238,6 +238,16 @@ class ActionConditioningTest(unittest.TestCase):
             ),
         )
         self.assertIsInstance(installed, ObservedContextResidualActionEncoder)
+        self.assertIs(
+            installed.residual_for_route(NEGATIVE_X_COMMAND_ROUTE),
+            installed.residuals[0],
+        )
+        self.assertIs(
+            installed.residual_for_route(POSITIVE_X_COMMAND_ROUTE),
+            installed.residuals[1],
+        )
+        with self.assertRaisesRegex(ValueError, "negative or positive"):
+            installed.residual_for_route(BASE_COMMAND_ROUTE)
         with torch.no_grad():
             installed.residuals[0].weight.fill_(1.0)
             installed.residuals[1].weight.fill_(-1.0)

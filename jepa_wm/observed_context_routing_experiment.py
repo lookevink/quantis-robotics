@@ -80,7 +80,7 @@ from jepa_wm.trajectory import RecordedRollout, load_rollouts
 
 EXPERIMENT_SCHEMA = "quantis.jepa_wm_observed_context_routing_experiment.v1"
 FROZEN_EXPERIMENT_CONFIG_FINGERPRINT = (
-    "d798df7eadde553fcbeb8b86e5d866ea7d6b1779b3c0b0c87c06556be4234d38"
+    "2b57e748a1bf3e60af1e6ad0ec946a1ed502923240ea7b03765c7e808bb3abf6"
 )
 OUTPUT_ROOT = Path(
     "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_observed_context_routing_v1"
@@ -92,7 +92,8 @@ ROUTING_SPEC = ObservedContextRoutingSpec(
     signed_x_deadband=0.0001,
     signed_x_transition_width=0.0001,
 )
-TREATMENT_SPEC = ActionConditioningSpec(
+OBSERVED_CONTEXT_TREATMENT = "O"
+OBSERVED_CONTEXT_TREATMENT_SPEC = ActionConditioningSpec(
     ActionConditioningKind.OBSERVED_CONTEXT_RESIDUAL,
     observed_context_routing=ROUTING_SPEC,
 )
@@ -112,6 +113,7 @@ def _load_experiment_config(path: Path) -> dict[str, Any]:
     payload = json.loads(encoded)
     corpus = payload.get("corpus", {})
     router = payload.get("router", {})
+    evaluation = payload.get("evaluation", {})
     if (
         not isinstance(payload, dict)
         or payload.get("schema") != EXPERIMENT_SCHEMA
@@ -133,6 +135,8 @@ def _load_experiment_config(path: Path) -> dict[str, Any]:
         or "candidate_action" not in router.get("forbidden_router_inputs", ())
         or "recorded_future_action"
         not in router.get("forbidden_router_inputs", ())
+        or evaluation.get("residual_ratio_candidates")
+        != ["recorded", "zero", "x_zero", "x_opposed"]
     ):
         raise ValueError("observed-context experiment contract is invalid")
     return payload
@@ -287,8 +291,8 @@ def _mine_observed_candidates(
 def _training_config(experiment: dict[str, Any]) -> dict[str, Any]:
     return {
         "experiment_config_fingerprint": FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
-        "treatment": "O",
-        "spec": TREATMENT_SPEC.to_dict(),
+        "treatment": OBSERVED_CONTEXT_TREATMENT,
+        "spec": OBSERVED_CONTEXT_TREATMENT_SPEC.to_dict(),
         "control_artifact_fingerprint": CONTROL_ARTIFACT_FINGERPRINT,
         "training": experiment["training"],
     }
@@ -332,7 +336,7 @@ def train_router(
         device=device,
         adapter=control_adapter,
     )
-    encoder = install_action_conditioning(model, TREATMENT_SPEC)
+    encoder = install_action_conditioning(model, OBSERVED_CONTEXT_TREATMENT_SPEC)
     if not isinstance(encoder, ObservedContextResidualActionEncoder):
         raise ValueError("observed-context encoder installation failed")
     load_seconds = monotonic() - load_started
@@ -526,13 +530,13 @@ def train_router(
         selection.fingerprint,
         config_fingerprint,
         FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
-        TREATMENT_SPEC,
+        OBSERVED_CONTEXT_TREATMENT_SPEC,
     )
     save_action_conditioning(model, output, contract)
     report = {
         "schema": "quantis.jepa_wm_observed_context_routing_training.v1",
         "status": "trained",
-        "treatment": "O",
+        "treatment": OBSERVED_CONTEXT_TREATMENT,
         "scope": "TRAIN-only offline routing; no held-out or live action",
         "artifact": str(output.resolve()),
         "artifact_fingerprint": artifact_fingerprint(output),
@@ -614,7 +618,7 @@ def smoke(
         device=device,
         adapter=control_adapter,
     )
-    encoder = install_action_conditioning(model, TREATMENT_SPEC)
+    encoder = install_action_conditioning(model, OBSERVED_CONTEXT_TREATMENT_SPEC)
     for parameter in model.parameters():
         parameter.requires_grad_(False)
     trainable = action_conditioning_parameters(model)
@@ -753,33 +757,55 @@ def _residual_ratio_report(
     actions: torch.Tensor,
     previous_actions: torch.Tensor,
 ) -> dict[str, Any]:
-    batch_actions = actions.transpose(0, 1).to(encoder.base.weight.device)
-    routes = ROUTING_SPEC.classify(previous_actions).to(batch_actions.device)
+    x_zero, x_opposed = signed_x_negatives(actions)
+    candidates = {
+        "recorded": actions,
+        "zero": torch.zeros_like(actions),
+        "x_zero": x_zero,
+        "x_opposed": x_opposed,
+    }
+    routes = ROUTING_SPEC.classify(previous_actions).to(
+        encoder.base.weight.device
+    )
     report = {}
     maxima = []
-    for residual_index, (name, route) in enumerate(
+    for name, route in (
         (
             ("negative_x", NEGATIVE_X_COMMAND_ROUTE),
             ("positive_x", POSITIVE_X_COMMAND_ROUTE),
         )
     ):
-        selected = batch_actions[routes == route]
-        if selected.shape[0] == 0:
+        selected_count = int((routes == route).sum())
+        if selected_count == 0:
             raise ValueError(f"TRAIN selection has no observed {name} route")
-        with torch.inference_mode():
-            base = encoder.base(selected)
-            residual = encoder.residuals[residual_index](selected)
-            ratios = torch.linalg.vector_norm(residual, dim=-1) / torch.clamp(
-                torch.linalg.vector_norm(base, dim=-1),
-                min=1e-12,
+        candidate_report = {}
+        route_maxima = []
+        for candidate_name, candidate in candidates.items():
+            batch_actions = candidate.transpose(0, 1).to(
+                encoder.base.weight.device
             )
-        maximum = float(ratios.max())
-        maxima.append(maximum)
+            selected = batch_actions[routes == route]
+            with torch.inference_mode():
+                base = encoder.base(selected)
+                residual = encoder.residual_for_route(route)(selected)
+                ratios = torch.linalg.vector_norm(
+                    residual,
+                    dim=-1,
+                ) / torch.clamp(
+                    torch.linalg.vector_norm(base, dim=-1),
+                    min=1e-12,
+                )
+            candidate_maximum = float(ratios.max())
+            route_maxima.append(candidate_maximum)
+            candidate_report[candidate_name] = {
+                "mean_residual_to_base_embedding_ratio": float(ratios.mean()),
+                "maximum_residual_to_base_embedding_ratio": candidate_maximum,
+            }
+        maximum = max(route_maxima)
+        maxima.extend(route_maxima)
         report[name] = {
-            "rollouts": int(selected.shape[0]),
-            "mean_full_route_residual_to_base_embedding_ratio": float(
-                ratios.mean()
-            ),
+            "rollouts": selected_count,
+            "candidates": candidate_report,
             "maximum_full_route_residual_to_base_embedding_ratio": maximum,
         }
     report["maximum"] = max(maxima)
@@ -866,13 +892,13 @@ def evaluate_train(
     if (
         loaded.contract.experiment_config_fingerprint
         != FROZEN_EXPERIMENT_CONFIG_FINGERPRINT
-        or loaded.contract.spec != TREATMENT_SPEC
+        or loaded.contract.spec != OBSERVED_CONTEXT_TREATMENT_SPEC
     ):
         raise ValueError("observed-context artifact contract changed")
     training_report = load_training_report(artifact)
     if (
         training_report.get("artifact_fingerprint") != identity.fingerprint
-        or training_report.get("treatment") != "O"
+        or training_report.get("treatment") != OBSERVED_CONTEXT_TREATMENT
         or training_report.get("base_map_unchanged") is not True
         or training_report.get("candidate_invariant") is not True
         or training_report.get("ordered_pairwise_objective") is not True

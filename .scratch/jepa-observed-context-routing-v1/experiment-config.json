@@ -111,6 +111,12 @@
     "minimum_retreat_signed_order_fraction": 0.75,
     "minimum_alignment_signed_order_fraction": 0.75,
     "minimum_insertion_signed_order_fraction": 0.75,
+    "residual_ratio_candidates": [
+      "recorded",
+      "zero",
+      "x_zero",
+      "x_opposed"
+    ],
     "maximum_full_route_residual_to_base_embedding_ratio": 0.15
   },
   "stopping_rules": {

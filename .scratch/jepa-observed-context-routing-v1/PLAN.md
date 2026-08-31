@@ -46,7 +46,10 @@ gate, not held-out generalization evidence. Require:
 - signed triple order on at least 0.75 of retreat, alignment, and insertion;
 - candidate-invariant context weights for every comparison;
 - unchanged base parameters; and
-- maximum full-route residual/base embedding ratio at most 0.15 on TRAIN.
+- maximum full-route residual/base embedding ratio at most 0.15 across the
+  recorded, zero, X-zero, and X-opposed TRAIN evaluation candidates. Mismatched
+  and mined actions must use the same context weights during training, but are
+  not inputs to this frozen continuity gate.
 
 ## Stopping rule
 
