@@ -316,6 +316,9 @@ def train_router(
 ) -> dict[str, Any]:
     if not torch.cuda.is_available():
         raise RuntimeError("runtime-routing training requires CUDA")
+    expected_output = EVALUATION_OUTPUT_ROOT / "runtime_command_router.pth"
+    if output.resolve() != expected_output:
+        raise ValueError(f"runtime-routing training output must be {expected_output}")
     if output.exists() or training_report_path(output).exists():
         raise ValueError(f"runtime-routing output already exists: {output}")
     experiment = _load_experiment_config(experiment_config)
