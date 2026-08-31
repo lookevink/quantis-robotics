@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -38,6 +39,23 @@ ACCESS_CLAIM_PATH = OUTPUT_PATH.with_name(
     "canonical-held-out-v2-access-claim.json"
 )
 TRAIN_EVALUATION_PATH = OUTPUT_PATH.with_name("train-evaluation.json")
+_PRECLAIM_COMPLETION_NONCE = object()
+
+
+@dataclass(frozen=True)
+class _PreclaimAuthentication:
+    experiment: Mapping[str, Any]
+    config_fingerprint: str
+    evaluator_identity: Mapping[str, str]
+    runtime_identity: Mapping[str, str]
+    prior_evidence: Mapping[str, Any]
+    training_experiment: Mapping[str, Any]
+    base_identity: Any
+    artifact_identity: ArtifactIdentity
+    training_identity: ArtifactIdentity
+    adjudication_identity: ArtifactIdentity
+    loaded: Any
+    nonce: object
 
 
 def _sha256(path: Path) -> str:
@@ -216,62 +234,44 @@ def _claim_canonical_access(
 
 
 def _claim_after_preclaim_authentication(
-    authentication_complete: bool,
+    authentication: _PreclaimAuthentication,
     claim_path: Path,
     recordings: Sequence[Path],
-    experiment_config_fingerprint: str,
 ) -> dict[str, Any]:
     """Keep the irreversible claim behind one explicit fail-closed seam."""
 
-    if authentication_complete is not True:
+    if (
+        not isinstance(authentication, _PreclaimAuthentication)
+        or authentication.nonce is not _PRECLAIM_COMPLETION_NONCE
+    ):
         raise ValueError("canonical access requires complete pre-claim authentication")
     return _claim_canonical_access(
-        claim_path, recordings, experiment_config_fingerprint
+        claim_path, recordings, authentication.config_fingerprint
     )
 
 
-def evaluate(
+def _authenticate_before_claim(
     source: Path,
     checkpoint: Path,
-    recordings: Sequence[Path],
     artifact: Path,
     adjudication: Path,
     train_evaluation: Path,
     output: Path,
-    *,
     experiment_config: Path,
     training_experiment_config: Path,
     evaluator_revision: str,
-) -> dict[str, Any]:
-    import torch
+) -> _PreclaimAuthentication:
+    """Complete every mutable/runtime check before issuing a completion token."""
 
-    from jepa_wm.action import ActionSelectionBounds
-    from jepa_wm.action_conditioning import (
-        LoadedActionConditioning,
-        PhysicalStateResidualActionEncoder,
-        installed_action_conditioning,
-    )
+    from jepa_wm.action_conditioning import LoadedActionConditioning
     from jepa_wm.action_routing_experiment import _authenticate_base_model
-    from jepa_wm.causal_context_routing_experiment import _selected_corpus_input_fingerprint
-    from jepa_wm.frames import encode_clips
-    from jepa_wm.model import load_headless_model
-    from jepa_wm.observed_context_routing_experiment import _gate_for_context_indices
     from jepa_wm.physical_state_residual_experiment import (
-        _applied_residual_ratio_report,
         _authenticate_training_contract,
-        _labeling_spec,
         _load_experiment_config as load_training_experiment_config,
-        _physical_dataset,
-        _score_evaluation_batches,
     )
     from jepa_wm.rollout_protocol import DROID_ROLLOUT_PROTOCOL
-    from jepa_wm.rollout_scoring import rollout_action_tensor
-    from jepa_wm.rollout_training import RolloutTrainingSelection
     from jepa_wm.training_artifact import load_training_report
-    from jepa_wm.trajectory import RolloutWindow
 
-    if not torch.cuda.is_available():
-        raise RuntimeError("physical residual held-out v2 evaluation requires CUDA")
     if (
         FAILURE_PATH.exists()
         or ACCESS_CLAIM_PATH.exists()
@@ -279,12 +279,9 @@ def evaluate(
         or output.exists()
     ):
         raise ValueError("physical residual held-out v2 evaluation is already terminal")
-
     experiment = load_experiment_config(experiment_config)
     config_fingerprint = sha256(experiment_config.resolve().read_bytes()).hexdigest()
     evaluator_identity = _authenticate_evaluator(experiment, evaluator_revision)
-
-    # Everything below this comment must succeed before canonical access is claimed.
     runtime_identity = validate_headless_runtime(source, checkpoint)
     prior_evidence = authenticate_prior_evidence(experiment)
     _authenticate_runtime_evidence(experiment, runtime_identity)
@@ -308,12 +305,86 @@ def evaluate(
         training_experiment,
         source_revision=os.environ.get("JEPA_WM_REVISION", "unknown"),
     )
-    if DROID_ROLLOUT_PROTOCOL.action_horizon != int(experiment["corpus"]["action_horizon"]):
+    if DROID_ROLLOUT_PROTOCOL.action_horizon != int(
+        experiment["corpus"]["action_horizon"]
+    ):
         raise ValueError("frozen held-out action horizon changed")
-
-    access_claim = _claim_after_preclaim_authentication(
-        True, ACCESS_CLAIM_PATH, recordings, config_fingerprint
+    return _PreclaimAuthentication(
+        experiment=experiment,
+        config_fingerprint=config_fingerprint,
+        evaluator_identity=evaluator_identity,
+        runtime_identity=runtime_identity,
+        prior_evidence=prior_evidence,
+        training_experiment=training_experiment,
+        base_identity=base_identity,
+        artifact_identity=artifact_identity,
+        training_identity=training_identity,
+        adjudication_identity=adjudication_identity,
+        loaded=loaded,
+        nonce=_PRECLAIM_COMPLETION_NONCE,
     )
+
+
+def evaluate(
+    source: Path,
+    checkpoint: Path,
+    recordings: Sequence[Path],
+    artifact: Path,
+    adjudication: Path,
+    train_evaluation: Path,
+    output: Path,
+    *,
+    experiment_config: Path,
+    training_experiment_config: Path,
+    evaluator_revision: str,
+) -> dict[str, Any]:
+    import torch
+
+    from jepa_wm.action import ActionSelectionBounds
+    from jepa_wm.action_conditioning import (
+        PhysicalStateResidualActionEncoder,
+        installed_action_conditioning,
+    )
+    from jepa_wm.causal_context_routing_experiment import _selected_corpus_input_fingerprint
+    from jepa_wm.frames import encode_clips
+    from jepa_wm.model import load_headless_model
+    from jepa_wm.observed_context_routing_experiment import _gate_for_context_indices
+    from jepa_wm.physical_state_residual_experiment import (
+        _applied_residual_ratio_report,
+        _labeling_spec,
+        _physical_dataset,
+        _score_evaluation_batches,
+    )
+    from jepa_wm.rollout_scoring import rollout_action_tensor
+    from jepa_wm.rollout_training import RolloutTrainingSelection
+    from jepa_wm.trajectory import RolloutWindow
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("physical residual held-out v2 evaluation requires CUDA")
+    authentication = _authenticate_before_claim(
+        source,
+        checkpoint,
+        artifact,
+        adjudication,
+        train_evaluation,
+        output,
+        experiment_config,
+        training_experiment_config,
+        evaluator_revision,
+    )
+    access_claim = _claim_after_preclaim_authentication(
+        authentication, ACCESS_CLAIM_PATH, recordings
+    )
+    experiment = authentication.experiment
+    evaluator_identity = authentication.evaluator_identity
+    runtime_identity = authentication.runtime_identity
+    prior_evidence = authentication.prior_evidence
+    training_experiment = authentication.training_experiment
+    base_identity = authentication.base_identity
+    artifact_identity = authentication.artifact_identity
+    training_identity = authentication.training_identity
+    adjudication_identity = authentication.adjudication_identity
+    loaded = authentication.loaded
     _authenticate_recordings(recordings, experiment)
     corpus = experiment["corpus"]
     selection = RolloutTrainingSelection.load(

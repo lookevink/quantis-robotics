@@ -128,10 +128,9 @@ class PhysicalResidualHeldOutV2Test(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "complete pre-claim"):
                 _claim_after_preclaim_authentication(
-                    False,
+                    object(),
                     claim,
                     (Path("held-00"), Path("held-01")),
-                    "config-sha",
                 )
 
             self.assertFalse(claim.exists())
