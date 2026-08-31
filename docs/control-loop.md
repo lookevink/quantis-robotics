@@ -820,9 +820,11 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     selected `26 -> 64 -> 64 -> 4`: grouped accuracy `0.987103`, retreat and
     advance recall `0.992908`/`0.989780`, attachment accuracy `1.0`,
     fail-closed fraction `0.028274`, and zero owned-route activations on hold
-    windows. The bounded candidate-invariant production seam and a separate
-    one-shot authenticated probe contract are implemented; residual training
-    and every live/held-out authority remain closed pending that probe.
+    windows. The one-shot authenticated grouped probe subsequently passed all
+    frozen gates; terminal report `385305e7...1ffa` matches the verified
+    recovery copy. This opens only the design of a separately frozen bounded-
+    residual training experiment. Residual training and every live/held-out
+    authority remain closed.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

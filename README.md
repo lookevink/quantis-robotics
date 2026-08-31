@@ -2178,9 +2178,13 @@ uses a sign-invariant relative quaternion, refuses inference until fitted
 normalization is serialized, holds one route fixed across every candidate,
 preserves the original action map exactly for hold/active-other, and enforces
 the `0.15` residual/base norm bound by construction. The one-shot authenticated
-probe is frozen in
-[`PLAN.md`](.scratch/jepa-physical-state-routing-v2/PLAN.md); it has not yet
-authorized residual training, held-out access, live JEPA action, or filming.
+grouped probe passed the frozen gate with a terminal report fingerprint of
+`385305e7...1ffa`; its live report matches the verified 16 GiB recovery copy.
+Exact evidence is in
+[`RESULT.md`](.scratch/jepa-physical-state-routing-v2/RESULT.md). This is route-
+feasibility evidence only: a separately frozen bounded-residual training
+experiment may now be proposed, but residual training, held-out access, live
+JEPA action, and filming remain unauthorized.
 
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
