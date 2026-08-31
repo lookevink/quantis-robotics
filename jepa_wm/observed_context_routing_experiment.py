@@ -65,7 +65,7 @@ from jepa_wm.frames import encode_clips
 from jepa_wm.insertion_layout import ContactInsertionSegment
 from jepa_wm.model import load_headless_model
 from jepa_wm.persistence import write_json_atomic
-from jepa_wm.readiness import ActionControlGate
+from jepa_wm.readiness import ActionControlGate, ResidualTrainGate
 from jepa_wm.rollout_scoring import rollout_action_tensor, score_actions
 from jepa_wm.training_artifact import (
     ArtifactIdentity,
@@ -133,8 +133,7 @@ def _load_experiment_config(path: Path) -> dict[str, Any]:
         or router.get("candidate_invariant") is not True
         or router.get("continuous_at_deadband") is not True
         or "candidate_action" not in router.get("forbidden_router_inputs", ())
-        or "recorded_future_action"
-        not in router.get("forbidden_router_inputs", ())
+        or "recorded_future_action" not in router.get("forbidden_router_inputs", ())
         or evaluation.get("residual_ratio_candidates")
         != ["recorded", "zero", "x_zero", "x_opposed"]
     ):
@@ -369,9 +368,7 @@ def train_router(
         dtype=actions.dtype,
     )
     mismatched_candidates = mismatched_negative_candidates(rollouts)
-    candidate_config = CandidateMiningConfig.from_dict(
-        training["candidate_mining"]
-    )
+    candidate_config = CandidateMiningConfig.from_dict(training["candidate_mining"])
     term_names = (
         "zero_negative",
         "mismatched_negative",
@@ -392,9 +389,7 @@ def train_router(
     sampler = AlternatingCommandRouteSampler(routes, seed=seed)
     mismatch_generator = torch.Generator(device="cpu").manual_seed(seed + 1)
     candidate_generator = torch.Generator(device=device).manual_seed(seed)
-    minimum_activity = float(
-        training["objective"]["signed_x_activity_threshold"]
-    )
+    minimum_activity = float(training["objective"]["signed_x_activity_threshold"])
     losses = []
     model.eval()
     training_started = monotonic()
@@ -698,8 +693,7 @@ def smoke(
         "recording": recording.name,
         "contexts": [rollout.context[0].index for rollout in rollouts],
         "routes": [
-            COMMAND_ROUTE_NAMES[int(route)]
-            for route in ROUTING_SPEC.classify(previous)
+            COMMAND_ROUTE_NAMES[int(route)] for route in ROUTING_SPEC.classify(previous)
         ],
         "loss": float(loss.detach().cpu()),
         "residuals_updated": list(changed),
@@ -764,16 +758,12 @@ def _residual_ratio_report(
         "x_zero": x_zero,
         "x_opposed": x_opposed,
     }
-    routes = ROUTING_SPEC.classify(previous_actions).to(
-        encoder.base.weight.device
-    )
+    routes = ROUTING_SPEC.classify(previous_actions).to(encoder.base.weight.device)
     report = {}
     maxima = []
     for name, route in (
-        (
-            ("negative_x", NEGATIVE_X_COMMAND_ROUTE),
-            ("positive_x", POSITIVE_X_COMMAND_ROUTE),
-        )
+        ("negative_x", NEGATIVE_X_COMMAND_ROUTE),
+        ("positive_x", POSITIVE_X_COMMAND_ROUTE),
     ):
         selected_count = int((routes == route).sum())
         if selected_count == 0:
@@ -781,9 +771,7 @@ def _residual_ratio_report(
         candidate_report = {}
         route_maxima = []
         for candidate_name, candidate in candidates.items():
-            batch_actions = candidate.transpose(0, 1).to(
-                encoder.base.weight.device
-            )
+            batch_actions = candidate.transpose(0, 1).to(encoder.base.weight.device)
             selected = batch_actions[routes == route]
             with torch.inference_mode():
                 base = encoder.base(selected)
@@ -850,19 +838,17 @@ def _gate_for_context_indices(
         ContactInsertionSegment.INSERT.value,
     )
     passed = (
-        control_gate.passed
-        and aggregate["recorded_action_win_rate"] >= 0.90
-        and retained["recorded_action_win_rate"] >= 0.85
-        and post["recorded_action_win_rate"] >= 0.95
-        and all(
-            segment["mean_improvement_over_zero"] > 0.0
-            for segment in by_segment.values()
+        ResidualTrainGate(
+            required_signed_segments=required_signed_segments,
         )
-        and all(
-            by_segment[segment]["signed_order_fraction"] >= 0.75
-            for segment in required_signed_segments
+        .evaluate(
+            aggregate=aggregate,
+            retained=retained,
+            post=post,
+            by_segment=by_segment,
+            maximum_residual_ratio=maximum_residual_ratio,
         )
-        and maximum_residual_ratio <= 0.15
+        .passed
     )
     aggregate["control_gate"] = control_gate.to_dict()
     return aggregate, retained, post, by_segment, passed
@@ -1034,9 +1020,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     smoke_parser.add_argument("--control-adapter", type=Path, required=True)
     train_parser = subparsers.add_parser("train")
     _add_common_model_arguments(train_parser)
-    train_parser.add_argument(
-        "--recording", type=Path, action="append", required=True
-    )
+    train_parser.add_argument("--recording", type=Path, action="append", required=True)
     train_parser.add_argument("--control-adapter", type=Path, required=True)
     train_parser.add_argument("--output", type=Path, required=True)
     evaluate_parser = subparsers.add_parser("evaluate-train")

@@ -1,0 +1,35 @@
+{
+  "schema": "quantis.jepa_wm_physical_state_residual_gate_adjudication.v1",
+  "source_evaluation": {
+    "path": "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/train-evaluation.json",
+    "fingerprint": "a5527c50eeb4a3223b74779584f7dad1f6edc29121534a778abf9147bf4d6bdd",
+    "experiment_config_fingerprint": "b296b7fc064627f13ed87c1baeaf84d4961f1b04db115f9afcc689bf05dda78d",
+    "artifact_fingerprint": "7f3cb2a99e749dd56e4f4a988b3b1c332ab13c4661c3413118ffb270f237db51",
+    "training_report_fingerprint": "08f41c36f4e0987c4652244ee0011001de30c76a6e014bd94ad4966780d78aba",
+    "training_selection_fingerprint": "f13bfc6d8eef6ca875d6f95f0bd5194a927e9bdf068377ea0ca4851c10b38d74",
+    "selected_input_fingerprint": "576404f64ac55f47490ef8358eb2121f4dd044f5ab72e396a2817f439fe3d839"
+  },
+  "gate": {
+    "minimum_overall_win_rate": 0.9,
+    "minimum_retained_win_rate": 0.85,
+    "minimum_post_win_rate": 0.95,
+    "minimum_signed_order_fraction": 0.75,
+    "required_signed_segments": ["retreat", "align", "insert"],
+    "maximum_residual_ratio": 0.15,
+    "residual_ratio_absolute_tolerance": 0.000001,
+    "require_positive_mean_each_segment": true,
+    "require_exact_base_in_semantic_holds": true,
+    "require_final_router_gate": true
+  },
+  "execution": {
+    "adjudications": 1,
+    "load_model": false,
+    "load_recordings": false,
+    "rescore": false,
+    "train": false,
+    "access_held_out": false,
+    "access_canonical": false,
+    "run_isaac": false,
+    "issue_live_action": false
+  }
+}
