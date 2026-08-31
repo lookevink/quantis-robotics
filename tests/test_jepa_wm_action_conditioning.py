@@ -13,10 +13,15 @@ except ModuleNotFoundError:
 if torch is not None:
     from jepa_wm.action_conditioning import (
         ACTION_CONDITIONING_SCHEMA,
+        BASE_COMMAND_ROUTE,
+        NEGATIVE_X_COMMAND_ROUTE,
+        POSITIVE_X_COMMAND_ROUTE,
         ActionConditioningContract,
         ActionConditioningKind,
         ActionConditioningSpec,
         LoadedActionConditioning,
+        RuntimeCommandResidualActionEncoder,
+        RuntimeCommandRoutingSpec,
         action_conditioning_parameters,
         action_regime_context,
         install_action_conditioning,
@@ -46,6 +51,15 @@ def _metadata() -> TrainingArtifactMetadata:
 
 @unittest.skipIf(torch is None, "PyTorch is required for action conditioning")
 class ActionConditioningTest(unittest.TestCase):
+    @staticmethod
+    def _runtime_routing() -> RuntimeCommandRoutingSpec:
+        return RuntimeCommandRoutingSpec(
+            signed_x_deadband=1e-4,
+            translation_activity_deadband=1e-4,
+            rotation_activity_deadband=1e-3,
+            gripper_activity_deadband=5e-3,
+        )
+
     def test_nonlinear_residual_is_exactly_zero_at_installation(self) -> None:
         torch.manual_seed(3)
         model = _model()
@@ -92,6 +106,91 @@ class ActionConditioningTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "regime routes"):
             installed(actions)
+
+    def test_runtime_routes_complete_command_horizons_without_phase_input(self) -> None:
+        routing = self._runtime_routing()
+        actions = torch.tensor(
+            [
+                [[-2e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]] * 3,
+                [[2e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]] * 3,
+                [[2e-5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]] * 3,
+                [[0.0, 2e-4, 0.0, 0.0, 0.0, 0.0, 0.0]] * 3,
+            ]
+        )
+
+        routes, active = routing.classify(actions)
+
+        torch.testing.assert_close(
+            routes,
+            torch.tensor(
+                (
+                    NEGATIVE_X_COMMAND_ROUTE,
+                    POSITIVE_X_COMMAND_ROUTE,
+                    BASE_COMMAND_ROUTE,
+                    BASE_COMMAND_ROUTE,
+                )
+            ),
+        )
+        torch.testing.assert_close(
+            active,
+            torch.tensor((True, True, False, True)),
+        )
+
+    def test_runtime_residual_preserves_base_for_neutral_and_non_x_motion(self) -> None:
+        torch.manual_seed(8)
+        model = _model()
+        installed = install_action_conditioning(
+            model,
+            ActionConditioningSpec(
+                ActionConditioningKind.RUNTIME_COMMAND_RESIDUAL,
+                runtime_routing=self._runtime_routing(),
+            ),
+        )
+        self.assertIsInstance(installed, RuntimeCommandResidualActionEncoder)
+        with torch.no_grad():
+            installed.residuals[0].weight.fill_(1.0)
+            installed.residuals[1].weight.fill_(-1.0)
+        actions = torch.tensor(
+            [
+                [[-2e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]] * 3,
+                [[2e-4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]] * 3,
+                [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]] * 3,
+                [[0.0, 2e-4, 0.0, 0.0, 0.0, 0.0, 0.0]] * 3,
+            ]
+        )
+        base = installed.base(actions)
+
+        routed = installed(actions)
+
+        self.assertTrue(torch.all(routed[0] < base[0]))
+        self.assertTrue(torch.all(routed[1] < base[1]))
+        torch.testing.assert_close(routed[2], base[2], rtol=0.0, atol=0.0)
+        torch.testing.assert_close(routed[3], base[3], rtol=0.0, atol=0.0)
+
+    def test_runtime_router_trains_only_residuals_and_starts_at_exact_base(self) -> None:
+        torch.manual_seed(9)
+        model = _model()
+        actions = torch.randn(2, 3, 7)
+        expected = model.model.predictor.action_encoder(actions)
+        installed = install_action_conditioning(
+            model,
+            ActionConditioningSpec(
+                ActionConditioningKind.RUNTIME_COMMAND_RESIDUAL,
+                runtime_routing=self._runtime_routing(),
+            ),
+        )
+
+        torch.testing.assert_close(installed(actions), expected, rtol=0.0, atol=0.0)
+        parameters = action_conditioning_parameters(model)
+        self.assertFalse(any(parameter is installed.base.weight for parameter in parameters))
+        self.assertFalse(any(parameter is installed.base.bias for parameter in parameters))
+        self.assertEqual(sum(parameter.numel() for parameter in parameters), 56)
+
+    def test_runtime_router_rejects_non_horizon_action_shapes(self) -> None:
+        routing = self._runtime_routing()
+
+        with self.assertRaisesRegex(ValueError, r"\[batch, horizon, 7\]"):
+            routing.classify(torch.zeros(3, 7))
 
     def test_versioned_artifact_round_trips_exact_family(self) -> None:
         source = _model()

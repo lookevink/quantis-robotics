@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 from hashlib import sha256
 from io import BytesIO
+from math import isfinite
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -24,18 +25,110 @@ ACTION_CONDITIONING_SCHEMA = "quantis.jepa_wm_action_conditioning.v1"
 RETAINED_REGIME = 0
 POST_REGIME = 1
 REGIME_NAMES = ("retained", "post")
+BASE_COMMAND_ROUTE = 0
+NEGATIVE_X_COMMAND_ROUTE = 1
+POSITIVE_X_COMMAND_ROUTE = 2
+COMMAND_ROUTE_NAMES = ("base", "negative_x", "positive_x")
 
 
 class ActionConditioningKind(str, Enum):
     GLOBAL_LINEAR = "global_linear"
     NONLINEAR_RESIDUAL = "nonlinear_residual"
     ORACLE_REGIME_RESIDUAL = "oracle_regime_residual"
+    RUNTIME_COMMAND_RESIDUAL = "runtime_command_residual"
+
+
+@dataclass(frozen=True)
+class RuntimeCommandRoutingSpec:
+    """Route complete candidate horizons using only their runtime commands."""
+
+    signed_x_deadband: float
+    translation_activity_deadband: float
+    rotation_activity_deadband: float
+    gripper_activity_deadband: float
+    horizon_x_statistic: str = "mean"
+
+    def __post_init__(self) -> None:
+        values = (
+            self.signed_x_deadband,
+            self.translation_activity_deadband,
+            self.rotation_activity_deadband,
+            self.gripper_activity_deadband,
+        )
+        if not all(isfinite(value) and value >= 0.0 for value in values):
+            raise ValueError("runtime command deadbands must be finite and non-negative")
+        if self.horizon_x_statistic != "mean":
+            raise ValueError("runtime command routing requires mean horizon X")
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> RuntimeCommandRoutingSpec:
+        if not isinstance(payload, dict) or set(payload) != {
+            "signed_x_deadband",
+            "translation_activity_deadband",
+            "rotation_activity_deadband",
+            "gripper_activity_deadband",
+            "horizon_x_statistic",
+        }:
+            raise ValueError("runtime command routing specification is invalid")
+        try:
+            return cls(
+                signed_x_deadband=float(payload["signed_x_deadband"]),
+                translation_activity_deadband=float(
+                    payload["translation_activity_deadband"]
+                ),
+                rotation_activity_deadband=float(
+                    payload["rotation_activity_deadband"]
+                ),
+                gripper_activity_deadband=float(payload["gripper_activity_deadband"]),
+                horizon_x_statistic=str(payload["horizon_x_statistic"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError("runtime command routing specification is invalid") from error
+
+    def to_dict(self) -> dict[str, float | str]:
+        return {
+            "signed_x_deadband": self.signed_x_deadband,
+            "translation_activity_deadband": self.translation_activity_deadband,
+            "rotation_activity_deadband": self.rotation_activity_deadband,
+            "gripper_activity_deadband": self.gripper_activity_deadband,
+            "horizon_x_statistic": self.horizon_x_statistic,
+        }
+
+    def classify(self, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return functional routes and whether each horizon contains activity."""
+
+        if actions.ndim != 3 or actions.shape[-1] != 7 or actions.shape[1] == 0:
+            raise ValueError("runtime command routing requires [batch, horizon, 7] actions")
+        translation_active = (
+            torch.linalg.vector_norm(actions[..., :3], dim=-1)
+            > self.translation_activity_deadband
+        )
+        rotation_active = (
+            torch.linalg.vector_norm(actions[..., 3:6], dim=-1)
+            > self.rotation_activity_deadband
+        )
+        gripper_active = actions[..., 6].abs() > self.gripper_activity_deadband
+        active = (translation_active | rotation_active | gripper_active).any(dim=1)
+        mean_x = actions[..., 0].mean(dim=1)
+        routes = torch.full_like(mean_x, BASE_COMMAND_ROUTE, dtype=torch.long)
+        routes = torch.where(
+            active & (mean_x < -self.signed_x_deadband),
+            NEGATIVE_X_COMMAND_ROUTE,
+            routes,
+        )
+        routes = torch.where(
+            active & (mean_x > self.signed_x_deadband),
+            POSITIVE_X_COMMAND_ROUTE,
+            routes,
+        )
+        return routes, active
 
 
 @dataclass(frozen=True)
 class ActionConditioningSpec:
     kind: ActionConditioningKind
     hidden_dimension: int | None = None
+    runtime_routing: RuntimeCommandRoutingSpec | None = None
 
     def __post_init__(self) -> None:
         if self.kind is ActionConditioningKind.NONLINEAR_RESIDUAL:
@@ -45,24 +138,41 @@ class ActionConditioningSpec:
                 or self.hidden_dimension <= 0
             ):
                 raise ValueError("nonlinear action conditioning requires a hidden dimension")
-        elif self.hidden_dimension is not None:
+            if self.runtime_routing is not None:
+                raise ValueError("nonlinear action conditioning cannot use runtime routing")
+        elif self.kind is ActionConditioningKind.RUNTIME_COMMAND_RESIDUAL:
+            if self.hidden_dimension is not None or self.runtime_routing is None:
+                raise ValueError("runtime command conditioning requires only routing")
+        elif self.hidden_dimension is not None or self.runtime_routing is not None:
             raise ValueError("only nonlinear action conditioning uses a hidden dimension")
 
     @classmethod
     def from_dict(cls, payload: Any) -> ActionConditioningSpec:
-        if not isinstance(payload, dict) or set(payload) != {
-            "kind",
-            "hidden_dimension",
-        }:
+        if not isinstance(payload, dict) or set(payload) not in (
+            {"kind", "hidden_dimension"},
+            {"kind", "hidden_dimension", "runtime_routing"},
+        ):
             raise ValueError("action-conditioning specification is invalid")
         try:
             kind = ActionConditioningKind(payload["kind"])
         except (TypeError, ValueError) as error:
             raise ValueError("action-conditioning kind is invalid") from error
-        return cls(kind, payload["hidden_dimension"])
+        routing_payload = payload.get("runtime_routing")
+        routing = (
+            RuntimeCommandRoutingSpec.from_dict(routing_payload)
+            if routing_payload is not None
+            else None
+        )
+        return cls(kind, payload["hidden_dimension"], routing)
 
-    def to_dict(self) -> dict[str, str | int | None]:
-        return {"kind": self.kind.value, "hidden_dimension": self.hidden_dimension}
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "kind": self.kind.value,
+            "hidden_dimension": self.hidden_dimension,
+        }
+        if self.runtime_routing is not None:
+            payload["runtime_routing"] = self.runtime_routing.to_dict()
+        return payload
 
 
 class GlobalLinearActionEncoder(torch.nn.Module):
@@ -154,10 +264,52 @@ class OracleRegimeResidualActionEncoder(torch.nn.Module):
         return output
 
 
+class RuntimeCommandResidualActionEncoder(torch.nn.Module):
+    """Apply signed-X residuals while preserving the base map for holds."""
+
+    def __init__(self, base: torch.nn.Linear, routing: RuntimeCommandRoutingSpec) -> None:
+        super().__init__()
+        self.base = base
+        self.residuals = torch.nn.ModuleList(
+            torch.nn.Linear(
+                base.in_features,
+                base.out_features,
+                bias=False,
+                device=base.weight.device,
+                dtype=base.weight.dtype,
+            )
+            for _ in (NEGATIVE_X_COMMAND_ROUTE, POSITIVE_X_COMMAND_ROUTE)
+        )
+        for residual in self.residuals:
+            torch.nn.init.zeros_(residual.weight)
+        self.spec = ActionConditioningSpec(
+            ActionConditioningKind.RUNTIME_COMMAND_RESIDUAL,
+            runtime_routing=routing,
+        )
+
+    def forward(self, actions: torch.Tensor) -> torch.Tensor:
+        routing = self.spec.runtime_routing
+        assert routing is not None
+        routes, _ = routing.classify(actions)
+        output = self.base(actions)
+        mask_shape = (routes.shape[0],) + (1,) * (output.ndim - 1)
+        for residual_index, route in enumerate(
+            (NEGATIVE_X_COMMAND_ROUTE, POSITIVE_X_COMMAND_ROUTE)
+        ):
+            mask = (routes == route).reshape(mask_shape)
+            output = output + torch.where(
+                mask,
+                self.residuals[residual_index](actions),
+                0.0,
+            )
+        return output
+
+
 ActionConditioningEncoder = (
     GlobalLinearActionEncoder
     | NonlinearResidualActionEncoder
     | OracleRegimeResidualActionEncoder
+    | RuntimeCommandResidualActionEncoder
 )
 
 
@@ -176,6 +328,7 @@ def _installed_encoder(model: Any) -> ActionConditioningEncoder:
             GlobalLinearActionEncoder,
             NonlinearResidualActionEncoder,
             OracleRegimeResidualActionEncoder,
+            RuntimeCommandResidualActionEncoder,
         ),
     ):
         raise ValueError("model has no installed action-conditioning family")
@@ -195,19 +348,27 @@ def install_action_conditioning(
     elif spec.kind is ActionConditioningKind.NONLINEAR_RESIDUAL:
         assert spec.hidden_dimension is not None
         installed = NonlinearResidualActionEncoder(base, spec.hidden_dimension)
-    else:
+    elif spec.kind is ActionConditioningKind.ORACLE_REGIME_RESIDUAL:
         installed = OracleRegimeResidualActionEncoder(base)
+    else:
+        assert spec.runtime_routing is not None
+        installed = RuntimeCommandResidualActionEncoder(base, spec.runtime_routing)
     predictor.action_encoder = installed
     return installed
 
 
 def action_conditioning_parameters(model: Any) -> tuple[torch.nn.Parameter, ...]:
     encoder = _installed_encoder(model)
-    parameters: list[torch.nn.Parameter] = [encoder.base.weight]
+    parameters: list[torch.nn.Parameter] = []
+    if not isinstance(encoder, RuntimeCommandResidualActionEncoder):
+        parameters.append(encoder.base.weight)
     if isinstance(encoder, NonlinearResidualActionEncoder):
         parameters.extend(encoder.residual_in.parameters())
         parameters.extend(encoder.residual_out.parameters())
     elif isinstance(encoder, OracleRegimeResidualActionEncoder):
+        for residual in encoder.residuals:
+            parameters.extend(residual.parameters())
+    elif isinstance(encoder, RuntimeCommandResidualActionEncoder):
         for residual in encoder.residuals:
             parameters.extend(residual.parameters())
     return tuple(parameters)

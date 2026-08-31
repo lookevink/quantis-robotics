@@ -9,6 +9,7 @@ except ModuleNotFoundError:
 
 if torch is not None:
     from jepa_wm.action_conditioning_training import (
+        AlternatingCommandRouteSampler,
         AlternatingStratumSampler,
         signed_x_margin_loss,
         signed_x_negatives,
@@ -60,6 +61,27 @@ class ActionConditioningTrainingTest(unittest.TestCase):
             AlternatingStratumSampler(torch.tensor((0, 0)), seed=1)
         with self.assertRaisesRegex(ValueError, "zero or one"):
             AlternatingStratumSampler(torch.tensor((0, 2)), seed=1)
+
+    def test_command_sampler_balances_motion_routes_and_ignores_base(self) -> None:
+        routes = torch.tensor((0, 1, 1, 2, 2, 2))
+        first = AlternatingCommandRouteSampler(routes, seed=23)
+        second = AlternatingCommandRouteSampler(routes, seed=23)
+
+        indices = [first.next_index() for _ in range(6)]
+
+        self.assertEqual(indices, [second.next_index() for _ in range(6)])
+        self.assertEqual([int(routes[index]) for index in indices], [1, 2] * 3)
+        self.assertNotIn(0, indices)
+        self.assertEqual(
+            first.to_dict(),
+            {
+                "strategy": "alternating_seeded_shuffled_command_routes",
+                "seed": 23,
+                "samples_drawn": 6,
+                "samples_by_route": {"negative_x": 3, "positive_x": 3},
+                "rollouts_by_route": {"negative_x": 2, "positive_x": 3},
+            },
+        )
 
     def test_signed_margin_ignores_inactive_x_without_constant_loss(self) -> None:
         actions = torch.zeros((3, 2, 7))

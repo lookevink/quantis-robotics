@@ -8,7 +8,12 @@ from math import isfinite
 import torch
 
 from jepa_wm.action import ACTION_DIMENSIONS
-from jepa_wm.action_conditioning import POST_REGIME, RETAINED_REGIME
+from jepa_wm.action_conditioning import (
+    NEGATIVE_X_COMMAND_ROUTE,
+    POSITIVE_X_COMMAND_ROUTE,
+    POST_REGIME,
+    RETAINED_REGIME,
+)
 
 
 def signed_x_negatives(actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -104,5 +109,62 @@ class AlternatingStratumSampler:
             "rollouts_by_regime": {
                 "retained": self._indices[RETAINED_REGIME].numel(),
                 "post": self._indices[POST_REGIME].numel(),
+            },
+        }
+
+
+class AlternatingCommandRouteSampler:
+    """Deterministically balance negative- and positive-X motion routes."""
+
+    _routes = (NEGATIVE_X_COMMAND_ROUTE, POSITIVE_X_COMMAND_ROUTE)
+
+    def __init__(self, routes: torch.Tensor, *, seed: int) -> None:
+        if routes.ndim != 1 or routes.numel() == 0:
+            raise ValueError("training routes must be a non-empty vector")
+        self._indices = {
+            route: torch.nonzero(routes == route, as_tuple=False).flatten()
+            for route in self._routes
+        }
+        if any(indices.numel() == 0 for indices in self._indices.values()):
+            raise ValueError("balanced training requires both command routes")
+        self.seed = seed
+        self.samples_drawn = 0
+        self._samples_by_route: Counter[int] = Counter()
+        self._generators = {
+            route: torch.Generator(device="cpu").manual_seed(seed + route)
+            for route in self._routes
+        }
+        self._orders = {route: self._shuffle(route) for route in self._routes}
+        self._cursors = {route: 0 for route in self._routes}
+
+    def _shuffle(self, route: int) -> torch.Tensor:
+        indices = self._indices[route]
+        order = torch.randperm(indices.numel(), generator=self._generators[route])
+        return indices[order]
+
+    def next_index(self) -> int:
+        route = self._routes[self.samples_drawn % len(self._routes)]
+        cursor = self._cursors[route]
+        if cursor == self._orders[route].numel():
+            self._orders[route] = self._shuffle(route)
+            cursor = 0
+        index = int(self._orders[route][cursor])
+        self._cursors[route] = cursor + 1
+        self.samples_drawn += 1
+        self._samples_by_route[route] += 1
+        return index
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "strategy": "alternating_seeded_shuffled_command_routes",
+            "seed": self.seed,
+            "samples_drawn": self.samples_drawn,
+            "samples_by_route": {
+                "negative_x": self._samples_by_route[NEGATIVE_X_COMMAND_ROUTE],
+                "positive_x": self._samples_by_route[POSITIVE_X_COMMAND_ROUTE],
+            },
+            "rollouts_by_route": {
+                "negative_x": self._indices[NEGATIVE_X_COMMAND_ROUTE].numel(),
+                "positive_x": self._indices[POSITIVE_X_COMMAND_ROUTE].numel(),
             },
         }
