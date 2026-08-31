@@ -247,12 +247,25 @@ class JepaWmRuntimeShellTest(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
+            held_out_v2 = subprocess.run(
+                (
+                    "bash",
+                    str(ops / "jepa_wm.sh"),
+                    "physical-state-residual-held-out-v2",
+                    "--sentinel-v2",
+                ),
+                cwd=home,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
 
             self.assertEqual(smoke.returncode, 0, smoke.stderr)
             self.assertEqual(preflight.returncode, 0, preflight.stderr)
             self.assertEqual(held_out.returncode, 0, held_out.stderr)
+            self.assertEqual(held_out_v2.returncode, 0, held_out_v2.stderr)
             calls = log.read_text().splitlines()
-            self.assertEqual(len(calls), 3)
+            self.assertEqual(len(calls), 4)
             self.assertIn(
                 f"{repository}|-m jepa_wm.smoke --source",
                 calls[0],
@@ -262,6 +275,10 @@ class JepaWmRuntimeShellTest(unittest.TestCase):
             self.assertIn(
                 "-m jepa_wm.physical_residual_held_out --sentinel",
                 calls[2],
+            )
+            self.assertIn(
+                "-m jepa_wm.physical_residual_held_out_v2 --sentinel-v2",
+                calls[3],
             )
             self.assertTrue(
                 all(

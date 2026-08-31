@@ -1,0 +1,83 @@
+{
+  "schema": "quantis.jepa_wm_physical_state_residual_held_out_experiment.v2",
+  "experiment_id": "contact-insertion-v10-drive-slow-2600-physical-state-held-out-v2",
+  "authority": "one read-only disjoint canonical held-out evaluation after authenticated runtime remediation",
+  "evaluator": {
+    "path": "jepa_wm/physical_residual_held_out_v2.py",
+    "fingerprint": "PENDING_CHECKPOINT",
+    "implementation_revision": "PENDING_CHECKPOINT"
+  },
+  "source": {
+    "training_experiment_config_fingerprint": "b296b7fc064627f13ed87c1baeaf84d4961f1b04db115f9afcc689bf05dda78d",
+    "artifact": {
+      "path": "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/physical_state_residual.pth",
+      "fingerprint": "7f3cb2a99e749dd56e4f4a988b3b1c332ab13c4661c3413118ffb270f237db51"
+    },
+    "training_report_fingerprint": "08f41c36f4e0987c4652244ee0011001de30c76a6e014bd94ad4966780d78aba",
+    "train_evaluation_fingerprint": "a5527c50eeb4a3223b74779584f7dad1f6edc29121534a778abf9147bf4d6bdd",
+    "adjudication": {
+      "path": "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/gate-adjudication-v1.json",
+      "fingerprint": "f9a395cf0926cf965a52c7a498a15b9bf03bc22032da4234bae23ca5dcc3412f",
+      "required_outcome": "physical_state_residual_train_candidate"
+    }
+  },
+  "prior_attempt": {
+    "access_claim": {
+      "path": "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/canonical-held-out-v1-access-claim.json",
+      "fingerprint": "b36c174f6ae8073bfde2d2618b830041f94673a69dac4fe98acfc6f1559cb358"
+    },
+    "failure": {
+      "path": "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/canonical-held-out-v1-failure.json",
+      "fingerprint": "15b5e63c11232be938b4b8edcbf732b1e58be1a21ac7331566bc233564511d3e"
+    },
+    "evaluation_report": "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/canonical-held-out-v1.json",
+    "require_no_evaluation_report": true
+  },
+  "runtime_remediation": {
+    "report": {
+      "path": "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/runtime-preflight-v1.json",
+      "fingerprint": "55f6786b96bfefd95c4d8f6fa450324c364e7a04baac4665e382458f83cc0179"
+    },
+    "claim": {
+      "path": "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/runtime-preflight-v1-claim.json",
+      "fingerprint": "782afe7d20d5a090591b4dbd27c275713d5c894578800152dbe2b0615f14b38f"
+    },
+    "checkpoint_fingerprint": "daa69198aef764932f1cb809239a4e19c71da20a93c6a0b9f3869cb30a13f4aa",
+    "dinov3_checkpoint_fingerprint": "8aa4cbddda325040fc78db2c272754af6ebe8ff2c55f6ec4f1964d8890f66035",
+    "source_revision": "13cf1d9c7e476f53c17714d2e0f1dc239a883ce0",
+    "dinov3_revision": "6876159a11b4df116f30f667f8c9888617df0751"
+  },
+  "corpus": {
+    "split": "held_out",
+    "camera": "wrist",
+    "window": {"start_index": 113, "count": 168, "stride": 1},
+    "action_horizon": 3,
+    "recordings": [
+      {"name": "contact-insertion-v10-drive-slow-2600-held-00", "seed": 12600, "manifest_fingerprint": "dd504100969f706e22795f6c7dc85578f11b0fc53dd5050560a8976c725a5879"},
+      {"name": "contact-insertion-v10-drive-slow-2600-held-01", "seed": 12601, "manifest_fingerprint": "3d5d64eb6efa8a3b18331ad016f1b502be074decd40f411a6aadf72bf4e070f5"}
+    ]
+  },
+  "gate": {
+    "populations": ["combined", "contact-insertion-v10-drive-slow-2600-held-00", "contact-insertion-v10-drive-slow-2600-held-01"],
+    "minimum_overall_win_rate": 0.9,
+    "minimum_retained_win_rate": 0.85,
+    "minimum_post_win_rate": 0.95,
+    "minimum_signed_order_fraction": 0.75,
+    "required_signed_segments": ["retreat", "align", "insert"],
+    "require_positive_mean_each_segment": true,
+    "maximum_residual_ratio": 0.15,
+    "residual_ratio_absolute_tolerance": 0.000001,
+    "require_exact_base_in_semantic_holds": true,
+    "router": {"minimum_accuracy": 0.95, "minimum_retreat_recall": 0.98, "minimum_advance_recall": 0.98, "minimum_grasp_attach_accuracy": 1.0, "maximum_failed_closed_fraction": 0.05, "maximum_semantic_hold_owned_route_activations": 0}
+  },
+  "output": "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/canonical-held-out-v2.json",
+  "recovery": {
+    "root": "/mnt/quantis-assets/quantis-state",
+    "backup_command": "AWS_PROFILE=quantis ./ops/aws.sh backup-state",
+    "require_dedicated_filesystem": true,
+    "compare_live_and_recovery_fingerprints": true,
+    "required_terminal_artifacts": ["/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/canonical-held-out-v2-access-claim.json"],
+    "terminal_report_alternatives": ["/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/canonical-held-out-v2.json", "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/canonical-held-out-v2-failure.json"]
+  },
+  "execution": {"evaluations": 1, "train": false, "run_isaac": false, "issue_live_action": false, "film": false, "stop_on_new_failure_class": true}
+}

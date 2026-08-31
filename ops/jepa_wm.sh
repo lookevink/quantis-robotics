@@ -1647,6 +1647,12 @@ case "${1:-}" in
     "${venv_dir}/bin/python" \
       -m jepa_wm.physical_residual_held_out "${@:2}"
     ;;
+  physical-state-residual-held-out-v2)
+    require_runtime
+    cd "${repo_dir}"
+    "${venv_dir}/bin/python" \
+      -m jepa_wm.physical_residual_held_out_v2 "${@:2}"
+    ;;
   model-load-preflight)
     model_load_preflight
     ;;
@@ -1777,6 +1783,6 @@ case "${1:-}" in
       "${2:-}" "${3:-}" "${4:-}" "${5:-wrist}" "${6:-40}"
     ;;
   *)
-    die "expected install, smoke, model-load-preflight, status, evaluate, adapt, adapt-set, action-conditioning-experiment, action-routing-experiment, observed-context-routing-experiment, causal-context-routing-probe, physical-state-routing-probe, physical-state-residual-experiment, physical-state-residual-adjudication, physical-state-residual-held-out, plan-benchmark, insertion-plan-benchmark, insertion-plan-summarize, insertion-proposal-training-diagnostic, proposal-train, grasp-proposal-train, contact-grasp-proposal-train, insertion-proposal-train, proposal-eval, grasp-proposal-eval, contact-grasp-proposal-eval, insertion-proposal-eval, proposal-summarize, grasp-proposal-summarize, contact-grasp-proposal-summarize, insertion-proposal-summarize, insertion-wm-summarize, control-worker-configure, control-worker-rebase-proposal, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, grasp-control-summarize, control-candidate-report, control-candidate-summarize, control-objective-calibrate, or summarize"
+    die "expected install, smoke, model-load-preflight, status, evaluate, adapt, adapt-set, action-conditioning-experiment, action-routing-experiment, observed-context-routing-experiment, causal-context-routing-probe, physical-state-routing-probe, physical-state-residual-experiment, physical-state-residual-adjudication, physical-state-residual-held-out, physical-state-residual-held-out-v2, plan-benchmark, insertion-plan-benchmark, insertion-plan-summarize, insertion-proposal-training-diagnostic, proposal-train, grasp-proposal-train, contact-grasp-proposal-train, insertion-proposal-train, proposal-eval, grasp-proposal-eval, contact-grasp-proposal-eval, insertion-proposal-eval, proposal-summarize, grasp-proposal-summarize, contact-grasp-proposal-summarize, insertion-proposal-summarize, insertion-wm-summarize, control-worker-configure, control-worker-rebase-proposal, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, grasp-control-summarize, control-candidate-report, control-candidate-summarize, control-objective-calibrate, or summarize"
     ;;
 esac
