@@ -20,11 +20,14 @@ if torch is not None:
         ActionConditioningKind,
         ActionConditioningSpec,
         LoadedActionConditioning,
+        ObservedContextResidualActionEncoder,
+        ObservedContextRoutingSpec,
         RuntimeCommandResidualActionEncoder,
         RuntimeCommandRoutingSpec,
         action_conditioning_parameters,
         action_regime_context,
         install_action_conditioning,
+        observed_action_context,
         save_action_conditioning,
     )
     from jepa_wm.contract import MODEL_ID
@@ -191,6 +194,114 @@ class ActionConditioningTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, r"\[batch, horizon, 7\]"):
             routing.classify(torch.zeros(3, 7))
+
+    def test_observed_context_weights_are_continuous_at_the_deadband(self) -> None:
+        routing = ObservedContextRoutingSpec(
+            signed_x_deadband=1e-4,
+            signed_x_transition_width=1e-4,
+        )
+        observed = torch.zeros((7, 7))
+        observed[:, 0] = torch.tensor(
+            (-0.00005, -0.00010, -0.00015, -0.00030, 0.00010, 0.00015, 0.00030)
+        )
+
+        weights = routing.route_weights(observed)
+
+        torch.testing.assert_close(
+            weights,
+            torch.tensor(
+                (
+                    (0.0, 0.0),
+                    (0.0, 0.0),
+                    (0.5, 0.0),
+                    (1.0, 0.0),
+                    (0.0, 0.0),
+                    (0.0, 0.5),
+                    (0.0, 1.0),
+                )
+            ),
+        )
+
+    def test_observed_context_router_is_candidate_invariant_and_scoped(self) -> None:
+        torch.manual_seed(10)
+        model = _model()
+        actions = torch.stack((torch.ones((3, 7)), -torch.ones((3, 7))))
+        expected = model.model.predictor.action_encoder(actions)
+        installed = install_action_conditioning(
+            model,
+            ActionConditioningSpec(
+                ActionConditioningKind.OBSERVED_CONTEXT_RESIDUAL,
+                observed_context_routing=ObservedContextRoutingSpec(
+                    signed_x_deadband=1e-4,
+                    signed_x_transition_width=1e-4,
+                ),
+            ),
+        )
+        self.assertIsInstance(installed, ObservedContextResidualActionEncoder)
+        with torch.no_grad():
+            installed.residuals[0].weight.fill_(1.0)
+            installed.residuals[1].weight.fill_(-1.0)
+
+        with self.assertRaisesRegex(ValueError, "observed action context"):
+            installed(actions)
+        with observed_action_context(
+            model,
+            torch.tensor(((-0.00030, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),) * 2),
+        ):
+            routed = installed(actions)
+
+        base = installed.base(actions)
+        torch.testing.assert_close(routed[0] - base[0], torch.full((3, 4), 7.0))
+        torch.testing.assert_close(routed[1] - base[1], torch.full((3, 4), -7.0))
+        with self.assertRaisesRegex(ValueError, "observed action context"):
+            installed(actions)
+
+        with observed_action_context(model, torch.zeros((2, 7))):
+            neutral = installed(actions)
+        torch.testing.assert_close(neutral, base, rtol=0.0, atol=0.0)
+
+        parameters = action_conditioning_parameters(model)
+        self.assertFalse(any(parameter is installed.base.weight for parameter in parameters))
+        self.assertFalse(any(parameter is installed.base.bias for parameter in parameters))
+        self.assertEqual(sum(parameter.numel() for parameter in parameters), 56)
+        self.assertFalse(torch.equal(expected, routed))
+
+    def test_observed_context_artifact_round_trips_exact_family(self) -> None:
+        source = _model()
+        spec = ActionConditioningSpec(
+            ActionConditioningKind.OBSERVED_CONTEXT_RESIDUAL,
+            observed_context_routing=ObservedContextRoutingSpec(1e-4, 1e-4),
+        )
+        installed = install_action_conditioning(source, spec)
+        with torch.no_grad():
+            installed.residuals[0].weight.fill_(0.25)
+            installed.residuals[1].weight.fill_(-0.25)
+        contract = ActionConditioningContract(
+            ACTION_CONDITIONING_SCHEMA,
+            _metadata(),
+            "a" * 64,
+            "b" * 64,
+            "c" * 64,
+            spec,
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "observed-context.pth"
+            save_action_conditioning(source, path, contract)
+            loaded = LoadedActionConditioning.load(path)
+            target = _model()
+
+            loaded.apply(target, expected_source_revision="revision")
+
+        self.assertEqual(loaded.contract.spec, spec)
+        self.assertIsInstance(
+            target.model.predictor.action_encoder,
+            ObservedContextResidualActionEncoder,
+        )
+        for expected_value, actual_value in zip(
+            installed.state_dict().values(),
+            target.model.predictor.action_encoder.state_dict().values(),
+        ):
+            torch.testing.assert_close(actual_value, expected_value)
 
     def test_versioned_artifact_round_trips_exact_family(self) -> None:
         source = _model()

@@ -1,0 +1,123 @@
+{
+  "schema": "quantis.jepa_wm_observed_context_routing_experiment.v1",
+  "experiment_id": "contact-insertion-v10-drive-slow-2600-observed-context-routing-v1",
+  "authority": "one TRAIN-only adapter training and evaluation",
+  "base_model": {
+    "model_id": "jepa_wm_droid",
+    "source_revision": "13cf1d9c7e476f53c17714d2e0f1dc239a883ce0",
+    "checkpoint_fingerprint": "daa69198aef764932f1cb809239a4e19c71da20a93c6a0b9f3869cb30a13f4aa",
+    "frozen_encoder": true,
+    "frozen_predictor": true,
+    "frozen_control_action_map": {
+      "artifact_fingerprint": "e2fea116de2aca46bb9a3e72e3d971e49dfc64936f8fc27469353da102ffa0ed",
+      "training_selection_fingerprint": "f13bfc6d8eef6ca875d6f95f0bd5194a927e9bdf068377ea0ca4851c10b38d74",
+      "training_config_fingerprint": "c3f42b98570237fc39127b2a784877b4b10d577d623de8130788074e7083a8d3"
+    }
+  },
+  "corpus": {
+    "roster_experiment_id": "contact-insertion-v10-drive-slow-2600",
+    "training_recordings": [
+      "contact-insertion-v10-drive-slow-2600-train-00",
+      "contact-insertion-v10-drive-slow-2600-train-01",
+      "contact-insertion-v10-drive-slow-2600-train-02",
+      "contact-insertion-v10-drive-slow-2600-train-03",
+      "contact-insertion-v10-drive-slow-2600-train-04",
+      "contact-insertion-v10-drive-slow-2600-train-05",
+      "contact-insertion-v10-drive-slow-2600-train-06",
+      "contact-insertion-v10-drive-slow-2600-train-07",
+      "contact-insertion-v10-drive-slow-2600-train-08",
+      "contact-insertion-v10-drive-slow-2600-train-09",
+      "contact-insertion-v10-drive-slow-2600-train-10",
+      "contact-insertion-v10-drive-slow-2600-train-11"
+    ],
+    "camera": "wrist",
+    "window": {"start_index": 113, "count": 168, "stride": 1},
+    "action_horizon": 3
+  },
+  "router": {
+    "kind": "observed_context_residual",
+    "source": "previous_realized_droid_action",
+    "signed_x_deadband": 0.0001,
+    "signed_x_transition_width": 0.0001,
+    "negative_route": "frozen_base_plus_weighted_linear_negative_x_residual",
+    "positive_route": "frozen_base_plus_weighted_linear_positive_x_residual",
+    "base_route": "frozen_base_only",
+    "runtime_inputs": ["previous_action"],
+    "forbidden_router_inputs": [
+      "candidate_action",
+      "recorded_future_action",
+      "scripted_phase",
+      "context_index",
+      "seed"
+    ],
+    "candidate_invariant": true,
+    "continuous_at_deadband": true,
+    "residual_output_zero_initialized": true,
+    "trainable_base": false
+  },
+  "train_only_previous_action_roster": {
+    "negative_x": 576,
+    "positive_x": 1283,
+    "base": 157,
+    "matches_recorded_future_route": 1895,
+    "total": 2016
+  },
+  "training": {
+    "steps": 2016,
+    "batch_size": 1,
+    "encoding_batch_size": 4,
+    "learning_rate": 0.001,
+    "optimizer": "AdamW",
+    "weight_decay": 0.01,
+    "seed": 236,
+    "sampler": {
+      "strategy": "alternating_seeded_shuffled_observed_motion_routes",
+      "routes": ["negative_x", "positive_x"],
+      "samples_per_route": 1008,
+      "base_route_updates": 0
+    },
+    "objective": {
+      "terminal": "terminal_latent_l2",
+      "zero_negative": {"weight": 1.0, "margin": 0.001},
+      "mismatched_negative": {"weight": 1.0, "margin": 0.001},
+      "candidate_negative": {"weight": 1.0, "margin": 0.001},
+      "signed_x_zero_negative": {"weight": 1.0, "margin": 0.001},
+      "signed_x_opposed_negative": {"weight": 1.0, "margin": 0.001},
+      "signed_x_zero_before_opposed": {"weight": 1.0, "margin": 0.001},
+      "signed_x_activity_threshold": 0.0001
+    },
+    "candidate_mining": {
+      "candidates_per_rollout": 4,
+      "scoring_batch_size": 2,
+      "noise_scale": 0.25,
+      "minimum_goal_cosine": null,
+      "bounds": {
+        "maximum_translation_norm": 0.02,
+        "maximum_rotation_norm": 0.08,
+        "maximum_gripper_delta": 0.25
+      },
+      "first_action_activity": {
+        "translation_norm": 0.001,
+        "rotation_norm": 0.005,
+        "gripper_delta": 0.02
+      }
+    }
+  },
+  "evaluation": {
+    "minimum_overall_win_rate": 0.90,
+    "minimum_retained_win_rate": 0.85,
+    "minimum_post_win_rate": 0.95,
+    "require_positive_mean_improvement_each_semantic_segment": true,
+    "minimum_retreat_signed_order_fraction": 0.75,
+    "minimum_alignment_signed_order_fraction": 0.75,
+    "minimum_insertion_signed_order_fraction": 0.75,
+    "maximum_full_route_residual_to_base_embedding_ratio": 0.15
+  },
+  "stopping_rules": {
+    "one_training_artifact": true,
+    "one_train_evaluation": true,
+    "stop_on_new_failure_class": true,
+    "no_held_out_or_canonical_access": true,
+    "no_live_action_or_filming_authority": true
+  }
+}

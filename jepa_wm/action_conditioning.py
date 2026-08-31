@@ -36,6 +36,7 @@ class ActionConditioningKind(str, Enum):
     NONLINEAR_RESIDUAL = "nonlinear_residual"
     ORACLE_REGIME_RESIDUAL = "oracle_regime_residual"
     RUNTIME_COMMAND_RESIDUAL = "runtime_command_residual"
+    OBSERVED_CONTEXT_RESIDUAL = "observed_context_residual"
 
 
 @dataclass(frozen=True)
@@ -125,10 +126,88 @@ class RuntimeCommandRoutingSpec:
 
 
 @dataclass(frozen=True)
+class ObservedContextRoutingSpec:
+    """Continuous residual weights derived from one previous realized action."""
+
+    signed_x_deadband: float
+    signed_x_transition_width: float
+
+    def __post_init__(self) -> None:
+        if (
+            not isfinite(self.signed_x_deadband)
+            or self.signed_x_deadband < 0.0
+            or not isfinite(self.signed_x_transition_width)
+            or self.signed_x_transition_width <= 0.0
+        ):
+            raise ValueError("observed-context routing thresholds are invalid")
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> ObservedContextRoutingSpec:
+        if not isinstance(payload, dict) or set(payload) != {
+            "signed_x_deadband",
+            "signed_x_transition_width",
+        }:
+            raise ValueError("observed-context routing specification is invalid")
+        try:
+            return cls(
+                signed_x_deadband=float(payload["signed_x_deadband"]),
+                signed_x_transition_width=float(
+                    payload["signed_x_transition_width"]
+                ),
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "observed-context routing specification is invalid"
+            ) from error
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "signed_x_deadband": self.signed_x_deadband,
+            "signed_x_transition_width": self.signed_x_transition_width,
+        }
+
+    def route_weights(self, previous_actions: torch.Tensor) -> torch.Tensor:
+        if previous_actions.ndim != 2 or previous_actions.shape[-1] != 7:
+            raise ValueError("observed-context routing requires [batch, 7] actions")
+        x = previous_actions[..., 0]
+        negative = torch.clamp(
+            (-x - self.signed_x_deadband) / self.signed_x_transition_width,
+            min=0.0,
+            max=1.0,
+        )
+        positive = torch.clamp(
+            (x - self.signed_x_deadband) / self.signed_x_transition_width,
+            min=0.0,
+            max=1.0,
+        )
+        return torch.stack((negative, positive), dim=-1)
+
+    def classify(self, previous_actions: torch.Tensor) -> torch.Tensor:
+        weights = self.route_weights(previous_actions)
+        routes = torch.full(
+            (previous_actions.shape[0],),
+            BASE_COMMAND_ROUTE,
+            dtype=torch.long,
+            device=previous_actions.device,
+        )
+        routes = torch.where(
+            weights[:, 0] > 0.0,
+            NEGATIVE_X_COMMAND_ROUTE,
+            routes,
+        )
+        return torch.where(
+            weights[:, 1] > 0.0,
+            POSITIVE_X_COMMAND_ROUTE,
+            routes,
+        )
+
+
+@dataclass(frozen=True)
 class ActionConditioningSpec:
     kind: ActionConditioningKind
     hidden_dimension: int | None = None
     runtime_routing: RuntimeCommandRoutingSpec | None = None
+    observed_context_routing: ObservedContextRoutingSpec | None = None
 
     def __post_init__(self) -> None:
         if self.kind is ActionConditioningKind.NONLINEAR_RESIDUAL:
@@ -138,12 +217,32 @@ class ActionConditioningSpec:
                 or self.hidden_dimension <= 0
             ):
                 raise ValueError("nonlinear action conditioning requires a hidden dimension")
-            if self.runtime_routing is not None:
+            if (
+                self.runtime_routing is not None
+                or self.observed_context_routing is not None
+            ):
                 raise ValueError("nonlinear action conditioning cannot use runtime routing")
         elif self.kind is ActionConditioningKind.RUNTIME_COMMAND_RESIDUAL:
-            if self.hidden_dimension is not None or self.runtime_routing is None:
+            if (
+                self.hidden_dimension is not None
+                or self.runtime_routing is None
+                or self.observed_context_routing is not None
+            ):
                 raise ValueError("runtime command conditioning requires only routing")
-        elif self.hidden_dimension is not None or self.runtime_routing is not None:
+        elif self.kind is ActionConditioningKind.OBSERVED_CONTEXT_RESIDUAL:
+            if (
+                self.hidden_dimension is not None
+                or self.runtime_routing is not None
+                or self.observed_context_routing is None
+            ):
+                raise ValueError(
+                    "observed-context conditioning requires only context routing"
+                )
+        elif (
+            self.hidden_dimension is not None
+            or self.runtime_routing is not None
+            or self.observed_context_routing is not None
+        ):
             raise ValueError("only nonlinear action conditioning uses a hidden dimension")
 
     @classmethod
@@ -151,6 +250,7 @@ class ActionConditioningSpec:
         if not isinstance(payload, dict) or set(payload) not in (
             {"kind", "hidden_dimension"},
             {"kind", "hidden_dimension", "runtime_routing"},
+            {"kind", "hidden_dimension", "observed_context_routing"},
         ):
             raise ValueError("action-conditioning specification is invalid")
         try:
@@ -163,7 +263,13 @@ class ActionConditioningSpec:
             if routing_payload is not None
             else None
         )
-        return cls(kind, payload["hidden_dimension"], routing)
+        observed_payload = payload.get("observed_context_routing")
+        observed_routing = (
+            ObservedContextRoutingSpec.from_dict(observed_payload)
+            if observed_payload is not None
+            else None
+        )
+        return cls(kind, payload["hidden_dimension"], routing, observed_routing)
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -172,6 +278,10 @@ class ActionConditioningSpec:
         }
         if self.runtime_routing is not None:
             payload["runtime_routing"] = self.runtime_routing.to_dict()
+        if self.observed_context_routing is not None:
+            payload["observed_context_routing"] = (
+                self.observed_context_routing.to_dict()
+            )
         return payload
 
 
@@ -305,11 +415,70 @@ class RuntimeCommandResidualActionEncoder(torch.nn.Module):
         return output
 
 
+class ObservedContextResidualActionEncoder(torch.nn.Module):
+    """Apply one candidate-invariant residual blend per observed context."""
+
+    def __init__(
+        self,
+        base: torch.nn.Linear,
+        routing: ObservedContextRoutingSpec,
+    ) -> None:
+        super().__init__()
+        self.base = base
+        self.residuals = torch.nn.ModuleList(
+            torch.nn.Linear(
+                base.in_features,
+                base.out_features,
+                bias=False,
+                device=base.weight.device,
+                dtype=base.weight.dtype,
+            )
+            for _ in (NEGATIVE_X_COMMAND_ROUTE, POSITIVE_X_COMMAND_ROUTE)
+        )
+        for residual in self.residuals:
+            torch.nn.init.zeros_(residual.weight)
+        self.spec = ActionConditioningSpec(
+            ActionConditioningKind.OBSERVED_CONTEXT_RESIDUAL,
+            observed_context_routing=routing,
+        )
+        self._active_weights: torch.Tensor | None = None
+
+    @contextmanager
+    def use_observed_actions(self, previous_actions: torch.Tensor) -> Iterator[None]:
+        if self._active_weights is not None:
+            raise ValueError("observed action context is already active")
+        routing = self.spec.observed_context_routing
+        assert routing is not None
+        self._active_weights = routing.route_weights(previous_actions).to(
+            device=self.base.weight.device,
+            dtype=self.base.weight.dtype,
+        ).detach()
+        try:
+            yield
+        finally:
+            self._active_weights = None
+
+    def forward(self, actions: torch.Tensor) -> torch.Tensor:
+        weights = self._active_weights
+        if weights is None or actions.ndim < 2 or actions.shape[0] != weights.shape[0]:
+            raise ValueError(
+                "observed action context must be scoped to the candidate batch"
+            )
+        output = self.base(actions)
+        weight_shape = (weights.shape[0],) + (1,) * (output.ndim - 1)
+        for residual_index in range(2):
+            output = output + weights[:, residual_index].reshape(
+                weight_shape
+            ) * self.residuals[residual_index](actions)
+        return output
+
+
 ActionConditioningEncoder = (
     GlobalLinearActionEncoder
     | NonlinearResidualActionEncoder
     | OracleRegimeResidualActionEncoder
     | RuntimeCommandResidualActionEncoder
+    | ObservedContextResidualActionEncoder
 )
 
 
@@ -329,6 +498,7 @@ def _installed_encoder(model: Any) -> ActionConditioningEncoder:
             NonlinearResidualActionEncoder,
             OracleRegimeResidualActionEncoder,
             RuntimeCommandResidualActionEncoder,
+            ObservedContextResidualActionEncoder,
         ),
     ):
         raise ValueError("model has no installed action-conditioning family")
@@ -350,9 +520,15 @@ def install_action_conditioning(
         installed = NonlinearResidualActionEncoder(base, spec.hidden_dimension)
     elif spec.kind is ActionConditioningKind.ORACLE_REGIME_RESIDUAL:
         installed = OracleRegimeResidualActionEncoder(base)
-    else:
+    elif spec.kind is ActionConditioningKind.RUNTIME_COMMAND_RESIDUAL:
         assert spec.runtime_routing is not None
         installed = RuntimeCommandResidualActionEncoder(base, spec.runtime_routing)
+    else:
+        assert spec.observed_context_routing is not None
+        installed = ObservedContextResidualActionEncoder(
+            base,
+            spec.observed_context_routing,
+        )
     predictor.action_encoder = installed
     return installed
 
@@ -360,7 +536,10 @@ def install_action_conditioning(
 def action_conditioning_parameters(model: Any) -> tuple[torch.nn.Parameter, ...]:
     encoder = _installed_encoder(model)
     parameters: list[torch.nn.Parameter] = []
-    if not isinstance(encoder, RuntimeCommandResidualActionEncoder):
+    if not isinstance(
+        encoder,
+        (RuntimeCommandResidualActionEncoder, ObservedContextResidualActionEncoder),
+    ):
         parameters.append(encoder.base.weight)
     if isinstance(encoder, NonlinearResidualActionEncoder):
         parameters.extend(encoder.residual_in.parameters())
@@ -369,6 +548,9 @@ def action_conditioning_parameters(model: Any) -> tuple[torch.nn.Parameter, ...]
         for residual in encoder.residuals:
             parameters.extend(residual.parameters())
     elif isinstance(encoder, RuntimeCommandResidualActionEncoder):
+        for residual in encoder.residuals:
+            parameters.extend(residual.parameters())
+    elif isinstance(encoder, ObservedContextResidualActionEncoder):
         for residual in encoder.residuals:
             parameters.extend(residual.parameters())
     return tuple(parameters)
@@ -381,6 +563,18 @@ def action_regime_context(model: Any, routes: torch.Tensor) -> Iterator[None]:
         with encoder.use_routes(routes):
             yield
     else:
+        yield
+
+
+@contextmanager
+def observed_action_context(
+    model: Any,
+    previous_actions: torch.Tensor,
+) -> Iterator[None]:
+    encoder = _installed_encoder(model)
+    if not isinstance(encoder, ObservedContextResidualActionEncoder):
+        raise ValueError("model has no observed-context action conditioning")
+    with encoder.use_observed_actions(previous_actions):
         yield
 
 
