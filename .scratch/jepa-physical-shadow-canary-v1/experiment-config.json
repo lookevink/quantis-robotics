@@ -4,8 +4,8 @@
   "session_id": "physical-shadow-canary-12601",
   "evaluator": {
     "path": "jepa_wm/physical_shadow_canary.py",
-    "fingerprint": "PENDING_CHECKPOINT",
-    "implementation_revision": "PENDING_CHECKPOINT"
+    "fingerprint": "5a0430594585810c4522e9d903e05225cc9165c6555bdfe7f736bb7d835f3344",
+    "implementation_revision": "3ee2d006a69eed3ed9a2537ef4d84e2583674066"
   },
   "runtime_sources": {
     "jepa_wm/action_model_artifact.py": "74304b1f7ec709ad69ee348b9f47f85d780ec2795bde1571808c9cbbd5626dce",
@@ -19,7 +19,7 @@
     "jepa_wm/control_safety.py": "b81579ec20072235fa6b2cb98392b14735ef4490310b073c4807877b4abc4d06",
     "jepa_wm/shadow_planning.py": "fa0b8de12afe29be8dde0a2be7a94e8e5a8d65b447d83849fc2ffc1de4bc3683",
     "jepa_wm/shadow_safety.py": "c8ff4fdb4190bb9fdb54f9341f4c338b989918e118d181907ff34170a9163071",
-    "ops/aws.sh": "PENDING_CHECKPOINT",
+    "ops/aws.sh": "7fdb778872a1501937b4047549b92c54fd93e5fceb757a35853dd464cc23b02f",
     "ops/run_physical_shadow_canary.sh": "b465f46cd5ecd18761bcc979b4295324e56bee0b6b098bbc7c00ad597c6f021d",
     "sim/control_session.py": "cd9520e692e2d0b14f116b32120dbc44418c41f8bf7352d2fc2ad57925e74077",
     "sim/isaac_control_capture.py": "fcc704b83d71b3787fa679796ae319955db07c3187d8384a1722eb66dc250c6c",
