@@ -2111,6 +2111,49 @@ canonical evaluation, JEPA action, filming, hardware, or production step
 followed. Diagnosis and any revised counterfactual objective belong to a new
 milestone.
 
+### Observed-context routing checkpoint
+
+The next frozen TRAIN-only experiment removed candidate-dependent switching.
+It derived one continuous route from the previous realized 7D action, then
+held that route fixed while scoring the recorded, zero, X-zero, X-opposed,
+mismatched, and mined candidates. The authenticated configuration fingerprint
+is `2b57e748...3abf6`. Only two zero-initialized linear residuals trained; the
+global action map remained bitwise unchanged. The observed route agreed with
+the future recorded command on `1,895/2,016` TRAIN transitions, with 576
+negative-X, 1,283 positive-X, and 157 base observations.
+
+The one permitted artifact trained for 2,016 updates. Loss fell from
+`0.018564` to `0.010682` (minimum `0.007192`), and its fingerprint is
+`27d00e129...b30912`. The complete frozen TRAIN gate then produced:
+
+| Slice | Recorded win | Signed order | Mean improvement |
+| --- | ---: | ---: | ---: |
+| all TRAIN | 0.988095 | 0.988095 | 0.001372884 |
+| retained | 0.962264 | 0.962264 | 0.001469931 |
+| post | 1.000000 | 1.000000 | 0.001328158 |
+| grasp attach | 0.000000 | 0.000000 | -0.000091481 |
+| retreat | 1.000000 | 1.000000 | 0.001623500 |
+| align | 1.000000 | 1.000000 | 0.002226017 |
+| insert | 1.000000 | 1.000000 | 0.000716770 |
+
+The experiment failed two unchanged conjunctive requirements. `grasp_attach`
+lost to zero on all 12 TRAIN cases and had negative mean improvement. The
+positive-X residual/base embedding ratio also reached `0.175160`, above the
+frozen `0.15` ceiling; the negative-X maximum was `0.119134`. Every aggregate,
+retained, post, and main-motion ordering threshold otherwise passed. In
+particular, candidate-independent routing changed retreat, alignment, and
+insertion signed order from the prior router's failure to `1.0` on each
+segment.
+
+This is an attachment-boundary and residual-magnitude negative, not evidence
+of representation insufficiency. The terminal evaluation fingerprint is
+`493f42e4...e5965`; it and the trained artifact/report exactly match the
+verified 16 GiB recovery copy. Per the frozen stopping rule, no retraining,
+fresh canary, canonical evaluation, JEPA action, filming, hardware, or
+production step followed. Full evidence is in
+[`RESULT.md`](.scratch/jepa-observed-context-routing-v1/RESULT.md). Any
+residual constraint or attachment-boundary change belongs to a new milestone.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

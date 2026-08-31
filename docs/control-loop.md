@@ -797,6 +797,22 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     This new training-objective/architecture failure ends the experiment.
     Diagnosis or a revised objective belongs to a separate milestone; no
     retraining, JEPA action, filming, hardware, or production authority opens.
+    A subsequent frozen TRAIN-only experiment removed candidate-dependent
+    switching by routing every candidate comparison from the previous realized
+    7D action. It trained exactly one two-residual artifact on all 2,016 TRAIN
+    transitions with the global action map bitwise frozen. Aggregate,
+    retained, and post recorded-action wins reached `0.988095`, `0.962264`,
+    and `1.0`; retreat, alignment, and insertion each reached `1.0` signed
+    ordering. The complete gate nevertheless failed: all 12 `grasp_attach`
+    cases lost to zero with negative mean improvement, and the positive-X
+    residual/base embedding ratio reached `0.175160` against the frozen
+    `0.15` ceiling. This localizes the negative to the attachment boundary and
+    residual magnitude rather than representation insufficiency. Artifact,
+    report, and terminal evaluation match the verified recovery copy. The
+    stopping rule closed the experiment without retraining, fresh canary,
+    canonical evaluation, JEPA action, filming, hardware, or production
+    authority. Exact identities and segment metrics are in the linked README
+    checkpoint.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one
