@@ -9,7 +9,6 @@ import json
 import math
 import os
 from pathlib import Path
-import subprocess
 from time import monotonic
 from typing import Any, Mapping, Sequence
 
@@ -69,7 +68,7 @@ def load_experiment_config(path: Path) -> dict[str, Any]:
             "contact-insertion-v10-drive-slow-2600-held-01",
         ]
         or gate.get("required_signed_segments") != ["retreat", "align", "insert"]
-        or set(evaluator) != {"path", "fingerprint", "minimum_revision"}
+        or set(evaluator) != {"path", "fingerprint", "implementation_revision"}
         or recovery
         != {
             "root": "/mnt/quantis-assets/quantis-state",
@@ -77,8 +76,11 @@ def load_experiment_config(path: Path) -> dict[str, Any]:
             "require_dedicated_filesystem": True,
             "compare_live_and_recovery_fingerprints": True,
             "required_terminal_artifacts": [
-                str(OUTPUT_PATH),
                 str(ACCESS_CLAIM_PATH),
+            ],
+            "terminal_report_alternatives": [
+                str(OUTPUT_PATH),
+                str(FAILURE_PATH),
             ],
         }
         or execution
@@ -96,7 +98,10 @@ def load_experiment_config(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _authenticate_evaluator(experiment: Mapping[str, Any]) -> dict[str, str]:
+def _authenticate_evaluator(
+    experiment: Mapping[str, Any],
+    implementation_revision: str,
+) -> dict[str, str]:
     evaluator = experiment["evaluator"]
     path = Path(__file__).resolve()
     if (
@@ -104,49 +109,12 @@ def _authenticate_evaluator(experiment: Mapping[str, Any]) -> dict[str, str]:
         or _sha256(path) != evaluator["fingerprint"]
     ):
         raise ValueError("physical residual held-out evaluator identity changed")
-    root = path.parent.parent
-    try:
-        head = subprocess.run(
-            ("git", "-C", str(root), "rev-parse", "HEAD"),
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        tracked = subprocess.run(
-            (
-                "git",
-                "-C",
-                str(root),
-                "status",
-                "--porcelain",
-                "--untracked-files=no",
-            ),
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        ancestry = subprocess.run(
-            (
-                "git",
-                "-C",
-                str(root),
-                "merge-base",
-                "--is-ancestor",
-                evaluator["minimum_revision"],
-                head,
-            ),
-            check=False,
-        ).returncode
-    except (OSError, subprocess.CalledProcessError) as error:
-        raise ValueError(
-            "held-out evaluator revision cannot be authenticated"
-        ) from error
-    if tracked or ancestry != 0:
-        raise ValueError("held-out evaluator repository state changed")
+    if implementation_revision != evaluator["implementation_revision"]:
+        raise ValueError("held-out evaluator implementation revision changed")
     return {
         "path": str(path),
         "fingerprint": evaluator["fingerprint"],
-        "revision": head,
+        "implementation_revision": implementation_revision,
     }
 
 
@@ -174,6 +142,11 @@ def _claim_canonical_access(
         stream.write(encoded)
         stream.flush()
         os.fsync(stream.fileno())
+    directory = os.open(claim_path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
     return payload
 
 
@@ -358,6 +331,7 @@ def evaluate(
     *,
     experiment_config: Path,
     training_experiment_config: Path,
+    evaluator_revision: str,
 ) -> dict[str, Any]:
     import torch
 
@@ -413,7 +387,9 @@ def evaluate(
     base_identity = _authenticate_base_model(
         training_experiment, source, checkpoint
     )
-    evaluator_identity = _authenticate_evaluator(experiment)
+    evaluator_identity = _authenticate_evaluator(
+        experiment, evaluator_revision
+    )
     artifact_identity, training_identity, adjudication_identity = (
         _authenticate_authority(
             experiment, artifact, adjudication, train_evaluation
@@ -423,8 +399,6 @@ def evaluate(
         experiment["corpus"]["action_horizon"]
     ):
         raise ValueError("frozen held-out action horizon changed")
-    access_claim = _claim_canonical_access(ACCESS_CLAIM_PATH, recordings)
-    _authenticate_recordings(recordings, experiment)
     loaded = LoadedActionConditioning.load(
         artifact, expected_identity=artifact_identity
     )
@@ -435,6 +409,8 @@ def evaluate(
         training_experiment,
         source_revision=os.environ.get("JEPA_WM_REVISION", "unknown"),
     )
+    access_claim = _claim_canonical_access(ACCESS_CLAIM_PATH, recordings)
+    _authenticate_recordings(recordings, experiment)
     corpus = experiment["corpus"]
     selection = RolloutTrainingSelection.load(
         recordings,
@@ -640,6 +616,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--experiment-config", type=Path, required=True)
     parser.add_argument("--training-experiment-config", type=Path, required=True)
+    parser.add_argument("--evaluator-revision", required=True)
     arguments = parser.parse_args(argv)
     values = vars(arguments)
     try:

@@ -29,13 +29,15 @@ map.
 
 Before the first canonical read, atomically claim the one permitted evaluation.
 Pre-claim invocation failures remain retryable; once the claim exists, process
-loss or any exception is terminal. Authenticate the exact evaluator module and
-a clean repository descended from its frozen checkpoint. Assert the global
-rollout protocol still has action horizon three.
+loss or any exception is terminal. Persist both the claim file and its parent
+directory before the first read. Authenticate the exact evaluator module and
+its explicit frozen implementation revision even on the gitless deployment
+checkout. Assert the global rollout protocol still has action horizon three.
 
-After the terminal report, run the repository recovery workflow onto the
+After the terminal evaluation report or terminal failure report, run the repository recovery workflow onto the
 dedicated `/mnt/quantis-assets` filesystem. Independently hash the live report
-and access claim, then require byte-identical copies below
+and access claim, then require byte-identical copies of the claim and exactly
+one terminal-report alternative below
 `/mnt/quantis-assets/quantis-state/jepa-wm/checkpoints` before documenting the
 result.
 

@@ -4,8 +4,8 @@
   "authority": "one read-only disjoint canonical held-out evaluation",
   "evaluator": {
     "path": "jepa_wm/physical_residual_held_out.py",
-    "fingerprint": "58bd0c56666bb8642160398e8e54db2421eab96cc34453674f09d2309d3d7537",
-    "minimum_revision": "631f7476e88c35f29b32c847cfc932eeab99155a"
+    "fingerprint": "PENDING_SECOND_CHECKPOINT",
+    "implementation_revision": "PENDING_SECOND_CHECKPOINT"
   },
   "source": {
     "training_experiment_config_fingerprint": "b296b7fc064627f13ed87c1baeaf84d4961f1b04db115f9afcc689bf05dda78d",
@@ -66,8 +66,11 @@
     "require_dedicated_filesystem": true,
     "compare_live_and_recovery_fingerprints": true,
     "required_terminal_artifacts": [
-      "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/canonical-held-out-v1.json",
       "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/canonical-held-out-v1-access-claim.json"
+    ],
+    "terminal_report_alternatives": [
+      "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/canonical-held-out-v1.json",
+      "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/canonical-held-out-v1-failure.json"
     ]
   },
   "execution": {
