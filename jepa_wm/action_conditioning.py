@@ -68,7 +68,9 @@ class RuntimeCommandRoutingSpec:
             self.gripper_activity_deadband,
         )
         if not all(isfinite(value) and value >= 0.0 for value in values):
-            raise ValueError("runtime command deadbands must be finite and non-negative")
+            raise ValueError(
+                "runtime command deadbands must be finite and non-negative"
+            )
         if self.horizon_x_statistic != "mean":
             raise ValueError("runtime command routing requires mean horizon X")
 
@@ -88,14 +90,14 @@ class RuntimeCommandRoutingSpec:
                 translation_activity_deadband=float(
                     payload["translation_activity_deadband"]
                 ),
-                rotation_activity_deadband=float(
-                    payload["rotation_activity_deadband"]
-                ),
+                rotation_activity_deadband=float(payload["rotation_activity_deadband"]),
                 gripper_activity_deadband=float(payload["gripper_activity_deadband"]),
                 horizon_x_statistic=str(payload["horizon_x_statistic"]),
             )
         except (TypeError, ValueError) as error:
-            raise ValueError("runtime command routing specification is invalid") from error
+            raise ValueError(
+                "runtime command routing specification is invalid"
+            ) from error
 
     def to_dict(self) -> dict[str, float | str]:
         return {
@@ -110,7 +112,9 @@ class RuntimeCommandRoutingSpec:
         """Return functional routes and whether each horizon contains activity."""
 
         if actions.ndim != 3 or actions.shape[-1] != 7 or actions.shape[1] == 0:
-            raise ValueError("runtime command routing requires [batch, horizon, 7] actions")
+            raise ValueError(
+                "runtime command routing requires [batch, horizon, 7] actions"
+            )
         translation_active = (
             torch.linalg.vector_norm(actions[..., :3], dim=-1)
             > self.translation_activity_deadband
@@ -162,9 +166,7 @@ class ObservedContextRoutingSpec:
         try:
             return cls(
                 signed_x_deadband=float(payload["signed_x_deadband"]),
-                signed_x_transition_width=float(
-                    payload["signed_x_transition_width"]
-                ),
+                signed_x_transition_width=float(payload["signed_x_transition_width"]),
             )
         except (TypeError, ValueError) as error:
             raise ValueError(
@@ -229,14 +231,18 @@ class ActionConditioningSpec:
                 or not isinstance(self.hidden_dimension, int)
                 or self.hidden_dimension <= 0
             ):
-                raise ValueError("nonlinear action conditioning requires a hidden dimension")
+                raise ValueError(
+                    "nonlinear action conditioning requires a hidden dimension"
+                )
             if (
                 self.runtime_routing is not None
                 or self.observed_context_routing is not None
                 or self.causal_context_routing is not None
                 or self.physical_state_routing is not None
             ):
-                raise ValueError("nonlinear action conditioning cannot use runtime routing")
+                raise ValueError(
+                    "nonlinear action conditioning cannot use runtime routing"
+                )
         elif self.kind is ActionConditioningKind.RUNTIME_COMMAND_RESIDUAL:
             if (
                 self.hidden_dimension is not None
@@ -286,7 +292,9 @@ class ActionConditioningSpec:
             or self.causal_context_routing is not None
             or self.physical_state_routing is not None
         ):
-            raise ValueError("only nonlinear action conditioning uses a hidden dimension")
+            raise ValueError(
+                "only nonlinear action conditioning uses a hidden dimension"
+            )
 
     @classmethod
     def from_dict(cls, payload: Any) -> ActionConditioningSpec:
@@ -388,7 +396,9 @@ class NonlinearResidualActionEncoder(torch.nn.Module):
         )
 
     def forward(self, actions: torch.Tensor) -> torch.Tensor:
-        residual = self.residual_out(torch.nn.functional.silu(self.residual_in(actions)))
+        residual = self.residual_out(
+            torch.nn.functional.silu(self.residual_in(actions))
+        )
         return self.base(actions) + residual
 
 
@@ -424,7 +434,9 @@ class OracleRegimeResidualActionEncoder(torch.nn.Module):
             or torch.any((routes != RETAINED_REGIME) & (routes != POST_REGIME))
         ):
             raise ValueError("action regime routes must contain only zero or one")
-        self._active_routes = routes.to(device=self.base.weight.device, dtype=torch.long)
+        self._active_routes = routes.to(
+            device=self.base.weight.device, dtype=torch.long
+        )
         try:
             yield
         finally:
@@ -445,7 +457,9 @@ class OracleRegimeResidualActionEncoder(torch.nn.Module):
 class RuntimeCommandResidualActionEncoder(torch.nn.Module):
     """Apply signed-X residuals while preserving the base map for holds."""
 
-    def __init__(self, base: torch.nn.Linear, routing: RuntimeCommandRoutingSpec) -> None:
+    def __init__(
+        self, base: torch.nn.Linear, routing: RuntimeCommandRoutingSpec
+    ) -> None:
         super().__init__()
         self.base = base
         self.residuals = torch.nn.ModuleList(
@@ -524,10 +538,14 @@ class ObservedContextResidualActionEncoder(torch.nn.Module):
             raise ValueError("observed action context is already active")
         routing = self.spec.observed_context_routing
         assert routing is not None
-        self._active_weights = routing.route_weights(previous_actions).to(
-            device=self.base.weight.device,
-            dtype=self.base.weight.dtype,
-        ).detach()
+        self._active_weights = (
+            routing.route_weights(previous_actions)
+            .to(
+                device=self.base.weight.device,
+                dtype=self.base.weight.dtype,
+            )
+            .detach()
+        )
         try:
             yield
         finally:
@@ -636,7 +654,9 @@ class CausalContextResidualActionEncoder(torch.nn.Module):
             or actions.ndim < 2
             or actions.shape[0] != decision.routes.shape[0]
         ):
-            raise ValueError("causal action context must be scoped to the candidate batch")
+            raise ValueError(
+                "causal action context must be scoped to the candidate batch"
+            )
         base = self.base(actions)
         weight_shape = (decision.routes.shape[0],) + (1,) * (base.ndim - 1)
         residual = torch.zeros_like(base)
@@ -777,7 +797,7 @@ def _predictor(model: Any) -> Any:
         raise ValueError("model has no predictor") from error
 
 
-def _installed_encoder(model: Any) -> ActionConditioningEncoder:
+def installed_action_conditioning(model: Any) -> ActionConditioningEncoder:
     encoder = getattr(_predictor(model), "action_encoder", None)
     if not isinstance(
         encoder,
@@ -836,7 +856,7 @@ def install_action_conditioning(
 
 
 def action_conditioning_parameters(model: Any) -> tuple[torch.nn.Parameter, ...]:
-    encoder = _installed_encoder(model)
+    encoder = installed_action_conditioning(model)
     parameters: list[torch.nn.Parameter] = []
     if not isinstance(
         encoder,
@@ -872,7 +892,7 @@ def action_conditioning_parameters(model: Any) -> tuple[torch.nn.Parameter, ...]
 
 
 def causal_context_encoder(model: Any) -> CausalContextResidualActionEncoder:
-    encoder = _installed_encoder(model)
+    encoder = installed_action_conditioning(model)
     if not isinstance(encoder, CausalContextResidualActionEncoder):
         raise ValueError("model has no causal-context action conditioning")
     return encoder
@@ -892,7 +912,7 @@ def causal_residual_parameters(model: Any) -> tuple[torch.nn.Parameter, ...]:
 
 
 def physical_state_encoder(model: Any) -> PhysicalStateResidualActionEncoder:
-    encoder = _installed_encoder(model)
+    encoder = installed_action_conditioning(model)
     if not isinstance(encoder, PhysicalStateResidualActionEncoder):
         raise ValueError("model has no physical-state action conditioning")
     return encoder
@@ -913,7 +933,7 @@ def physical_residual_parameters(model: Any) -> tuple[torch.nn.Parameter, ...]:
 
 @contextmanager
 def action_regime_context(model: Any, routes: torch.Tensor) -> Iterator[None]:
-    encoder = _installed_encoder(model)
+    encoder = installed_action_conditioning(model)
     if isinstance(encoder, OracleRegimeResidualActionEncoder):
         with encoder.use_routes(routes):
             yield
@@ -926,7 +946,7 @@ def observed_action_context(
     model: Any,
     previous_actions: torch.Tensor,
 ) -> Iterator[None]:
-    encoder = _installed_encoder(model)
+    encoder = installed_action_conditioning(model)
     if not isinstance(encoder, ObservedContextResidualActionEncoder):
         raise ValueError("model has no observed-context action conditioning")
     with encoder.use_observed_actions(previous_actions):
@@ -966,7 +986,9 @@ class ActionConditioningContract:
                 ActionConditioningSpec.from_dict(payload["spec"]),
             )
         except (KeyError, TypeError, ValueError) as error:
-            raise ValueError("action-conditioning artifact contract is invalid") from error
+            raise ValueError(
+                "action-conditioning artifact contract is invalid"
+            ) from error
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -984,7 +1006,7 @@ def save_action_conditioning(
     path: Path,
     contract: ActionConditioningContract,
 ) -> None:
-    encoder = _installed_encoder(model)
+    encoder = installed_action_conditioning(model)
     if encoder.spec != contract.spec:
         raise ValueError("installed action conditioning disagrees with its contract")
     path = path.resolve()
@@ -1014,7 +1036,9 @@ class LoadedActionConditioning:
         encoded = resolved.read_bytes()
         identity = ArtifactIdentity(resolved, sha256(encoded).hexdigest())
         if expected_identity is not None and identity != expected_identity:
-            raise ValueError("action-conditioning artifact identity changed before loading")
+            raise ValueError(
+                "action-conditioning artifact identity changed before loading"
+            )
         payload = torch.load(BytesIO(encoded), map_location="cpu", weights_only=True)
         if not isinstance(payload, dict) or not isinstance(
             payload.get("action_encoder"), dict

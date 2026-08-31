@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass
 from math import isfinite
 from typing import Sequence
@@ -16,6 +15,10 @@ from jepa_wm.causal_routing import (
     CausalMotionRoute,
     CausalMotionRouter,
     pool_context_latents,
+)
+from jepa_wm.route_metrics import (
+    balanced_route_class_weights,
+    route_metrics,
 )
 
 
@@ -116,43 +119,6 @@ class CausalRouteProbeDataset:
         )
 
 
-def _route_counts(values: torch.Tensor) -> dict[str, int]:
-    counts = Counter(int(value) for value in values)
-    return {name: counts[index] for index, name in enumerate(CAUSAL_MOTION_ROUTE_NAMES)}
-
-
-def _metrics(labels: torch.Tensor, predictions: torch.Tensor) -> dict[str, object]:
-    if labels.numel() == 0 or predictions.shape != labels.shape:
-        raise ValueError("causal route metrics require aligned non-empty labels")
-    by_route = {}
-    for route, name in enumerate(CAUSAL_MOTION_ROUTE_NAMES):
-        selected = labels == route
-        count = int(selected.sum())
-        by_route[name] = {
-            "examples": count,
-            "recall": (
-                float((predictions[selected] == route).float().mean())
-                if count
-                else None
-            ),
-        }
-    return {
-        "examples": int(labels.numel()),
-        "accuracy": float((predictions == labels).float().mean()),
-        "labels": _route_counts(labels),
-        "predictions": _route_counts(predictions),
-        "by_route": by_route,
-    }
-
-
-def _balanced_class_weights(labels: torch.Tensor) -> torch.Tensor:
-    counts = torch.bincount(labels, minlength=len(CausalMotionRoute)).float()
-    present = counts > 0
-    weights = torch.zeros_like(counts)
-    weights[present] = labels.numel() / (present.sum() * counts[present])
-    return weights
-
-
 def run_grouped_causal_route_probe(
     dataset: CausalRouteProbeDataset,
     routing: CausalContextRoutingSpec,
@@ -188,7 +154,7 @@ def run_grouped_causal_route_probe(
         train_context = dataset.context_latents[train_mask].to(device)
         train_poses = dataset.context_poses[train_mask].to(device)
         train_previous = dataset.previous_actions[train_mask].to(device)
-        class_weights = _balanced_class_weights(train_labels).to(device)
+        class_weights = balanced_route_class_weights(train_labels).to(device)
         router.train()
         for _ in range(config.steps):
             loss = torch.nn.functional.cross_entropy(
@@ -213,13 +179,13 @@ def run_grouped_causal_route_probe(
         folds.append(
             {
                 "held_group": held_group,
-                **_metrics(dataset.labels[held_mask], held_predictions),
+                **route_metrics(dataset.labels[held_mask], held_predictions),
                 "failed_closed_fraction": float(decision.failed_closed.float().mean()),
                 "mean_confidence": float(decision.confidence.mean()),
             }
         )
     by_slice = {
-        name: _metrics(dataset.labels[indices], predictions[indices])
+        name: route_metrics(dataset.labels[indices], predictions[indices])
         for name in sorted(set(dataset.slices))
         if (indices := torch.tensor([value == name for value in dataset.slices])).any()
     }
@@ -234,7 +200,7 @@ def run_grouped_causal_route_probe(
             "weight_decay": config.weight_decay,
             "seed": config.seed,
         },
-        "overall": _metrics(dataset.labels, predictions),
+        "overall": route_metrics(dataset.labels, predictions),
         "by_slice": by_slice,
         "folds": folds,
         "failed_closed_fraction": float(failed_closed.float().mean()),

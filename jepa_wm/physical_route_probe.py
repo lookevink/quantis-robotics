@@ -7,15 +7,15 @@ from math import isfinite
 
 import torch
 
-from jepa_wm.causal_route_probe import (
-    _balanced_class_weights,
-    _metrics,
-)
 from jepa_wm.causal_routing import CausalMotionRoute
 from jepa_wm.physical_routing import (
     PHYSICAL_ROUTING_FEATURE_DIMENSION,
     PhysicalMotionRouter,
     PhysicalStateRoutingSpec,
+)
+from jepa_wm.route_metrics import (
+    balanced_route_class_weights,
+    route_metrics,
 )
 
 
@@ -112,7 +112,7 @@ def run_grouped_physical_route_probe(
             lr=config.learning_rate,
             weight_decay=config.weight_decay,
         )
-        class_weights = _balanced_class_weights(train_labels).to(device)
+        class_weights = balanced_route_class_weights(train_labels).to(device)
         router.train()
         for _ in range(config.steps):
             loss = torch.nn.functional.cross_entropy(
@@ -133,13 +133,13 @@ def run_grouped_physical_route_probe(
         folds.append(
             {
                 "held_group": held_group,
-                **_metrics(dataset.labels[held_mask], held_predictions),
+                **route_metrics(dataset.labels[held_mask], held_predictions),
                 "failed_closed_fraction": float(decision.failed_closed.float().mean()),
                 "mean_confidence": float(decision.confidence.mean()),
             }
         )
     by_slice = {
-        name: _metrics(dataset.labels[indices], predictions[indices])
+        name: route_metrics(dataset.labels[indices], predictions[indices])
         for name in sorted(set(dataset.slices))
         if (indices := torch.tensor([value == name for value in dataset.slices])).any()
     }
@@ -156,7 +156,7 @@ def run_grouped_physical_route_probe(
             "weight_decay": config.weight_decay,
             "seed": config.seed,
         },
-        "overall": _metrics(dataset.labels, predictions),
+        "overall": route_metrics(dataset.labels, predictions),
         "by_slice": by_slice,
         "folds": folds,
         "failed_closed_fraction": float(failed_closed.float().mean()),

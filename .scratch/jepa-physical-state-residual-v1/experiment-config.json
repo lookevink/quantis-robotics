@@ -1,0 +1,167 @@
+{
+  "schema": "quantis.jepa_wm_physical_state_residual_experiment.v1",
+  "experiment_id": "contact-insertion-v10-drive-slow-2600-physical-state-residual-v1",
+  "authority": "one TRAIN-only residual artifact and terminal TRAIN evaluation",
+  "base_model": {
+    "model_id": "jepa_wm_droid",
+    "source_revision": "13cf1d9c7e476f53c17714d2e0f1dc239a883ce0",
+    "checkpoint_fingerprint": "daa69198aef764932f1cb809239a4e19c71da20a93c6a0b9f3869cb30a13f4aa",
+    "frozen_encoder": true,
+    "frozen_predictor": true,
+    "frozen_control_action_map": {
+      "artifact_fingerprint": "e2fea116de2aca46bb9a3e72e3d971e49dfc64936f8fc27469353da102ffa0ed",
+      "training_selection_fingerprint": "f13bfc6d8eef6ca875d6f95f0bd5194a927e9bdf068377ea0ca4851c10b38d74",
+      "training_config_fingerprint": "c3f42b98570237fc39127b2a784877b4b10d577d623de8130788074e7083a8d3"
+    }
+  },
+  "passed_router_probe": {
+    "report_fingerprint": "385305e7268e296702f1ecfd5e0104426894a119e15e73567acb03e129801ffa",
+    "experiment_config_fingerprint": "f889fcd39704f9d242e6f4e45965fc5d857e6cf2727109aad86b3cc34361f2d5",
+    "training_selection_fingerprint": "f13bfc6d8eef6ca875d6f95f0bd5194a927e9bdf068377ea0ca4851c10b38d74",
+    "selected_input_fingerprint": "576404f64ac55f47490ef8358eb2121f4dd044f5ab72e396a2817f439fe3d839"
+  },
+  "corpus": {
+    "training_recordings": [
+      "contact-insertion-v10-drive-slow-2600-train-00",
+      "contact-insertion-v10-drive-slow-2600-train-01",
+      "contact-insertion-v10-drive-slow-2600-train-02",
+      "contact-insertion-v10-drive-slow-2600-train-03",
+      "contact-insertion-v10-drive-slow-2600-train-04",
+      "contact-insertion-v10-drive-slow-2600-train-05",
+      "contact-insertion-v10-drive-slow-2600-train-06",
+      "contact-insertion-v10-drive-slow-2600-train-07",
+      "contact-insertion-v10-drive-slow-2600-train-08",
+      "contact-insertion-v10-drive-slow-2600-train-09",
+      "contact-insertion-v10-drive-slow-2600-train-10",
+      "contact-insertion-v10-drive-slow-2600-train-11"
+    ],
+    "camera": "wrist",
+    "window": {"start_index": 113, "count": 168, "stride": 1},
+    "action_horizon": 3
+  },
+  "labeling": {
+    "source": "recorded_future_action_horizon",
+    "semantic_hold_segments": ["retreat_hold", "align_hold", "seated_hold"],
+    "signed_x_deadband": 0.0001,
+    "translation_activity_deadband": 0.0001,
+    "rotation_activity_deadband": 0.001,
+    "gripper_activity_deadband": 0.005
+  },
+  "router": {
+    "observation_schema": "quantis.jepa_wm_physical_routing_observation.v2",
+    "feature_names": [
+      "plug_to_socket_axial_m",
+      "plug_to_socket_lateral_x_m",
+      "plug_to_socket_lateral_y_m",
+      "plug_to_socket_lateral_z_m",
+      "end_effector_to_socket_x_m",
+      "end_effector_to_socket_y_m",
+      "end_effector_to_socket_z_m",
+      "gripper_frame_to_socket_x_m",
+      "gripper_frame_to_socket_y_m",
+      "gripper_frame_to_socket_z_m",
+      "plug_to_socket_orientation_w",
+      "plug_to_socket_orientation_x",
+      "plug_to_socket_orientation_y",
+      "plug_to_socket_orientation_z",
+      "gripper_width_m",
+      "arm_tracking_error_rad",
+      "gripper_tracking_error_m",
+      "contact_force_newtons",
+      "plug_attached",
+      "previous_action_x",
+      "previous_action_y",
+      "previous_action_z",
+      "previous_action_rx",
+      "previous_action_ry",
+      "previous_action_rz",
+      "previous_action_gripper"
+    ],
+    "hidden_dimensions": [64, 64],
+    "minimum_route_confidence": 0.75,
+    "maximum_residual_ratio": 0.15,
+    "runtime_inputs": ["physical_observation"],
+    "forbidden_runtime_inputs": [
+      "visual_context_latent",
+      "candidate_action",
+      "recorded_future_action",
+      "scripted_phase",
+      "context_index",
+      "seed"
+    ],
+    "candidate_invariant": true,
+    "semantic_hold_segments": ["retreat_hold", "align_hold", "seated_hold"],
+    "fit": {
+      "steps": 1000,
+      "learning_rate": 0.003,
+      "weight_decay": 0.0001,
+      "seed": 237,
+      "minimum_accuracy": 0.95,
+      "minimum_retreat_recall": 0.98,
+      "minimum_advance_recall": 0.98,
+      "minimum_grasp_attach_accuracy": 1.0,
+      "maximum_failed_closed_fraction": 0.05,
+      "maximum_semantic_hold_owned_route_activations": 0
+    }
+  },
+  "training": {
+    "steps": 2016,
+    "batch_size": 1,
+    "encoding_batch_size": 4,
+    "learning_rate": 0.001,
+    "optimizer": "AdamW",
+    "weight_decay": 0.01,
+    "seed": 238,
+    "sampler": {
+      "strategy": "alternating_seeded_shuffled_semantic_motion_routes",
+      "routes": ["retreat", "advance"],
+      "samples_per_route": 1008,
+      "hold_or_active_other_updates": 0
+    },
+    "objective": {
+      "terminal": "terminal_latent_l2",
+      "zero_negative": {"weight": 1.0, "margin": 0.001},
+      "mismatched_negative": {"weight": 1.0, "margin": 0.001},
+      "candidate_negative": {"weight": 1.0, "margin": 0.001},
+      "signed_x_zero_negative": {"weight": 1.0, "margin": 0.001},
+      "signed_x_opposed_negative": {"weight": 1.0, "margin": 0.001},
+      "signed_x_zero_before_opposed": {"weight": 1.0, "margin": 0.001},
+      "signed_x_activity_threshold": 0.0001
+    },
+    "candidate_mining": {
+      "candidates_per_rollout": 4,
+      "scoring_batch_size": 2,
+      "noise_scale": 0.25,
+      "minimum_goal_cosine": null,
+      "bounds": {
+        "maximum_translation_norm": 0.02,
+        "maximum_rotation_norm": 0.08,
+        "maximum_gripper_delta": 0.25
+      },
+      "first_action_activity": {
+        "translation_norm": 0.001,
+        "rotation_norm": 0.005,
+        "gripper_delta": 0.02
+      }
+    }
+  },
+  "evaluation": {
+    "minimum_overall_win_rate": 0.90,
+    "minimum_retained_win_rate": 0.85,
+    "minimum_post_win_rate": 0.95,
+    "require_positive_mean_improvement_each_semantic_segment": true,
+    "minimum_retreat_signed_order_fraction": 0.75,
+    "minimum_alignment_signed_order_fraction": 0.75,
+    "minimum_insertion_signed_order_fraction": 0.75,
+    "residual_ratio_candidates": ["recorded", "zero", "x_zero", "x_opposed"],
+    "maximum_applied_residual_to_base_embedding_ratio": 0.15,
+    "require_exact_base_in_semantic_holds": true
+  },
+  "stopping_rules": {
+    "one_training_artifact": true,
+    "one_train_evaluation": true,
+    "stop_on_new_failure_class": true,
+    "no_held_out_or_canonical_access": true,
+    "no_live_action_or_filming_authority": true
+  }
+}
