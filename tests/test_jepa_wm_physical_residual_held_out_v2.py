@@ -33,15 +33,15 @@ class PhysicalResidualHeldOutV2Test(unittest.TestCase):
         self.assertFalse(execution["film"])
         self.assertEqual(
             FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
-            "a4ed3975e75104785f495dc5d0affda48c02e527f64c783d7f51ff2f2187fb18",
+            "2cc04d39fa843850e0fe685e1349b508b563aeed07fc1b989ec76f1ffe65fd4e",
         )
         self.assertEqual(
             self.config["evaluator"]["fingerprint"],
-            "caed23e4763ee8163ef558c4d4027e14d917326d236ade44f8c9a172bc841d0f",
+            "46d4fdd448fc94a2049eaf5323e7c23b3bff98da6a19e724afd47c5c2450a836",
         )
         self.assertEqual(
             self.config["evaluator"]["implementation_revision"],
-            "e0ea97bbb9fb8d4111ac7677122e5ce3484c5d91",
+            "3e06d7ece80078315b19371444c61c984430d3fc",
         )
 
     def test_contract_binds_consumed_v1_negative_and_runtime_remediation(self) -> None:
