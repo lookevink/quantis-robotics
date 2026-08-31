@@ -4,8 +4,8 @@
   "session_id": "physical-shadow-canary-12601",
   "evaluator": {
     "path": "jepa_wm/physical_shadow_canary.py",
-    "fingerprint": "5a0430594585810c4522e9d903e05225cc9165c6555bdfe7f736bb7d835f3344",
-    "implementation_revision": "6fe3ddceb7e75c06cf547b887ecbe1c0fee7b1c2"
+    "fingerprint": "PENDING_CHECKPOINT",
+    "implementation_revision": "PENDING_CHECKPOINT"
   },
   "runtime_sources": {
     "jepa_wm/action_model_artifact.py": "74304b1f7ec709ad69ee348b9f47f85d780ec2795bde1571808c9cbbd5626dce",
@@ -15,9 +15,18 @@
     "jepa_wm/physical_observation.py": "11722bff80b106a083a707e00aed94df08b35815d15f2daff179f030ee6905ad",
     "jepa_wm/physical_shadow_canary.py": "5a0430594585810c4522e9d903e05225cc9165c6555bdfe7f736bb7d835f3344",
     "jepa_wm/planning_scoring.py": "e4e720825dca3156f18378f89fee790751f7f5ce6ee08c24ea6708f33809a643",
-    "ops/aws.sh": "6e131de40dfc4ab4eb9bb36d4bd416918024c998f1de54d1c1785d3885ad93f2",
+    "jepa_wm/action.py": "PENDING_CHECKPOINT",
+    "jepa_wm/control_safety.py": "PENDING_CHECKPOINT",
+    "jepa_wm/shadow_planning.py": "PENDING_CHECKPOINT",
+    "jepa_wm/shadow_safety.py": "PENDING_CHECKPOINT",
+    "ops/aws.sh": "PENDING_CHECKPOINT",
     "ops/run_physical_shadow_canary.sh": "b465f46cd5ecd18761bcc979b4295324e56bee0b6b098bbc7c00ad597c6f021d",
-    "sim/isaac_control_capture.py": "fcc704b83d71b3787fa679796ae319955db07c3187d8384a1722eb66dc250c6c"
+    "sim/control_session.py": "PENDING_CHECKPOINT",
+    "sim/isaac_control_capture.py": "fcc704b83d71b3787fa679796ae319955db07c3187d8384a1722eb66dc250c6c",
+    "sim/isaac_control_execution.py": "PENDING_CHECKPOINT",
+    "sim/isaac_demo.py": "PENDING_CHECKPOINT",
+    "sim/isaac_demo_runtime.py": "PENDING_CHECKPOINT",
+    "sim/isaac_shadow_safety.py": "PENDING_CHECKPOINT"
   },
   "proposal": {
     "path": "/home/ubuntu/docker/jepa-wm/checkpoints/contact-grasp-v10-drive-slow-2600_task12_h256_s3000.pth",

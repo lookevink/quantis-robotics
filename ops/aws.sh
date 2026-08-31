@@ -1118,12 +1118,20 @@ case "${command}" in
       remote "bash ~/quantis-robotics/ops/run_physical_shadow_canary.sh '${source_revision}'" \
         || command_status=$?
     fi
+    run_status=${command_status}
+    stop_status=0
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-stop" \
-      || true
+      || stop_status=$?
+    if (( command_status == 0 && stop_status != 0 )); then
+      command_status=${stop_status}
+    fi
     backup_status=0
     remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' \
       || backup_status=$?
-    if (( command_status == 0 && backup_status == 0 )); then
+    if (( run_status == 0 && stop_status != 0 )); then
+      remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.physical_shadow_canary failure --config .scratch/jepa-physical-shadow-canary-v1/experiment-config.json --error 'worker_stop:exit_${stop_status}'" \
+        || true
+    elif (( command_status == 0 && backup_status == 0 )); then
       remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.physical_shadow_canary finalize-recovery --config .scratch/jepa-physical-shadow-canary-v1/experiment-config.json --recovery-checkpoint-root /mnt/quantis-assets/quantis-state/jepa-wm/checkpoints --deployed-revision '${source_revision}'" \
         || command_status=$?
       if (( command_status != 0 )); then

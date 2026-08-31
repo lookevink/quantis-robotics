@@ -27,11 +27,11 @@ class PhysicalShadowCanaryTest(unittest.TestCase):
         self.assertTrue(config["gate"]["require_zero_actuation"])
         self.assertEqual(
             FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
-            "20ae97f69f1a8633042819161713ebf94ea5c3a9dc97ae0633d02ad011c9c038",
+            "PENDING_CHECKPOINT",
         )
         self.assertEqual(
             config["evaluator"]["implementation_revision"],
-            "6fe3ddceb7e75c06cf547b887ecbe1c0fee7b1c2",
+            "PENDING_CHECKPOINT",
         )
 
     def test_canary_claim_is_exclusive(self) -> None:

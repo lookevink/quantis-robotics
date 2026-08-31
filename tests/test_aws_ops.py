@@ -1480,6 +1480,16 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertNotIn("run_control_step.sh", calls)
         self.assertNotIn("control-apply", calls)
 
+    def test_physical_shadow_canary_cannot_pass_when_worker_stop_fails(self):
+        result, calls = self.run_command(
+            "jepa-wm-physical-shadow-canary",
+            extra_env={"FAKE_SSH_FAIL_MATCH": "control-worker-stop"},
+        )
+
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertIn("worker_stop:exit_7", calls)
+        self.assertNotIn("finalize-recovery", calls)
+
     def test_insertion_trial_forwards_exact_source_and_always_backs_up(self):
         result, calls = self.run_command(
             "jepa-wm-insertion-trial",
