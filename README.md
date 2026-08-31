@@ -2217,6 +2217,20 @@ JEPA action, or filming followed. Exact evidence is in
 milestone must separately regression-test a tolerance-consistent shared gate
 and adjudicate this immutable report without retraining or rescoring.
 
+That separate report-only adjudication is now complete. Configuration
+`92986c48...a437e` authenticated the immutable evaluation
+`a5527c50...d6bdd` and changed only the duplicated ratio predicate to
+`<= 0.15 + 1e-6`. Adjudication sidecar `f9a395cf...3412f` passed and records
+that no model or recording loaded and no training, rescoring, Isaac, held-out,
+canonical, or live-action access occurred. Regression tests retain fail-closed
+behavior for ratios above tolerance and for every non-finite aggregate,
+retained, post, or segment metric. The existing artifact is now an offline
+TRAIN candidate eligible to be proposed for a separately frozen disjoint
+held-out gate; that gate is not authorized by this result. The sidecar matches
+the verified 16 GiB recovery copy from `2026-08-31T19:05:20Z`. Exact evidence
+is in
+[`RESULT.md`](.scratch/jepa-physical-state-gate-adjudication-v1/RESULT.md).
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

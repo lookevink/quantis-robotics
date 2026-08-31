@@ -842,6 +842,15 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     without retraining or rescoring; held-out evaluation, JEPA action, filming,
     hardware, and production authority remain closed. Exact identities and
     metrics are in the linked README checkpoint.
+    A subsequent separately frozen, report-only adjudication corrected only
+    that duplicated numeric predicate to `<= 0.15 + 1e-6`. It authenticated
+    the immutable terminal report and produced passing sidecar
+    `f9a395cf...3412f` without loading a model or recording and without
+    training, rescoring, Isaac, held-out, canonical, or live-action access.
+    Ratios above tolerance and all non-finite gate metrics remain fail-closed.
+    The existing artifact is therefore an offline TRAIN candidate eligible to
+    be proposed for a separately frozen disjoint held-out gate. That gate and
+    every live, filming, hardware, or production authority remain closed.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one
