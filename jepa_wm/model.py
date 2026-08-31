@@ -10,7 +10,7 @@ from typing import Any
 import torch
 import yaml
 
-from jepa_wm.adapter import apply_action_adapter
+from jepa_wm.action_model_artifact import apply_action_model_artifact
 from jepa_wm.runtime_environment import validate_headless_runtime
 
 
@@ -85,7 +85,7 @@ def load_headless_model(
         wrapper_kwargs=model_config["wrapper_kwargs"],
     )
     if adapter is not None:
-        apply_action_adapter(
+        apply_action_model_artifact(
             model,
             adapter,
             expected_source_revision=os.environ.get("JEPA_WM_REVISION", "unknown"),

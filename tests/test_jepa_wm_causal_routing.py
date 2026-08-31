@@ -48,6 +48,7 @@ if torch is not None:
     from jepa_wm.physical_observation import (
         PHYSICAL_ROUTING_FEATURE_NAMES,
         PHYSICAL_ROUTING_OBSERVATION_SCHEMA,
+        PhysicalRoutingObservation,
     )
     from jepa_wm.physical_routing import (
         PhysicalMotionRouter,
@@ -65,6 +66,7 @@ if torch is not None:
         _routing_spec as _physical_experiment_routing_spec,
     )
     from jepa_wm.physical_scoring import PhysicalCandidateScorer
+    from jepa_wm.planning_scoring import LatentGoalScorer
     from jepa_wm.training_artifact import TrainingArtifactMetadata
 
 
@@ -374,6 +376,34 @@ class CausalRoutingTest(unittest.TestCase):
             scored.decision.routes.tolist(),
             [CausalMotionRoute.ADVANCE, CausalMotionRoute.ADVANCE],
         )
+        self.assertIsNone(encoder.active_decision)
+
+    def test_live_planner_scopes_one_observed_route_across_candidate_batches(self) -> None:
+        model = _conditioning_model()
+        encoder = install_action_conditioning(
+            model,
+            ActionConditioningSpec(
+                ActionConditioningKind.PHYSICAL_STATE_RESIDUAL,
+                physical_state_routing=_physical_routing_spec(),
+            ),
+        )
+        features = torch.zeros((2, len(PHYSICAL_ROUTING_FEATURE_NAMES)))
+        encoder.router.fit_normalization(features)
+        scoring_model = _ScoringModel(encoder)
+        scorer = LatentGoalScorer(
+            scoring_model,
+            torch.zeros((1, 2, 1, 1, 1, 4)),
+            torch.zeros((1, 1, 4)),
+            device=torch.device("cpu"),
+            batch_size=1,
+            physical_routing=PhysicalRoutingObservation(
+                tuple(0.0 for _ in PHYSICAL_ROUTING_FEATURE_NAMES)
+            ),
+        )
+
+        energies = scorer(torch.zeros((2, 3, 7)))
+
+        self.assertEqual(energies.shape, (2,))
         self.assertIsNone(encoder.active_decision)
 
     def test_physical_artifact_round_trips_router_and_bounded_residuals(self) -> None:

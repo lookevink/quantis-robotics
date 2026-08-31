@@ -552,6 +552,7 @@ Commands:
   jepa-wm-control-worker-configure NAME PROPOSAL ADAPTER [CALIBRATION] [translation-margin rotation-margin gripper-margin] [planner-seed iterations samples elites]
   jepa-wm-control-worker-start [artifacts] | jepa-wm-control-worker-status | jepa-wm-control-worker-stop
   jepa-wm-control-worker-rebase-proposal SOURCE_ARTIFACTS NEW_ARTIFACTS PROPOSAL
+  jepa-wm-physical-shadow-canary       Run the frozen known-start zero-actuation canary
   jepa-wm-control-step REFERENCE_RECORDING SEED [artifacts] [context-index]
   jepa-wm-insertion-safety REFERENCE_RECORDING SEED [artifacts] [context-index]
   jepa-wm-insertion-trial REFERENCE_RECORDING SEED ARTIFACTS SOURCE_SESSION [context-index]
@@ -1108,6 +1109,34 @@ case "${command}" in
     remote \
       "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-rebase-proposal --source '${source_identity}' --name '${new_identity}' --proposal '${proposal_name}'"
     guarded_insertion_summary="Control worker proposal: ${new_identity}"
+    ;;
+  jepa-wm-physical-shadow-canary)
+    deployment_source_revision >/dev/null
+    session_id="physical-shadow-canary-12601"
+    command_status=0
+    sync_repo || command_status=$?
+    if (( command_status == 0 )); then
+      remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.physical_shadow_canary prepare-worker --config .scratch/jepa-physical-shadow-canary-v1/experiment-config.json --output ~/docker/jepa-wm/checkpoints/contact-insertion-v10-physical-shadow-canary-v1.worker.json --recording-root ~/docker/isaac-sim/data/quantis/recordings" \
+        || command_status=$?
+    fi
+    if (( command_status == 0 )); then
+      remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-stop && bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --artifacts 'contact-insertion-v10-physical-shadow-canary-v1'" \
+        || command_status=$?
+    fi
+    if (( command_status == 0 )); then
+      remote "bash ~/quantis-robotics/ops/run_physical_shadow_canary.sh '${session_id}'" \
+        || command_status=$?
+    fi
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-stop" \
+      || true
+    backup_status=0
+    remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' \
+      || backup_status=$?
+    if (( command_status == 0 && backup_status != 0 )); then
+      command_status=${backup_status}
+    fi
+    printf 'Physical shadow canary session: %s\n' "${session_id}"
+    exit "${command_status}"
     ;;
   jepa-wm-control-step)
     reference_name="${2:-}"

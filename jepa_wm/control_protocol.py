@@ -9,6 +9,7 @@ from typing import Any
 
 from jepa_wm.action import DroidAction, DroidPose, action_between
 from jepa_wm.training_artifact import ArtifactIdentity
+from jepa_wm.physical_observation import PhysicalRoutingObservation
 
 
 CONTROL_SCHEMA = "quantis.jepa_wm_control.v1"
@@ -78,6 +79,7 @@ class ControlObservation:
     pose: DroidPose
     previous_action: DroidAction
     warmup_frames: int
+    physical_routing: PhysicalRoutingObservation | None = None
 
     @property
     def target_frame(self) -> Path:
@@ -134,6 +136,11 @@ class ControlObservation:
                 pose=DroidPose(tuple(payload["pose"])),
                 previous_action=DroidAction(tuple(payload["previous_action"])),
                 warmup_frames=_strict_nonnegative_int(payload, "warmup_frames"),
+                physical_routing=(
+                    PhysicalRoutingObservation.from_dict(payload["physical_routing"])
+                    if payload.get("physical_routing") is not None
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("control observation is incomplete") from error
@@ -150,6 +157,8 @@ class ControlObservation:
             "previous_action": list(self.previous_action.values),
             "warmup_frames": self.warmup_frames,
         }
+        if self.physical_routing is not None:
+            payload["physical_routing"] = self.physical_routing.to_dict()
         return payload
 
 

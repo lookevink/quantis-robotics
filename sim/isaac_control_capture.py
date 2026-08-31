@@ -38,6 +38,7 @@ from jepa_wm.insertion_rollout import (
 )
 from jepa_wm.insertion_recording import ContactInsertionEvidence
 from jepa_wm.persistence import write_json_atomic
+from jepa_wm.physical_observation import PhysicalRoutingObservation
 from jepa_wm.control_safety import SimulatorSafetyLimits
 from jepa_wm.training_artifact import artifact_fingerprint
 from jepa_wm.trajectory import load_rollout_at
@@ -243,6 +244,26 @@ def recorded_control_context(
         except (KeyError, TypeError, ValueError) as error:
             raise RuntimeError("control warm-up telemetry is incomplete") from error
     return context_frame_index, context_step, previous_action
+
+
+def control_physical_routing_observation(
+    context_step: dict[str, Any],
+    insertion_target: Any,
+    previous_action: DroidAction,
+    *,
+    insertion_control: bool,
+) -> PhysicalRoutingObservation | None:
+    """Derive the live router input only for contact-insertion captures."""
+
+    if not insertion_control:
+        return None
+    if not isinstance(insertion_target, dict):
+        raise ValueError("insertion control capture has no insertion target")
+    return PhysicalRoutingObservation.from_recorded_step(
+        context_step,
+        insertion_target,
+        previous_action,
+    )
 
 
 ControlCaptureProgress = Callable[[str, int, int], None]
@@ -777,6 +798,12 @@ async def capture_control_observation(
         pose=DroidPose(tuple(context_step["end_effector_pose"])),
         previous_action=previous_action,
         warmup_frames=context_index,
+        physical_routing=control_physical_routing_observation(
+            context_step,
+            target_metadata,
+            previous_action,
+            insertion_control=insertion_control,
+        ),
     )
     active_command = actuators.current_command() if insertion_control else None
     state = ControlSessionState(

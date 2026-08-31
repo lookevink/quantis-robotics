@@ -2261,6 +2261,25 @@ failure remain unchanged. This is deployment readiness only; a new canonical
 gate remains separately closed. Exact evidence is in
 [`RESULT.md`](.scratch/jepa-dinov3-runtime-remediation-v1/RESULT.md).
 
+The separately frozen v2 gate then authenticated that repaired runtime and the
+unchanged residual artifact before issuing a new exclusive canonical-access
+claim. Both exact HELD_OUT seeds passed independently and together. Across 336
+examples, recorded-action win rates were `0.982143` overall, `0.943396` on the
+retained retreat boundary, and `1.0` post-contact. Combined router accuracy was
+`0.991071`, retreat/advance recall were `1.0`/`0.990566`, semantic holds had
+zero owned-route activations and used the exact base map, and the maximum
+residual ratio remained inside the frozen `0.15 + 1e-6` tolerance. Report
+`ca100086...cc2f4` and claim `29536227...e1520` match byte-identical recovery
+copies. No training, Isaac, live action, filming, hardware, or production
+authority was exercised. Exact evidence is in
+[`RESULT.md`](.scratch/jepa-physical-state-held-out-v2/RESULT.md).
+
+The next bounded milestone is deployment integration and one zero-actuation
+known-start shadow/safety canary. It must bind the same frozen residual artifact
+and produce candidate plus counterfactual safety evidence without applying a
+command. A pass opens only a separately frozen milestone-20 unknown-start run;
+it does not itself authorize motion or filming.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

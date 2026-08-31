@@ -7,6 +7,7 @@ from jepa_wm.control_protocol import (
     ControlTarget,
     ProposedControl,
 )
+from jepa_wm.physical_observation import PhysicalRoutingObservation
 from jepa_wm.control_safety import (
     ControlInterlockEvidence,
     ControlGateReason,
@@ -199,6 +200,15 @@ class SimulatorControlGateTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "artifact identity"):
             _proposal(proposal_fingerprint="not-a-sha256")
+
+    def test_round_trips_the_observed_physical_router_input(self) -> None:
+        physical = PhysicalRoutingObservation(tuple(float(index) for index in range(26)))
+        observation = _observation(physical_routing=physical)
+
+        encoded = observation.to_dict()
+
+        self.assertEqual(encoded["physical_routing"]["values"], list(physical.values))
+        self.assertEqual(ControlObservation.from_dict(encoded), observation)
 
     def test_rejects_cartesian_motion_in_the_wrong_direction(self) -> None:
         tracking = evaluate_action_tracking(

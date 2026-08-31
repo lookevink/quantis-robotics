@@ -110,6 +110,27 @@ class PhysicalRoutingObservation:
         ):
             raise ValueError("physical routing observation is invalid")
 
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema": PHYSICAL_ROUTING_OBSERVATION_SCHEMA,
+            "values": list(self.values),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> PhysicalRoutingObservation:
+        if (
+            not isinstance(payload, Mapping)
+            or payload.get("schema") != PHYSICAL_ROUTING_OBSERVATION_SCHEMA
+        ):
+            raise ValueError("physical routing observation schema is invalid")
+        return cls(
+            _vector(
+                payload.get("values"),
+                length=len(PHYSICAL_ROUTING_FEATURE_NAMES),
+                name="physical routing values",
+            )
+        )
+
     @classmethod
     def from_recorded_step(
         cls,

@@ -871,6 +871,17 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     and claim match the verified recovery copy. This opens only a separately
     frozen proposal for a new offline gate; it does not reopen canonical or
     live authority.
+    The separately frozen v2 gate subsequently authenticated that repaired
+    runtime before claiming canonical access and scored the unchanged residual
+    artifact once on both exact HELD_OUT seeds. Combined and per-seed
+    populations all passed: `0.982143` overall, `0.943396` retained, and `1.0`
+    post-contact recorded-action wins; combined router accuracy was `0.991071`
+    with `1.0` retreat recall, `0.990566` advance recall, and no owned-route
+    activation on semantic holds. Its report and exclusive claim match the
+    verified recovery copy. This closes the offline gate only. The next bounded
+    milestone is one known-start, zero-actuation shadow/safety canary using the
+    exact artifact; only a pass may open a separately frozen milestone-20 run.
+    Live motion, filming, hardware, and production authority remain closed.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

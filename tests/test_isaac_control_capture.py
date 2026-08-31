@@ -18,6 +18,7 @@ from sim.isaac_control_capture import (
     control_capture_schedule,
     control_context_recording_label,
     control_warmup_plan,
+    control_physical_routing_observation,
     recorded_control_context,
     requires_stable_insertion_capture,
     validate_known_start_collision_configuration,
@@ -35,6 +36,43 @@ from sim.recording import RecordingLabel, RecordingMoment
 
 
 class ControlCaptureContractTest(unittest.TestCase):
+    def test_insertion_capture_persists_the_observed_physical_router_input(self) -> None:
+        step = {
+            "plug_position": [0.1, 0.2, 0.3],
+            "plug_orientation_wxyz": [1.0, 0.0, 0.0, 0.0],
+            "end_effector_world_position": [0.2, 0.3, 0.4],
+            "gripper_frame_world_position": [0.15, 0.25, 0.35],
+            "gripper_width_m": 0.02,
+            "arm_tracking_error_rad": 0.001,
+            "gripper_tracking_error_m": 0.0005,
+            "contact_force_newtons": 0.0,
+            "plug_attached": False,
+        }
+        target = {
+            "socket_position": [0.0, 0.0, 0.0],
+            "socket_orientation_wxyz": [1.0, 0.0, 0.0, 0.0],
+            "insertion_axis": [1.0, 0.0, 0.0],
+        }
+
+        observed = control_physical_routing_observation(
+            step,
+            target,
+            DroidAction((0.01, 0.0, 0.0, 0.0, 0.0, 0.0, -0.1)),
+            insertion_control=True,
+        )
+
+        self.assertIsNotNone(observed)
+        assert observed is not None
+        self.assertEqual(len(observed.values), 26)
+        self.assertIsNone(
+            control_physical_routing_observation(
+                step,
+                target,
+                DroidAction((0.0,) * 7),
+                insertion_control=False,
+            )
+        )
+
     def test_capture_phase_deadline_cancels_the_owned_operation(self) -> None:
         cancelled = False
 

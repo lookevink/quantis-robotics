@@ -1466,6 +1466,18 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/run_insertion_safety_check.sh", calls)
         self.assertIn("ops/backup_state.sh", calls)
 
+    def test_physical_shadow_canary_is_single_non_actuating_workflow(self):
+        result, calls = self.run_command("jepa-wm-physical-shadow-canary")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("physical-shadow-canary-12601", calls)
+        self.assertIn("prepare-worker", calls)
+        self.assertIn("control-worker-start", calls)
+        self.assertIn("run_physical_shadow_canary.sh", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+        self.assertNotIn("run_control_step.sh", calls)
+        self.assertNotIn("control-apply", calls)
+
     def test_insertion_trial_forwards_exact_source_and_always_backs_up(self):
         result, calls = self.run_command(
             "jepa-wm-insertion-trial",

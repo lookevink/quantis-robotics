@@ -201,6 +201,7 @@ class FrozenProposalPredictor:
             context,
             target,
             device=self._device,
+            physical_routing=request.observation.physical_routing,
         )
         task_progress = None
         if self._calibration is not None:
