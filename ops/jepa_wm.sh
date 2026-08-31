@@ -17,6 +17,7 @@ dinov3_checkpoint_dir="${checkpoint_dir}/dinov3"
 dinov3_checkpoint="${dinov3_checkpoint_dir}/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth"
 dinov3_expected_checkpoint="${dinov3_checkpoint_dir}/dinov3_vitl16_pretrain_lvd1689m-7c1da9a5.pth"
 dinov3_cached_checkpoint="${cache_dir}/torch/hub/checkpoints/$(basename "${dinov3_checkpoint}")"
+runtime_preflight_output="${checkpoint_dir}/quantis_physical_state_residual_v1/runtime-preflight-v1.json"
 control_run_dir="${jepa_wm_home}/run"
 control_socket="${control_run_dir}/control.sock"
 control_pid_file="${control_run_dir}/control.pid"
@@ -34,6 +35,7 @@ export JEPAWM_LOGS="${jepa_wm_home}/logs"
 export JEPAWM_CKPT="${checkpoint_dir}"
 export JEPAWM_OSSCKPT="${checkpoint_dir}"
 export JEPA_WM_REVISION="${jepa_revision}"
+export DINOV3_REVISION="${dinov3_revision}"
 export HF_HOME="${cache_dir}/huggingface"
 export TORCH_HOME="${cache_dir}/torch"
 export XDG_CACHE_HOME="${cache_dir}"
@@ -206,9 +208,20 @@ require_runtime() {
 
 smoke_runtime() {
   require_runtime
-  "${venv_dir}/bin/python" "${repo_dir}/jepa_wm/smoke.py" \
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.smoke \
     --source "${source_dir}" \
     --checkpoint "${jepa_checkpoint}"
+}
+
+model_load_preflight() {
+  require_runtime
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" -m jepa_wm.smoke \
+    --source "${source_dir}" \
+    --checkpoint "${jepa_checkpoint}" \
+    --load-only \
+    --output "${runtime_preflight_output}"
 }
 
 status_runtime() {
@@ -1628,6 +1641,15 @@ case "${1:-}" in
     cd "${repo_dir}"
     python3 -m jepa_wm.physical_residual_adjudication "${@:2}"
     ;;
+  physical-state-residual-held-out)
+    require_runtime
+    cd "${repo_dir}"
+    "${venv_dir}/bin/python" \
+      -m jepa_wm.physical_residual_held_out "${@:2}"
+    ;;
+  model-load-preflight)
+    model_load_preflight
+    ;;
   plan-benchmark)
     benchmark_planner "${@:2}"
     ;;
@@ -1755,6 +1777,6 @@ case "${1:-}" in
       "${2:-}" "${3:-}" "${4:-}" "${5:-wrist}" "${6:-40}"
     ;;
   *)
-    die "expected install, smoke, status, evaluate, adapt, adapt-set, action-conditioning-experiment, action-routing-experiment, observed-context-routing-experiment, causal-context-routing-probe, physical-state-routing-probe, physical-state-residual-experiment, physical-state-residual-adjudication, plan-benchmark, insertion-plan-benchmark, insertion-plan-summarize, insertion-proposal-training-diagnostic, proposal-train, grasp-proposal-train, contact-grasp-proposal-train, insertion-proposal-train, proposal-eval, grasp-proposal-eval, contact-grasp-proposal-eval, insertion-proposal-eval, proposal-summarize, grasp-proposal-summarize, contact-grasp-proposal-summarize, insertion-proposal-summarize, insertion-wm-summarize, control-worker-configure, control-worker-rebase-proposal, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, grasp-control-summarize, control-candidate-report, control-candidate-summarize, control-objective-calibrate, or summarize"
+    die "expected install, smoke, model-load-preflight, status, evaluate, adapt, adapt-set, action-conditioning-experiment, action-routing-experiment, observed-context-routing-experiment, causal-context-routing-probe, physical-state-routing-probe, physical-state-residual-experiment, physical-state-residual-adjudication, physical-state-residual-held-out, plan-benchmark, insertion-plan-benchmark, insertion-plan-summarize, insertion-proposal-training-diagnostic, proposal-train, grasp-proposal-train, contact-grasp-proposal-train, insertion-proposal-train, proposal-eval, grasp-proposal-eval, contact-grasp-proposal-eval, insertion-proposal-eval, proposal-summarize, grasp-proposal-summarize, contact-grasp-proposal-summarize, insertion-proposal-summarize, insertion-wm-summarize, control-worker-configure, control-worker-rebase-proposal, control-worker-start, control-worker-status, control-worker-stop, control-infer-replay, control-infer-session, control-shadow-session, control-baseline-session, control-candidate-session, control-rollout-report, control-baseline-report, grasp-control-summarize, control-candidate-report, control-candidate-summarize, control-objective-calibrate, or summarize"
     ;;
 esac

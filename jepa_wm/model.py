@@ -11,6 +11,7 @@ import torch
 import yaml
 
 from jepa_wm.adapter import apply_action_adapter
+from jepa_wm.runtime_environment import validate_headless_runtime
 
 
 CONFIG_RELATIVE_PATH = Path(
@@ -29,6 +30,7 @@ def load_headless_model(
 ) -> Any:
     """Load the official model without its optional pixel-decoder head."""
 
+    validate_headless_runtime(source, checkpoint)
     sys.path.insert(0, str(source))
     from app.plan_common.datasets import get_data_stats
     from app.plan_common.datasets.preprocessor import Preprocessor

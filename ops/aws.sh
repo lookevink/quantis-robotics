@@ -521,7 +521,7 @@ Commands:
   capture-smoke | jepa-embed [source-name] [camera]
   jepa-stage-embed [recording-name] [camera]
   jepa-stage-report REFERENCE QUERY [camera]
-  jepa-wm-install | jepa-wm-smoke | jepa-wm-status
+  jepa-wm-install | jepa-wm-smoke | jepa-wm-model-load-preflight | jepa-wm-status
   jepa-wm-grasp-milestone [training-count=12] [held-out-count=2] [steps=3000] [base-seed=2400]
   jepa-wm-eval RECORDING [camera] [start-index] [count] [stride]
   jepa-wm-adapt RECORDING [camera] [steps]
@@ -768,6 +768,10 @@ case "${command}" in
   jepa-wm-smoke)
     sync_repo
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh smoke"
+    ;;
+  jepa-wm-model-load-preflight)
+    sync_repo
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh model-load-preflight"
     ;;
   jepa-wm-status)
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh status"

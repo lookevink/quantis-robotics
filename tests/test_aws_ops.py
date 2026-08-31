@@ -812,6 +812,13 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("rsync ", calls)
         self.assertIn("ops/jepa_wm.sh smoke", calls)
 
+    def test_jepa_wm_model_load_preflight_syncs_and_uses_runtime_wrapper(self):
+        result, calls = self.run_command("jepa-wm-model-load-preflight")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("rsync ", calls)
+        self.assertIn("ops/jepa_wm.sh model-load-preflight", calls)
+
     def test_jepa_wm_install_forwards_the_gated_checkpoint_url(self):
         result, calls = self.run_command(
             "jepa-wm-install",
