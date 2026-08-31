@@ -851,6 +851,15 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     The existing artifact is therefore an offline TRAIN candidate eligible to
     be proposed for a separately frozen disjoint held-out gate. That gate and
     every live, filming, hardware, or production authority remain closed.
+    That separately frozen disjoint gate consumed one durable canonical access
+    claim and authenticated both exact HELD_OUT recordings. Model construction
+    then failed before encoding or scoring because the deployment lacked
+    `/home/ubuntu/dinov3/hubconf.py`. No canonical energy, route, residual, or
+    gate metric exists, so this is deployment-dependency evidence rather than
+    held-out model evidence. The access claim and terminal failure match the
+    verified recovery copy. Retry, retraining, Isaac, live action, filming,
+    hardware, and production authority remain closed; no repair or second
+    evaluation occurred in this milestone.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

@@ -2231,6 +2231,19 @@ the verified 16 GiB recovery copy from `2026-08-31T19:05:20Z`. Exact evidence
 is in
 [`RESULT.md`](.scratch/jepa-physical-state-gate-adjudication-v1/RESULT.md).
 
+The separately frozen disjoint gate subsequently consumed its one canonical
+access claim and authenticated both exact HELD_OUT recordings, but model
+construction failed before encoding or scoring: the frozen JEPA source tried
+to load `/home/ubuntu/dinov3/hubconf.py`, which was absent on the deployment
+host. This is a terminal deployment-dependency negative, not held-out model,
+representation, router, controller, or Isaac evidence. No canonical metric or
+evaluation report exists, and retry/retraining/live/filming authority remains
+false. The access claim (`b36c174f...b358`) and failure
+(`15b5e63c...d3e`) match the verified 16 GiB recovery copy from
+`2026-08-31T19:28:23Z`. Per the frozen stopping rule, no repair or second
+evaluation followed. Exact evidence is in
+[`RESULT.md`](.scratch/jepa-physical-state-held-out-v1/RESULT.md).
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded
