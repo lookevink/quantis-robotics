@@ -3,8 +3,8 @@
   "experiment_id": "contact-insertion-v10-physical-shadow-canary-v1",
   "evaluator": {
     "path": "jepa_wm/physical_shadow_canary.py",
-    "fingerprint": "PENDING_CHECKPOINT",
-    "implementation_revision": "PENDING_CHECKPOINT"
+    "fingerprint": "e99fbc24ca025f8de8a0970c7720deb31f90be943ede7d24769c1d4b183f4789",
+    "implementation_revision": "1d8cb54b3c4c7a1d24a00cf66ccefbbf543e6975"
   },
   "proposal": {
     "path": "/home/ubuntu/docker/jepa-wm/checkpoints/contact-grasp-v10-drive-slow-2600_task12_h256_s3000.pth",

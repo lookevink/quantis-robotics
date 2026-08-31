@@ -9,6 +9,9 @@ from jepa_wm.physical_shadow_canary import (
     load_experiment_config,
     prepare_worker,
 )
+from jepa_wm.physical_shadow_canary_contract import (
+    FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+)
 
 
 class PhysicalShadowCanaryTest(unittest.TestCase):
@@ -22,6 +25,14 @@ class PhysicalShadowCanaryTest(unittest.TestCase):
         self.assertEqual(config["execution"]["evaluations"], 1)
         self.assertFalse(config["execution"]["apply_action"])
         self.assertTrue(config["gate"]["require_zero_actuation"])
+        self.assertEqual(
+            FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+            "5293718fc4b6c5cc8ca47b4a53b9d63b39724c5f112b431485ef2267b8b6d1d0",
+        )
+        self.assertEqual(
+            config["evaluator"]["implementation_revision"],
+            "1d8cb54b3c4c7a1d24a00cf66ccefbbf543e6975",
+        )
 
     def test_canary_claim_is_exclusive(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
