@@ -92,3 +92,20 @@ after canonical JSON validation and becomes the immutable comparison identity.
   `b82627965542f0f0ee64a9b493ca6418cfe7553e8641899d20b4817a43cbde7e`.
   It was invalidated before training because it applied signed-X margins to
   inactive hold actions, where recorded and negative actions are identical.
+
+## Terminal experiment evidence
+
+- Frozen terminal outcome: `frozen_dynamics_or_representation_blocker`
+- Selected treatment/artifact: none
+- B artifact SHA-256:
+  `7bb9b54682c245f580f8e4922ceed53e33e21ffcc35ab80e01b11e90378a0754`
+- C artifact SHA-256:
+  `65272ab9a4b1f5369486dd829585739f0119f3f186dcd8d07072512d94ca9908`
+- D diagnostic artifact SHA-256:
+  `243c80ea0c2cd56ff0ce8c76426fb90cdc79aa898d816abd400b0d14b420610a`
+- Canary summary SHA-256:
+  `6324665b9d22f370851bbd3d2b4fa9930df8a141f08497279d89f68d5e0e4650`
+- Stable recovery backup timestamp: `2026-08-31T00:10:14Z`
+- Source and recovery hashes match for all three artifacts and sidecars, all
+  four seed-72600 reports, and the terminal summary.
+- Canonical held-out seeds 12600 and 12601 were not evaluated by any model.

@@ -27,13 +27,16 @@ candidate or one precisely scoped next blocker.
 - [Freeze the experiment ledger](issues/01-freeze-experiment-ledger.md) — authenticated the exact corpus, artifacts, recovery copy, known baseline, and immutable experiment configuration; corrected the draft batch size from 2 to the proven value 1 before freezing.
 - [Build the treatment seam](issues/02-build-treatment-seam.md) — added fingerprint-bound B/C/D action-conditioning families, balanced sampling, signed negatives, scoped oracle routing, and one-shot evaluation guards with 26 focused tests passing.
 - [Pass preflight and review](issues/03-pass-preflight-and-review.md) — real TRAIN-only smokes proved identical initialization and finite updates, an inactive signed-margin defect was repaired and re-frozen, and the full 733-test suite plus standards/spec review passed.
+- [Train the treatment matrix](issues/04-train-treatment-matrix.md) — B, C, and D completed once under the frozen 12-TRAIN contract; all artifact, report, roster, selection, sampler, and configuration identities authenticated.
+- [Run the one-pass canary gate](issues/05-run-one-pass-canary-gate.md) — A reproduced the old retreat failure; B and C learned retreat while reversing the post regime; oracle D reached 0.9821 overall but failed the four-frame retreat-hold segment, so no artifact was selected under the unchanged gate.
+- [Preserve the canonical boundary](issues/06-run-conditional-canonical-gate.md) — no B/C finalist survived, so canonical seeds 12600 and 12601 remained unopened and no live action followed.
+- [Scope the no-candidate branch](issues/07-scope-no-candidate-branch.md) — D ruled out representation insufficiency as the demonstrated blocker for the dominant motion regimes; the next experiment is a three-way runtime-command router with a neutral/base hold path and a fresh noncanonical canary.
+- [Audit, checkpoint, and hand off](issues/08-audit-checkpoint-and-handoff.md) — all new artifacts and reports match the stable recovery copy, focused and full tests pass, canonical outcomes remain sealed, and the authority boundary is unchanged.
 
 ## Not yet specified
 
-- The deployable context-derived gate if only the oracle-separated treatment
-  succeeds.
 - The exact same-reset counterfactual capture protocol if every offline
-  treatment fails.
+  runtime-observable routed treatment fails.
 - The live shadow/control and filming milestone after a successful canonical
   offline gate.
 

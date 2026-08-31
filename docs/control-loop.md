@@ -763,6 +763,23 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     so only resumable data capture is open; retraining, another JEPA action,
     filming, and production authority remain closed. Exact measurements and
     artifact identities are in the linked README checkpoint.
+    The resumable corpus subsequently completed and authenticated all 12 TRAIN
+    seeds, both canonical HELD_OUT seeds, and the separate seed-72600
+    development canary. A frozen train-only action-conditioning matrix then
+    compared the existing linear control, balanced linear fitting, a small
+    nonlinear residual, and diagnostic-only oracle-separated residuals. On the
+    one-pass seed-72600 gate, the first three treatments split the regimes:
+    they could preserve post-retreat motion or learn retreat, but not both.
+    Oracle separation reached `0.982143` overall, `0.943396` retained, and
+    `1.0` post win rates, proving the frozen representation/predictor can
+    express the main transitions. It still failed the four-frame retreat-hold
+    segment and is non-promotable. No finalist was selected, canonical seeds
+    `12600-12601` remained unopened for model evaluation, and no threshold or
+    safety gate changed. The next offline milestone is a three-way router
+    derived only from runtime command values: negative-X motion, positive-X
+    motion, and a neutral shared-base hold path. Because seed 72600 informed
+    that design, selection requires a fresh noncanonical scripted canary. No
+    JEPA action, filming, hardware, or production authority is open.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

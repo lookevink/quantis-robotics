@@ -2000,10 +2000,60 @@ identity and completed all 284 frames. Independent reconstruction reports
 error, `0.0021 mm` seating-depth error, `0.0715 mm` lateral error, `0.437 mrad`
 orientation error, attachment at frame 113, and four seated observations. A
 separate held-out canary `contact-insertion-v10-drive-slow-72600-held-00` also
-passes the new contract. The verified recovery copy is `15 GB`. The remaining
-canonical TRAIN and HELD_OUT recordings have not yet been collected, so this
-checkpoint authorizes only resuming the resumable corpus workflow—not model
-training, a new JEPA action, filming, or production use.
+passes the new contract. The resumable workflow subsequently completed all 12
+TRAIN recordings (seeds `2600-2611`) and both canonical HELD_OUT recordings
+(seeds `12600-12601`). All 15 exact roster entries, including the development
+canary, independently validate as 284-frame contact-aware artifacts with `0 N`
+maximum connector force and four seated observations. Their manifests, the
+base checkpoint, and the control adapter match the verified recovery copy.
+
+### Contact-insertion action-conditioning checkpoint
+
+A frozen offline experiment then tested whether the retained-retreat failure
+was caused by sampling imbalance, insufficient nonlinear action capacity, or
+conflicting physical regimes. Configuration
+`a8e111cbd197592091c93cf1d00adb751ede97a194c537559ffe10e7b5e7de14`
+fit only the exact 12 TRAIN recordings with 2,016 balanced updates. It compared
+the existing linear control A, balanced global-linear B, a small
+`7 -> 32 -> 1024` nonlinear residual C, and diagnostic-only oracle-routed
+retained/post residuals D. The DINOv3 encoder and 12-block JEPA-WM predictor
+remained frozen.
+
+All B/C/D artifacts authenticated after atomic writes. Their final losses were
+`0.013490`, `0.007792`, and `0.011364`; artifact fingerprints are respectively
+`7bb9b546...a0754`, `65272ab9...a9908`, and `243c80ea...0610a`. The sealed
+seed-72600 canary was then evaluated exactly once per treatment:
+
+| Treatment | Overall win | Retained win | Post win | Mean improvement | Result |
+| --- | ---: | ---: | ---: | ---: | --- |
+| A | 0.702381 | 0.056604 | 1.000000 | 0.000052213 | retreat failure reproduced |
+| B | 0.297619 | 0.943396 | 0.000000 | -0.000084014 | learned retreat, reversed post |
+| C | 0.267857 | 0.849057 | 0.000000 | -0.000001553 | learned retreat, reversed post |
+| D | 0.982143 | 0.943396 | 1.000000 | 0.001082767 | main regimes pass; diagnostic only |
+
+No promotion-eligible artifact passed the frozen gate. D passed the unchanged
+repository action-control gate and every main motion-regime threshold, but
+failed the stronger every-segment requirement on the four-frame
+`retreat_hold` segment (`0.25` wins and negative mean). Its oracle phase router
+also makes it non-deployable. Canonical held-out seeds `12600-12601` therefore
+remain unopened for model evaluation; no threshold was weakened and no live
+action followed.
+
+The result is a scoped routing/capacity blocker, not evidence that DINOv3 is
+insufficient. On the canary, all 48 retreat rollout actions have negative mean
+base-frame X, while all 48 alignment and all 64 insertion rollout actions have
+positive mean X. The split-safe TRAIN roster shows the same invariant across
+all 12 recordings: `576/576` retreat rollouts are negative-X, while `576/576`
+alignment and `768/768` insertion rollouts are positive-X. Hold windows contain
+only measured drift and mix signs, so sign alone is insufficient. The next
+bounded offline experiment is a runtime-command-derived three-way router:
+negative-X motion and positive-X motion receive small residual experts, while
+neutral hold commands retain the shared base path. Its deadband must be
+selected from TRAIN command statistics before freeze, it must not depend on
+scripted phase or context index, and it requires a fresh noncanonical scripted
+canary because seed 72600 informed the design. Same-reset causal captures are
+deferred unless that observable router fails. This checkpoint grants no new
+JEPA action, filming, hardware, or production authority.
 
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
