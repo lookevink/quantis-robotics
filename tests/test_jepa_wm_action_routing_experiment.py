@@ -133,7 +133,23 @@ class ActionRoutingExperimentTest(unittest.TestCase):
                     FRESH_CANARY,
                     treatment,
                 ).name
-                report_path.write_text(json.dumps({"treatment": treatment}) + "\n")
+                report_path.write_text(
+                    json.dumps(
+                        {
+                            "treatment": treatment,
+                            "artifact": (
+                                str(artifact.path)
+                                if treatment == "R"
+                                else "/tmp/control.pth"
+                            ),
+                            "artifact_fingerprint": (
+                                artifact.fingerprint if treatment == "R" else "c" * 64
+                            ),
+                            "experimental_gate": {"passed": treatment == "R"},
+                        }
+                    )
+                    + "\n"
+                )
                 report_identities.append(
                     ArtifactIdentity.from_artifact(report_path).to_dict()
                 )
@@ -145,6 +161,8 @@ class ActionRoutingExperimentTest(unittest.TestCase):
                             "quantis.jepa_wm_runtime_command_routing_"
                             "canary_summary.v1"
                         ),
+                        "status": "complete",
+                        "outcome": "runtime_router_candidate",
                         "experiment_config_fingerprint": (
                             FROZEN_EXPERIMENT_CONFIG_FINGERPRINT
                         ),
@@ -154,6 +172,7 @@ class ActionRoutingExperimentTest(unittest.TestCase):
                             "fingerprint": artifact.fingerprint,
                         },
                         "canonical_authorized_offline": True,
+                        "live_action_authorized": False,
                         "source_reports": report_identities,
                     }
                 )
@@ -202,7 +221,10 @@ class ActionRoutingExperimentTest(unittest.TestCase):
                 patch.dict("os.environ", {"JEPA_WM_REVISION": revision}),
                 patch(
                     "jepa_wm.action_routing_experiment.subprocess.run",
-                    return_value=SimpleNamespace(stdout=f"{revision}\n"),
+                    side_effect=(
+                        SimpleNamespace(stdout=f"{revision}\n"),
+                        SimpleNamespace(stdout=""),
+                    ),
                 ),
             ):
                 identity = _authenticate_base_model(experiment, root, checkpoint)
@@ -212,6 +234,70 @@ class ActionRoutingExperimentTest(unittest.TestCase):
             identity["checkpoint_fingerprint"],
             experiment["base_model"]["checkpoint_fingerprint"],
         )
+
+    def test_failed_router_reports_cannot_authorize_canonical_evaluation(self) -> None:
+        artifact = ArtifactIdentity(Path("/tmp/router.pth"), "a" * 64)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            report_identities = []
+            for treatment in ("A", "R"):
+                report_path = root / _expected_evaluation_output(
+                    FRESH_CANARY,
+                    treatment,
+                ).name
+                report_path.write_text(
+                    json.dumps(
+                        {
+                            "treatment": treatment,
+                            "artifact": str(artifact.path),
+                            "artifact_fingerprint": artifact.fingerprint,
+                            "experimental_gate": {"passed": False},
+                        }
+                    )
+                    + "\n"
+                )
+                report_identities.append(
+                    ArtifactIdentity.from_artifact(report_path).to_dict()
+                )
+            summary_path = root / "canary-summary.json"
+            summary_path.write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            "quantis.jepa_wm_runtime_command_routing_"
+                            "canary_summary.v1"
+                        ),
+                        "status": "complete",
+                        "outcome": "runtime_router_candidate",
+                        "experiment_config_fingerprint": (
+                            FROZEN_EXPERIMENT_CONFIG_FINGERPRINT
+                        ),
+                        "selected_treatment": "R",
+                        "selected_artifact": artifact.to_dict(),
+                        "source_reports": report_identities,
+                        "canonical_authorized_offline": True,
+                        "live_action_authorized": False,
+                    }
+                )
+                + "\n"
+            )
+            with (
+                patch(
+                    "jepa_wm.action_routing_experiment.EVALUATION_OUTPUT_ROOT",
+                    root,
+                ),
+                patch(
+                    "jepa_wm.action_routing_experiment._validate_evaluation_report"
+                ),
+                self.assertRaisesRegex(ValueError, "did not select a passing router"),
+            ):
+                _authorize_evaluation(
+                    CANONICAL_HELD_OUT[0],
+                    "R",
+                    artifact,
+                    summary_path,
+                    {},
+                )
 
     def test_base_model_rejects_a_different_checked_out_revision(self) -> None:
         revision = "1" * 40
@@ -229,7 +315,35 @@ class ActionRoutingExperimentTest(unittest.TestCase):
                 patch.dict("os.environ", {"JEPA_WM_REVISION": revision}),
                 patch(
                     "jepa_wm.action_routing_experiment.subprocess.run",
-                    return_value=SimpleNamespace(stdout=f"{'2' * 40}\n"),
+                    side_effect=(
+                        SimpleNamespace(stdout=f"{'2' * 40}\n"),
+                        SimpleNamespace(stdout=""),
+                    ),
+                ),
+                self.assertRaisesRegex(ValueError, "base identity changed"),
+            ):
+                _authenticate_base_model(experiment, root, checkpoint)
+
+    def test_base_model_rejects_tracked_source_changes(self) -> None:
+        revision = "1" * 40
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            checkpoint = root / "checkpoint.pth"
+            checkpoint.write_bytes(b"checkpoint")
+            experiment = {
+                "base_model": {
+                    "source_revision": revision,
+                    "checkpoint_fingerprint": artifact_fingerprint(checkpoint),
+                }
+            }
+            with (
+                patch.dict("os.environ", {"JEPA_WM_REVISION": revision}),
+                patch(
+                    "jepa_wm.action_routing_experiment.subprocess.run",
+                    side_effect=(
+                        SimpleNamespace(stdout=f"{revision}\n"),
+                        SimpleNamespace(stdout=" M src/model.py\n"),
+                    ),
                 ),
                 self.assertRaisesRegex(ValueError, "base identity changed"),
             ):

@@ -127,12 +127,26 @@ def _authenticate_base_model(
             capture_output=True,
             text=True,
         ).stdout.strip()
+        tracked_changes = subprocess.run(
+            (
+                "git",
+                "-C",
+                str(source.resolve()),
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+            ),
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
     except (OSError, subprocess.CalledProcessError) as error:
         raise ValueError("JEPA-WM source revision cannot be authenticated") from error
     checkpoint_identity = ArtifactIdentity.from_artifact(checkpoint)
     if (
         configured_revision != expected_revision
         or actual_revision != expected_revision
+        or tracked_changes
         or checkpoint_identity.fingerprint != base["checkpoint_fingerprint"]
     ):
         raise ValueError("frozen JEPA-WM base identity changed")
@@ -683,6 +697,19 @@ def _authorize_evaluation(
             treatment=report_treatment,
             experiment=experiment,
         )
+    router_report = reports_by_treatment["R"]
+    router_identity = ArtifactIdentity(
+        Path(router_report["artifact"]),
+        router_report["artifact_fingerprint"],
+    )
+    if (
+        not router_report["experimental_gate"]["passed"]
+        or selected != router_identity.to_dict()
+        or payload.get("status") != "complete"
+        or payload.get("outcome") != "runtime_router_candidate"
+        or payload.get("live_action_authorized") is not False
+    ):
+        raise ValueError("canonical routing canary did not select a passing router")
 
 
 def _experimental_gate(
