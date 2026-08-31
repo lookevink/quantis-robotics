@@ -1489,6 +1489,7 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertIn("worker_stop:exit_7", calls)
         self.assertNotIn("finalize-recovery", calls)
+        self.assertLess(calls.index("worker_stop:exit_7"), calls.index("backup_state.sh"))
 
     def test_insertion_trial_forwards_exact_source_and_always_backs_up(self):
         result, calls = self.run_command(
