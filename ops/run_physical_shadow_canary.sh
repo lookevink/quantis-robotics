@@ -8,30 +8,69 @@ venv_python="${HOME}/.venvs/quantis-jepa-wm/bin/python"
 checkpoint_dir="${HOME}/docker/jepa-wm/checkpoints"
 control_root="${HOME}/docker/isaac-sim/data/quantis"
 config="${repo_dir}/.scratch/jepa-physical-shadow-canary-v1/experiment-config.json"
-session_id="${1:-}"
-reference_name="contact-insertion-v10-drive-slow-2600-held-01"
-exploration_seed="12601"
-control_identity="contact-insertion-v10-physical-shadow-canary-v1"
-context_index="110"
-output="${checkpoint_dir}/quantis_physical_state_residual_v1/known-start-shadow-canary-v1.json"
-phase="claim"
+deployed_revision="${1:-}"
+mapfile -t frozen_contract < <(
+  "${venv_python}" - "${config}" <<'PY'
+import json
+import sys
 
-is_safe_identifier "${session_id}" || {
-  printf 'error: invalid physical shadow canary session\n' >&2
+config = json.load(open(sys.argv[1]))
+for value in (
+    config["session_id"],
+    config["known_start"]["reference"],
+    config["known_start"]["seed"],
+    config["worker"]["name"],
+    config["known_start"]["context_index"],
+    config["output"],
+):
+    print(value)
+PY
+)
+(( ${#frozen_contract[@]} == 6 )) || {
+  printf 'error: incomplete physical shadow canary contract\n' >&2
   exit 1
 }
+session_id="${frozen_contract[0]}"
+reference_name="${frozen_contract[1]}"
+exploration_seed="${frozen_contract[2]}"
+control_identity="${frozen_contract[3]}"
+context_index="${frozen_contract[4]}"
+output="${frozen_contract[5]}"
+[[ "${deployed_revision}" =~ ^[0-9a-f]{40}$ ]] || {
+  printf 'error: invalid physical shadow canary deployment revision\n' >&2
+  exit 1
+}
+worker_manifest="${checkpoint_dir}/${control_identity}.worker.json"
+for identifier in "${session_id}" "${reference_name}" "${control_identity}"; do
+  is_safe_identifier "${identifier}" || {
+    printf 'error: invalid physical shadow canary identifier\n' >&2
+    exit 1
+  }
+done
+require_nonnegative_integer "exploration seed" "${exploration_seed}"
+require_positive_integer "context index" "${context_index}"
+
+cd "${repo_dir}"
+"${venv_python}" -m jepa_wm.physical_shadow_canary prepare-worker \
+  --config "${config}" --output "${worker_manifest}" \
+  --recording-root "${control_root}/recordings"
+bash "${repo_dir}/ops/jepa_wm.sh" control-worker-stop
+bash "${repo_dir}/ops/jepa_wm.sh" \
+  control-worker-start --artifacts "${control_identity}"
+
+phase="claim"
 
 terminalize_failure() {
   local exit_status=$?
   trap - ERR
   set +e
   "${venv_python}" -m jepa_wm.physical_shadow_canary failure \
-    --session "${session_id}" --error "${phase}:exit_${exit_status}" >&2
+    --config "${config}" --session "${session_id}" \
+    --error "${phase}:exit_${exit_status}" >&2
   exit "${exit_status}"
 }
 trap terminalize_failure ERR
 
-cd "${repo_dir}"
 "${venv_python}" -m jepa_wm.physical_shadow_canary claim \
   --config "${config}" --session "${session_id}"
 
@@ -50,12 +89,9 @@ isaac_server_call \
   "await demo.evaluate_shadow_candidate('${session_id}')" 180
 
 phase="terminal_evaluation"
-evaluator_revision="$("${venv_python}" -c \
-  'import json,sys; print(json.load(open(sys.argv[1]))["evaluator"]["implementation_revision"])' \
-  "${config}")"
 "${venv_python}" -m jepa_wm.physical_shadow_canary evaluate \
   --config "${config}" \
   --session-path "${control_root}/control_sessions/${session_id}" \
   --output "${output}" \
-  --evaluator-revision "${evaluator_revision}"
+  --deployed-revision "${deployed_revision}"
 trap - ERR

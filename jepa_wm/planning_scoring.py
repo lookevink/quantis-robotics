@@ -42,10 +42,6 @@ class LatentGoalScorer:
             raise ValueError(
                 "physical action conditioning requires one observed router input"
             )
-        if self._physical_encoder is None and physical_routing is not None:
-            raise ValueError(
-                "physical router input requires physical action conditioning"
-            )
         self._physical_routing = physical_routing
 
     def __call__(self, candidates: np.ndarray) -> np.ndarray:

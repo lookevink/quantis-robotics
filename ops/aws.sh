@@ -1111,20 +1111,11 @@ case "${command}" in
     guarded_insertion_summary="Control worker proposal: ${new_identity}"
     ;;
   jepa-wm-physical-shadow-canary)
-    deployment_source_revision >/dev/null
-    session_id="physical-shadow-canary-12601"
+    source_revision="$(deployment_source_revision)"
     command_status=0
     sync_repo || command_status=$?
     if (( command_status == 0 )); then
-      remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.physical_shadow_canary prepare-worker --config .scratch/jepa-physical-shadow-canary-v1/experiment-config.json --output ~/docker/jepa-wm/checkpoints/contact-insertion-v10-physical-shadow-canary-v1.worker.json --recording-root ~/docker/isaac-sim/data/quantis/recordings" \
-        || command_status=$?
-    fi
-    if (( command_status == 0 )); then
-      remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-stop && bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-start --artifacts 'contact-insertion-v10-physical-shadow-canary-v1'" \
-        || command_status=$?
-    fi
-    if (( command_status == 0 )); then
-      remote "bash ~/quantis-robotics/ops/run_physical_shadow_canary.sh '${session_id}'" \
+      remote "bash ~/quantis-robotics/ops/run_physical_shadow_canary.sh '${source_revision}'" \
         || command_status=$?
     fi
     remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-stop" \
@@ -1132,10 +1123,19 @@ case "${command}" in
     backup_status=0
     remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' \
       || backup_status=$?
-    if (( command_status == 0 && backup_status != 0 )); then
+    if (( command_status == 0 && backup_status == 0 )); then
+      remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.physical_shadow_canary finalize-recovery --config .scratch/jepa-physical-shadow-canary-v1/experiment-config.json --recovery-checkpoint-root /mnt/quantis-assets/quantis-state/jepa-wm/checkpoints --deployed-revision '${source_revision}'" \
+        || command_status=$?
+      if (( command_status != 0 )); then
+        remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.physical_shadow_canary failure --config .scratch/jepa-physical-shadow-canary-v1/experiment-config.json --error 'recovery_finalization:exit_${command_status}'" \
+          || true
+      fi
+    elif (( command_status == 0 )); then
       command_status=${backup_status}
+      remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.physical_shadow_canary failure --config .scratch/jepa-physical-shadow-canary-v1/experiment-config.json --error 'recovery_backup:exit_${backup_status}'" \
+        || true
     fi
-    printf 'Physical shadow canary session: %s\n' "${session_id}"
+    printf 'Physical shadow canary workflow complete.\n'
     exit "${command_status}"
     ;;
   jepa-wm-control-step)

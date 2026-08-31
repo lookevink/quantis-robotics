@@ -406,6 +406,19 @@ class CausalRoutingTest(unittest.TestCase):
         self.assertEqual(energies.shape, (2,))
         self.assertIsNone(encoder.active_decision)
 
+    def test_legacy_planner_ignores_unowned_physical_route_input(self) -> None:
+        scorer = LatentGoalScorer(
+            _ScoringModel(torch.nn.Linear(7, 4, bias=False)),
+            torch.zeros((1, 2, 1, 1, 1, 4)),
+            torch.zeros((1, 1, 4)),
+            device=torch.device("cpu"),
+            physical_routing=PhysicalRoutingObservation(
+                tuple(0.0 for _ in PHYSICAL_ROUTING_FEATURE_NAMES)
+            ),
+        )
+
+        self.assertEqual(scorer(torch.zeros((1, 3, 7))).shape, (1,))
+
     def test_physical_artifact_round_trips_router_and_bounded_residuals(self) -> None:
         source = _conditioning_model()
         spec = ActionConditioningSpec(

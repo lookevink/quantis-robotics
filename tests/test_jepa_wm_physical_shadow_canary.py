@@ -27,11 +27,11 @@ class PhysicalShadowCanaryTest(unittest.TestCase):
         self.assertTrue(config["gate"]["require_zero_actuation"])
         self.assertEqual(
             FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
-            "5293718fc4b6c5cc8ca47b4a53b9d63b39724c5f112b431485ef2267b8b6d1d0",
+            "PENDING_CHECKPOINT",
         )
         self.assertEqual(
             config["evaluator"]["implementation_revision"],
-            "1d8cb54b3c4c7a1d24a00cf66ccefbbf543e6975",
+            "PENDING_CHECKPOINT",
         )
 
     def test_canary_claim_is_exclusive(self) -> None:
@@ -47,8 +47,13 @@ class PhysicalShadowCanaryTest(unittest.TestCase):
     def test_runner_has_no_actuation_seam(self) -> None:
         runner = Path("ops/run_physical_shadow_canary.sh").read_text()
 
+        self.assertIn('config["session_id"]', runner)
+        self.assertIn('config["worker"]["name"]', runner)
         self.assertIn("control-shadow-session", runner)
         self.assertIn("evaluate_shadow_candidate", runner)
+        self.assertIn('deployed_revision="${1:-}"', runner)
+        self.assertNotIn("contact-insertion-v10-drive-slow-2600-held-01", runner)
+        self.assertNotIn('exploration_seed="12601"', runner)
         self.assertNotIn("apply_control_response", runner)
         self.assertNotIn("run_control_step.sh", runner)
 

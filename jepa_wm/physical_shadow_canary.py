@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -22,12 +23,6 @@ from sim.control_session import ControlSession
 
 
 EXPERIMENT_SCHEMA = "quantis.jepa_wm_physical_shadow_canary_experiment.v1"
-OUTPUT_PATH = Path(
-    "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/"
-    "known-start-shadow-canary-v1.json"
-)
-CLAIM_PATH = OUTPUT_PATH.with_name("known-start-shadow-canary-v1-claim.json")
-FAILURE_PATH = OUTPUT_PATH.with_name("known-start-shadow-canary-v1-failure.json")
 
 
 def load_experiment_config(path: Path) -> dict[str, Any]:
@@ -39,16 +34,12 @@ def load_experiment_config(path: Path) -> dict[str, Any]:
     ):
         raise ValueError("physical shadow canary configuration changed")
     payload = json.loads(encoded)
-    start = payload.get("known_start", {})
     execution = payload.get("execution", {})
     gate = payload.get("gate", {})
     if (
         payload.get("schema") != EXPERIMENT_SCHEMA
-        or start.get("reference")
-        != "contact-insertion-v10-drive-slow-2600-held-01"
-        or start.get("seed") != 12601
-        or start.get("context_index") != 110
-        or start.get("context_purpose") != "contact_grasp"
+        or not isinstance(payload.get("session_id"), str)
+        or not payload["session_id"]
         or gate
         != {
             "require_shadow_gate": True,
@@ -65,10 +56,22 @@ def load_experiment_config(path: Path) -> dict[str, Any]:
             "hardware": False,
             "production": False,
         }
-        or payload.get("output") != str(OUTPUT_PATH)
     ):
         raise ValueError("physical shadow canary contract is invalid")
+    terminal_paths(payload)
     return payload
+
+
+def terminal_paths(experiment: Mapping[str, Any]) -> tuple[Path, Path, Path, Path]:
+    output = Path(str(experiment.get("output", "")))
+    if not output.is_absolute() or output.name != "known-start-shadow-canary-v1.json":
+        raise ValueError("physical shadow canary output is invalid")
+    return (
+        output,
+        output.with_name("known-start-shadow-canary-v1-claim.json"),
+        output.with_name("known-start-shadow-canary-v1-failure.json"),
+        output.with_name("known-start-shadow-canary-v1-evaluation.json"),
+    )
 
 
 def claim_canary(
@@ -108,20 +111,56 @@ def _identity(source: Mapping[str, str], label: str) -> ArtifactIdentity:
     return identity
 
 
+@dataclass(frozen=True)
+class AuthenticatedCanaryArtifacts:
+    proposal: ArtifactIdentity
+    proposal_report: ArtifactIdentity
+    readiness: ArtifactIdentity
+    action_model: ArtifactIdentity
+    held_out_gate: ArtifactIdentity
+
+
+def authenticate_runtime_sources(experiment: Mapping[str, Any]) -> Path:
+    repository = Path(__file__).resolve().parents[1]
+    sources = experiment.get("runtime_sources")
+    if not isinstance(sources, Mapping) or not sources:
+        raise ValueError("physical shadow canary runtime sources are invalid")
+    for relative, expected in sources.items():
+        path = repository / str(relative)
+        if not path.is_file() or artifact_fingerprint(path) != expected:
+            raise ValueError(f"physical shadow canary runtime source changed: {relative}")
+    return repository
+
+
+def authenticated_deployment_revision(
+    experiment: Mapping[str, Any], claimed_revision: str
+) -> str:
+    authenticate_runtime_sources(experiment)
+    implementation = str(experiment["evaluator"]["implementation_revision"])
+    revisions = (implementation, claimed_revision)
+    if any(
+        len(revision) != 40
+        or any(character not in "0123456789abcdef" for character in revision)
+        for revision in revisions
+    ):
+        raise ValueError("physical shadow canary deployment revision changed")
+    return claimed_revision
+
+
 def prepare_worker(
     experiment: Mapping[str, Any], output: Path, recording_root: Path
 ) -> ControlWorkerArtifacts:
     """Write the one worker manifest named by the authenticated canary contract."""
 
-    proposal, action_model = _authenticate_frozen_artifacts(experiment)
+    authenticated = _authenticate_frozen_artifacts(experiment)
     start = experiment["known_start"]
     manifest = recording_root / start["reference"] / "manifest.json"
     if artifact_fingerprint(manifest) != start["manifest_fingerprint"]:
         raise ValueError("known-start recording identity changed")
     planner = CEMConfig(**experiment["worker"]["planner"])
     artifacts = ControlWorkerArtifacts(
-        proposal=proposal.path,
-        adapter=action_model.path,
+        proposal=authenticated.proposal.path,
+        adapter=authenticated.action_model.path,
         planner=planner,
     )
     artifacts.write(output)
@@ -130,7 +169,7 @@ def prepare_worker(
 
 def _authenticate_frozen_artifacts(
     experiment: Mapping[str, Any],
-) -> tuple[ArtifactIdentity, ArtifactIdentity]:
+) -> AuthenticatedCanaryArtifacts:
     proposal = _identity(experiment["proposal"], "proposal")
     proposal_report = ArtifactIdentity.from_artifact(
         proposal.path.with_suffix(proposal.path.suffix + ".json")
@@ -154,27 +193,41 @@ def _authenticate_frozen_artifacts(
     )
     if json.loads(held_out.path.read_text()).get("passed") is not True:
         raise ValueError("action model held-out gate did not pass")
-    return proposal, action_model
+    return AuthenticatedCanaryArtifacts(
+        proposal,
+        proposal_report,
+        readiness,
+        action_model,
+        held_out,
+    )
 
 
 def evaluate_canary(
     experiment_config: Path,
     session_path: Path,
     output: Path,
-    evaluator_revision: str,
+    deployed_revision_claim: str,
 ) -> dict[str, Any]:
-    if output.resolve() != OUTPUT_PATH or output.exists() or FAILURE_PATH.exists():
-        raise ValueError("physical shadow canary is already terminal")
     experiment = load_experiment_config(experiment_config)
+    frozen_output, claim_path, failure_path, evaluation_path = terminal_paths(experiment)
+    if (
+        output.resolve() != frozen_output
+        or output.exists()
+        or failure_path.exists()
+        or evaluation_path.exists()
+    ):
+        raise ValueError("physical shadow canary is already terminal")
     evaluator = experiment["evaluator"]
     evaluator_path = Path(__file__).resolve()
+    deployed_revision = authenticated_deployment_revision(
+        experiment, deployed_revision_claim
+    )
     if (
         evaluator.get("path") != "jepa_wm/physical_shadow_canary.py"
         or artifact_fingerprint(evaluator_path) != evaluator.get("fingerprint")
-        or evaluator_revision != evaluator.get("implementation_revision")
     ):
         raise ValueError("physical shadow canary evaluator identity changed")
-    claim = json.loads(CLAIM_PATH.read_text())
+    claim = json.loads(claim_path.read_text())
     if (
         claim.get("schema")
         != "quantis.jepa_wm_physical_shadow_canary_claim.v1"
@@ -186,14 +239,12 @@ def evaluate_canary(
     ):
         raise ValueError("physical shadow canary claim is invalid")
 
-    proposal, action_model = _authenticate_frozen_artifacts(experiment)
-    proposal_report = ArtifactIdentity.from_artifact(
-        proposal.path.with_suffix(proposal.path.suffix + ".json")
-    )
-    readiness = _identity(experiment["proposal"]["readiness"], "proposal readiness")
-    held_out = _identity(
-        experiment["action_model"]["held_out_gate"], "held-out gate"
-    )
+    authenticated = _authenticate_frozen_artifacts(experiment)
+    proposal = authenticated.proposal
+    proposal_report = authenticated.proposal_report
+    readiness = authenticated.readiness
+    action_model = authenticated.action_model
+    held_out = authenticated.held_out_gate
 
     session = ControlSession(session_path.resolve(), session_path.resolve().parent.parent)
     observation, state = session.load_capture()
@@ -235,17 +286,20 @@ def evaluate_canary(
 
     report = {
         "schema": "quantis.jepa_wm_physical_shadow_canary_evaluation.v1",
-        "status": "evaluated",
+        "status": "evaluated_pending_recovery",
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
-        "passed": True,
+        "passed": False,
+        "evaluation_passed": True,
+        "recovery_verified": False,
         "outcome": "physical_residual_live_shadow_candidate",
         "experiment_config": ArtifactIdentity.from_artifact(experiment_config).to_dict(),
         "evaluator": {
             "path": str(evaluator_path),
             "fingerprint": evaluator["fingerprint"],
-            "implementation_revision": evaluator_revision,
+            "implementation_revision": evaluator["implementation_revision"],
+            "deployed_revision": deployed_revision,
         },
-        "claim": ArtifactIdentity.from_artifact(CLAIM_PATH).to_dict(),
+        "claim": ArtifactIdentity.from_artifact(claim_path).to_dict(),
         "proposal": proposal.to_dict(),
         "proposal_training_report": proposal_report.to_dict(),
         "proposal_readiness": readiness.to_dict(),
@@ -267,12 +321,63 @@ def evaluate_canary(
         "hardware_authorized": False,
         "production_authority_granted": False,
     }
-    write_json_atomic(output, report)
+    write_json_atomic(evaluation_path, report)
     return report
 
 
-def write_failure(error: str, session_id: str) -> dict[str, Any]:
-    if OUTPUT_PATH.exists() or FAILURE_PATH.exists():
+def finalize_recovery(
+    experiment_config: Path,
+    recovery_checkpoint_root: Path,
+    claimed_revision: str,
+) -> dict[str, Any]:
+    experiment = load_experiment_config(experiment_config)
+    deployed_revision = authenticated_deployment_revision(
+        experiment, claimed_revision
+    )
+    output, _, failure_path, evaluation_path = terminal_paths(experiment)
+    checkpoint_root = Path(experiment["action_model"]["path"]).resolve().parents[1]
+    recovery_evaluation = recovery_checkpoint_root / evaluation_path.relative_to(
+        checkpoint_root
+    )
+    recovery_output = recovery_checkpoint_root / output.relative_to(checkpoint_root)
+    if (
+        output.exists()
+        or failure_path.exists()
+        or not evaluation_path.is_file()
+        or not recovery_evaluation.is_file()
+        or artifact_fingerprint(evaluation_path)
+        != artifact_fingerprint(recovery_evaluation)
+    ):
+        raise ValueError("physical shadow canary recovery is invalid")
+    payload = {
+        "schema": "quantis.jepa_wm_physical_shadow_canary_terminal.v1",
+        "status": "passed",
+        "passed": True,
+        "evaluation": ArtifactIdentity.from_artifact(evaluation_path).to_dict(),
+        "recovery_evaluation": ArtifactIdentity.from_artifact(
+            recovery_evaluation
+        ).to_dict(),
+        "recovery_verified": True,
+        "deployed_revision": deployed_revision,
+        "apply_action": False,
+        "execution_started": False,
+        "trained": False,
+        "filming_authorized": False,
+        "hardware_authorized": False,
+        "production_authority_granted": False,
+    }
+    write_json_atomic(recovery_output, payload)
+    write_json_atomic(output, payload)
+    if artifact_fingerprint(output) != artifact_fingerprint(recovery_output):
+        raise ValueError("physical shadow canary terminal recovery changed")
+    return payload
+
+
+def write_failure(
+    error: str, session_id: str, experiment: Mapping[str, Any]
+) -> dict[str, Any]:
+    output, claim_path, failure_path, _ = terminal_paths(experiment)
+    if output.exists() or failure_path.exists():
         raise ValueError("physical shadow canary is already terminal")
     payload = {
         "schema": "quantis.jepa_wm_physical_shadow_canary_failure.v1",
@@ -280,13 +385,13 @@ def write_failure(error: str, session_id: str) -> dict[str, Any]:
         "recorded_at": datetime.now(timezone.utc).isoformat(),
         "session_id": session_id,
         "error": error,
-        "claim": ArtifactIdentity.from_artifact(CLAIM_PATH).to_dict(),
+        "claim": ArtifactIdentity.from_artifact(claim_path).to_dict(),
         "retry_authorized": False,
         "apply_action": False,
         "training_authorized": False,
         "filming_authorized": False,
     }
-    write_json_atomic(FAILURE_PATH, payload)
+    write_json_atomic(failure_path, payload)
     return payload
 
 
@@ -300,32 +405,48 @@ def main(argv: Sequence[str] | None = None) -> int:
     evaluate.add_argument("--config", type=Path, required=True)
     evaluate.add_argument("--session-path", type=Path, required=True)
     evaluate.add_argument("--output", type=Path, required=True)
-    evaluate.add_argument("--evaluator-revision", required=True)
+    evaluate.add_argument("--deployed-revision", required=True)
     failure = subparsers.add_parser("failure")
-    failure.add_argument("--session", required=True)
+    failure.add_argument("--config", type=Path, required=True)
+    failure.add_argument("--session")
     failure.add_argument("--error", required=True)
     prepare = subparsers.add_parser("prepare-worker")
     prepare.add_argument("--config", type=Path, required=True)
     prepare.add_argument("--output", type=Path, required=True)
     prepare.add_argument("--recording-root", type=Path, required=True)
+    finalize = subparsers.add_parser("finalize-recovery")
+    finalize.add_argument("--config", type=Path, required=True)
+    finalize.add_argument("--recovery-checkpoint-root", type=Path, required=True)
+    finalize.add_argument("--deployed-revision", required=True)
     args = parser.parse_args(argv)
     if args.command == "prepare-worker":
         experiment = load_experiment_config(args.config)
+        authenticate_runtime_sources(experiment)
         payload = prepare_worker(
             experiment, args.output, args.recording_root
         ).to_dict()
+    elif args.command == "finalize-recovery":
+        payload = finalize_recovery(
+            args.config,
+            args.recovery_checkpoint_root,
+            args.deployed_revision,
+        )
     elif args.command == "claim":
         fingerprint = sha256(args.config.resolve().read_bytes()).hexdigest()
-        load_experiment_config(args.config)
-        payload = claim_canary(CLAIM_PATH, args.session, fingerprint)
+        experiment = load_experiment_config(args.config)
+        _, claim_path, _, _ = terminal_paths(experiment)
+        payload = claim_canary(claim_path, args.session, fingerprint)
     elif args.command == "failure":
-        payload = write_failure(args.error, args.session)
+        experiment = load_experiment_config(args.config)
+        payload = write_failure(
+            args.error, args.session or str(experiment["session_id"]), experiment
+        )
     else:
         payload = evaluate_canary(
             args.config,
             args.session_path,
             args.output,
-            args.evaluator_revision,
+            args.deployed_revision,
         )
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0

@@ -1,10 +1,23 @@
 {
   "schema": "quantis.jepa_wm_physical_shadow_canary_experiment.v1",
   "experiment_id": "contact-insertion-v10-physical-shadow-canary-v1",
+  "session_id": "physical-shadow-canary-12601",
   "evaluator": {
     "path": "jepa_wm/physical_shadow_canary.py",
-    "fingerprint": "e99fbc24ca025f8de8a0970c7720deb31f90be943ede7d24769c1d4b183f4789",
-    "implementation_revision": "1d8cb54b3c4c7a1d24a00cf66ccefbbf543e6975"
+    "fingerprint": "PENDING_CHECKPOINT",
+    "implementation_revision": "PENDING_CHECKPOINT"
+  },
+  "runtime_sources": {
+    "jepa_wm/action_model_artifact.py": "PENDING_CHECKPOINT",
+    "jepa_wm/control_protocol.py": "PENDING_CHECKPOINT",
+    "jepa_wm/control_worker.py": "PENDING_CHECKPOINT",
+    "jepa_wm/model.py": "PENDING_CHECKPOINT",
+    "jepa_wm/physical_observation.py": "PENDING_CHECKPOINT",
+    "jepa_wm/physical_shadow_canary.py": "PENDING_CHECKPOINT",
+    "jepa_wm/planning_scoring.py": "PENDING_CHECKPOINT",
+    "ops/aws.sh": "PENDING_CHECKPOINT",
+    "ops/run_physical_shadow_canary.sh": "PENDING_CHECKPOINT",
+    "sim/isaac_control_capture.py": "PENDING_CHECKPOINT"
   },
   "proposal": {
     "path": "/home/ubuntu/docker/jepa-wm/checkpoints/contact-grasp-v10-drive-slow-2600_task12_h256_s3000.pth",

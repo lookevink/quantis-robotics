@@ -1470,11 +1470,13 @@ class AwsLifecycleTests(unittest.TestCase):
         result, calls = self.run_command("jepa-wm-physical-shadow-canary")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("physical-shadow-canary-12601", calls)
-        self.assertIn("prepare-worker", calls)
-        self.assertIn("control-worker-start", calls)
         self.assertIn("run_physical_shadow_canary.sh", calls)
         self.assertIn("ops/backup_state.sh", calls)
+        self.assertIn("finalize-recovery", calls)
+        self.assertIn(
+            "/mnt/quantis-assets/quantis-state/jepa-wm/checkpoints", calls
+        )
+        self.assertNotIn("contact-insertion-v10-drive-slow-2600-held-01", calls)
         self.assertNotIn("run_control_step.sh", calls)
         self.assertNotIn("control-apply", calls)
 
