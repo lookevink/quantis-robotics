@@ -10,6 +10,9 @@ from jepa_wm.physical_residual_held_out_v2 import (
     authenticate_prior_evidence,
     load_experiment_config,
 )
+from jepa_wm.physical_residual_held_out_v2_contract import (
+    FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+)
 
 
 class PhysicalResidualHeldOutV2Test(unittest.TestCase):
@@ -28,6 +31,18 @@ class PhysicalResidualHeldOutV2Test(unittest.TestCase):
         self.assertFalse(execution["run_isaac"])
         self.assertFalse(execution["issue_live_action"])
         self.assertFalse(execution["film"])
+        self.assertEqual(
+            FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+            "a4ed3975e75104785f495dc5d0affda48c02e527f64c783d7f51ff2f2187fb18",
+        )
+        self.assertEqual(
+            self.config["evaluator"]["fingerprint"],
+            "caed23e4763ee8163ef558c4d4027e14d917326d236ade44f8c9a172bc841d0f",
+        )
+        self.assertEqual(
+            self.config["evaluator"]["implementation_revision"],
+            "e0ea97bbb9fb8d4111ac7677122e5ce3484c5d91",
+        )
 
     def test_contract_binds_consumed_v1_negative_and_runtime_remediation(self) -> None:
         prior = self.config["prior_attempt"]
