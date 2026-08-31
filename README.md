@@ -2154,6 +2154,34 @@ production step followed. Full evidence is in
 [`RESULT.md`](.scratch/jepa-observed-context-routing-v1/RESULT.md). Any
 residual constraint or attachment-boundary change belongs to a new milestone.
 
+### Physical-state routing redesign
+
+The next router design separates demonstrated intent labels from the failed
+visual-context classifier. Declared `retreat_hold`, `align_hold`, and
+`seated_hold` windows are semantic holds even when recorded joint telemetry
+contains sub-deadband drift. Runtime routing uses a versioned 26-value,
+task-relative physical observation: plug/socket, end-effector/socket, and
+gripper/socket geometry; plug orientation; gripper, tracking, force, and
+attachment telemetry; plus the previous realized 7D action. It cannot inspect
+the visual latent, candidate or future action, phase, context index, or seed.
+
+An architecture-selection diagnostic over all 2,016 exact TRAIN transitions
+selected the smallest passing nonlinear router, `26 -> 64 -> 64 -> 4`. In
+leave-one-recording-out evaluation it reached `0.987103` accuracy, `0.992908`
+retreat recall, `0.989780` advance recall, `1.0` grasp-attachment accuracy,
+and `0.028274` fail-closed fraction, with zero retreat/advance activations in
+all three semantic hold segments. The label roster is 142 hold, 564 retreat,
+1,272 advance, and 38 active-other transitions.
+
+The production action-conditioning seam now authenticates that feature order,
+uses a sign-invariant relative quaternion, refuses inference until fitted
+normalization is serialized, holds one route fixed across every candidate,
+preserves the original action map exactly for hold/active-other, and enforces
+the `0.15` residual/base norm bound by construction. The one-shot authenticated
+probe is frozen in
+[`PLAN.md`](.scratch/jepa-physical-state-routing-v2/PLAN.md); it has not yet
+authorized residual training, held-out access, live JEPA action, or filming.
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

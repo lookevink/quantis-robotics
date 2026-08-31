@@ -22,6 +22,15 @@ class ContactInsertionSegment(str, Enum):
     SEATED_HOLD = "seated_hold"
 
 
+CONTACT_INSERTION_PASSTHROUGH_SEGMENTS = frozenset(
+    {
+        ContactInsertionSegment.RETREAT_HOLD,
+        ContactInsertionSegment.ALIGN_HOLD,
+        ContactInsertionSegment.SEATED_HOLD,
+    }
+)
+
+
 DRIVE_ONLY_ARM_MOTION_FRAMES = 48
 DRIVE_ONLY_GRIPPER_CLOSE_FRAMES = 16
 

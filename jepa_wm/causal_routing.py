@@ -5,11 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import IntEnum
 from math import isfinite
-from typing import Any
+from typing import Any, Sequence
 
 import torch
 
 from jepa_wm.action import ACTION_DIMENSIONS
+from jepa_wm.insertion_layout import (
+    CONTACT_INSERTION_PASSTHROUGH_SEGMENTS,
+    ContactInsertionSegment,
+)
 
 
 class CausalMotionRoute(IntEnum):
@@ -22,6 +26,110 @@ class CausalMotionRoute(IntEnum):
 
 
 CAUSAL_MOTION_ROUTE_NAMES = tuple(route.name.lower() for route in CausalMotionRoute)
+
+
+@dataclass(frozen=True)
+class RecordedMotionLabelSpec:
+    """Classify demonstrated intent while preserving declared semantic holds."""
+
+    signed_x_deadband: float
+    translation_activity_deadband: float
+    rotation_activity_deadband: float
+    gripper_activity_deadband: float
+
+    def __post_init__(self) -> None:
+        if not all(
+            isfinite(value) and value >= 0.0
+            for value in (
+                self.signed_x_deadband,
+                self.translation_activity_deadband,
+                self.rotation_activity_deadband,
+                self.gripper_activity_deadband,
+            )
+        ):
+            raise ValueError(
+                "motion route label deadbands must be finite and non-negative"
+            )
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> RecordedMotionLabelSpec:
+        expected = {
+            "signed_x_deadband",
+            "translation_activity_deadband",
+            "rotation_activity_deadband",
+            "gripper_activity_deadband",
+        }
+        if not isinstance(payload, dict) or set(payload) != expected:
+            raise ValueError("motion route labeling specification is invalid")
+        try:
+            return cls(
+                signed_x_deadband=float(payload["signed_x_deadband"]),
+                translation_activity_deadband=float(
+                    payload["translation_activity_deadband"]
+                ),
+                rotation_activity_deadband=float(
+                    payload["rotation_activity_deadband"]
+                ),
+                gripper_activity_deadband=float(payload["gripper_activity_deadband"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "motion route labeling specification is invalid"
+            ) from error
+
+    def classify_action_horizons(self, actions: torch.Tensor) -> torch.Tensor:
+        if (
+            actions.ndim != 3
+            or actions.shape[0] == 0
+            or actions.shape[-1] != ACTION_DIMENSIONS
+        ):
+            raise ValueError("future actions must have shape [horizon, batch, 7]")
+        by_rollout = actions.transpose(0, 1)
+        translation_active = (
+            torch.linalg.vector_norm(by_rollout[..., :3], dim=-1)
+            > self.translation_activity_deadband
+        )
+        rotation_active = (
+            torch.linalg.vector_norm(by_rollout[..., 3:6], dim=-1)
+            > self.rotation_activity_deadband
+        )
+        gripper_active = by_rollout[..., 6].abs() > self.gripper_activity_deadband
+        active = (translation_active | rotation_active | gripper_active).any(dim=1)
+        mean_x = by_rollout[..., 0].mean(dim=1)
+        routes = torch.full(
+            (by_rollout.shape[0],),
+            int(CausalMotionRoute.HOLD),
+            dtype=torch.long,
+            device=actions.device,
+        )
+        routes = torch.where(active, int(CausalMotionRoute.ACTIVE_OTHER), routes)
+        routes = torch.where(
+            active & (mean_x < -self.signed_x_deadband),
+            int(CausalMotionRoute.RETREAT),
+            routes,
+        )
+        return torch.where(
+            active & (mean_x > self.signed_x_deadband),
+            int(CausalMotionRoute.ADVANCE),
+            routes,
+        )
+
+    def classify_recorded_horizons(
+        self,
+        actions: torch.Tensor,
+        segments: Sequence[ContactInsertionSegment],
+    ) -> torch.Tensor:
+        routes = self.classify_action_horizons(actions)
+        if len(segments) != routes.shape[0] or any(
+            not isinstance(segment, ContactInsertionSegment) for segment in segments
+        ):
+            raise ValueError("recorded route segments do not match the action batch")
+        passthrough = torch.tensor(
+            [segment in CONTACT_INSERTION_PASSTHROUGH_SEGMENTS for segment in segments],
+            dtype=torch.bool,
+            device=routes.device,
+        )
+        return torch.where(passthrough, int(CausalMotionRoute.HOLD), routes)
 
 
 @dataclass(frozen=True)
@@ -115,45 +223,24 @@ class CausalContextRoutingSpec:
 
     def classify_action_horizons(self, actions: torch.Tensor) -> torch.Tensor:
         """Label complete 7D future horizons without collapsing active non-X motion."""
+        return self.labeling_spec.classify_action_horizons(actions)
 
-        if (
-            actions.ndim != 3
-            or actions.shape[0] == 0
-            or actions.shape[-1] != ACTION_DIMENSIONS
-        ):
-            raise ValueError("future actions must have shape [horizon, batch, 7]")
-        by_rollout = actions.transpose(0, 1)
-        translation_active = (
-            torch.linalg.vector_norm(by_rollout[..., :3], dim=-1)
-            > self.translation_activity_deadband
-        )
-        rotation_active = (
-            torch.linalg.vector_norm(by_rollout[..., 3:6], dim=-1)
-            > self.rotation_activity_deadband
-        )
-        gripper_active = by_rollout[..., 6].abs() > self.gripper_activity_deadband
-        active = (translation_active | rotation_active | gripper_active).any(dim=1)
-        mean_x = by_rollout[..., 0].mean(dim=1)
-        routes = torch.full(
-            (by_rollout.shape[0],),
-            int(CausalMotionRoute.HOLD),
-            dtype=torch.long,
-            device=actions.device,
-        )
-        routes = torch.where(
-            active,
-            int(CausalMotionRoute.ACTIVE_OTHER),
-            routes,
-        )
-        routes = torch.where(
-            active & (mean_x < -self.signed_x_deadband),
-            int(CausalMotionRoute.RETREAT),
-            routes,
-        )
-        return torch.where(
-            active & (mean_x > self.signed_x_deadband),
-            int(CausalMotionRoute.ADVANCE),
-            routes,
+    def classify_recorded_horizons(
+        self,
+        actions: torch.Tensor,
+        segments: Sequence[ContactInsertionSegment],
+    ) -> torch.Tensor:
+        """Label authenticated demonstrations without turning hold drift into intent."""
+
+        return self.labeling_spec.classify_recorded_horizons(actions, segments)
+
+    @property
+    def labeling_spec(self) -> RecordedMotionLabelSpec:
+        return RecordedMotionLabelSpec(
+            signed_x_deadband=self.signed_x_deadband,
+            translation_activity_deadband=self.translation_activity_deadband,
+            rotation_activity_deadband=self.rotation_activity_deadband,
+            gripper_activity_deadband=self.gripper_activity_deadband,
         )
 
 

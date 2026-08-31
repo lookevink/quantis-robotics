@@ -15,12 +15,15 @@ if torch is not None:
         ActionConditioningKind,
         ActionConditioningSpec,
         CausalContextResidualActionEncoder,
+        PhysicalStateResidualActionEncoder,
         ActionConditioningContract,
         LoadedActionConditioning,
         action_conditioning_parameters,
         causal_residual_parameters,
         causal_router_parameters,
         install_action_conditioning,
+        physical_residual_parameters,
+        physical_router_parameters,
         save_action_conditioning,
     )
     from jepa_wm.causal_route_probe import (
@@ -41,6 +44,27 @@ if torch is not None:
     )
     from jepa_wm.causal_scoring import CausalCandidateScorer
     from jepa_wm.contract import MODEL_ID
+    from jepa_wm.insertion_layout import ContactInsertionSegment
+    from jepa_wm.physical_observation import (
+        PHYSICAL_ROUTING_FEATURE_NAMES,
+        PHYSICAL_ROUTING_OBSERVATION_SCHEMA,
+    )
+    from jepa_wm.physical_routing import (
+        PhysicalMotionRouter,
+        PhysicalStateRoutingSpec,
+    )
+    from jepa_wm.physical_route_probe import (
+        PhysicalRouteProbeConfig,
+        PhysicalRouteProbeDataset,
+        run_grouped_physical_route_probe,
+    )
+    from jepa_wm.physical_state_routing_experiment import (
+        FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as PHYSICAL_CONFIG_FINGERPRINT,
+        _labeling_spec as _physical_labeling_spec,
+        _load_experiment_config as _load_physical_experiment_config,
+        _routing_spec as _physical_experiment_routing_spec,
+    )
+    from jepa_wm.physical_scoring import PhysicalCandidateScorer
     from jepa_wm.training_artifact import TrainingArtifactMetadata
 
 
@@ -61,6 +85,14 @@ def _conditioning_model() -> SimpleNamespace:
     encoder = torch.nn.Linear(7, 4, bias=False)
     return SimpleNamespace(
         model=SimpleNamespace(predictor=SimpleNamespace(action_encoder=encoder))
+    )
+
+
+def _physical_routing_spec() -> PhysicalStateRoutingSpec:
+    return PhysicalStateRoutingSpec(
+        hidden_dimensions=(8, 8),
+        minimum_route_confidence=0.75,
+        maximum_residual_ratio=0.15,
     )
 
 
@@ -104,6 +136,28 @@ class CausalRoutingTest(unittest.TestCase):
             ],
         )
 
+    def test_semantic_hold_labels_override_realized_drift(self) -> None:
+        actions = torch.zeros((3, 3, 7))
+        actions[:, :, 0] = 0.001
+
+        routes = _routing_spec().classify_recorded_horizons(
+            actions,
+            (
+                ContactInsertionSegment.ALIGN,
+                ContactInsertionSegment.RETREAT_HOLD,
+                ContactInsertionSegment.SEATED_HOLD,
+            ),
+        )
+
+        self.assertEqual(
+            routes.tolist(),
+            [
+                CausalMotionRoute.ADVANCE,
+                CausalMotionRoute.HOLD,
+                CausalMotionRoute.HOLD,
+            ],
+        )
+
     def test_router_uses_context_and_fails_closed_below_confidence(self) -> None:
         router = CausalMotionRouter(_routing_spec())
         context = torch.zeros((2, 2, 1, 1, 1, 4))
@@ -142,6 +196,228 @@ class CausalRoutingTest(unittest.TestCase):
             rtol=0.0,
             atol=0.0,
         )
+
+    def test_physical_router_normalizes_features_and_fails_closed(self) -> None:
+        spec = _physical_routing_spec()
+        router = PhysicalMotionRouter(spec)
+        features = torch.stack(
+            (
+                torch.arange(len(PHYSICAL_ROUTING_FEATURE_NAMES)).float(),
+                torch.arange(len(PHYSICAL_ROUTING_FEATURE_NAMES)).float() + 2.0,
+            )
+        )
+
+        router.fit_normalization(features)
+        normalized = router.normalized_features(features)
+        decision = router.decide(features)
+
+        torch.testing.assert_close(
+            normalized.mean(dim=0),
+            torch.zeros(len(PHYSICAL_ROUTING_FEATURE_NAMES)),
+            rtol=0.0,
+            atol=1e-6,
+        )
+        self.assertTrue(torch.all(decision.failed_closed))
+        self.assertEqual(
+            decision.routes.tolist(),
+            [CausalMotionRoute.ACTIVE_OTHER, CausalMotionRoute.ACTIVE_OTHER],
+        )
+
+    def test_physical_router_refuses_unfitted_normalization(self) -> None:
+        router = PhysicalMotionRouter(_physical_routing_spec())
+        features = torch.zeros((1, len(PHYSICAL_ROUTING_FEATURE_NAMES)))
+
+        with self.assertRaisesRegex(ValueError, "normalization has not been fitted"):
+            router.decide(features)
+
+    def test_physical_routing_spec_authenticates_feature_schema(self) -> None:
+        payload = _physical_routing_spec().to_dict()
+
+        self.assertEqual(
+            payload["feature_names"],
+            list(PHYSICAL_ROUTING_FEATURE_NAMES),
+        )
+        self.assertEqual(
+            payload["observation_schema"],
+            PHYSICAL_ROUTING_OBSERVATION_SCHEMA,
+        )
+        self.assertEqual(
+            PhysicalStateRoutingSpec.from_dict(payload),
+            _physical_routing_spec(),
+        )
+
+        payload["feature_names"] = list(reversed(payload["feature_names"]))
+        with self.assertRaisesRegex(ValueError, "physical routing specification"):
+            PhysicalStateRoutingSpec.from_dict(payload)
+
+        payload = _physical_routing_spec().to_dict()
+        payload["observation_schema"] = "quantis.invalid.v1"
+        with self.assertRaisesRegex(ValueError, "physical routing specification"):
+            PhysicalStateRoutingSpec.from_dict(payload)
+
+    def test_frozen_physical_probe_manifest_authenticates(self) -> None:
+        experiment = _load_physical_experiment_config(
+            Path(".scratch/jepa-physical-state-routing-v2/experiment-config.json")
+        )
+
+        self.assertEqual(
+            experiment["schema"],
+            "quantis.jepa_wm_physical_state_routing_probe.v1",
+        )
+        self.assertEqual(len(PHYSICAL_CONFIG_FINGERPRINT), 64)
+        self.assertEqual(
+            _physical_experiment_routing_spec(experiment),
+            PhysicalStateRoutingSpec((64, 64), 0.75, 0.15),
+        )
+        self.assertEqual(
+            _physical_labeling_spec(experiment).gripper_activity_deadband,
+            0.005,
+        )
+
+    def test_physical_conditioner_enforces_bound_and_exact_passthrough(self) -> None:
+        model = _conditioning_model()
+        encoder = install_action_conditioning(
+            model,
+            ActionConditioningSpec(
+                ActionConditioningKind.PHYSICAL_STATE_RESIDUAL,
+                physical_state_routing=_physical_routing_spec(),
+            ),
+        )
+        self.assertIsInstance(encoder, PhysicalStateResidualActionEncoder)
+        features = torch.zeros((2, len(PHYSICAL_ROUTING_FEATURE_NAMES)))
+        actions = torch.ones((2, 3, 7))
+        encoder.router.fit_normalization(features)
+        with torch.no_grad():
+            encoder.base.weight.fill_(1.0)
+            encoder.residuals[0].weight.fill_(20.0)
+            encoder.router.output.weight.zero_()
+            encoder.router.output.bias.zero_()
+            encoder.router.output.bias[CausalMotionRoute.RETREAT] = 12.0
+
+        with encoder.use_physical_observations(features) as decision:
+            output = encoder(actions)
+
+        base = encoder.base(actions)
+        ratios = torch.linalg.vector_norm(
+            output - base, dim=-1
+        ) / torch.linalg.vector_norm(base, dim=-1)
+        self.assertEqual(
+            decision.routes.tolist(),
+            [CausalMotionRoute.RETREAT, CausalMotionRoute.RETREAT],
+        )
+        self.assertLessEqual(float(ratios.max()), 0.150001)
+
+        with torch.no_grad():
+            encoder.router.output.bias.zero_()
+            encoder.router.output.bias[CausalMotionRoute.HOLD] = 12.0
+        with encoder.use_physical_observations(features):
+            passthrough = encoder(actions)
+        self.assertTrue(torch.equal(passthrough, base))
+
+    def test_physical_training_seams_freeze_base_and_split_router_residuals(
+        self,
+    ) -> None:
+        model = _conditioning_model()
+        encoder = install_action_conditioning(
+            model,
+            ActionConditioningSpec(
+                ActionConditioningKind.PHYSICAL_STATE_RESIDUAL,
+                physical_state_routing=_physical_routing_spec(),
+            ),
+        )
+
+        router = physical_router_parameters(model)
+        residuals = physical_residual_parameters(model)
+        combined = action_conditioning_parameters(model)
+
+        self.assertTrue(router)
+        self.assertTrue(residuals)
+        self.assertEqual(
+            {id(parameter) for parameter in router + residuals},
+            {id(parameter) for parameter in combined},
+        )
+        self.assertNotIn(
+            id(encoder.base.weight),
+            {id(parameter) for parameter in combined},
+        )
+
+    def test_physical_scoring_holds_one_route_fixed_for_every_candidate(self) -> None:
+        model = _conditioning_model()
+        encoder = install_action_conditioning(
+            model,
+            ActionConditioningSpec(
+                ActionConditioningKind.PHYSICAL_STATE_RESIDUAL,
+                physical_state_routing=_physical_routing_spec(),
+            ),
+        )
+        with torch.no_grad():
+            encoder.router.output.weight.zero_()
+            encoder.router.output.bias.zero_()
+            encoder.router.output.bias[CausalMotionRoute.ADVANCE] = 12.0
+        scoring_model = _ScoringModel(encoder)
+        scorer = PhysicalCandidateScorer(scoring_model)
+        context = torch.zeros((2, 2, 1, 1, 1, 4))
+        target = torch.zeros((2, 1, 4))
+        features = torch.zeros((2, len(PHYSICAL_ROUTING_FEATURE_NAMES)))
+        encoder.router.fit_normalization(features)
+        recorded = torch.ones((3, 2, 7))
+
+        scored = scorer.score(
+            context,
+            target,
+            {"recorded": recorded, "zero": torch.zeros_like(recorded)},
+            physical_observations=features,
+        )
+
+        self.assertEqual(set(scored.energies), {"recorded", "zero"})
+        self.assertEqual(
+            scored.decision.routes.tolist(),
+            [CausalMotionRoute.ADVANCE, CausalMotionRoute.ADVANCE],
+        )
+        self.assertIsNone(encoder.active_decision)
+
+    def test_physical_artifact_round_trips_router_and_bounded_residuals(self) -> None:
+        source = _conditioning_model()
+        spec = ActionConditioningSpec(
+            ActionConditioningKind.PHYSICAL_STATE_RESIDUAL,
+            physical_state_routing=_physical_routing_spec(),
+        )
+        installed = install_action_conditioning(source, spec)
+        installed.router.fit_normalization(
+            torch.zeros((2, len(PHYSICAL_ROUTING_FEATURE_NAMES)))
+        )
+        with torch.no_grad():
+            installed.router.feature_mean.fill_(0.5)
+            installed.router.output.bias[CausalMotionRoute.RETREAT] = 3.0
+            installed.residuals[0].weight.fill_(0.25)
+        contract = ActionConditioningContract(
+            "quantis.jepa_wm_action_conditioning.v1",
+            TrainingArtifactMetadata(
+                base_model=MODEL_ID,
+                source_revision="revision",
+                camera="wrist",
+                training_recordings=("train-00",),
+                training_steps=10,
+            ),
+            "a" * 64,
+            "b" * 64,
+            "c" * 64,
+            spec,
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "physical.pth"
+            save_action_conditioning(source, path, contract)
+            loaded = LoadedActionConditioning.load(path)
+            target = _conditioning_model()
+
+            loaded.apply(target, expected_source_revision="revision")
+
+        self.assertEqual(loaded.contract, contract)
+        for expected, actual in zip(
+            installed.state_dict().values(),
+            target.model.predictor.action_encoder.state_dict().values(),
+        ):
+            torch.testing.assert_close(actual, expected)
 
     def test_conditioner_enforces_hard_residual_ratio(self) -> None:
         model = _conditioning_model()
@@ -396,6 +672,47 @@ class CausalRoutingTest(unittest.TestCase):
 
         self.assertEqual(report["overall"]["accuracy"], 1.0)
         self.assertFalse(report["candidate_actions_used_as_router_inputs"])
+
+    def test_grouped_physical_probe_uses_only_observed_state(self) -> None:
+        labels = torch.tensor((0, 1, 2, 3) * 3)
+        features = torch.zeros((12, len(PHYSICAL_ROUTING_FEATURE_NAMES)))
+        features[:, :4] = torch.nn.functional.one_hot(labels, num_classes=4).float()
+        dataset = PhysicalRouteProbeDataset(
+            features=features,
+            labels=labels,
+            groups=torch.tensor((0,) * 4 + (1,) * 4 + (2,) * 4),
+            slices=("hold", "retreat", "advance", "active_other") * 3,
+        )
+
+        report = run_grouped_physical_route_probe(
+            dataset,
+            PhysicalStateRoutingSpec(
+                hidden_dimensions=(8, 8),
+                minimum_route_confidence=0.55,
+                maximum_residual_ratio=0.15,
+            ),
+            PhysicalRouteProbeConfig(
+                steps=300,
+                learning_rate=0.05,
+                weight_decay=0.0,
+                seed=17,
+            ),
+            device=torch.device("cpu"),
+        )
+
+        self.assertEqual(report["overall"]["accuracy"], 1.0)
+        self.assertEqual(report["runtime_inputs"], ["physical_observation"])
+        self.assertFalse(report["candidate_actions_used_as_router_inputs"])
+        self.assertFalse(report["visual_latents_used_as_router_inputs"])
+
+    def test_physical_probe_rejects_malformed_feature_rank(self) -> None:
+        with self.assertRaisesRegex(ValueError, "physical route probe dataset"):
+            PhysicalRouteProbeDataset(
+                features=torch.tensor(1.0),
+                labels=torch.tensor((0,)),
+                groups=torch.tensor((0,)),
+                slices=("hold",),
+            )
 
 
 if __name__ == "__main__":

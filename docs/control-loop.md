@@ -813,6 +813,16 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     canonical evaluation, JEPA action, filming, hardware, or production
     authority. Exact identities and segment metrics are in the linked README
     checkpoint.
+    The subsequent router redesign makes hold intent explicit for all three
+    declared hold segments and routes from a versioned 26-value task-relative
+    physical observation, never from candidates, future actions, phase,
+    indices, seeds, or visual latents. A TRAIN-only architecture diagnostic
+    selected `26 -> 64 -> 64 -> 4`: grouped accuracy `0.987103`, retreat and
+    advance recall `0.992908`/`0.989780`, attachment accuracy `1.0`,
+    fail-closed fraction `0.028274`, and zero owned-route activations on hold
+    windows. The bounded candidate-invariant production seam and a separate
+    one-shot authenticated probe contract are implemented; residual training
+    and every live/held-out authority remain closed pending that probe.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one
