@@ -128,6 +128,17 @@ class ContactInsertionLayout:
             start += span.frames
         raise ValueError(f"unknown insertion segment: {segment.value}")
 
+    def segment_for_index(self, index: int) -> ContactInsertionSegment:
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            raise ValueError("insertion layout index must be a non-negative integer")
+        start = 0
+        for span in self.spans:
+            stop = start + span.frames
+            if index < stop:
+                return span.segment
+            start = stop
+        raise ValueError("index is outside the insertion layout")
+
     @property
     def insertion_steps(self) -> int:
         return self.span(ContactInsertionSegment.INSERT).frames

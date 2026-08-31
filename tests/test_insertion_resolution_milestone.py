@@ -11,7 +11,10 @@ from jepa_wm.control_resolution_profile import (
     CONTROL_RESOLUTION_LOADS,
     CONTROL_RESOLUTION_MEASUREMENT_TIMEOUT_SECONDS,
 )
-from jepa_wm.insertion_layout import CONTACT_INSERTION_LAYOUT
+from jepa_wm.insertion_layout import (
+    CONTACT_INSERTION_LAYOUT,
+    ContactInsertionSegment,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +22,24 @@ MILESTONE = REPO_ROOT / "ops" / "jepa_wm_insertion_resolution_milestone.sh"
 
 
 class InsertionResolutionMilestoneTest(unittest.TestCase):
+    def test_layout_resolves_every_frame_to_exactly_one_segment(self) -> None:
+        resolved = tuple(
+            CONTACT_INSERTION_LAYOUT.segment_for_index(index)
+            for index in range(CONTACT_INSERTION_LAYOUT.frame_count)
+        )
+
+        self.assertEqual(resolved[113], ContactInsertionSegment.GRASP_ATTACH)
+        self.assertEqual(resolved[114], ContactInsertionSegment.RETREAT)
+        self.assertEqual(resolved[162], ContactInsertionSegment.RETREAT_HOLD)
+        self.assertEqual(resolved[166], ContactInsertionSegment.ALIGN)
+        self.assertEqual(resolved[214], ContactInsertionSegment.ALIGN_HOLD)
+        self.assertEqual(resolved[216], ContactInsertionSegment.INSERT)
+        self.assertEqual(resolved[280], ContactInsertionSegment.SEATED_HOLD)
+        with self.assertRaises(ValueError):
+            CONTACT_INSERTION_LAYOUT.segment_for_index(
+                CONTACT_INSERTION_LAYOUT.frame_count
+            )
+
     def test_contexts_are_first_middle_and_last_insertion_commands(self) -> None:
         contexts = CONTACT_INSERTION_LAYOUT.insertion_command_context_indices
 

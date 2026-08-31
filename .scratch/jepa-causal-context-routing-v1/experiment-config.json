@@ -1,0 +1,80 @@
+{
+  "schema": "quantis.jepa_wm_causal_context_routing_probe.v1",
+  "experiment_id": "contact-insertion-v10-drive-slow-2600-causal-context-routing-v1",
+  "authority": "one TRAIN-only feasibility preflight and grouped route probe",
+  "base_model": {
+    "model_id": "jepa_wm_droid",
+    "source_revision": "13cf1d9c7e476f53c17714d2e0f1dc239a883ce0",
+    "checkpoint_fingerprint": "daa69198aef764932f1cb809239a4e19c71da20a93c6a0b9f3869cb30a13f4aa",
+    "control_artifact_fingerprint": "e2fea116de2aca46bb9a3e72e3d971e49dfc64936f8fc27469353da102ffa0ed",
+    "frozen_encoder": true,
+    "frozen_predictor": true,
+    "frozen_control_action_map": true
+  },
+  "corpus": {
+    "training_recordings": [
+      "contact-insertion-v10-drive-slow-2600-train-00",
+      "contact-insertion-v10-drive-slow-2600-train-01",
+      "contact-insertion-v10-drive-slow-2600-train-02",
+      "contact-insertion-v10-drive-slow-2600-train-03",
+      "contact-insertion-v10-drive-slow-2600-train-04",
+      "contact-insertion-v10-drive-slow-2600-train-05",
+      "contact-insertion-v10-drive-slow-2600-train-06",
+      "contact-insertion-v10-drive-slow-2600-train-07",
+      "contact-insertion-v10-drive-slow-2600-train-08",
+      "contact-insertion-v10-drive-slow-2600-train-09",
+      "contact-insertion-v10-drive-slow-2600-train-10",
+      "contact-insertion-v10-drive-slow-2600-train-11"
+    ],
+    "camera": "wrist",
+    "window": {"start_index": 113, "count": 168, "stride": 1},
+    "action_horizon": 3
+  },
+  "routing": {
+    "context_dimension": 1024,
+    "router_hidden_dimension": 64,
+    "signed_x_deadband": 0.0001,
+    "translation_activity_deadband": 0.0001,
+    "rotation_activity_deadband": 0.001,
+    "gripper_activity_deadband": 0.005,
+    "minimum_route_confidence": 0.75,
+    "maximum_residual_ratio": 0.15,
+    "runtime_inputs": ["visual_context_latent", "context_pose", "previous_action"],
+    "forbidden_runtime_inputs": [
+      "candidate_action",
+      "recorded_future_action",
+      "scripted_phase",
+      "context_index",
+      "seed"
+    ]
+  },
+  "ownership": {
+    "owned": ["grasp_attach", "retreat", "align", "insert"],
+    "passthrough": ["retreat_hold", "align_hold", "seated_hold"],
+    "trainable_routes": ["retreat", "advance"],
+    "owned_gate": {
+      "minimum_win_rate": 0.75,
+      "requires_positive_mean": true
+    }
+  },
+  "probe": {
+    "grouping": "leave_one_recording_out",
+    "steps": 500,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "seed": 237,
+    "minimum_overall_accuracy": 0.95,
+    "minimum_retreat_recall": 0.98,
+    "minimum_advance_recall": 0.98,
+    "minimum_grasp_attach_accuracy": 1.0,
+    "maximum_failed_closed_fraction": 0.05,
+    "maximum_passthrough_owned_route_activations": 0
+  },
+  "stopping_rules": {
+    "one_preflight": true,
+    "one_grouped_probe": true,
+    "no_residual_training": true,
+    "no_held_out_or_canonical_access": true,
+    "no_live_action_or_filming_authority": true
+  }
+}

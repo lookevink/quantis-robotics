@@ -13,6 +13,11 @@ from typing import Any, Iterator
 
 import torch
 
+from jepa_wm.causal_routing import (
+    CausalContextRoutingSpec,
+    CausalMotionRouter,
+    CausalRouteDecision,
+)
 from jepa_wm.contract import MODEL_ID
 from jepa_wm.training_artifact import (
     ArtifactIdentity,
@@ -37,6 +42,7 @@ class ActionConditioningKind(str, Enum):
     ORACLE_REGIME_RESIDUAL = "oracle_regime_residual"
     RUNTIME_COMMAND_RESIDUAL = "runtime_command_residual"
     OBSERVED_CONTEXT_RESIDUAL = "observed_context_residual"
+    CAUSAL_CONTEXT_RESIDUAL = "causal_context_residual"
 
 
 @dataclass(frozen=True)
@@ -208,6 +214,7 @@ class ActionConditioningSpec:
     hidden_dimension: int | None = None
     runtime_routing: RuntimeCommandRoutingSpec | None = None
     observed_context_routing: ObservedContextRoutingSpec | None = None
+    causal_context_routing: CausalContextRoutingSpec | None = None
 
     def __post_init__(self) -> None:
         if self.kind is ActionConditioningKind.NONLINEAR_RESIDUAL:
@@ -220,6 +227,7 @@ class ActionConditioningSpec:
             if (
                 self.runtime_routing is not None
                 or self.observed_context_routing is not None
+                or self.causal_context_routing is not None
             ):
                 raise ValueError("nonlinear action conditioning cannot use runtime routing")
         elif self.kind is ActionConditioningKind.RUNTIME_COMMAND_RESIDUAL:
@@ -227,6 +235,7 @@ class ActionConditioningSpec:
                 self.hidden_dimension is not None
                 or self.runtime_routing is None
                 or self.observed_context_routing is not None
+                or self.causal_context_routing is not None
             ):
                 raise ValueError("runtime command conditioning requires only routing")
         elif self.kind is ActionConditioningKind.OBSERVED_CONTEXT_RESIDUAL:
@@ -234,14 +243,26 @@ class ActionConditioningSpec:
                 self.hidden_dimension is not None
                 or self.runtime_routing is not None
                 or self.observed_context_routing is None
+                or self.causal_context_routing is not None
             ):
                 raise ValueError(
                     "observed-context conditioning requires only context routing"
+                )
+        elif self.kind is ActionConditioningKind.CAUSAL_CONTEXT_RESIDUAL:
+            if (
+                self.hidden_dimension is not None
+                or self.runtime_routing is not None
+                or self.observed_context_routing is not None
+                or self.causal_context_routing is None
+            ):
+                raise ValueError(
+                    "causal-context conditioning requires only causal routing"
                 )
         elif (
             self.hidden_dimension is not None
             or self.runtime_routing is not None
             or self.observed_context_routing is not None
+            or self.causal_context_routing is not None
         ):
             raise ValueError("only nonlinear action conditioning uses a hidden dimension")
 
@@ -251,6 +272,7 @@ class ActionConditioningSpec:
             {"kind", "hidden_dimension"},
             {"kind", "hidden_dimension", "runtime_routing"},
             {"kind", "hidden_dimension", "observed_context_routing"},
+            {"kind", "hidden_dimension", "causal_context_routing"},
         ):
             raise ValueError("action-conditioning specification is invalid")
         try:
@@ -269,7 +291,19 @@ class ActionConditioningSpec:
             if observed_payload is not None
             else None
         )
-        return cls(kind, payload["hidden_dimension"], routing, observed_routing)
+        causal_payload = payload.get("causal_context_routing")
+        causal_routing = (
+            CausalContextRoutingSpec.from_dict(causal_payload)
+            if causal_payload is not None
+            else None
+        )
+        return cls(
+            kind,
+            payload["hidden_dimension"],
+            routing,
+            observed_routing,
+            causal_routing,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -282,6 +316,8 @@ class ActionConditioningSpec:
             payload["observed_context_routing"] = (
                 self.observed_context_routing.to_dict()
             )
+        if self.causal_context_routing is not None:
+            payload["causal_context_routing"] = self.causal_context_routing.to_dict()
         return payload
 
 
@@ -482,12 +518,122 @@ class ObservedContextResidualActionEncoder(torch.nn.Module):
         return output
 
 
+class CausalContextResidualActionEncoder(torch.nn.Module):
+    """Apply hard-bounded residuals selected once from causal observations."""
+
+    def __init__(
+        self,
+        base: torch.nn.Linear,
+        routing: CausalContextRoutingSpec,
+    ) -> None:
+        super().__init__()
+        if base.out_features != routing.context_dimension:
+            raise ValueError(
+                "causal routing context dimension must match the action embedding"
+            )
+        self.base = base
+        self.router = CausalMotionRouter(routing).to(
+            device=base.weight.device,
+            dtype=base.weight.dtype,
+        )
+        self.residuals = torch.nn.ModuleList(
+            torch.nn.Linear(
+                base.in_features,
+                base.out_features,
+                bias=False,
+                device=base.weight.device,
+                dtype=base.weight.dtype,
+            )
+            for _ in (NEGATIVE_X_COMMAND_ROUTE, POSITIVE_X_COMMAND_ROUTE)
+        )
+        for residual in self.residuals:
+            torch.nn.init.zeros_(residual.weight)
+        self.spec = ActionConditioningSpec(
+            ActionConditioningKind.CAUSAL_CONTEXT_RESIDUAL,
+            causal_context_routing=routing,
+        )
+        self._active_decision: CausalRouteDecision | None = None
+
+    @property
+    def active_decision(self) -> CausalRouteDecision | None:
+        return self._active_decision
+
+    def residual_for_route(self, route: int) -> torch.nn.Linear:
+        if route == NEGATIVE_X_COMMAND_ROUTE:
+            return self.residuals[0]
+        if route == POSITIVE_X_COMMAND_ROUTE:
+            return self.residuals[1]
+        raise ValueError("causal residual route must be retreat or advance")
+
+    def route(
+        self,
+        context_latents: torch.Tensor,
+        context_poses: torch.Tensor,
+        previous_actions: torch.Tensor,
+    ) -> CausalRouteDecision:
+        return self.router.decide(context_latents, context_poses, previous_actions)
+
+    @contextmanager
+    def use_causal_context(
+        self,
+        context_latents: torch.Tensor,
+        context_poses: torch.Tensor,
+        previous_actions: torch.Tensor,
+    ) -> Iterator[CausalRouteDecision]:
+        if self._active_decision is not None:
+            raise ValueError("causal action context is already active")
+        decision = self.route(context_latents, context_poses, previous_actions)
+        self._active_decision = CausalRouteDecision(
+            decision.routes.to(device=self.base.weight.device),
+            decision.confidence.to(device=self.base.weight.device),
+            decision.residual_weights.to(
+                device=self.base.weight.device,
+                dtype=self.base.weight.dtype,
+            ),
+            decision.failed_closed.to(device=self.base.weight.device),
+        )
+        try:
+            yield self._active_decision
+        finally:
+            self._active_decision = None
+
+    def forward(self, actions: torch.Tensor) -> torch.Tensor:
+        decision = self._active_decision
+        if (
+            decision is None
+            or actions.ndim < 2
+            or actions.shape[0] != decision.routes.shape[0]
+        ):
+            raise ValueError("causal action context must be scoped to the candidate batch")
+        base = self.base(actions)
+        weight_shape = (decision.routes.shape[0],) + (1,) * (base.ndim - 1)
+        residual = torch.zeros_like(base)
+        for index, route in enumerate(
+            (NEGATIVE_X_COMMAND_ROUTE, POSITIVE_X_COMMAND_ROUTE)
+        ):
+            residual = residual + decision.residual_weights[:, index].reshape(
+                weight_shape
+            ) * self.residual_for_route(route)(actions)
+        residual_norm = torch.linalg.vector_norm(residual, dim=-1, keepdim=True)
+        base_norm = torch.linalg.vector_norm(base, dim=-1, keepdim=True)
+        routing = self.spec.causal_context_routing
+        assert routing is not None
+        maximum = routing.maximum_residual_ratio * base_norm
+        denominator = torch.clamp(
+            residual_norm,
+            min=torch.finfo(residual.dtype).eps,
+        )
+        scale = torch.clamp(maximum / denominator, max=1.0)
+        return base + residual * scale
+
+
 ActionConditioningEncoder = (
     GlobalLinearActionEncoder
     | NonlinearResidualActionEncoder
     | OracleRegimeResidualActionEncoder
     | RuntimeCommandResidualActionEncoder
     | ObservedContextResidualActionEncoder
+    | CausalContextResidualActionEncoder
 )
 
 
@@ -508,6 +654,7 @@ def _installed_encoder(model: Any) -> ActionConditioningEncoder:
             OracleRegimeResidualActionEncoder,
             RuntimeCommandResidualActionEncoder,
             ObservedContextResidualActionEncoder,
+            CausalContextResidualActionEncoder,
         ),
     ):
         raise ValueError("model has no installed action-conditioning family")
@@ -532,11 +679,17 @@ def install_action_conditioning(
     elif spec.kind is ActionConditioningKind.RUNTIME_COMMAND_RESIDUAL:
         assert spec.runtime_routing is not None
         installed = RuntimeCommandResidualActionEncoder(base, spec.runtime_routing)
-    else:
+    elif spec.kind is ActionConditioningKind.OBSERVED_CONTEXT_RESIDUAL:
         assert spec.observed_context_routing is not None
         installed = ObservedContextResidualActionEncoder(
             base,
             spec.observed_context_routing,
+        )
+    else:
+        assert spec.causal_context_routing is not None
+        installed = CausalContextResidualActionEncoder(
+            base,
+            spec.causal_context_routing,
         )
     predictor.action_encoder = installed
     return installed
@@ -547,7 +700,11 @@ def action_conditioning_parameters(model: Any) -> tuple[torch.nn.Parameter, ...]
     parameters: list[torch.nn.Parameter] = []
     if not isinstance(
         encoder,
-        (RuntimeCommandResidualActionEncoder, ObservedContextResidualActionEncoder),
+        (
+            RuntimeCommandResidualActionEncoder,
+            ObservedContextResidualActionEncoder,
+            CausalContextResidualActionEncoder,
+        ),
     ):
         parameters.append(encoder.base.weight)
     if isinstance(encoder, NonlinearResidualActionEncoder):
@@ -562,7 +719,31 @@ def action_conditioning_parameters(model: Any) -> tuple[torch.nn.Parameter, ...]
     elif isinstance(encoder, ObservedContextResidualActionEncoder):
         for residual in encoder.residuals:
             parameters.extend(residual.parameters())
+    elif isinstance(encoder, CausalContextResidualActionEncoder):
+        parameters.extend(encoder.router.parameters())
+        for residual in encoder.residuals:
+            parameters.extend(residual.parameters())
     return tuple(parameters)
+
+
+def causal_context_encoder(model: Any) -> CausalContextResidualActionEncoder:
+    encoder = _installed_encoder(model)
+    if not isinstance(encoder, CausalContextResidualActionEncoder):
+        raise ValueError("model has no causal-context action conditioning")
+    return encoder
+
+
+def causal_router_parameters(model: Any) -> tuple[torch.nn.Parameter, ...]:
+    return tuple(causal_context_encoder(model).router.parameters())
+
+
+def causal_residual_parameters(model: Any) -> tuple[torch.nn.Parameter, ...]:
+    encoder = causal_context_encoder(model)
+    return tuple(
+        parameter
+        for residual in encoder.residuals
+        for parameter in residual.parameters()
+    )
 
 
 @contextmanager
