@@ -4,8 +4,8 @@
   "authority": "one read-only disjoint canonical held-out evaluation",
   "evaluator": {
     "path": "jepa_wm/physical_residual_held_out.py",
-    "fingerprint": "PENDING_SECOND_CHECKPOINT",
-    "implementation_revision": "PENDING_SECOND_CHECKPOINT"
+    "fingerprint": "a06c5de8b943475502ea335bb73000878d8149f409024457f9fc432faaa1a973",
+    "implementation_revision": "85c2cd713f8a75ac5e8037e71bb4e4214ed38917"
   },
   "source": {
     "training_experiment_config_fingerprint": "b296b7fc064627f13ed87c1baeaf84d4961f1b04db115f9afcc689bf05dda78d",

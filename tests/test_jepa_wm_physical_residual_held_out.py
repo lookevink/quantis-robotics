@@ -7,6 +7,7 @@ import unittest
 
 from jepa_wm.physical_residual_held_out import (
     FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+    _authenticate_evaluator,
     _claim_canonical_access,
     evaluate_population_gate,
     load_experiment_config,
@@ -64,7 +65,7 @@ class PhysicalResidualHeldOutTest(unittest.TestCase):
 
         self.assertEqual(
             FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
-            "c3ad387457c72e89c8d06d50b3638ba3b5ca17160e5c42c013d4bc7e778e3c25",
+            "19bd7eed2039e25cbae050d27eeddb6d93a82fdc17e00d4596018eb9bea1ea82",
         )
         self.assertEqual([item["seed"] for item in recordings], [12600, 12601])
         self.assertEqual(len({item["manifest_fingerprint"] for item in recordings}), 2)
@@ -110,6 +111,17 @@ class PhysicalResidualHeldOutTest(unittest.TestCase):
             self.assertEqual(payload["recordings"], ["held-00", "held-01"])
             with self.assertRaisesRegex(ValueError, "already claimed"):
                 _claim_canonical_access(claim, recordings)
+
+    def test_frozen_evaluator_identity_authenticates(self) -> None:
+        evaluator = self.config["evaluator"]
+
+        identity = _authenticate_evaluator(
+            self.config, evaluator["implementation_revision"]
+        )
+
+        self.assertEqual(identity["fingerprint"], evaluator["fingerprint"])
+        with self.assertRaisesRegex(ValueError, "revision changed"):
+            _authenticate_evaluator(self.config, "0" * 40)
 
 
 if __name__ == "__main__":
