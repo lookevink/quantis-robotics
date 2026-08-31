@@ -8,6 +8,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+import subprocess
 from time import monotonic
 from typing import Any, Sequence
 
@@ -89,6 +90,9 @@ FRESH_CANARY_SEED = 72601
 CONTROL_ARTIFACT_FINGERPRINT = (
     "e2fea116de2aca46bb9a3e72e3d971e49dfc64936f8fc27469353da102ffa0ed"
 )
+EVALUATION_OUTPUT_ROOT = Path(
+    "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_action_routing_v1"
+)
 ROUTING_SPEC = RuntimeCommandRoutingSpec(
     signed_x_deadband=0.0001,
     translation_activity_deadband=0.0001,
@@ -106,6 +110,63 @@ EXPECTED_ROUTE_ROSTER = {
     "base_active_non_x": 50,
     "total": 2016,
 }
+
+
+def _authenticate_base_model(
+    experiment: dict[str, Any],
+    source: Path,
+    checkpoint: Path,
+) -> dict[str, str]:
+    base = experiment["base_model"]
+    expected_revision = str(base["source_revision"])
+    configured_revision = os.environ.get("JEPA_WM_REVISION")
+    try:
+        actual_revision = subprocess.run(
+            ("git", "-C", str(source.resolve()), "rev-parse", "HEAD"),
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise ValueError("JEPA-WM source revision cannot be authenticated") from error
+    checkpoint_identity = ArtifactIdentity.from_artifact(checkpoint)
+    if (
+        configured_revision != expected_revision
+        or actual_revision != expected_revision
+        or checkpoint_identity.fingerprint != base["checkpoint_fingerprint"]
+    ):
+        raise ValueError("frozen JEPA-WM base identity changed")
+    return {
+        "source": str(source.resolve()),
+        "source_revision": actual_revision,
+        "checkpoint": str(checkpoint_identity.path),
+        "checkpoint_fingerprint": checkpoint_identity.fingerprint,
+    }
+
+
+def _expected_evaluation_output(recording: str, treatment: str) -> Path:
+    return EVALUATION_OUTPUT_ROOT / f"evaluation-{recording}-{treatment}.json"
+
+
+def _selected_input_fingerprint(
+    recording: Path,
+    rollouts: Sequence[RecordedRollout],
+) -> str:
+    root = recording.resolve()
+    selected = {root / "manifest.json", root / "steps.jsonl"}
+    for rollout in rollouts:
+        selected.update(rollout.context_paths)
+        selected.update(rollout.target_clip)
+    digest = sha256()
+    for path in sorted(selected):
+        resolved = path.resolve()
+        relative = resolved.relative_to(root)
+        digest.update(str(relative).encode())
+        digest.update(b"\0")
+        with resolved.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _load_experiment_config(path: Path) -> dict[str, Any]:
@@ -187,6 +248,8 @@ def _validated_selection(recordings: Sequence[Path]) -> RolloutTrainingSelection
 
 def preflight(
     recordings: Sequence[Path],
+    source: Path,
+    checkpoint: Path,
     control_adapter: Path,
     output: Path,
     *,
@@ -194,7 +257,8 @@ def preflight(
 ) -> dict[str, Any]:
     if output.exists():
         raise ValueError(f"runtime-routing preflight already exists: {output}")
-    _load_experiment_config(experiment_config)
+    experiment = _load_experiment_config(experiment_config)
+    base_identity = _authenticate_base_model(experiment, source, checkpoint)
     control_identity = ArtifactIdentity.from_artifact(control_adapter)
     if control_identity.fingerprint != CONTROL_ARTIFACT_FINGERPRINT:
         raise ValueError("frozen control action map identity changed")
@@ -204,6 +268,7 @@ def preflight(
         "status": "passed",
         "scope": "offline routing experiment only; no live JEPA action",
         "experiment_config_fingerprint": FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+        "base_model": base_identity,
         "control_artifact": control_identity.to_dict(),
         "training_selection_fingerprint": selection.fingerprint,
         "router": ROUTING_SPEC.to_dict(),
@@ -240,6 +305,7 @@ def train_router(
     if output.exists() or training_report_path(output).exists():
         raise ValueError(f"runtime-routing output already exists: {output}")
     experiment = _load_experiment_config(experiment_config)
+    base_identity = _authenticate_base_model(experiment, source, checkpoint)
     control_identity = ArtifactIdentity.from_artifact(control_adapter)
     if control_identity.fingerprint != CONTROL_ARTIFACT_FINGERPRINT:
         raise ValueError("frozen control action map identity changed")
@@ -428,6 +494,7 @@ def train_router(
         "route_roster": route_roster(rollouts),
         "sampling": sampler.to_dict(),
         "control_artifact": control_identity.to_dict(),
+        "base_model": base_identity,
         "base_map_unchanged": True,
         "trainable_parameters": sum(parameter.numel() for parameter in trainable),
         "initial_loss": losses[0],
@@ -459,6 +526,7 @@ def smoke(
     if not torch.cuda.is_available():
         raise RuntimeError("runtime-routing smoke requires CUDA")
     experiment = _load_experiment_config(experiment_config)
+    _authenticate_base_model(experiment, source, checkpoint)
     validated = validated_training_recordings((recording,))
     if validated[0].name != TRAINING_RECORDINGS[0] or validated[0].seed != 2600:
         raise ValueError("runtime-routing smoke requires frozen TRAIN recording 00")
@@ -565,6 +633,7 @@ def _authorize_evaluation(
     treatment: str,
     artifact: ArtifactIdentity,
     canary_summary: Path | None,
+    experiment: dict[str, Any],
 ) -> None:
     if recording == FRESH_CANARY:
         if canary_summary is not None:
@@ -574,8 +643,12 @@ def _authorize_evaluation(
         raise ValueError("canonical routing evaluation is not authorized")
     if canary_summary is None:
         raise ValueError("canonical routing evaluation requires a passing canary summary")
+    expected_summary = EVALUATION_OUTPUT_ROOT / "canary-summary.json"
+    if canary_summary.resolve() != expected_summary:
+        raise ValueError("canonical routing evaluation requires the frozen canary summary")
     payload = json.loads(canary_summary.resolve().read_text())
     selected = payload.get("selected_artifact")
+    source_reports = payload.get("source_reports")
     if (
         payload.get("schema")
         != "quantis.jepa_wm_runtime_command_routing_canary_summary.v1"
@@ -584,16 +657,49 @@ def _authorize_evaluation(
         or payload.get("selected_treatment") != "R"
         or not payload.get("canonical_authorized_offline")
         or not isinstance(selected, dict)
-        or selected.get("fingerprint") != artifact.fingerprint
+        or selected != artifact.to_dict()
+        or not isinstance(source_reports, list)
+        or len(source_reports) != 2
     ):
         raise ValueError("canonical routing evaluation lacks matching canary authority")
+    reports_by_treatment = {}
+    expected_report_paths = {
+        _expected_evaluation_output(FRESH_CANARY, item) for item in ("A", "R")
+    }
+    for identity_payload in source_reports:
+        identity = ArtifactIdentity.from_dict(identity_payload)
+        if identity.path not in expected_report_paths:
+            raise ValueError("canonical routing canary report path changed")
+        actual = ArtifactIdentity.from_artifact(identity.path)
+        if actual != identity:
+            raise ValueError("canonical routing canary report identity changed")
+        report = json.loads(identity.path.read_text())
+        reports_by_treatment[report.get("treatment")] = report
+    if set(reports_by_treatment) != {"A", "R"}:
+        raise ValueError("canonical routing canary reports are incomplete")
+    for report_treatment, report in reports_by_treatment.items():
+        _validate_evaluation_report(
+            report,
+            treatment=report_treatment,
+            experiment=experiment,
+        )
 
 
 def _experimental_gate(
     energies: EvaluationEnergies,
     rollouts: Sequence[RecordedRollout],
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], bool]:
-    aggregate = _metrics(list(range(len(rollouts))), energies)
+    return _gate_for_context_indices(
+        energies,
+        tuple(rollout.context[0].index for rollout in rollouts),
+    )
+
+
+def _gate_for_context_indices(
+    energies: EvaluationEnergies,
+    context_indices: Sequence[int],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], bool]:
+    aggregate = _metrics(list(range(len(context_indices))), energies)
     control_gate = ActionControlGate().evaluate(
         mean_improvement_over_zero=aggregate["mean_improvement_over_zero"],
         recorded_action_win_rate=aggregate["recorded_action_win_rate"],
@@ -602,20 +708,20 @@ def _experimental_gate(
     for segment in ContactInsertionSegment:
         indices = [
             index
-            for index, rollout in enumerate(rollouts)
-            if _segment_for_context(rollout.context[0].index) == segment.value
+            for index, context in enumerate(context_indices)
+            if _segment_for_context(context) == segment.value
         ]
         if indices:
             by_segment[segment.value] = _metrics(indices, energies)
     retained_indices = [
         index
-        for index, rollout in enumerate(rollouts)
-        if _regime_for_context(rollout.context[0].index) == 0
+        for index, context in enumerate(context_indices)
+        if _regime_for_context(context) == 0
     ]
     post_indices = [
         index
-        for index, rollout in enumerate(rollouts)
-        if _regime_for_context(rollout.context[0].index) == 1
+        for index, context in enumerate(context_indices)
+        if _regime_for_context(context) == 1
     ]
     retained = _metrics(retained_indices, energies)
     post = _metrics(post_indices, energies)
@@ -657,9 +763,15 @@ def evaluate(
         raise ValueError("runtime-routing evaluation treatment must be A or R")
     if not torch.cuda.is_available():
         raise RuntimeError("runtime-routing evaluation requires CUDA")
+    expected_output = _expected_evaluation_output(recording.name, treatment)
+    if output.resolve() != expected_output:
+        raise ValueError(
+            f"runtime-routing evaluation output must be {expected_output}"
+        )
     if output.exists():
         raise ValueError(f"runtime-routing evaluation already exists: {output}")
-    _load_experiment_config(experiment_config)
+    experiment = _load_experiment_config(experiment_config)
+    base_identity = _authenticate_base_model(experiment, source, checkpoint)
     if _expected_evaluation_seed(recording.name) != expected_seed:
         raise ValueError("evaluation input is outside the frozen held-out roster")
     artifact_identity = ArtifactIdentity.from_artifact(artifact)
@@ -668,6 +780,7 @@ def evaluate(
         treatment,
         artifact_identity,
         canary_summary,
+        experiment,
     )
     ContactInsertionEvidence.from_recording(
         recording,
@@ -679,6 +792,7 @@ def evaluate(
     )
     if len(rollouts) != EXPERIMENT_WINDOW.count:
         raise ValueError("evaluation recording lacks the frozen insertion window")
+    input_fingerprint = _selected_input_fingerprint(recording, rollouts)
 
     device_index = torch.cuda.current_device()
     device = torch.device("cuda", device_index)
@@ -781,10 +895,13 @@ def evaluate(
         "scope": "offline insertion energy only; no live JEPA action",
         "treatment": treatment,
         "experiment_config_fingerprint": FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+        "base_model": base_identity,
         "artifact": str(artifact_identity.path),
         "artifact_fingerprint": artifact_identity.fingerprint,
         "artifact_spec": artifact_spec,
         "recording": recording.name,
+        "recording_path": str(recording.resolve()),
+        "selected_input_fingerprint": input_fingerprint,
         "expected_seed": expected_seed,
         "window": EXPERIMENT_WINDOW.to_dict(),
         "route_roster": route_roster(rollouts),
@@ -814,13 +931,179 @@ def evaluate(
     return report
 
 
+def _validate_evaluation_report(
+    payload: dict[str, Any],
+    *,
+    treatment: str,
+    experiment: dict[str, Any],
+) -> None:
+    artifact_path = Path(str(payload.get("artifact", "")))
+    recording_path = Path(str(payload.get("recording_path", "")))
+    base = payload.get("base_model")
+    if (
+        payload.get("schema")
+        != "quantis.jepa_wm_runtime_command_routing_evaluation.v1"
+        or payload.get("status") != "evaluated"
+        or payload.get("treatment") != treatment
+        or payload.get("experiment_config_fingerprint")
+        != FROZEN_EXPERIMENT_CONFIG_FINGERPRINT
+        or payload.get("recording") != FRESH_CANARY
+        or payload.get("expected_seed") != FRESH_CANARY_SEED
+        or payload.get("window") != EXPERIMENT_WINDOW.to_dict()
+        or not isinstance(base, dict)
+    ):
+        raise ValueError("canary evaluation report identity is invalid")
+    authenticated_base = _authenticate_base_model(
+        experiment,
+        Path(str(base.get("source", ""))),
+        Path(str(base.get("checkpoint", ""))),
+    )
+    if base != authenticated_base:
+        raise ValueError("canary evaluation base identity is invalid")
+    artifact_identity = ArtifactIdentity.from_artifact(artifact_path)
+    if artifact_identity.fingerprint != payload.get("artifact_fingerprint"):
+        raise ValueError("canary evaluation artifact identity is invalid")
+    if treatment == "A":
+        if artifact_identity.fingerprint != CONTROL_ARTIFACT_FINGERPRINT:
+            raise ValueError("canary control artifact identity is invalid")
+    else:
+        loaded = LoadedActionConditioning.load(
+            artifact_path,
+            expected_identity=artifact_identity,
+        )
+        if (
+            loaded.contract.experiment_config_fingerprint
+            != FROZEN_EXPERIMENT_CONFIG_FINGERPRINT
+            or loaded.contract.spec != TREATMENT_SPEC
+            or loaded.contract.metadata.source_revision
+            != experiment["base_model"]["source_revision"]
+        ):
+            raise ValueError("canary router artifact contract is invalid")
+        training_report = load_training_report(artifact_path)
+        if (
+            training_report.get("artifact_fingerprint")
+            != artifact_identity.fingerprint
+            or training_report.get("treatment") != "R"
+            or not training_report.get("base_map_unchanged")
+            or training_report.get("base_model") != authenticated_base
+        ):
+            raise ValueError("canary router training provenance is invalid")
+
+    ContactInsertionEvidence.from_recording(
+        recording_path,
+        expected_split="held_out",
+        expected_seed=FRESH_CANARY_SEED,
+    )
+    rollouts = EXPERIMENT_WINDOW.select(
+        load_rollouts(recording_path, camera="wrist", bounds=TRAINING_BOUNDS)
+    )
+    if (
+        recording_path.name != FRESH_CANARY
+        or payload.get("selected_input_fingerprint")
+        != _selected_input_fingerprint(recording_path, rollouts)
+        or payload.get("route_roster") != route_roster(rollouts)
+    ):
+        raise ValueError("canary evaluation input identity is invalid")
+
+    results = payload.get("results")
+    if not isinstance(results, list) or len(results) != EXPERIMENT_WINDOW.count:
+        raise ValueError("canary evaluation results are incomplete")
+    contexts = tuple(result.get("context_index") for result in results)
+    if contexts != EXPERIMENT_WINDOW.context_indices:
+        raise ValueError("canary evaluation contexts are invalid")
+    actions = rollout_action_tensor(rollouts)
+    routes, active = _functional_routes(actions)
+    energy_fields = (
+        "recorded_energy",
+        "zero_energy",
+        "x_zero_energy",
+        "x_opposed_energy",
+    )
+    if any(
+        not isinstance(result, dict)
+        or result.get("target_index") != context + 3
+        or result.get("segment") != _segment_for_context(context)
+        or result.get("functional_route") != COMMAND_ROUTE_NAMES[int(routes[index])]
+        or result.get("route")
+        != _route_name(int(routes[index]), bool(active[index]))
+        or any(
+            isinstance(result.get(field), bool)
+            or not isinstance(result.get(field), (int, float))
+            or not np.isfinite(float(result[field]))
+            for field in energy_fields
+        )
+        for index, (result, context) in enumerate(zip(results, contexts))
+    ):
+        raise ValueError("canary evaluation result contract is invalid")
+    energies = EvaluationEnergies(
+        **{
+            name: torch.tensor(
+                [float(result[field]) for result in results],
+                dtype=torch.float32,
+            )
+            for name, field in (
+                ("recorded", "recorded_energy"),
+                ("zero", "zero_energy"),
+                ("x_zero", "x_zero_energy"),
+                ("x_opposed", "x_opposed_energy"),
+            )
+        }
+    )
+    aggregate, retained, post, by_segment, passed = _gate_for_context_indices(
+        energies,
+        contexts,
+    )
+    for index, result in enumerate(results):
+        recorded = float(energies.recorded[index])
+        zero = float(energies.zero[index])
+        x_zero = float(energies.x_zero[index])
+        x_opposed = float(energies.x_opposed[index])
+        if (
+            result.get("improvement_over_zero") != zero - recorded
+            or result.get("recorded_action_wins") is not (recorded < zero)
+            or result.get("signed_order_passed")
+            is not (recorded < x_zero < x_opposed)
+        ):
+            raise ValueError("canary evaluation result claims are invalid")
+    expected_gate = {
+        "passed": passed,
+        "minimum_overall_win_rate": 0.90,
+        "minimum_retained_win_rate": 0.85,
+        "minimum_post_win_rate": 0.95,
+        "minimum_retreat_signed_order_fraction": 0.75,
+        "minimum_alignment_signed_order_fraction": 0.75,
+        "requires_positive_mean_each_segment": True,
+    }
+    if (
+        payload.get("aggregate") != aggregate
+        or payload.get("retained") != retained
+        or payload.get("post") != post
+        or payload.get("by_segment") != by_segment
+        or payload.get("experimental_gate") != expected_gate
+    ):
+        raise ValueError("canary evaluation gate cannot be reproduced")
+
+
 def summarize_canary(
     reports: Sequence[Path],
     output: Path,
+    *,
+    experiment_config: Path,
 ) -> dict[str, Any]:
+    expected_output = EVALUATION_OUTPUT_ROOT / "canary-summary.json"
+    if output.resolve() != expected_output:
+        raise ValueError(f"runtime-routing canary summary must be {expected_output}")
     if output.exists():
         raise ValueError(f"runtime-routing canary summary already exists: {output}")
-    payloads = [json.loads(report.resolve().read_text()) for report in reports]
+    experiment = _load_experiment_config(experiment_config)
+    expected_reports = {
+        _expected_evaluation_output(FRESH_CANARY, treatment)
+        for treatment in ("A", "R")
+    }
+    resolved_reports = {report.resolve() for report in reports}
+    if resolved_reports != expected_reports:
+        raise ValueError("canary reports do not use the frozen evaluation paths")
+    payloads = [json.loads(report.read_text()) for report in sorted(resolved_reports)]
     if (
         len(payloads) != 2
         or {payload.get("treatment") for payload in payloads} != {"A", "R"}
@@ -833,6 +1116,12 @@ def summarize_canary(
     ):
         raise ValueError("canary reports do not match the frozen routing experiment")
     by_treatment = {payload["treatment"]: payload for payload in payloads}
+    for treatment, payload in by_treatment.items():
+        _validate_evaluation_report(
+            payload,
+            treatment=treatment,
+            experiment=experiment,
+        )
     router_passed = bool(by_treatment["R"]["experimental_gate"]["passed"])
     summary = {
         "schema": "quantis.jepa_wm_runtime_command_routing_canary_summary.v1",
@@ -848,6 +1137,10 @@ def summarize_canary(
             if router_passed
             else None
         ),
+        "source_reports": [
+            ArtifactIdentity.from_artifact(report).to_dict()
+            for report in sorted(resolved_reports)
+        ],
         "control": {
             "aggregate": by_treatment["A"]["aggregate"],
             "retained": by_treatment["A"]["retained"],
@@ -873,6 +1166,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     preflight_parser = subparsers.add_parser("preflight")
     preflight_parser.add_argument("--recording", type=Path, action="append", required=True)
+    preflight_parser.add_argument("--source", type=Path, required=True)
+    preflight_parser.add_argument("--checkpoint", type=Path, required=True)
     preflight_parser.add_argument("--control-adapter", type=Path, required=True)
     preflight_parser.add_argument("--output", type=Path, required=True)
     preflight_parser.add_argument("--experiment-config", type=Path, required=True)
@@ -902,10 +1197,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     summarize_parser = subparsers.add_parser("summarize-canary")
     summarize_parser.add_argument("--report", type=Path, action="append", required=True)
     summarize_parser.add_argument("--output", type=Path, required=True)
+    summarize_parser.add_argument("--experiment-config", type=Path, required=True)
     arguments = parser.parse_args(argv)
     if arguments.command == "preflight":
         result = preflight(
             arguments.recording,
+            arguments.source,
+            arguments.checkpoint,
             arguments.control_adapter,
             arguments.output,
             experiment_config=arguments.experiment_config,
@@ -940,7 +1238,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             canary_summary=arguments.canary_summary,
         )
     else:
-        result = summarize_canary(arguments.report, arguments.output)
+        result = summarize_canary(
+            arguments.report,
+            arguments.output,
+            experiment_config=arguments.experiment_config,
+        )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 

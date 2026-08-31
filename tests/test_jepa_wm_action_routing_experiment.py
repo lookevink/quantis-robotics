@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 try:
     import torch
@@ -20,12 +22,14 @@ if torch is not None:
         CANONICAL_HELD_OUT,
         FRESH_CANARY,
         FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+        _authenticate_base_model,
         _authorize_evaluation,
+        _expected_evaluation_output,
         _functional_routes,
         _load_experiment_config,
         summarize_canary,
     )
-    from jepa_wm.training_artifact import ArtifactIdentity
+    from jepa_wm.training_artifact import ArtifactIdentity, artifact_fingerprint
 
 
 @unittest.skipIf(torch is None, "PyTorch is required for action routing")
@@ -88,13 +92,31 @@ class ActionRoutingExperimentTest(unittest.TestCase):
             root = Path(temporary_directory)
             reports = []
             for treatment in ("A", "R"):
-                path = root / f"{treatment}.json"
+                path = _expected_evaluation_output(FRESH_CANARY, treatment)
+                path = root / path.name
                 path.write_text(
                     json.dumps(self._report(treatment, treatment == "R")) + "\n"
                 )
                 reports.append(path)
 
-            summary = summarize_canary(reports, root / "summary.json")
+            with (
+                patch(
+                    "jepa_wm.action_routing_experiment.EVALUATION_OUTPUT_ROOT",
+                    root,
+                ),
+                patch(
+                    "jepa_wm.action_routing_experiment._load_experiment_config",
+                    return_value={},
+                ),
+                patch(
+                    "jepa_wm.action_routing_experiment._validate_evaluation_report"
+                ),
+            ):
+                summary = summarize_canary(
+                    reports,
+                    root / "canary-summary.json",
+                    experiment_config=root / "config.json",
+                )
 
         self.assertEqual(summary["outcome"], "runtime_router_candidate")
         self.assertEqual(summary["selected_treatment"], "R")
@@ -105,7 +127,17 @@ class ActionRoutingExperimentTest(unittest.TestCase):
         artifact = ArtifactIdentity(Path("/tmp/router.pth"), "a" * 64)
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            summary_path = root / "summary.json"
+            report_identities = []
+            for treatment in ("A", "R"):
+                report_path = root / _expected_evaluation_output(
+                    FRESH_CANARY,
+                    treatment,
+                ).name
+                report_path.write_text(json.dumps({"treatment": treatment}) + "\n")
+                report_identities.append(
+                    ArtifactIdentity.from_artifact(report_path).to_dict()
+                )
+            summary_path = root / "canary-summary.json"
             summary_path.write_text(
                 json.dumps(
                     {
@@ -122,24 +154,122 @@ class ActionRoutingExperimentTest(unittest.TestCase):
                             "fingerprint": artifact.fingerprint,
                         },
                         "canonical_authorized_offline": True,
+                        "source_reports": report_identities,
                     }
                 )
                 + "\n"
             )
 
-            _authorize_evaluation(
-                CANONICAL_HELD_OUT[0],
-                "R",
-                artifact,
-                summary_path,
-            )
-
-            with self.assertRaisesRegex(ValueError, "matching canary authority"):
+            with (
+                patch(
+                    "jepa_wm.action_routing_experiment.EVALUATION_OUTPUT_ROOT",
+                    root,
+                ),
+                patch(
+                    "jepa_wm.action_routing_experiment._validate_evaluation_report"
+                ),
+            ):
                 _authorize_evaluation(
                     CANONICAL_HELD_OUT[0],
                     "R",
-                    ArtifactIdentity(Path("/tmp/other.pth"), "b" * 64),
+                    artifact,
                     summary_path,
+                    {},
+                )
+
+                with self.assertRaisesRegex(ValueError, "matching canary authority"):
+                    _authorize_evaluation(
+                        CANONICAL_HELD_OUT[0],
+                        "R",
+                        ArtifactIdentity(Path("/tmp/other.pth"), "b" * 64),
+                        summary_path,
+                        {},
+                    )
+
+    def test_base_model_authenticates_source_environment_and_checkpoint(self) -> None:
+        revision = "1" * 40
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            checkpoint = root / "checkpoint.pth"
+            checkpoint.write_bytes(b"checkpoint")
+            experiment = {
+                "base_model": {
+                    "source_revision": revision,
+                    "checkpoint_fingerprint": artifact_fingerprint(checkpoint),
+                }
+            }
+            with (
+                patch.dict("os.environ", {"JEPA_WM_REVISION": revision}),
+                patch(
+                    "jepa_wm.action_routing_experiment.subprocess.run",
+                    return_value=SimpleNamespace(stdout=f"{revision}\n"),
+                ),
+            ):
+                identity = _authenticate_base_model(experiment, root, checkpoint)
+
+        self.assertEqual(identity["source_revision"], revision)
+        self.assertEqual(
+            identity["checkpoint_fingerprint"],
+            experiment["base_model"]["checkpoint_fingerprint"],
+        )
+
+    def test_base_model_rejects_a_different_checked_out_revision(self) -> None:
+        revision = "1" * 40
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            checkpoint = root / "checkpoint.pth"
+            checkpoint.write_bytes(b"checkpoint")
+            experiment = {
+                "base_model": {
+                    "source_revision": revision,
+                    "checkpoint_fingerprint": artifact_fingerprint(checkpoint),
+                }
+            }
+            with (
+                patch.dict("os.environ", {"JEPA_WM_REVISION": revision}),
+                patch(
+                    "jepa_wm.action_routing_experiment.subprocess.run",
+                    return_value=SimpleNamespace(stdout=f"{'2' * 40}\n"),
+                ),
+                self.assertRaisesRegex(ValueError, "base identity changed"),
+            ):
+                _authenticate_base_model(experiment, root, checkpoint)
+
+    def test_fabricated_summary_cannot_open_canonical_evaluation(self) -> None:
+        artifact = ArtifactIdentity(Path("/tmp/router.pth"), "a" * 64)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            summary_path = root / "canary-summary.json"
+            summary_path.write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            "quantis.jepa_wm_runtime_command_routing_"
+                            "canary_summary.v1"
+                        ),
+                        "experiment_config_fingerprint": (
+                            FROZEN_EXPERIMENT_CONFIG_FINGERPRINT
+                        ),
+                        "selected_treatment": "R",
+                        "selected_artifact": artifact.to_dict(),
+                        "canonical_authorized_offline": True,
+                    }
+                )
+                + "\n"
+            )
+            with (
+                patch(
+                    "jepa_wm.action_routing_experiment.EVALUATION_OUTPUT_ROOT",
+                    root,
+                ),
+                self.assertRaisesRegex(ValueError, "matching canary authority"),
+            ):
+                _authorize_evaluation(
+                    CANONICAL_HELD_OUT[0],
+                    "R",
+                    artifact,
+                    summary_path,
+                    {},
                 )
 
     def test_canonical_evaluation_fails_closed_without_canary_authority(self) -> None:
@@ -151,6 +281,7 @@ class ActionRoutingExperimentTest(unittest.TestCase):
                 "R",
                 artifact,
                 None,
+                {},
             )
         with self.assertRaisesRegex(ValueError, "not authorized"):
             _authorize_evaluation(
@@ -158,6 +289,7 @@ class ActionRoutingExperimentTest(unittest.TestCase):
                 "A",
                 artifact,
                 None,
+                {},
             )
 
     def test_fresh_canary_cannot_consume_its_own_summary(self) -> None:
@@ -169,6 +301,7 @@ class ActionRoutingExperimentTest(unittest.TestCase):
                 "R",
                 artifact,
                 Path("/tmp/summary.json"),
+                {},
             )
 
 
