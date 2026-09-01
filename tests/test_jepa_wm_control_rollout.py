@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -39,6 +39,7 @@ from jepa_wm.control_safety import (
     ControlGateReason,
     ControlInterlockEvidence,
     SafetyProjectionAttempt,
+    contact_grasp_action_scales,
 )
 from jepa_wm.control_tracking import (
     ActionTrackingDecision,
@@ -355,10 +356,18 @@ class ControlRolloutTest(unittest.TestCase):
             session.state_path.write_text(json.dumps(state.to_dict()))
             session.result_path.write_text(json.dumps(result.to_dict()))
 
-            summary = ControlStepSummary.from_session(session)
+            with patch(
+                "jepa_wm.control_rollout.contact_grasp_action_scales",
+                wraps=contact_grasp_action_scales,
+            ) as scale_policy:
+                summary = ControlStepSummary.from_session(session)
 
         self.assertEqual(summary.result.selected_action_scale, scale)
         self.assertEqual(summary.result.post_action.raw_proposed_action, raw)
+        self.assertEqual(
+            scale_policy.call_args.kwargs["exact_coarse_translation_projection"],
+            CONTACT_GRASP_TARGET_POLICY.uses_exact_coarse_translation_projection,
+        )
 
     def test_parses_reset_trial_preflight_failure(self) -> None:
         failure = OrchestrationFailure.parse(

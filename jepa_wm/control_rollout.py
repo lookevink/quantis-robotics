@@ -625,6 +625,9 @@ class ControlStepSummary:
                 require_resolvable_rotation=(
                     contact_grasp_policy.requires_resolvable_rotation
                 ),
+                exact_coarse_translation_projection=(
+                    contact_grasp_policy.uses_exact_coarse_translation_projection
+                ),
             )
             attempted_projection_policy = tuple(
                 attempt.scale for attempt in result.projection_attempts
