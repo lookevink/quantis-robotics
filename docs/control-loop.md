@@ -898,6 +898,14 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     evaluation and terminal result have byte-identical recovery copies, the
     source session remained unchanged, and Isaac stayed stopped. This opens
     only a new zero-actuation canary on a different held-out start.
+    That new canary used seed 12600/context 110 from the other exact HELD_OUT
+    recording and passed once. Objective improvement was `0.008054`, first
+    action cosine was `0.992502`, and the separate Isaac counterfactual safety
+    projection passed. No action was applied or execution evidence created;
+    primary and recovery terminal/evaluation files match byte-for-byte, and the
+    worker and Isaac were stopped. This closes the known-start zero-actuation
+    integration gate only. Unknown-start motion and filming remain closed until
+    milestone 20 has a separately frozen reset and execution contract.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

@@ -2303,6 +2303,17 @@ stopped. This opens only a separately frozen zero-actuation canary on a
 different held-out start. Exact evidence is in
 [`RESULT.md`](.scratch/jepa-physical-shadow-replay-v1/RESULT.md).
 
+That separately frozen canary used the other canonical held-out start (seed
+12600, context 110) and passed once. The corrected planner improved its
+objective by `0.008054`, passed the unchanged first-action direction gate at
+`0.992502` cosine, and passed the independent Isaac counterfactual safety
+projection. No action was applied and execution never started. Primary and
+recovery terminal/evaluation files are byte-identical, the worker and Isaac
+were stopped, and all `827` tests passed before the run. This closes only the
+known-start zero-actuation integration gate; milestone 20 motion and filming
+remain subject to a separately frozen reset/execution contract. Exact evidence
+is in [`RESULT.md`](.scratch/jepa-physical-shadow-canary-v2/RESULT.md).
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded
