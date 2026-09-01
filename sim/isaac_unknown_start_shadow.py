@@ -469,6 +469,27 @@ async def _capture_unknown_start_observation(
         RigidPrim(PLUG_PATH)
     )
     sensors = control_contact_sensors(stage, create=False, include_connector=True)
+    if execution_policy is ControlExecutionPolicy.RESET_TRIAL_CANDIDATE:
+        import numpy as np
+
+        from sim.isaac_demo_kinematics import solve_waypoints
+        from sim.isaac_demo_runtime import JointCommand
+
+        ready = solve_waypoints()[0]
+        reset_state = JointCommand(
+            np.asarray(evidence.observed_arm_positions_radians, dtype=np.float64),
+            evidence.observed_gripper_width_m,
+        )
+        reset_drive_target = JointCommand(
+            ready.arm_positions
+            + np.asarray(evidence.sample.initial_arm_offset_radians),
+            ready.waypoint.gripper_width_m,
+        )
+        actuators.set_reset_state(
+            reset_state,
+            drive_target=reset_drive_target,
+        )
+        timeline.set_auto_update(False)
     actual, authored, snapshot, socket_position, socket_orientation, _ = (
         _validated_live_snapshot(
             stage,

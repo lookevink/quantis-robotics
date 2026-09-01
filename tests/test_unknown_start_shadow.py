@@ -167,7 +167,12 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
         self.assertIn('"panda_hand", joints', source)
         self.assertIn('"right_gripper", joints', source)
         self.assertIn("snapshot = _joint_kinematic_snapshot(", source)
-        self.assertNotIn("set_reset_state(", source)
+        self.assertIn(
+            "execution_policy is ControlExecutionPolicy.RESET_TRIAL_CANDIDATE",
+            source,
+        )
+        self.assertIn("actuators.set_reset_state(", source)
+        self.assertIn("drive_target=reset_drive_target", source)
         self.assertNotIn("apply_control_response", source)
         self.assertNotIn("move_joint_command", source)
         self.assertNotIn("timeline.play", source)
@@ -181,6 +186,18 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
             source.index("_validated_live_snapshot(", capture),
         )
         self.assertIn("timeline.set_auto_update(False)", source[capture:])
+        candidate_reset = source.index(
+            "if execution_policy is ControlExecutionPolicy.RESET_TRIAL_CANDIDATE",
+            capture,
+        )
+        first_validation = source.index("_validated_live_snapshot(", capture)
+        camera_capture = source.index("await capture_camera_frame(", capture)
+        second_validation = source.index(
+            "_validated_live_snapshot(", first_validation + 1
+        )
+        self.assertLess(candidate_reset, first_validation)
+        self.assertLess(first_validation, camera_capture)
+        self.assertLess(camera_capture, second_validation)
         self.assertNotIn("timeline.stop()", source)
         self.assertIn('"applied_actions": 0', source)
         self.assertIn("UnknownStartControlHandoff(", source)
