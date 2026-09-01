@@ -37,6 +37,7 @@ from sim.isaac_control_bridge import (
     verify_insertion_demo_rollout_result,
     verify_insertion_followup_source,
     verify_insertion_two_step_result,
+    verify_unknown_start_grasp_continuation_source,
     evaluate_direct_insertion_candidate as _evaluate_direct_insertion_candidate,
     measure_insertion_control_resolution as _measure_insertion_control_resolution,
     evaluate_shadow_candidate as _evaluate_shadow_candidate,

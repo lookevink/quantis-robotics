@@ -66,6 +66,7 @@ from sim.isaac_control_runtime import (
     bind_live_runtime,
     contact_sensor,
     live_runtime_for,
+    pause_control_timeline,
     read_control_contact,
     synchronized_insertion_frame_capture,
 )
@@ -769,6 +770,62 @@ def _contact_grasp_followup_policy(
             "unknown-start contact grasp handoff is not bound to its source"
         )
     return policy
+
+
+async def verify_unknown_start_grasp_continuation_source(
+    session_id: str,
+) -> dict[str, Any]:
+    """Prove the resident generation can continue one safe reset candidate."""
+
+    import omni.kit.app
+    import omni.timeline
+    import omni.usd
+    from jepa_wm.control_rollout import ControlStepSummary
+
+    session = ControlSession.at(CONTROL_ROOT, session_id)
+    step = ControlStepSummary.from_session(session)
+    _contact_grasp_followup_policy(step)
+    stage = omni.usd.get_context().get_stage()
+    runtime = live_runtime_for(session_id, stage)
+    timeline = omni.timeline.get_timeline_interface()
+    if runtime is None:
+        raise RuntimeError("unknown-start grasp continuation runtime was lost")
+    await pause_control_timeline(
+        timeline,
+        omni.kit.app.get_app().next_update_async,
+    )
+    current = runtime.actuators.actual_command()
+    collision, force = read_control_contact(runtime.sensor)
+    snapshot = recording_snapshot(
+        RecordingLabel(RecordingMoment.MOTION, Phase.READY),
+        ObservationStage.APPROACHING_CABLE,
+        current,
+        runtime.attachment,
+    )
+    live = ControlSafetySnapshot(
+        tuple(float(value) for value in current.arm_positions),
+        current.gripper_width_m,
+        tuple(float(value) for value in snapshot.plug_position),
+        force,
+        collision,
+        snapshot.plug_attached,
+    )
+    live.validate_followup_continuity(
+        step.result.post_action.require_safety_snapshot(),
+        step.contact_grasp_drive_target(),
+        maximum_gripper_error_meters=(
+            MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+        ),
+    )
+    return {
+        "status": "unknown_start_grasp_continuation_ready",
+        "session_id": session_id,
+        "result_status": step.result.status.value,
+        "plug_attached": live.plug_attached,
+        "contact_force_newtons": live.contact_force_newtons,
+        "collision_detected": live.collision_detected,
+        "timeline_playing": False,
+    }
 
 
 async def capture_insertion_transition_observation(

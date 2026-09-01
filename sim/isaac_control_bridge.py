@@ -16,6 +16,7 @@ from sim.isaac_control_followup import (
     verify_insertion_demo_rollout_result,
     verify_insertion_followup_source,
     verify_insertion_two_step_result,
+    verify_unknown_start_grasp_continuation_source,
 )
 from sim.isaac_candidate_binding import (
     persist_experimental_candidate_response,
@@ -46,6 +47,7 @@ __all__ = (
     "verify_insertion_demo_rollout_result",
     "verify_insertion_followup_source",
     "verify_insertion_two_step_result",
+    "verify_unknown_start_grasp_continuation_source",
     "measure_insertion_control_resolution",
     "evaluate_shadow_candidate",
     "evaluate_direct_insertion_candidate",

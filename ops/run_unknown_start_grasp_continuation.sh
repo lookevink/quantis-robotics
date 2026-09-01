@@ -8,7 +8,7 @@ checkpoint_root="${HOME}/docker/jepa-wm/checkpoints"
 data_root="${HOME}/docker/isaac-sim/data/quantis"
 source_revision="${1:-}"
 runtime_fingerprint="${2:-}"
-run_id="unknown-start-e2e-v2-62605-grasp"
+run_id="unknown-start-e2e-v3-62605-grasp"
 previous_session="unknown-start-live-action-v7-62605"
 reference_name="contact-insertion-v10-drive-slow-2600-held-00"
 reference_seed="12600"
@@ -17,6 +17,10 @@ worker_identity="contact-insertion-v10-unknown-start-shadow-canary-v5"
 maximum_actions="51"
 
 cd "${repo_dir}"
+phase="resident_preflight"
+isaac_server_call \
+  "await demo.verify_unknown_start_grasp_continuation_source('${previous_session}')" \
+  180 true
 phase="claim"
 "${python_bin}" -m jepa_wm.unknown_start_grasp_continuation claim \
   --checkpoint-root "${checkpoint_root}" \
