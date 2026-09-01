@@ -20,12 +20,12 @@ from sim.unknown_start_reset import (
 )
 
 
-UNKNOWN_START_RESET_RECORDING_ID = "unknown-start-reset-v3-62602"
-UNKNOWN_START_RESET_SEED = 62602
-UNKNOWN_START_RESET_PREVIOUS_SEEDS = frozenset({62600, 62601})
-UNKNOWN_START_RESET_LEDGER_NAME = "unknown_start_reset_v3_claims"
-UNKNOWN_START_RESET_CLAIM_NAME = "milestone-20-unknown-start-reset-v3-claim.json"
-UNKNOWN_START_RESET_FAILURE_NAME = "milestone-20-unknown-start-reset-v3-failure.json"
+UNKNOWN_START_RESET_RECORDING_ID = "unknown-start-reset-v4-62603"
+UNKNOWN_START_RESET_SEED = 62603
+UNKNOWN_START_RESET_PREVIOUS_SEEDS = frozenset({62600, 62601, 62602})
+UNKNOWN_START_RESET_LEDGER_NAME = "unknown_start_reset_v4_claims"
+UNKNOWN_START_RESET_CLAIM_NAME = "milestone-20-unknown-start-reset-v4-claim.json"
+UNKNOWN_START_RESET_FAILURE_NAME = "milestone-20-unknown-start-reset-v4-failure.json"
 
 
 def _write_exclusive(path: Path, payload: dict[str, Any]) -> None:
@@ -120,14 +120,15 @@ def failure(ledger_root: Path, error: str) -> dict[str, Any]:
     claim_path, path = terminal_paths(ledger_root)
     if not claim_path.is_file():
         raise ValueError("unknown-start reset has no claim")
-    primary_result = (
+    primary_recording = (
         ledger_root.parent
         / "recordings"
         / UNKNOWN_START_RESET_RECORDING_ID
-        / "RESULT.json"
     )
+    primary_result = primary_recording / "RESULT.json"
     if primary_result.exists():
         raise ValueError("unknown-start reset is already terminally passed")
+    claim_payload = _load_json(claim_path, "claim")
     payload = {
         "schema": "quantis.unknown_start_reset_failure.v1",
         "failed_at": datetime.now(timezone.utc).isoformat(),
@@ -137,6 +138,46 @@ def failure(ledger_root: Path, error: str) -> dict[str, Any]:
         "retry_authorized": False,
         "applied_actions": 0,
     }
+    negative_path = primary_recording / "UNKNOWN_START_RESET_NEGATIVE.json"
+    if negative_path.exists():
+        negative = _load_json(negative_path, "negative evidence")
+        captured_frame = negative.get("captured_frame")
+        try:
+            rejected_evidence = UnknownStartResetEvidence.rejected_from_dict(
+                negative.get("evidence")
+            )
+            recomputed_failures = list(
+                rejected_evidence.validation_failures(
+                    UNKNOWN_START_RESET_CONTRACT
+                )
+            )
+        except (TypeError, ValueError) as validation_error:
+            raise ValueError(
+                "unknown-start reset negative evidence is inauthentic"
+            ) from validation_error
+        if (
+            negative.get("schema") != "quantis.unknown_start_reset_negative.v1"
+            or negative.get("recording_id") != claim_payload.get("recording_id")
+            or negative.get("source_revision")
+            != claim_payload.get("source_revision")
+            or negative.get("runtime_source_fingerprint")
+            != claim_payload.get("runtime_source_fingerprint")
+            or negative.get("contract_fingerprint")
+            != claim_payload.get("contract_fingerprint")
+            or negative.get("sample_fingerprint")
+            != claim_payload.get("sample_fingerprint")
+            or negative.get("validation_failures") != recomputed_failures
+            or rejected_evidence.sample.fingerprint
+            != claim_payload.get("sample_fingerprint")
+            or rejected_evidence.realized_sample_fingerprint
+            != claim_payload.get("sample_fingerprint")
+            or not isinstance(captured_frame, dict)
+            or captured_frame.get("path") != "wrist/frame_000000.png"
+            or captured_frame.get("fingerprint")
+            != _fingerprint(primary_recording / "wrist/frame_000000.png")
+        ):
+            raise ValueError("unknown-start reset negative evidence is inauthentic")
+        payload["negative_evidence_fingerprint"] = _fingerprint(negative_path)
     _write_exclusive(path, payload)
     return payload
 

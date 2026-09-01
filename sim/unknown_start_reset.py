@@ -544,33 +544,68 @@ class UnknownStartResetEvidence:
     applied_actions: int
     phase: UnknownStartResetPhase
 
-    def validate(self, contract: UnknownStartResetContract) -> None:
+    def validation_failures(
+        self,
+        contract: UnknownStartResetContract,
+    ) -> tuple[str, ...]:
         contract.validate_sample(self.sample)
         expected = contract.draw(self.sample.seed, forbidden_seeds=set())
-        if (
-            self.sample != expected
-            or not contract.workspace.contains(self.workspace)
-            or not contract.workspace.matches_sample(self.sample, self.workspace)
-            or not contract.realization_tolerances.matches(
-                self.sample,
-                self.realization,
+        checks = (
+            ("sample_replay", self.sample == expected),
+            ("workspace_bounds", contract.workspace.contains(self.workspace)),
+            (
+                "workspace_sample_alignment",
+                contract.workspace.matches_sample(self.sample, self.workspace),
+            ),
+            (
+                "sample_realization",
+                contract.realization_tolerances.matches(
+                    self.sample,
+                    self.realization,
+                ),
+            ),
+            (
+                "realized_sample_fingerprint",
+                _valid_fingerprint(self.realized_sample_fingerprint)
+                and self.realized_sample_fingerprint == self.sample.fingerprint,
+            ),
+            (
+                "observed_arm_positions",
+                len(self.observed_arm_positions_radians) == 7
+                and all(
+                    isfinite(value)
+                    for value in self.observed_arm_positions_radians
+                ),
+            ),
+            (
+                "observed_gripper_width",
+                isfinite(self.observed_gripper_width_m)
+                and 0.0 <= self.observed_gripper_width_m <= 0.08,
+            ),
+            ("plug_unattached", not self.plug_attached),
+            ("collision_free", not self.collision_detected),
+            (
+                "contact_force_zero",
+                isfinite(self.contact_force_newtons)
+                and self.contact_force_newtons == 0.0,
+            ),
+            ("direct_state_setting_count", self.direct_state_setting_count == 1),
+            ("prefix_replay_frames", self.prefix_replay_frames == 0),
+            ("applied_actions", self.applied_actions == 0),
+            (
+                "phase",
+                self.phase is UnknownStartResetPhase.RESET_AUTHENTICATION,
+            ),
+        )
+        return tuple(name for name, passed in checks if not passed)
+
+    def validate(self, contract: UnknownStartResetContract) -> None:
+        failures = self.validation_failures(contract)
+        if failures:
+            raise ValueError(
+                "unknown-start reset evidence is unsafe or inauthentic: "
+                + ", ".join(failures)
             )
-            or not _valid_fingerprint(self.realized_sample_fingerprint)
-            or self.realized_sample_fingerprint != self.sample.fingerprint
-            or len(self.observed_arm_positions_radians) != 7
-            or not all(isfinite(value) for value in self.observed_arm_positions_radians)
-            or not isfinite(self.observed_gripper_width_m)
-            or not 0.0 <= self.observed_gripper_width_m <= 0.08
-            or self.plug_attached
-            or self.collision_detected
-            or not isfinite(self.contact_force_newtons)
-            or self.contact_force_newtons != 0.0
-            or self.direct_state_setting_count != 1
-            or self.prefix_replay_frames != 0
-            or self.applied_actions != 0
-            or self.phase is not UnknownStartResetPhase.RESET_AUTHENTICATION
-        ):
-            raise ValueError("unknown-start reset evidence is unsafe or inauthentic")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -593,7 +628,7 @@ class UnknownStartResetEvidence:
         }
 
     @classmethod
-    def from_dict(cls, payload: Any) -> UnknownStartResetEvidence:
+    def _parse_dict(cls, payload: Any) -> UnknownStartResetEvidence:
         if (
             not isinstance(payload, dict)
             or payload.get("schema") != UNKNOWN_START_RESET_EVIDENCE_SCHEMA
@@ -620,7 +655,19 @@ class UnknownStartResetEvidence:
             applied_actions=payload.get("applied_actions"),
             phase=UnknownStartResetPhase(payload.get("phase")),
         )
+        return evidence
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> UnknownStartResetEvidence:
+        evidence = cls._parse_dict(payload)
         evidence.validate(UNKNOWN_START_RESET_CONTRACT)
+        return evidence
+
+    @classmethod
+    def rejected_from_dict(cls, payload: Any) -> UnknownStartResetEvidence:
+        evidence = cls._parse_dict(payload)
+        if not evidence.validation_failures(UNKNOWN_START_RESET_CONTRACT):
+            raise ValueError("unknown-start reset rejected evidence is valid")
         return evidence
 
 

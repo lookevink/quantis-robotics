@@ -251,6 +251,32 @@ async def authenticate_unknown_start_reset(
             applied_actions=0,
             phase=UnknownStartResetPhase.RESET_AUTHENTICATION,
         )
+        validation_failures = evidence.validation_failures(
+            UNKNOWN_START_RESET_CONTRACT
+        )
+        if validation_failures:
+            captured_frame = recorder.output_dir / "wrist/frame_000000.png"
+            if not captured_frame.is_file():
+                raise RuntimeError(
+                    "unknown-start reset negative has no captured frame"
+                )
+            write_json_atomic(
+                recorder.output_dir / "UNKNOWN_START_RESET_NEGATIVE.json",
+                {
+                    "schema": "quantis.unknown_start_reset_negative.v1",
+                    "recording_id": recording_id,
+                    "source_revision": source_revision,
+                    "runtime_source_fingerprint": runtime_source_fingerprint,
+                    "contract_fingerprint": UNKNOWN_START_RESET_CONTRACT.fingerprint,
+                    "sample_fingerprint": sample.fingerprint,
+                    "captured_frame": {
+                        "path": "wrist/frame_000000.png",
+                        "fingerprint": sha256(captured_frame.read_bytes()).hexdigest(),
+                    },
+                    "validation_failures": list(validation_failures),
+                    "evidence": evidence.to_dict(),
+                },
+            )
         evidence.validate(UNKNOWN_START_RESET_CONTRACT)
         completed = True
     except Exception:

@@ -9,6 +9,7 @@ import zlib
 
 from jepa_wm.unknown_start_reset_lifecycle import (
     claim,
+    failure,
     finalize_recovery,
     terminal_paths,
 )
@@ -29,8 +30,8 @@ from sim.exploration import DatasetSplit
 
 def valid_evidence() -> UnknownStartResetEvidence:
     sample = UNKNOWN_START_RESET_CONTRACT.draw(
-        62602,
-        forbidden_seeds={62600, 62601},
+        62603,
+        forbidden_seeds={62600, 62601, 62602},
     )
     connector_position = tuple(
         baseline + offset
@@ -101,8 +102,8 @@ class UnknownStartResetContractTest(unittest.TestCase):
             ledger_root = Path(directory) / "ledger"
             payload = claim(
                 ledger_root,
-                "unknown-start-reset-v3-62602",
-                62602,
+                "unknown-start-reset-v4-62603",
+                62603,
                 "a" * 40,
                 "b" * 64,
             )
@@ -112,8 +113,8 @@ class UnknownStartResetContractTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "already claimed"):
                 claim(
                     ledger_root,
-                    "unknown-start-reset-v3-62602",
-                    62602,
+                    "unknown-start-reset-v4-62603",
+                    62603,
                     "a" * 40,
                     "b" * 64,
                 )
@@ -142,7 +143,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
             recovery.mkdir()
             source_revision = "a" * 40
             runtime_fingerprint = "b" * 64
-            recording_id = "unknown-start-reset-v3-62602"
+            recording_id = "unknown-start-reset-v4-62603"
             evidence = valid_evidence()
             sample = evidence.sample
             primary_ledger = root / "claims"
@@ -245,6 +246,62 @@ class UnknownStartResetContractTest(unittest.TestCase):
             self.assertFalse(recovery_payload["passed"])
             self.assertFalse((recovery / "RESULT.json").exists())
 
+    def test_failure_authenticates_and_binds_detailed_negative(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            data_root = Path(directory)
+            ledger = data_root / "unknown_start_reset_v4_claims"
+            source_revision = "a" * 40
+            runtime_fingerprint = "b" * 64
+            claim_payload = claim(
+                ledger,
+                "unknown-start-reset-v4-62603",
+                62603,
+                source_revision,
+                runtime_fingerprint,
+            )
+            recording = (
+                data_root / "recordings" / "unknown-start-reset-v4-62603"
+            )
+            frame = recording / "wrist/frame_000000.png"
+            frame.parent.mkdir(parents=True)
+            frame.write_bytes(b"captured-frame")
+            evidence = replace(valid_evidence(), contact_force_newtons=0.01)
+            negative = {
+                "schema": "quantis.unknown_start_reset_negative.v1",
+                "recording_id": claim_payload["recording_id"],
+                "source_revision": source_revision,
+                "runtime_source_fingerprint": runtime_fingerprint,
+                "contract_fingerprint": claim_payload["contract_fingerprint"],
+                "sample_fingerprint": claim_payload["sample_fingerprint"],
+                "captured_frame": {
+                    "path": "wrist/frame_000000.png",
+                    "fingerprint": sha256(frame.read_bytes()).hexdigest(),
+                },
+                "validation_failures": ["contact_force_zero"],
+                "evidence": evidence.to_dict(),
+            }
+            negative_path = recording / "UNKNOWN_START_RESET_NEGATIVE.json"
+            negative["source_revision"] = "c" * 40
+            negative_path.write_text(json.dumps(negative, sort_keys=True) + "\n")
+            with self.assertRaisesRegex(ValueError, "negative evidence"):
+                failure(ledger, "simulator_reset:exit_1")
+            self.assertFalse(terminal_paths(ledger)[1].exists())
+            negative["source_revision"] = source_revision
+            negative["evidence"]["contact_force_newtons"] = 0.0
+            negative_path.write_text(json.dumps(negative, sort_keys=True) + "\n")
+            with self.assertRaisesRegex(ValueError, "negative evidence"):
+                failure(ledger, "simulator_reset:exit_1")
+            self.assertFalse(terminal_paths(ledger)[1].exists())
+            negative["evidence"]["contact_force_newtons"] = 0.01
+            negative_path.write_text(json.dumps(negative, sort_keys=True) + "\n")
+
+            payload = failure(ledger, "simulator_reset:exit_1")
+
+            self.assertEqual(
+                payload["negative_evidence_fingerprint"],
+                sha256(negative_path.read_bytes()).hexdigest(),
+            )
+
     def test_recovery_rejects_semantically_invalid_evidence(self) -> None:
         source = Path("jepa_wm/unknown_start_reset_lifecycle.py").read_text()
 
@@ -267,6 +324,16 @@ class UnknownStartResetContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "evidence payload is invalid"):
             UnknownStartResetEvidence.from_dict(payload)
 
+    def test_validation_identifies_the_exact_rejected_invariant(self) -> None:
+        evidence = replace(valid_evidence(), contact_force_newtons=0.01)
+
+        self.assertEqual(
+            evidence.validation_failures(UNKNOWN_START_RESET_CONTRACT),
+            ("contact_force_zero",),
+        )
+        with self.assertRaisesRegex(ValueError, "contact_force_zero"):
+            evidence.validate(UNKNOWN_START_RESET_CONTRACT)
+
     def test_runtime_source_roster_authenticates_exact_bytes(self) -> None:
         fingerprint = runtime_source_fingerprint()
 
@@ -286,6 +353,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
         self.assertIn("workspace.realization_scale_tolerance", source)
         self.assertIn("authored = actuators.current_command()", source)
         self.assertIn("snapshot.gripper_frame_world_position", source)
+        self.assertIn('"UNKNOWN_START_RESET_NEGATIVE.json"', source)
         self.assertNotIn("plan.light_exposure_delta) > 1e-9", source)
         self.assertNotIn("atol=1e-12", source)
 
@@ -299,7 +367,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
         self.assertIn("describe --field ledger-name", runner)
         self.assertIn("describe --field recording-id", aws)
         self.assertIn("describe --field claim-name", aws)
-        self.assertNotIn("unknown-start-reset-v3-62602", runner)
+        self.assertNotIn("unknown-start-reset-v4-62603", runner)
 
     def test_reserved_seed_draw_is_deterministic_and_bounded(self) -> None:
         sample = UNKNOWN_START_RESET_CONTRACT.draw(62600, forbidden_seeds={12600, 12601})
