@@ -13,7 +13,7 @@ from typing import Any, AbstractSet
 from sim.exploration import DatasetSplit, build_exploration_plan
 
 
-UNKNOWN_START_RESET_SCHEMA = "quantis.unknown_start_reset_contract.v2"
+UNKNOWN_START_RESET_SCHEMA = "quantis.unknown_start_reset_contract.v3"
 UNKNOWN_START_RESET_SAMPLE_SCHEMA = "quantis.unknown_start_reset_sample.v1"
 UNKNOWN_START_RESET_EVIDENCE_SCHEMA = "quantis.unknown_start_reset_evidence.v2"
 UNKNOWN_START_GRIPPER_FRAME = "right_gripper_control_frame"
@@ -254,19 +254,29 @@ class UnknownStartWorkspaceBounds:
     def _position_in_bounds(
         position: tuple[float, ...],
         bounds: tuple[tuple[float, float], ...],
+        tolerance_m: float,
     ) -> bool:
         return all(
-            lower <= value <= upper
+            lower - tolerance_m <= value <= upper + tolerance_m
             for value, (lower, upper) in zip(position, bounds)
         )
 
     def contains(self, state: UnknownStartWorkspaceState) -> bool:
         return (
-            self._position_in_bounds(state.connector_position_m, self.connector)
-            and self._position_in_bounds(state.socket_position_m, self.socket)
+            self._position_in_bounds(
+                state.connector_position_m,
+                self.connector,
+                self.realization_position_tolerance_m,
+            )
+            and self._position_in_bounds(
+                state.socket_position_m,
+                self.socket,
+                self.realization_position_tolerance_m,
+            )
             and self._position_in_bounds(
                 state.gripper_control_frame_position_m,
                 self.initial_gripper_control_frame,
+                self.realization_position_tolerance_m,
             )
         )
 
@@ -326,10 +336,13 @@ class UnknownStartWorkspaceBounds:
                 "frame": UNKNOWN_START_GRIPPER_FRAME,
                 "bounds": axes(self.initial_gripper_control_frame),
             },
-            "realization_tolerances": {
-                "position_m": self.realization_position_tolerance_m,
-                "socket_scale": self.realization_scale_tolerance,
-            },
+                    "realization_tolerances": {
+                        "position_m": self.realization_position_tolerance_m,
+                        "workspace_containment_position_m": (
+                            self.realization_position_tolerance_m
+                        ),
+                        "socket_scale": self.realization_scale_tolerance,
+                    },
         }
 
 

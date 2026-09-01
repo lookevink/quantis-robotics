@@ -20,12 +20,12 @@ from sim.unknown_start_reset import (
 )
 
 
-UNKNOWN_START_RESET_RECORDING_ID = "unknown-start-reset-v4-62603"
-UNKNOWN_START_RESET_SEED = 62603
-UNKNOWN_START_RESET_PREVIOUS_SEEDS = frozenset({62600, 62601, 62602})
-UNKNOWN_START_RESET_LEDGER_NAME = "unknown_start_reset_v4_claims"
-UNKNOWN_START_RESET_CLAIM_NAME = "milestone-20-unknown-start-reset-v4-claim.json"
-UNKNOWN_START_RESET_FAILURE_NAME = "milestone-20-unknown-start-reset-v4-failure.json"
+UNKNOWN_START_RESET_RECORDING_ID = "unknown-start-reset-v5-62604"
+UNKNOWN_START_RESET_SEED = 62604
+UNKNOWN_START_RESET_PREVIOUS_SEEDS = frozenset({62600, 62601, 62602, 62603})
+UNKNOWN_START_RESET_LEDGER_NAME = "unknown_start_reset_v5_claims"
+UNKNOWN_START_RESET_CLAIM_NAME = "milestone-20-unknown-start-reset-v5-claim.json"
+UNKNOWN_START_RESET_FAILURE_NAME = "milestone-20-unknown-start-reset-v5-failure.json"
 
 
 def _write_exclusive(path: Path, payload: dict[str, Any]) -> None:

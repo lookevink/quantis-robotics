@@ -30,8 +30,8 @@ from sim.exploration import DatasetSplit
 
 def valid_evidence() -> UnknownStartResetEvidence:
     sample = UNKNOWN_START_RESET_CONTRACT.draw(
-        62603,
-        forbidden_seeds={62600, 62601, 62602},
+        62604,
+        forbidden_seeds={62600, 62601, 62602, 62603},
     )
     connector_position = tuple(
         baseline + offset
@@ -102,8 +102,8 @@ class UnknownStartResetContractTest(unittest.TestCase):
             ledger_root = Path(directory) / "ledger"
             payload = claim(
                 ledger_root,
-                "unknown-start-reset-v4-62603",
-                62603,
+                "unknown-start-reset-v5-62604",
+                62604,
                 "a" * 40,
                 "b" * 64,
             )
@@ -113,8 +113,8 @@ class UnknownStartResetContractTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "already claimed"):
                 claim(
                     ledger_root,
-                    "unknown-start-reset-v4-62603",
-                    62603,
+                    "unknown-start-reset-v5-62604",
+                    62604,
                     "a" * 40,
                     "b" * 64,
                 )
@@ -143,7 +143,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
             recovery.mkdir()
             source_revision = "a" * 40
             runtime_fingerprint = "b" * 64
-            recording_id = "unknown-start-reset-v4-62603"
+            recording_id = "unknown-start-reset-v5-62604"
             evidence = valid_evidence()
             sample = evidence.sample
             primary_ledger = root / "claims"
@@ -249,18 +249,18 @@ class UnknownStartResetContractTest(unittest.TestCase):
     def test_failure_authenticates_and_binds_detailed_negative(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             data_root = Path(directory)
-            ledger = data_root / "unknown_start_reset_v4_claims"
+            ledger = data_root / "unknown_start_reset_v5_claims"
             source_revision = "a" * 40
             runtime_fingerprint = "b" * 64
             claim_payload = claim(
                 ledger,
-                "unknown-start-reset-v4-62603",
-                62603,
+                "unknown-start-reset-v5-62604",
+                62604,
                 source_revision,
                 runtime_fingerprint,
             )
             recording = (
-                data_root / "recordings" / "unknown-start-reset-v4-62603"
+                data_root / "recordings" / "unknown-start-reset-v5-62604"
             )
             frame = recording / "wrist/frame_000000.png"
             frame.parent.mkdir(parents=True)
@@ -334,6 +334,30 @@ class UnknownStartResetContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "contact_force_zero"):
             evidence.validate(UNKNOWN_START_RESET_CONTRACT)
 
+    def test_workspace_bounds_use_the_existing_realization_tolerance(self) -> None:
+        evidence = valid_evidence()
+        float32_readback = replace(
+            evidence.workspace,
+            connector_position_m=(
+                -0.025600001215934753,
+                *evidence.workspace.connector_position_m[1:],
+            ),
+        )
+
+        self.assertTrue(
+            UNKNOWN_START_RESET_CONTRACT.workspace.contains(float32_readback)
+        )
+        outside_tolerance = replace(
+            float32_readback,
+            connector_position_m=(
+                -0.025611,
+                *float32_readback.connector_position_m[1:],
+            ),
+        )
+        self.assertFalse(
+            UNKNOWN_START_RESET_CONTRACT.workspace.contains(outside_tolerance)
+        )
+
     def test_runtime_source_roster_authenticates_exact_bytes(self) -> None:
         fingerprint = runtime_source_fingerprint()
 
@@ -367,7 +391,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
         self.assertIn("describe --field ledger-name", runner)
         self.assertIn("describe --field recording-id", aws)
         self.assertIn("describe --field claim-name", aws)
-        self.assertNotIn("unknown-start-reset-v4-62603", runner)
+        self.assertNotIn("unknown-start-reset-v5-62604", runner)
 
     def test_reserved_seed_draw_is_deterministic_and_bounded(self) -> None:
         sample = UNKNOWN_START_RESET_CONTRACT.draw(62600, forbidden_seeds={12600, 12601})
@@ -453,7 +477,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
         self.assertEqual(
             UNKNOWN_START_RESET_CONTRACT.to_dict(),
             {
-                "schema": "quantis.unknown_start_reset_contract.v2",
+                "schema": "quantis.unknown_start_reset_contract.v3",
                 "seed_namespace": {"minimum": 62600, "maximum": 62699},
                 "split": "held_out",
                 "sampler": "build_exploration_plan.v1",
@@ -501,6 +525,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
                     },
                     "realization_tolerances": {
                         "position_m": 1e-5,
+                        "workspace_containment_position_m": 1e-5,
                         "socket_scale": 1e-9,
                     },
                 },
