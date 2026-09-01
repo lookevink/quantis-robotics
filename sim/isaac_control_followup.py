@@ -43,6 +43,7 @@ from jepa_wm.contact_grasp_acquisition_hold import (
 )
 from jepa_wm.contact_grasp_acquisition_resolution import (
     HANDOFF_SCHEMA as ACQUISITION_RESOLUTION_SCHEMA,
+    RUNTIME_OWNER_SESSION_ID as ACQUISITION_RESOLUTION_RUNTIME_SESSION_ID,
     SOURCE_SESSION_ID as ACQUISITION_RESOLUTION_SOURCE_SESSION_ID,
     ContactGraspAcquisitionResolution,
     diagnostic_path as acquisition_resolution_diagnostic_path,
@@ -264,7 +265,13 @@ def diagnose_contact_grasp_acquisition_resolution(
     ):
         raise ValueError("contact-grasp resolution diagnostic is not far approach")
     action = policy.action_for_execution(step.response.actions, plug_attached=False)
-    scales = contact_grasp_action_scales(action, coarse_acquisition=True)
+    scales = contact_grasp_action_scales(
+        action,
+        coarse_acquisition=True,
+        maximum_coarse_translation_command_meters=(
+            policy.coarse_acquisition_maximum_translation_meters
+        ),
+    )
     limits = SimulatorSafetyLimits()
     maximum_joint_delta = (
         limits.maximum_joint_velocity_radians_per_second / DROID_FPS
@@ -486,6 +493,11 @@ async def capture_contact_grasp_acquisition_handoff(
         raise ValueError("contact-grasp acquisition handoff already exists")
     stage = omni.usd.get_context().get_stage()
     runtime = live_runtime_for(source_session_id, stage)
+    if runtime is None and resolution_continuation:
+        runtime = live_runtime_for(
+            ACQUISITION_RESOLUTION_RUNTIME_SESSION_ID,
+            stage,
+        )
     if runtime is None and hold_continuation:
         runtime = live_runtime_for(ACQUISITION_HOLD_RUNTIME_SESSION_ID, stage)
     if runtime is None:

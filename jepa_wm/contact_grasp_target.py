@@ -48,6 +48,9 @@ ACQUISITION_PROGRESS_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
 RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v7"
 )
+TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+    "quantis.jepa_wm_contact_grasp_target_policy.v8"
+)
 
 
 class _TransportComposition(str, Enum):
@@ -62,6 +65,7 @@ class _PolicyCapabilities:
     transport_composition: _TransportComposition
     acquisition_progress: bool = False
     coarse_acquisition: bool = False
+    coarse_acquisition_maximum_translation_meters: float | None = None
 
 
 _POLICY_CAPABILITIES = {
@@ -95,6 +99,14 @@ _POLICY_CAPABILITIES = {
         _TransportComposition.TRANSLATION_HORIZON,
         True,
         True,
+        0.005,
+    ),
+    TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA: _PolicyCapabilities(
+        True,
+        _TransportComposition.TRANSLATION_HORIZON,
+        True,
+        True,
+        0.002,
     ),
 }
 
@@ -143,6 +155,7 @@ class ContactGraspTargetPolicy:
                     TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     ACQUISITION_PROGRESS_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                    TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 )
                 and self.scene_translation_m != (0.0, 0.0, 0.0)
             )
@@ -155,7 +168,7 @@ class ContactGraspTargetPolicy:
         translation_m: tuple[float, float, float],
     ) -> ContactGraspTargetPolicy:
         return cls(
-            RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             translation_m,
         )
 
@@ -237,6 +250,14 @@ class ContactGraspTargetPolicy:
                 ContactInsertionSegment.GRASP_CLOSE
             )
         )
+
+    @property
+    def coarse_acquisition_maximum_translation_meters(self) -> float | None:
+        """Return the versioned far-approach command limit, if enabled."""
+
+        return _POLICY_CAPABILITIES[
+            self.schema
+        ].coarse_acquisition_maximum_translation_meters
 
     @property
     def acquisition_context_indices(self) -> tuple[int, ...]:
@@ -602,6 +623,7 @@ class ContactGraspTargetPolicy:
             TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             ACQUISITION_PROGRESS_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         ):
             payload["scene_translation_m"] = list(self.scene_translation_m)
         return payload
@@ -618,6 +640,7 @@ class ContactGraspTargetPolicy:
                 TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 ACQUISITION_PROGRESS_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             )
             else {"schema"}
         )

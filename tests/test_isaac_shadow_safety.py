@@ -30,7 +30,7 @@ from jepa_wm.shadow_safety import ShadowSafetyEvidence
 class ShadowSafetyEvidenceTest(unittest.TestCase):
     def test_coarse_acquisition_decouples_opening_from_arm_scale(self) -> None:
         action = DroidAction(
-            (0.0038, 0.0007, -0.0021, 0.0, 0.0, 0.0, -0.02)
+            (0.0015, 0.0002, -0.0005, 0.0, 0.0, 0.0, -0.02)
         )
 
         scales = contact_grasp_action_scales(action, coarse_acquisition=True)
@@ -41,7 +41,7 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
         self.assertLessEqual(
             sum(value * value for value in scales[0].apply(action).values[:3])
             ** 0.5,
-            0.005,
+            0.002,
         )
 
     def test_coarse_acquisition_bounds_large_arm_and_closing_commands(self) -> None:
@@ -52,10 +52,10 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
         scales = contact_grasp_action_scales(action, coarse_acquisition=True)
         commanded = scales[0].apply(action)
 
-        self.assertEqual(scales[0].translation, 0.25)
+        self.assertEqual(scales[0].translation, 0.125)
         self.assertLessEqual(
             sum(value * value for value in commanded.values[:3]) ** 0.5,
-            0.005,
+            0.002,
         )
         self.assertLessEqual(commanded.values[6] * 0.08, 0.0015)
 

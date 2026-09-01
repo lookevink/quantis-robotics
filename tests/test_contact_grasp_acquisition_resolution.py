@@ -17,7 +17,7 @@ from jepa_wm.control_safety import contact_grasp_action_scales
 class ContactGraspAcquisitionResolutionTest(unittest.TestCase):
     def _handoff(self) -> ContactGraspAcquisitionResolution:
         return ContactGraspAcquisitionResolution(
-            "unknown-start-e2e-v12-62605-grasp-01",
+            "unknown-start-e2e-v13-62605-grasp-01",
             "a" * 64,
             "b" * 40,
         )
@@ -68,13 +68,14 @@ class ContactGraspAcquisitionResolutionTest(unittest.TestCase):
             runner.count("demo.capture_contact_grasp_acquisition_handoff"), 1
         )
         self.assertEqual(runner.count("demo.capture_followup_observation"), 1)
+        self.assertIn('maximum_actions="52"', runner)
         self.assertNotIn("reset_stage", runner)
         self.assertNotIn("film", runner)
 
     def test_diagnostic_requires_first_safe_frozen_coarse_scale(self) -> None:
         handoff = self._handoff()
         claim_fingerprint = "c" * 64
-        action = DroidAction((0.007, 0.0, 0.0, 0.0, 0.0, 0.0, -0.2))
+        action = DroidAction((0.003, 0.0, 0.0, 0.0, 0.0, 0.0, -0.2))
         scales = contact_grasp_action_scales(action, coarse_acquisition=True)
         attempts = [
             {"scale": scale.to_dict(), "passed": index == 1}

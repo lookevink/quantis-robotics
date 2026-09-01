@@ -17,6 +17,7 @@ from jepa_wm.contact_grasp_target import (
     LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+    TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     ContactGraspTargetPolicy,
 )
 
@@ -199,7 +200,7 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
             self.assertAlmostEqual(actual, expected)
         self.assertEqual(
             policy.schema,
-            RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         )
         self.assertTrue(policy.uses_measured_acquisition_progress)
         self.assertEqual(ContactGraspTargetPolicy.from_dict(policy.to_dict()), policy)
@@ -228,6 +229,14 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
     def test_resolution_aware_policy_uses_coarse_motion_only_before_close(self) -> None:
         policy = ContactGraspTargetPolicy.for_scene_translation((0.0, 0.0, 0.0))
 
+        self.assertEqual(
+            policy.schema,
+            TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+        )
+        self.assertEqual(
+            policy.coarse_acquisition_maximum_translation_meters,
+            0.002,
+        )
         self.assertTrue(
             policy.uses_coarse_acquisition_action(
                 self._target_path(96),
@@ -239,6 +248,19 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
                 self._target_path(97),
                 plug_attached=False,
             )
+        )
+
+        historical = ContactGraspTargetPolicy(
+            RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            (0.0, 0.0, 0.0),
+        )
+        self.assertEqual(
+            historical.coarse_acquisition_maximum_translation_meters,
+            0.005,
+        )
+        self.assertEqual(
+            ContactGraspTargetPolicy.from_dict(historical.to_dict()),
+            historical,
         )
         self.assertFalse(
             policy.uses_coarse_acquisition_action(

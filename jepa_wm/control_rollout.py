@@ -619,6 +619,9 @@ class ControlStepSummary:
                     observation.target_frame,
                     plug_attached=state.plug_attached,
                 ),
+                maximum_coarse_translation_command_meters=(
+                    contact_grasp_policy.coarse_acquisition_maximum_translation_meters
+                ),
             )
             attempted_projection_policy = tuple(
                 attempt.scale for attempt in result.projection_attempts

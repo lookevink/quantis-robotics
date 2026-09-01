@@ -58,7 +58,8 @@ ACTION_SCALES = (
 # reference gripper delta. Keep small proposals above the measured translation
 # noise floor, while bounding larger proposals to a one-millimetre command.
 MAXIMUM_CONTACT_GRASP_TRANSLATION_COMMAND_METERS = 0.001
-MAXIMUM_CONTACT_GRASP_COARSE_TRANSLATION_COMMAND_METERS = 0.005
+LEGACY_MAXIMUM_CONTACT_GRASP_COARSE_TRANSLATION_COMMAND_METERS = 0.005
+MAXIMUM_CONTACT_GRASP_COARSE_TRANSLATION_COMMAND_METERS = 0.002
 MAXIMUM_CONTACT_GRASP_FINE_CLOSURE_COMMAND_METERS = 0.0015
 MINIMUM_CONTACT_GRASP_TRANSPORT_COMMAND_METERS = 0.0005
 MAXIMUM_CONTACT_GRASP_TRANSPORT_COMMAND_METERS = 0.00075
@@ -97,7 +98,10 @@ CONTACT_GRASP_ACTION_SCALE_LEVELS = (
 
 # The authenticated acquisition trajectory contains native 4-FPS approach
 # steps up to 6.81 mm. Before the demonstrated close phase, permit at most a
-# 5 mm arm command and retain every smaller scale as an IK/velocity fallback.
+# 2 mm arm command and retain every smaller scale as an IK/velocity fallback.
+# A guarded 4.15 mm command moved in the correct direction but missed its
+# Cartesian target by 0.97 mm; quarter scale projects safely inside the
+# unchanged 0.5 mm tracking gate, while half scale leaves only 15 micrometres.
 # Gripper scaling remains independent, so a harmless opening correction can no
 # longer collapse an otherwise resolvable arm command to 1/32 scale.
 CONTACT_GRASP_COARSE_ACTION_SCALES = tuple(
@@ -250,11 +254,18 @@ def contact_grasp_action_scales(
     require_directional_transport_progress: bool = False,
     require_resolvable_transport: bool = False,
     coarse_acquisition: bool = False,
+    maximum_coarse_translation_command_meters: float | None = None,
 ) -> tuple[DroidActionScale, ...]:
     """Bound approach motion and calibrate gripper closure independently."""
 
     if not isinstance(coarse_acquisition, bool):
         raise ValueError("contact-grasp acquisition scale phase is invalid")
+    if maximum_coarse_translation_command_meters is not None and (
+        isinstance(maximum_coarse_translation_command_meters, bool)
+        or not isfinite(maximum_coarse_translation_command_meters)
+        or maximum_coarse_translation_command_meters <= 0.0
+    ):
+        raise ValueError("contact-grasp acquisition translation limit is invalid")
     translation_norm = sqrt(sum(value * value for value in action.values[:3]))
     if attachment_acquired:
         if require_resolvable_transport:
@@ -287,10 +298,15 @@ def contact_grasp_action_scales(
         return policies[-1]
 
     if coarse_acquisition:
+        coarse_limit = (
+            maximum_coarse_translation_command_meters
+            if maximum_coarse_translation_command_meters is not None
+            else MAXIMUM_CONTACT_GRASP_COARSE_TRANSLATION_COMMAND_METERS
+        )
         for policy in CONTACT_GRASP_COARSE_ACTION_SCALE_POLICIES:
             if (
                 translation_norm * policy[0].translation
-                <= MAXIMUM_CONTACT_GRASP_COARSE_TRANSLATION_COMMAND_METERS
+                <= coarse_limit
             ):
                 return (
                     _bounded_closing_policy(policy, action.values[6])
