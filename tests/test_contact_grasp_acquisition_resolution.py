@@ -17,7 +17,7 @@ from jepa_wm.control_safety import contact_grasp_action_scales
 class ContactGraspAcquisitionResolutionTest(unittest.TestCase):
     def _handoff(self) -> ContactGraspAcquisitionResolution:
         return ContactGraspAcquisitionResolution(
-            "unknown-start-e2e-v13-62605-grasp-01",
+            "unknown-start-e2e-v14-62605-grasp-01",
             "a" * 64,
             "b" * 40,
         )
@@ -93,6 +93,11 @@ class ContactGraspAcquisitionResolutionTest(unittest.TestCase):
             "selected_scale": scales[1].to_dict(),
             "attempts": attempts,
             "simulator_action_applied": False,
+            "runtime_owner_session_id": "unknown-start-e2e-v12-62605-grasp-01",
+            "active_drive_target": {
+                "joint_positions": [0.0] * 7,
+                "gripper_width_m": 0.07,
+            },
         }
 
         self.assertEqual(

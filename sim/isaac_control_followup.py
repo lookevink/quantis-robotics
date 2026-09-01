@@ -49,6 +49,7 @@ from jepa_wm.contact_grasp_acquisition_resolution import (
     diagnostic_path as acquisition_resolution_diagnostic_path,
     runtime_fingerprint as acquisition_resolution_runtime_fingerprint,
     validate_diagnostic_evidence as validate_acquisition_resolution_diagnostic,
+    v12_rollback_drive_target as acquisition_resolution_drive_target,
 )
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.control_policy import (
@@ -255,6 +256,21 @@ def diagnose_contact_grasp_acquisition_resolution(
         > SimulatorSafetyLimits().maximum_contact_force_newtons
     ):
         raise ValueError("contact-grasp resolution diagnostic source is unsafe")
+    import omni.usd
+
+    stage = omni.usd.get_context().get_stage()
+    runtime = live_runtime_for(
+        ACQUISITION_RESOLUTION_RUNTIME_SESSION_ID,
+        stage,
+    )
+    expected_drive_target = acquisition_resolution_drive_target(
+        QUANTIS_DATA_ROOT
+    )
+    if (
+        runtime is None
+        or current_drive_target(runtime) != expected_drive_target
+    ):
+        raise ValueError("contact-grasp rollback drive target changed")
     historical_policy = step.state.require_current_contact_grasp_policy()
     policy = ContactGraspTargetPolicy.for_scene_translation(
         historical_policy.scene_translation_m
@@ -338,6 +354,8 @@ def diagnose_contact_grasp_acquisition_resolution(
         "action": list(action.values),
         "selected_scale": selected.to_dict(),
         "attempts": attempts,
+        "runtime_owner_session_id": ACQUISITION_RESOLUTION_RUNTIME_SESSION_ID,
+        "active_drive_target": expected_drive_target.to_dict(),
         "simulator_action_applied": False,
     }
     output = acquisition_resolution_diagnostic_path(
@@ -503,11 +521,13 @@ async def capture_contact_grasp_acquisition_handoff(
     if runtime is None:
         raise RuntimeError("live contact-grasp acquisition runtime was lost")
     if resolution_continuation:
-        from jepa_wm.control_rollout import ControlStepSummary
-
-        expected_active_drive_target = ControlStepSummary.from_session(
-            source
-        ).contact_grasp_drive_target()
+        expected_active_drive_target = acquisition_resolution_drive_target(
+            QUANTIS_DATA_ROOT
+        )
+        if current_drive_target(runtime) != expected_active_drive_target:
+            raise RuntimeError(
+                "contact-grasp acquisition rollback target changed"
+            )
     else:
         expected_active_drive_target = (
             current_drive_target(runtime)

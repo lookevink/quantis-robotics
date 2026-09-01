@@ -1,4 +1,4 @@
-"""Authenticated V13 continuation after the bounded V10 acquisition negative."""
+"""Authenticated V14 continuation after the bounded V10 acquisition negative."""
 
 from __future__ import annotations
 
@@ -28,9 +28,9 @@ from jepa_wm.persistence import write_json_atomic
 from jepa_wm.training_artifact import artifact_fingerprint
 
 
-HANDOFF_SCHEMA = "quantis.contact_grasp_acquisition_resolution.v3"
-EXPERIMENT_DIRECTORY = "unknown_start_acquisition_resolution_v13"
-ROLLOUT_ID = "unknown-start-e2e-v13-62605-grasp"
+HANDOFF_SCHEMA = "quantis.contact_grasp_acquisition_resolution.v4"
+EXPERIMENT_DIRECTORY = "unknown_start_acquisition_resolution_v14"
+ROLLOUT_ID = "unknown-start-e2e-v14-62605-grasp"
 SOURCE_ROLLOUT_ID = "unknown-start-e2e-v10-62605-grasp"
 SOURCE_SESSION_ID = f"{SOURCE_ROLLOUT_ID}-52"
 MAXIMUM_ACTIONS = 52
@@ -81,6 +81,18 @@ V12_SESSION_FINGERPRINTS = {
     "context.png": "d8dabdd0715c500399f8cab8ba85acd923c8a4770cd6db761ad32ab182ff33f8",
     "post_action.png": "6db31f040e0d1f8d387ace3b7883a8247927870d6ca9c39b2733f44c6545b9e2",
 }
+V13_CLAIM_FINGERPRINT = (
+    "c090f910fb50969def39c603120d63ca1b0f89bb7c34cdb02e3347ca5224ac89"
+)
+V13_FAILURE_FINGERPRINT = (
+    "925a7d4f7646a238db433aa042d1f253a1082b50bfd7ef6628d7af9fc2c3cfb8"
+)
+V13_DIAGNOSTIC_FINGERPRINT = (
+    "e32ed2335eff625334efc529f9bcb5ce6efa7cb33d7487ef8d88193a90028995"
+)
+V13_EXPERIMENT_DIRECTORY = "unknown_start_acquisition_resolution_v13"
+V13_ROLLOUT_ID = "unknown-start-e2e-v13-62605-grasp"
+V13_SESSION_ID = f"{V13_ROLLOUT_ID}-01"
 SESSION_FILES = (
     "request.json",
     "state.json",
@@ -187,6 +199,10 @@ class ContactGraspAcquisitionResolution:
             "v12_session_fingerprints": V12_SESSION_FINGERPRINTS,
             "v12_runtime_owner_session_id": RUNTIME_OWNER_SESSION_ID,
             "v12_rollback_verified": True,
+            "v13_claim_fingerprint": V13_CLAIM_FINGERPRINT,
+            "v13_failure_fingerprint": V13_FAILURE_FINGERPRINT,
+            "v13_diagnostic_fingerprint": V13_DIAGNOSTIC_FINGERPRINT,
+            "v13_simulator_action_applied": False,
             "runtime_fingerprint": self.runtime_fingerprint,
             "source_revision": self.source_revision,
             "no_actuation_diagnostic_required": True,
@@ -356,6 +372,10 @@ def validate_v12_tracking_rollback(checkpoint_root: Path, data_root: Path) -> No
         or post.collision_detected
         or post.plug_attached
         or refresh is None
+        or tuple(step.state.current_joint_positions)
+        != tuple(refresh.live_state.joint_positions)
+        or step.state.current_gripper_width_m
+        != refresh.live_state.gripper_width_m
         or failure_payload.get("error") != "report:exit_1"
         or failure_payload.get("retry_authorized") is not False
         or (data_root / "control_rollouts" / V12_ROLLOUT_ID).exists()
@@ -380,6 +400,44 @@ def validate_v12_tracking_rollback(checkpoint_root: Path, data_root: Path) -> No
         raise ValueError("V12 rollback did not return to the bounded source state")
 
 
+def v12_rollback_drive_target(data_root: Path):
+    from jepa_wm.joint_drive import JointDriveTarget
+    from sim.control_session import ControlSession
+
+    _, state = ControlSession.at(
+        data_root / "control_sessions",
+        V12_SESSION_ID,
+    ).load_capture()
+    return JointDriveTarget(
+        tuple(state.current_joint_positions),
+        state.current_gripper_width_m,
+    )
+
+
+def validate_v13_no_action(checkpoint_root: Path, data_root: Path) -> None:
+    root = checkpoint_root / V13_EXPERIMENT_DIRECTORY
+    claim_path = root / "CLAIM.json"
+    failure_path = root / "FAILURE.json"
+    diagnostic = diagnostic_path(data_root, V13_SESSION_ID)
+    if (
+        artifact_fingerprint(claim_path) != V13_CLAIM_FINGERPRINT
+        or artifact_fingerprint(failure_path) != V13_FAILURE_FINGERPRINT
+        or artifact_fingerprint(diagnostic) != V13_DIAGNOSTIC_FINGERPRINT
+    ):
+        raise ValueError("terminal no-action V13 evidence changed")
+    failure_payload = json.loads(failure_path.read_text())
+    diagnostic_payload = json.loads(diagnostic.read_text())
+    if (
+        failure_payload.get("error") != "capture_01:exit_1"
+        or failure_payload.get("retry_authorized") is not False
+        or diagnostic_payload.get("status") != "passed_no_actuation"
+        or diagnostic_payload.get("simulator_action_applied") is not False
+        or (data_root / "control_sessions" / V13_SESSION_ID).exists()
+        or (data_root / "control_rollouts" / V13_ROLLOUT_ID).exists()
+    ):
+        raise ValueError("V13 was not the exact no-capture target-owner failure")
+
+
 def claim(
     checkpoint_root: Path,
     recovery_checkpoint_root: Path,
@@ -398,6 +456,8 @@ def claim(
     validate_v11_no_action(recovery_checkpoint_root, recovery_data_root)
     validate_v12_tracking_rollback(checkpoint_root, data_root)
     validate_v12_tracking_rollback(recovery_checkpoint_root, recovery_data_root)
+    validate_v13_no_action(checkpoint_root, data_root)
+    validate_v13_no_action(recovery_checkpoint_root, recovery_data_root)
     handoff = ContactGraspAcquisitionResolution(
         followup_session_id,
         runtime_fingerprint(),
@@ -464,6 +524,8 @@ def validate_diagnostic_evidence(
         or payload.get("followup_session_id") != handoff.followup_session_id
         or payload.get("claim_fingerprint") != claim_fingerprint
         or payload.get("simulator_action_applied") is not False
+        or payload.get("runtime_owner_session_id") != RUNTIME_OWNER_SESSION_ID
+        or not isinstance(payload.get("active_drive_target"), dict)
         or not isinstance(selected, dict)
         or not expected_scale_payloads
         or attempted_scale_payloads != expected_scale_payloads
@@ -485,11 +547,16 @@ def validate_diagnostic(checkpoint_root: Path, data_root: Path) -> dict[str, Any
     claim_payload = json.loads(claim_path.read_text())
     handoff = ContactGraspAcquisitionResolution.from_dict(claim_payload)
     payload = json.loads(diagnostic_path(data_root, handoff.followup_session_id).read_text())
-    return validate_diagnostic_evidence(
+    validated = validate_diagnostic_evidence(
         payload,
         handoff,
         artifact_fingerprint(claim_path),
     )
+    if validated["active_drive_target"] != v12_rollback_drive_target(
+        data_root
+    ).to_dict():
+        raise ValueError("coarse acquisition rollback drive target changed")
+    return validated
 
 
 def evaluate(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
