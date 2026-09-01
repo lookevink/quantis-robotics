@@ -55,6 +55,16 @@ for identifier in "${session_id}" "${reference_name}" "${control_identity}"; do
 done
 require_nonnegative_integer "exploration seed" "${exploration_seed}"
 require_positive_integer "context index" "${context_index}"
+if [[ "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v3" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v4" ]]; then
+  is_safe_identifier "${reset_recording_id}" || {
+    printf 'error: invalid unknown-start reset recording ID\n' >&2
+    exit 1
+  }
+  [[ "${reset_result_fingerprint}" =~ ^[0-9a-f]{64}$ ]] || {
+    printf 'error: invalid unknown-start reset result fingerprint\n' >&2
+    exit 1
+  }
+fi
 
 cd "${repo_dir}"
 "${venv_python}" -m jepa_wm.physical_shadow_canary prepare-worker \
@@ -63,6 +73,12 @@ cd "${repo_dir}"
 bash "${repo_dir}/ops/jepa_wm.sh" control-worker-stop
 bash "${repo_dir}/ops/jepa_wm.sh" \
   control-worker-start --artifacts "${control_identity}"
+
+if [[ "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v4" ]]; then
+  isaac_server_call \
+    "await demo.preflight_unknown_start_shadow('${reset_recording_id}','${reset_result_fingerprint}')" \
+    180 true
+fi
 
 phase="claim"
 
@@ -81,15 +97,7 @@ trap terminalize_failure ERR
   --config "${config}" --session "${session_id}"
 
 phase="capture"
-if [[ "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v3" ]]; then
-  is_safe_identifier "${reset_recording_id}" || {
-    printf 'error: invalid unknown-start reset recording ID\n' >&2
-    exit 1
-  }
-  [[ "${reset_result_fingerprint}" =~ ^[0-9a-f]{64}$ ]] || {
-    printf 'error: invalid unknown-start reset result fingerprint\n' >&2
-    exit 1
-  }
+if [[ "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v3" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v4" ]]; then
   proposal_name="$(control_proposal_from_identity \
     direct "${control_identity}" "${checkpoint_dir}" "${venv_python}")"
   isaac_server_call \

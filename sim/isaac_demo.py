@@ -55,6 +55,7 @@ from sim.isaac_unknown_start_reset import (
 )
 from sim.isaac_unknown_start_shadow import (
     capture_unknown_start_shadow_observation as _capture_unknown_start_shadow_observation,
+    preflight_unknown_start_shadow as _preflight_unknown_start_shadow,
 )
 from sim.isaac_demo_runtime import (
     Actuators,
@@ -126,6 +127,21 @@ async def capture_unknown_start_shadow_observation(
             reference_recording,
             reference_seed,
             proposal_name,
+            reset_recording_id,
+            reset_result_fingerprint,
+        ),
+    )
+
+
+async def preflight_unknown_start_shadow(
+    reset_recording_id: str,
+    reset_result_fingerprint: str,
+) -> dict[str, Any]:
+    """Pause and authenticate the reset before an experiment is claimed."""
+
+    return await _RECORDING_JOBS.run_exclusive(
+        f"unknown-start-shadow-preflight-{reset_recording_id}",
+        lambda: _preflight_unknown_start_shadow(
             reset_recording_id,
             reset_result_fingerprint,
         ),

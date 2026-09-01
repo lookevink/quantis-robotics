@@ -21,6 +21,9 @@ from jepa_wm.physical_shadow_canary_v2_contract import (
 from jepa_wm.physical_shadow_canary_v3_contract import (
     FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V3_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
 )
+from jepa_wm.physical_shadow_canary_v4_contract import (
+    FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V4_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+)
 
 
 class PhysicalShadowCanaryTest(unittest.TestCase):
@@ -103,6 +106,20 @@ class PhysicalShadowCanaryTest(unittest.TestCase):
 
     def test_negative_safety_evidence_has_no_selected_scale(self) -> None:
         self.assertIsNone(_serialized_action_scale(None))
+
+    def test_v4_pauses_and_authenticates_before_claim(self) -> None:
+        config = load_experiment_config(
+            Path(".scratch/jepa-physical-shadow-canary-v4/experiment-config.json")
+        )
+        runner = Path("ops/run_physical_shadow_canary.sh").read_text()
+
+        self.assertEqual(config["unknown_start"]["seed"], 62604)
+        self.assertTrue(config["output"].endswith("unknown-start-shadow-canary-v2.json"))
+        self.assertEqual(V4_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT, "PENDING_CHECKPOINT")
+        self.assertLess(
+            runner.index("demo.preflight_unknown_start_shadow"),
+            runner.index("physical_shadow_canary claim"),
+        )
 
     def test_recovery_preserves_authenticated_model_rejection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -1113,13 +1113,15 @@ case "${command}" in
       "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-rebase-proposal --source '${source_identity}' --name '${new_identity}' --proposal '${proposal_name}'"
     guarded_insertion_summary="Control worker proposal: ${new_identity}"
     ;;
-  jepa-wm-physical-shadow-canary|jepa-wm-physical-shadow-canary-v2|jepa-wm-physical-shadow-canary-v3)
+  jepa-wm-physical-shadow-canary|jepa-wm-physical-shadow-canary-v2|jepa-wm-physical-shadow-canary-v3|jepa-wm-physical-shadow-canary-v4)
     source_revision="$(deployment_source_revision)"
     canary_config=".scratch/jepa-physical-shadow-canary-v1/experiment-config.json"
     if [[ "${command}" == "jepa-wm-physical-shadow-canary-v2" ]]; then
       canary_config=".scratch/jepa-physical-shadow-canary-v2/experiment-config.json"
     elif [[ "${command}" == "jepa-wm-physical-shadow-canary-v3" ]]; then
       canary_config=".scratch/jepa-physical-shadow-canary-v3/experiment-config.json"
+    elif [[ "${command}" == "jepa-wm-physical-shadow-canary-v4" ]]; then
+      canary_config=".scratch/jepa-physical-shadow-canary-v4/experiment-config.json"
     fi
     command_status=0
     sync_repo || command_status=$?

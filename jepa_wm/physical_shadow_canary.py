@@ -23,6 +23,9 @@ from jepa_wm.physical_shadow_canary_v2_contract import (
 from jepa_wm.physical_shadow_canary_v3_contract import (
     FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V3_CONFIG_FINGERPRINT,
 )
+from jepa_wm.physical_shadow_canary_v4_contract import (
+    FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V4_CONFIG_FINGERPRINT,
+)
 from jepa_wm.planner import CEMConfig
 from jepa_wm.shadow_planning import CandidateAuthority
 from jepa_wm.training_artifact import ArtifactIdentity, artifact_fingerprint
@@ -35,6 +38,7 @@ from sim.unknown_start_reset import UnknownStartResetEvidence
 EXPERIMENT_SCHEMA = "quantis.jepa_wm_physical_shadow_canary_experiment.v1"
 EXPERIMENT_SCHEMA_V2 = "quantis.jepa_wm_physical_shadow_canary_experiment.v2"
 EXPERIMENT_SCHEMA_V3 = "quantis.jepa_wm_physical_shadow_canary_experiment.v3"
+EXPERIMENT_SCHEMA_V4 = "quantis.jepa_wm_physical_shadow_canary_experiment.v4"
 
 
 def _serialized_action_scale(scale: Any) -> dict[str, Any] | None:
@@ -49,6 +53,7 @@ def load_experiment_config(path: Path) -> dict[str, Any]:
         EXPERIMENT_SCHEMA: V1_CONFIG_FINGERPRINT,
         EXPERIMENT_SCHEMA_V2: V2_CONFIG_FINGERPRINT,
         EXPERIMENT_SCHEMA_V3: V3_CONFIG_FINGERPRINT,
+        EXPERIMENT_SCHEMA_V4: V4_CONFIG_FINGERPRINT,
     }.get(payload.get("schema"))
     if expected_fingerprint is None or (
         expected_fingerprint != "PENDING_CHECKPOINT"
@@ -59,7 +64,12 @@ def load_experiment_config(path: Path) -> dict[str, Any]:
     gate = payload.get("gate", {})
     if (
         payload.get("schema")
-        not in (EXPERIMENT_SCHEMA, EXPERIMENT_SCHEMA_V2, EXPERIMENT_SCHEMA_V3)
+        not in (
+            EXPERIMENT_SCHEMA,
+            EXPERIMENT_SCHEMA_V2,
+            EXPERIMENT_SCHEMA_V3,
+            EXPERIMENT_SCHEMA_V4,
+        )
         or not isinstance(payload.get("session_id"), str)
         or not payload["session_id"]
         or gate
@@ -80,7 +90,7 @@ def load_experiment_config(path: Path) -> dict[str, Any]:
         }
     ):
         raise ValueError("physical shadow canary contract is invalid")
-    if payload.get("schema") == EXPERIMENT_SCHEMA_V3:
+    if payload.get("schema") in (EXPERIMENT_SCHEMA_V3, EXPERIMENT_SCHEMA_V4):
         unknown_start = payload.get("unknown_start")
         if (
             not isinstance(unknown_start, Mapping)
@@ -342,7 +352,7 @@ def evaluate_canary(
     ):
         raise ValueError("physical shadow canary gate failed")
     handoff = None
-    if experiment["schema"] == EXPERIMENT_SCHEMA_V3:
+    if experiment["schema"] in (EXPERIMENT_SCHEMA_V3, EXPERIMENT_SCHEMA_V4):
         if not handoff_path.is_file() or not isinstance(unknown_start, Mapping):
             raise ValueError("unknown-start shadow canary handoff is missing")
         handoff = UnknownStartControlHandoff.from_dict(

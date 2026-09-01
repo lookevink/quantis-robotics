@@ -28,6 +28,7 @@ from sim.control_session import (
 from sim.isaac_control_runtime import (
     bind_live_runtime,
     control_contact_sensors,
+    pause_control_timeline,
     read_control_contact,
 )
 from sim.isaac_demo_camera import (
@@ -278,6 +279,52 @@ def reauthenticate_unknown_start_shadow_session(session_id: str) -> None:
         evidence,
         reset_step,
     )
+
+
+async def preflight_unknown_start_shadow(
+    reset_recording_id: str,
+    reset_result_fingerprint: str,
+) -> dict[str, Any]:
+    """Pause Isaac and reauthenticate the reset before claiming an experiment."""
+
+    import omni.kit.app
+    import omni.timeline
+    import omni.usd
+    from isaacsim.core.experimental.prims import Articulation, RigidPrim
+
+    validate_recording_id(reset_recording_id)
+    timeline = omni.timeline.get_timeline_interface()
+    await pause_control_timeline(
+        timeline,
+        omni.kit.app.get_app().next_update_async,
+    )
+    if timeline.is_playing():
+        raise RuntimeError("unknown-start shadow preflight could not pause timeline")
+    _, _, evidence, reset_step = _load_authenticated_reset(
+        reset_recording_id,
+        reset_result_fingerprint,
+    )
+    stage = omni.usd.get_context().get_stage()
+    actuators = create_actuators(stage, Articulation(ROBOT_PATH))
+    attachment = bind_existing_fixed_joint_plug(stage).bind_physics(
+        RigidPrim(PLUG_PATH)
+    )
+    sensors = control_contact_sensors(stage, create=False, include_connector=True)
+    _validated_live_snapshot(
+        stage,
+        actuators,
+        attachment,
+        sensors,
+        evidence,
+        reset_step,
+    )
+    return {
+        "status": "ready",
+        "reset_recording_id": reset_recording_id,
+        "reset_result_fingerprint": reset_result_fingerprint,
+        "timeline_playing": False,
+        "applied_actions": 0,
+    }
 
 
 async def capture_unknown_start_shadow_observation(
