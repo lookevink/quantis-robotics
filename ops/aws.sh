@@ -569,6 +569,7 @@ Commands:
   jepa-wm-insertion-demo-rollout REFERENCE_RECORDING SEED ARTIFACTS [context-index]
   jepa-wm-grasp-to-insertion REFERENCE_RECORDING SEED GRASP_ARTIFACTS INSERTION_ARTIFACTS DEMO_SPEC_ID DEMO_SPEC_FINGERPRINT
   jepa-wm-unknown-start-reset
+  jepa-wm-unknown-start-live-action     Apply one recovery-gated unknown-start candidate action
   jepa-wm-physical-shadow-canary-v5    Run continuity-safe unknown-start zero-actuation canary
   jepa-wm-physical-shadow-canary-v6    Run paused-render unknown-start zero-actuation canary
   jepa-wm-physical-shadow-canary-v7    Run classifier-corrected unknown-start canary
@@ -1217,6 +1218,34 @@ case "${command}" in
       fi
     fi
     printf 'Unknown-start reset authentication workflow complete.\n'
+    exit "${command_status}"
+    ;;
+  jepa-wm-unknown-start-live-action)
+    source_revision="$(deployment_source_revision)"
+    runtime_fingerprint="$(python3 -m jepa_wm.unknown_start_live_action fingerprint)"
+    command_status=0
+    sync_repo || command_status=$?
+    if (( command_status == 0 )); then
+      remote "bash ~/quantis-robotics/ops/run_unknown_start_live_action.sh '${source_revision}' '${runtime_fingerprint}'" \
+        || command_status=$?
+    fi
+    backup_status=0
+    remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' \
+      || backup_status=$?
+    if (( command_status == 0 && backup_status == 0 )); then
+      remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.unknown_start_live_action finalize --checkpoint-root ~/docker/jepa-wm/checkpoints --recovery-checkpoint-root /mnt/quantis-assets/quantis-state/jepa-wm/checkpoints --data-root ~/docker/isaac-sim/data/quantis --recovery-data-root /mnt/quantis-assets/quantis-state/isaac" \
+        || command_status=$?
+      if (( command_status != 0 )); then
+        remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.unknown_start_live_action failure --checkpoint-root ~/docker/jepa-wm/checkpoints --error 'recovery_finalization:exit_${command_status}'" \
+          || true
+        remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' || true
+      fi
+    elif (( command_status == 0 )); then
+      command_status=${backup_status}
+      remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.unknown_start_live_action failure --checkpoint-root ~/docker/jepa-wm/checkpoints --error 'recovery_backup:exit_${backup_status}'" \
+        || true
+    fi
+    printf 'Unknown-start live action workflow complete.\n'
     exit "${command_status}"
     ;;
   jepa-wm-physical-shadow-replay)

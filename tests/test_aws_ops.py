@@ -295,12 +295,8 @@ class AwsLifecycleTests(unittest.TestCase):
 
         checkpoint = root / "docker/jepa-wm/checkpoints/contact-grasp-v1.pth"
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(
-            f"docker exec quantis-isaac-sim test -r {checkpoint}", calls
-        )
-        self.assertIn(
-            f"docker exec quantis-isaac-sim test -r {checkpoint}.json", calls
-        )
+        self.assertIn(f"docker exec quantis-isaac-sim test -r {checkpoint}", calls)
+        self.assertIn(f"docker exec quantis-isaac-sim test -r {checkpoint}.json", calls)
 
     def test_backup_state_syncs_and_runs_on_the_remote_host(self):
         result, calls = self.run_command("backup-state")
@@ -1473,9 +1469,7 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("run_physical_shadow_canary.sh", calls)
         self.assertIn("ops/backup_state.sh", calls)
         self.assertIn("finalize-recovery", calls)
-        self.assertIn(
-            "/mnt/quantis-assets/quantis-state/jepa-wm/checkpoints", calls
-        )
+        self.assertIn("/mnt/quantis-assets/quantis-state/jepa-wm/checkpoints", calls)
         self.assertNotIn("contact-insertion-v10-drive-slow-2600-held-01", calls)
         self.assertNotIn("run_control_step.sh", calls)
         self.assertNotIn("control-apply", calls)
@@ -1499,7 +1493,9 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertIn("worker_stop:exit_7", calls)
         self.assertNotIn("finalize-recovery", calls)
-        self.assertLess(calls.index("worker_stop:exit_7"), calls.index("backup_state.sh"))
+        self.assertLess(
+            calls.index("worker_stop:exit_7"), calls.index("backup_state.sh")
+        )
 
     def test_physical_shadow_canary_v2_selects_its_frozen_config(self):
         result, calls = self.run_command("jepa-wm-physical-shadow-canary-v2")
@@ -1565,6 +1561,25 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("runtime-source-fingerprint", calls)
         self.assertNotIn("control-worker-start", calls)
         self.assertNotIn("control-apply", calls)
+
+    def test_unknown_start_live_action_is_single_workflow_and_recovery_gated(self):
+        result, calls = self.run_command("jepa-wm-unknown-start-live-action")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("run_unknown_start_live_action.sh", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+        self.assertIn("unknown_start_live_action finalize", calls)
+        self.assertNotIn("record_candidate_demo", calls)
+
+    def test_unknown_start_live_action_terminalizes_a_recovery_failure(self):
+        result, calls = self.run_command(
+            "jepa-wm-unknown-start-live-action",
+            extra_env={"FAKE_SSH_FAIL_MATCH": "unknown_start_live_action finalize"},
+        )
+
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertIn("recovery_finalization:exit_7", calls)
+        self.assertGreaterEqual(calls.count("ops/backup_state.sh"), 2)
 
     def test_sync_does_not_deploy_local_log_artifacts(self):
         result, calls = self.run_command("sync")

@@ -12,6 +12,19 @@ from tests.test_unknown_start_reset import valid_evidence
 
 
 class UnknownStartShadowHandoffTest(unittest.TestCase):
+    def test_live_candidate_reuses_authenticated_capture_and_reauthenticates(
+        self,
+    ) -> None:
+        capture = Path("sim/isaac_unknown_start_shadow.py").read_text()
+        execution = Path("sim/isaac_control_execution.py").read_text()
+
+        self.assertIn("capture_unknown_start_candidate_observation", capture)
+        self.assertIn("ControlExecutionPolicy.RESET_TRIAL_CANDIDATE", capture)
+        self.assertLess(
+            execution.index("reauthenticate_unknown_start_shadow_session(session_id)"),
+            execution.index("session.claim_execution()"),
+        )
+
     def test_handoff_wire_contract_rejects_added_authority(self) -> None:
         handoff = UnknownStartControlHandoff(
             session_id="shadow-session",
@@ -29,15 +42,15 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
             state_fingerprint="0" * 64,
         )
 
-        self.assertEqual(UnknownStartControlHandoff.from_dict(handoff.to_dict()), handoff)
+        self.assertEqual(
+            UnknownStartControlHandoff.from_dict(handoff.to_dict()), handoff
+        )
         with self.assertRaisesRegex(ValueError, "payload"):
             UnknownStartControlHandoff.from_dict(
                 {**handoff.to_dict(), "apply_action": True}
             )
         with self.assertRaisesRegex(ValueError, "invalid"):
-            UnknownStartControlHandoff(
-                **{**handoff.__dict__, "applied_actions": 1}
-            )
+            UnknownStartControlHandoff(**{**handoff.__dict__, "applied_actions": 1})
 
     def test_exact_reset_state_can_create_only_a_zero_action_handoff(self) -> None:
         evidence = valid_evidence()
@@ -89,9 +102,7 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
             "gripper_width_m": evidence.observed_gripper_width_m,
             "connector_position_m": workspace.connector_position_m,
             "socket_position_m": workspace.socket_position_m,
-            "gripper_frame_position_m": (
-                workspace.gripper_control_frame_position_m
-            ),
+            "gripper_frame_position_m": (workspace.gripper_control_frame_position_m),
             "connector_orientation_wxyz": (1.0, 0.0, 0.0, 0.0),
             "expected_connector_orientation_wxyz": (1.0, 0.0, 0.0, 0.0),
             "socket_orientation_wxyz": (1.0, 0.0, 0.0, 0.0),

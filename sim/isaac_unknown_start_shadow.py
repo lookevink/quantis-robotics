@@ -52,7 +52,10 @@ from sim.isaac_demo_scene import (
     world_pose,
 )
 from sim.recording import RecordingLabel, RecordingMoment, validate_recording_id
-from sim.unknown_start_reset import UNKNOWN_START_RESET_CONTRACT, UnknownStartResetEvidence
+from sim.unknown_start_reset import (
+    UNKNOWN_START_RESET_CONTRACT,
+    UnknownStartResetEvidence,
+)
 from sim.unknown_start_shadow import (
     UnknownStartControlHandoff,
     validate_unknown_start_handoff,
@@ -70,14 +73,17 @@ def _load_authenticated_reset(
     if artifact_fingerprint(result_path) != reset_result_fingerprint:
         raise ValueError("unknown-start terminal result fingerprint changed")
     result = json.loads(result_path.read_text())
-    evidence = UnknownStartResetEvidence.from_dict(json.loads(evidence_path.read_text()))
+    evidence = UnknownStartResetEvidence.from_dict(
+        json.loads(evidence_path.read_text())
+    )
     artifacts = result.get("artifacts", {})
     if (
         result.get("passed") is not True
         or result.get("recovery_verified") is not True
         or result.get("applied_actions") != 0
         or result.get("recording_id") != reset_recording_id
-        or result.get("contract_fingerprint") != UNKNOWN_START_RESET_CONTRACT.fingerprint
+        or result.get("contract_fingerprint")
+        != UNKNOWN_START_RESET_CONTRACT.fingerprint
         or result.get("sample_fingerprint") != evidence.sample.fingerprint
         or artifacts.get("unknown_start_reset_evidence.json")
         != artifact_fingerprint(evidence_path)
@@ -193,9 +199,7 @@ def _validated_live_snapshot(
             float(value) for value in reset_step["plug_orientation_wxyz"]
         ),
         socket_orientation_wxyz=tuple(float(value) for value in socket_orientation),
-        expected_socket_orientation_wxyz=variant[
-            "base_socket_orientation_wxyz"
-        ],
+        expected_socket_orientation_wxyz=variant["base_socket_orientation_wxyz"],
         camera_offset_m=variant["camera_offset_m"],
         socket_scale=variant["socket_scale"],
         light_exposure_deltas=variant["light_exposure_deltas"],
@@ -226,7 +230,11 @@ def _validate_context_image(path: Path, captured: dict[str, Any]) -> None:
     ):
         raise RuntimeError("unknown-start context raster shape is invalid")
     with Image.open(path) as image:
-        if image.format != "PNG" or image.mode != "RGB" or image.size != (width, height):
+        if (
+            image.format != "PNG"
+            or image.mode != "RGB"
+            or image.size != (width, height)
+        ):
             raise RuntimeError("unknown-start context PNG contract is invalid")
         image.verify()
     with Image.open(path) as image:
@@ -246,9 +254,7 @@ def reauthenticate_unknown_start_shadow_session(session_id: str) -> None:
         return
     if omni.timeline.get_timeline_interface().is_playing():
         raise RuntimeError("unknown-start shadow evaluation requires a paused timeline")
-    handoff = UnknownStartControlHandoff.from_dict(
-        json.loads(handoff_path.read_text())
-    )
+    handoff = UnknownStartControlHandoff.from_dict(json.loads(handoff_path.read_text()))
     if (
         handoff.session_id != session_id
         or artifact_fingerprint(session.path / "context.png")
@@ -337,11 +343,59 @@ async def capture_unknown_start_shadow_observation(
 ) -> dict[str, Any]:
     """Create one fresh model request from v5 state without resetting or moving."""
 
+    return await _capture_unknown_start_observation(
+        session_id,
+        reference_recording,
+        reference_seed,
+        proposal_name,
+        reset_recording_id,
+        reset_result_fingerprint,
+        ControlExecutionPolicy.DIRECT,
+    )
+
+
+async def capture_unknown_start_candidate_observation(
+    session_id: str,
+    reference_recording: str,
+    reference_seed: int,
+    proposal_name: str,
+    reset_recording_id: str,
+    reset_result_fingerprint: str,
+) -> dict[str, Any]:
+    """Capture one reset-equivalent observation for an explicit candidate trial."""
+
+    return await _capture_unknown_start_observation(
+        session_id,
+        reference_recording,
+        reference_seed,
+        proposal_name,
+        reset_recording_id,
+        reset_result_fingerprint,
+        ControlExecutionPolicy.RESET_TRIAL_CANDIDATE,
+    )
+
+
+async def _capture_unknown_start_observation(
+    session_id: str,
+    reference_recording: str,
+    reference_seed: int,
+    proposal_name: str,
+    reset_recording_id: str,
+    reset_result_fingerprint: str,
+    execution_policy: ControlExecutionPolicy,
+) -> dict[str, Any]:
+    """Capture one authenticated unknown-start observation without motion."""
+
     import omni.timeline
     import omni.usd
     from isaacsim.core.experimental.prims import Articulation, RigidPrim
 
-    for identifier in (session_id, reference_recording, proposal_name, reset_recording_id):
+    for identifier in (
+        session_id,
+        reference_recording,
+        proposal_name,
+        reset_recording_id,
+    ):
         validate_recording_id(identifier)
     session = ControlSession.at(CONTROL_ROOT, session_id)
     if session.path.exists():
@@ -459,9 +513,7 @@ async def capture_unknown_start_shadow_observation(
         expected_proposal=proposal.path,
         pose=snapshot.end_effector_pose,
         previous_action=zero_action,
-        warmup_frames=target_policy.context_index_for_target(
-            initial_target.frame
-        ),
+        warmup_frames=target_policy.context_index_for_target(initial_target.frame),
         physical_routing=PhysicalRoutingObservation.from_recorded_step(
             routing_step,
             target_metadata,
@@ -476,7 +528,7 @@ async def capture_unknown_start_shadow_observation(
         current_joint_positions=tuple(float(value) for value in actual.arm_positions),
         collision_detected=False,
         contact_force_newtons=0.0,
-        execution_policy=ControlExecutionPolicy.DIRECT,
+        execution_policy=execution_policy,
         plug_position=tuple(float(value) for value in snapshot.plug_position),
         plug_attached=False,
         current_gripper_width_m=float(actual.gripper_width_m),
@@ -484,7 +536,9 @@ async def capture_unknown_start_shadow_observation(
             tuple(float(value) for value in authored.arm_positions),
             authored.gripper_width_m,
         ),
-        contact_grasp_target_policy=target_policy,
+        contact_grasp_target_policy=(
+            target_policy if execution_policy is ControlExecutionPolicy.DIRECT else None
+        ),
     )
     session.write_capture(observation, state)
     binding = UnknownStartControlHandoff(

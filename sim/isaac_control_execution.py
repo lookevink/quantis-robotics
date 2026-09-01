@@ -33,7 +33,10 @@ from jepa_wm.control_safety import (
     SafetyProjectionAttempt,
     contact_grasp_action_scales,
 )
-from jepa_wm.control_tracking import evaluate_action_tracking, tracking_limits_for_policy
+from jepa_wm.control_tracking import (
+    evaluate_action_tracking,
+    tracking_limits_for_policy,
+)
 from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.joint_settlement import (
     GripperSettlementCriterion,
@@ -226,8 +229,7 @@ async def settle_joint_command(
         )
         gripper_settled = (
             gripper is None
-            or gripper.error(actual.gripper_width_m)
-            <= gripper.maximum_error_meters
+            or gripper.error(actual.gripper_width_m) <= gripper.maximum_error_meters
         )
         if arm_settled and gripper_settled:
             return
@@ -253,9 +255,7 @@ async def settle_tracked_joint_command(
 ) -> JointSettlementEvidence:
     """Settle one tracked command relative to its exact live start."""
 
-    requested_motion = float(
-        np.max(np.abs(target_arm_positions - start_arm_positions))
-    )
+    requested_motion = float(np.max(np.abs(target_arm_positions - start_arm_positions)))
     return await _settle_tracked_joint_command(
         actuators,
         target_arm_positions,
@@ -282,9 +282,7 @@ async def _settle_tracked_joint_command(
     passing_errors: list[float] = []
     tracking_errors: list[float] = []
     gripper_errors: list[float] | None = [] if gripper is not None else None
-    passing_gripper_errors: list[float] | None = (
-        [] if gripper is not None else None
-    )
+    passing_gripper_errors: list[float] | None = [] if gripper is not None else None
     for update_count in range(1, policy.maximum_updates + 1):
         await advance()
         if observe_safety is not None:
@@ -300,8 +298,7 @@ async def _settle_tracked_joint_command(
         if gripper_errors is not None:
             gripper_errors.append(gripper_error)
         if tracking_error <= required_error and (
-            gripper_error is None
-            or gripper_error <= gripper.maximum_error_meters
+            gripper_error is None or gripper_error <= gripper.maximum_error_meters
         ):
             passing_errors.append(tracking_error)
             if passing_gripper_errors is not None:
@@ -423,9 +420,7 @@ async def rollback_control_command(
                 "rollback attachment state did not match its captured reset"
             )
         actual = actuators.actual_command()
-        arm_error = float(
-            np.max(np.abs(actual.arm_positions - target.arm_positions))
-        )
+        arm_error = float(np.max(np.abs(actual.arm_positions - target.arm_positions)))
         gripper_error = abs(actual.gripper_width_m - target.gripper_width_m)
         if (
             arm_error <= arm_limit
@@ -581,7 +576,9 @@ def project_control_candidate(
         maximum_joint_delta,
         tuple(solved.arm_positions),
     )
-    return attempt, SafeProjection(candidate, solved, decision) if decision.passed else None
+    return attempt, (
+        SafeProjection(candidate, solved, decision) if decision.passed else None
+    )
 
 
 def select_safe_projection(
@@ -655,9 +652,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         control_period_seconds = trial_policy.control_period_seconds
     contact_insertion_execution = (
         recording_task(
-            CONTROL_ROOT.parent
-            / "recordings"
-            / persisted_state.reference_recording
+            CONTROL_ROOT.parent / "recordings" / persisted_state.reference_recording
         )
         == INSERTION_TASK_ID
     )
@@ -667,16 +662,12 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         and persisted_state.insertion_target_policy is None
     )
     if contact_grasp_execution:
-        contact_grasp_policy = (
-            persisted_state.require_current_contact_grasp_policy()
-        )
+        contact_grasp_policy = persisted_state.require_current_contact_grasp_policy()
         execution_action = contact_grasp_policy.action_for_execution(
             proposal.actions,
             plug_attached=persisted_state.plug_attached,
         )
-        proposal = proposal.with_actions(
-            (execution_action, *proposal.actions[1:])
-        )
+        proposal = proposal.with_actions((execution_action, *proposal.actions[1:]))
         action_scales = contact_grasp_action_scales(
             execution_action,
             attachment_acquired=persisted_state.plug_attached,
@@ -687,6 +678,11 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                 contact_grasp_policy.uses_horizon_transport_action
             ),
         )
+    from sim.isaac_unknown_start_shadow import (
+        reauthenticate_unknown_start_shadow_session,
+    )
+
+    reauthenticate_unknown_start_shadow_session(session_id)
     session.claim_execution()
     stage = omni.usd.get_context().get_stage()
     if SimulationManager.get_physics_sim_view() is None:
@@ -845,9 +841,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             selected_scale = attempts[-1].scale
 
         pre_action_time = time()
-        pre_action_age_seconds = (
-            pre_action_time - observation.captured_at_unix_seconds
-        )
+        pre_action_age_seconds = pre_action_time - observation.captured_at_unix_seconds
         if candidate is not None:
             decision = safety.evaluate(
                 candidate,
@@ -910,9 +904,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                 )
                 active_drive_target = (
                     JointCommand(
-                        np.asarray(
-                            insertion_trial_active_drive_target.joint_positions
-                        ),
+                        np.asarray(insertion_trial_active_drive_target.joint_positions),
                         insertion_trial_active_drive_target.gripper_width_m,
                     )
                     if (insertion_trial_execution or preserve_contact_grasp_target)
@@ -1002,9 +994,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     recorder=None,
                     sample_period_seconds=control_period_seconds,
                     observe_safety=(
-                        live_interlock.observe
-                        if contact_insertion_execution
-                        else None
+                        live_interlock.observe if contact_insertion_execution else None
                     ),
                 )
                 if trial_policy is not None:
@@ -1052,9 +1042,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     sensor,
                     session.path / "post_action.png",
                     observe_safety=(
-                        live_interlock.observe
-                        if contact_insertion_execution
-                        else None
+                        live_interlock.observe if contact_insertion_execution else None
                     ),
                 )
                 actual = captured.command
@@ -1088,8 +1076,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                         observation.target_pose,
                         post_snapshot.end_effector_pose,
                     )
-                    if trial_policy is not None
-                    and observation.target_pose is not None
+                    if trial_policy is not None and observation.target_pose is not None
                     else None
                 )
                 acquisition_passed = True
@@ -1158,10 +1145,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                 if contact_insertion_execution:
                     execution_interlock = live_interlock.evidence
             if post_action is not None:
-                if (
-                    trial_policy is not None
-                    and post_action.insertion_trial is not None
-                ):
+                if trial_policy is not None and post_action.insertion_trial is not None:
                     rollback_reason = trial_policy.rollback_reason(
                         post_action.insertion_trial,
                         InsertionTrialOutcomeObservation(
@@ -1174,10 +1158,8 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                             persisted_state.plug_attached,
                         ),
                     )
-                    outcome_status = (
-                        ControlResultStatus.from_insertion_rollback_reason(
-                            rollback_reason
-                        )
+                    outcome_status = ControlResultStatus.from_insertion_rollback_reason(
+                        rollback_reason
                     )
                     rollback_status = (
                         None
@@ -1215,7 +1197,9 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             projection_attempts=tuple(attempts),
             selected_action_scale=selected_scale,
             observation_age_seconds=pre_action_age_seconds,
-            ik_position_error_m=(solved.position_error_m if solved is not None else None),
+            ik_position_error_m=(
+                solved.position_error_m if solved is not None else None
+            ),
             ik_orientation_error_rad=(
                 solved.orientation_error_rad if solved is not None else None
             ),
@@ -1226,9 +1210,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             insertion_trial_refresh=insertion_trial_refresh,
             insertion_trial_drive=insertion_trial_drive,
             insertion_trial_rollback=insertion_trial_rollback,
-            insertion_trial_settlement_failure=(
-                insertion_trial_settlement_failure
-            ),
+            insertion_trial_settlement_failure=(insertion_trial_settlement_failure),
         )
         session.write_result(result)
         return result.to_dict()

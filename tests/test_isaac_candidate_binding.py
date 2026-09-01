@@ -12,6 +12,26 @@ from sim.isaac_candidate_binding import (
 
 class CandidateBindingServiceTest(unittest.TestCase):
     @patch.dict("sim.isaac_candidate_binding._PREPARED_SOURCES._sources", clear=True)
+    @patch("sim.isaac_candidate_binding.artifact_fingerprint")
+    @patch("sim.isaac_candidate_binding.ControlSession.at")
+    def test_rejects_a_changed_authenticated_source_before_caching(
+        self,
+        session_at: MagicMock,
+        fingerprint: MagicMock,
+    ) -> None:
+        fingerprint.side_effect = ("changed", "safety")
+
+        with self.assertRaisesRegex(ValueError, "shadow identity changed"):
+            prepare_experimental_candidate_source(
+                "source-session",
+                "shadow",
+                "safety",
+                control_root=Path("/tmp/control-sessions"),
+            )
+
+        session_at.return_value.load_candidate_source_evidence.assert_not_called()
+
+    @patch.dict("sim.isaac_candidate_binding._PREPARED_SOURCES._sources", clear=True)
     @patch("sim.isaac_candidate_binding.ControlSession.at")
     def test_preflights_source_before_live_capture(self, session_at: MagicMock) -> None:
         source = session_at.return_value
@@ -71,7 +91,9 @@ class CandidateBindingServiceTest(unittest.TestCase):
             binding, source_evidence
         )
         session.write_response.assert_called_once_with(response)
-        self.assertEqual(result, {"binding": {"binding": True}, "response": {"response": True}})
+        self.assertEqual(
+            result, {"binding": {"binding": True}, "response": {"response": True}}
+        )
 
 
 if __name__ == "__main__":

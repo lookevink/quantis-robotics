@@ -7,6 +7,7 @@ from typing import Any
 
 from jepa_wm.experimental_candidate import build_experimental_candidate_response
 from jepa_wm.experimental_candidate import CandidateSourceEvidence
+from jepa_wm.training_artifact import artifact_fingerprint
 from sim.control_session import CONTROL_ROOT, ControlSession
 from sim.trial_source_cache import ResidentTrialSourceCache
 
@@ -16,12 +17,26 @@ _PREPARED_SOURCES = ResidentTrialSourceCache[CandidateSourceEvidence]()
 
 def prepare_experimental_candidate_source(
     source_session_id: str,
+    expected_shadow_fingerprint: str | None = None,
+    expected_safety_fingerprint: str | None = None,
     *,
     control_root: Path = CONTROL_ROOT,
 ) -> dict[str, Any]:
     """Warm and validate immutable source evidence before live capture begins."""
 
     source_session = ControlSession.at(control_root, source_session_id)
+    if (
+        expected_shadow_fingerprint is not None
+        and artifact_fingerprint(source_session.shadow_path)
+        != expected_shadow_fingerprint
+    ):
+        raise ValueError("candidate source shadow identity changed")
+    if (
+        expected_safety_fingerprint is not None
+        and artifact_fingerprint(source_session.shadow_safety_path)
+        != expected_safety_fingerprint
+    ):
+        raise ValueError("candidate source safety identity changed")
     evidence = _PREPARED_SOURCES.prepare(
         source_session,
         source_session.load_candidate_source_evidence,

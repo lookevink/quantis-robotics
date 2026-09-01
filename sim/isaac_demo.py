@@ -54,6 +54,7 @@ from sim.isaac_unknown_start_reset import (
     authenticate_unknown_start_reset as _authenticate_unknown_start_reset,
 )
 from sim.isaac_unknown_start_shadow import (
+    capture_unknown_start_candidate_observation as _capture_unknown_start_candidate_observation,
     capture_unknown_start_shadow_observation as _capture_unknown_start_shadow_observation,
     preflight_unknown_start_shadow as _preflight_unknown_start_shadow,
 )
@@ -123,6 +124,29 @@ async def capture_unknown_start_shadow_observation(
     return await _RECORDING_JOBS.run_exclusive(
         f"unknown-start-shadow-{session_id}",
         lambda: _capture_unknown_start_shadow_observation(
+            session_id,
+            reference_recording,
+            reference_seed,
+            proposal_name,
+            reset_recording_id,
+            reset_result_fingerprint,
+        ),
+    )
+
+
+async def capture_unknown_start_candidate_observation(
+    session_id: str,
+    reference_recording: str,
+    reference_seed: int,
+    proposal_name: str,
+    reset_recording_id: str,
+    reset_result_fingerprint: str,
+) -> dict[str, Any]:
+    """Capture one exclusive reset-equivalent candidate execution source."""
+
+    return await _RECORDING_JOBS.run_exclusive(
+        f"unknown-start-candidate-{session_id}",
+        lambda: _capture_unknown_start_candidate_observation(
             session_id,
             reference_recording,
             reference_seed,
