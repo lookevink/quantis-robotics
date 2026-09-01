@@ -1,4 +1,4 @@
-"""Authenticated V23 continuation after the V22 tracking rollback."""
+"""Authenticated V24 continuation after the V23 target-only reject."""
 
 from __future__ import annotations
 
@@ -16,10 +16,10 @@ from jepa_wm.persistence import write_json_atomic
 from jepa_wm.training_artifact import artifact_fingerprint
 
 
-HANDOFF_SCHEMA = "quantis.contact_grasp_horizon_completion.v4"
-FAILURE_SCHEMA = "quantis.contact_grasp_horizon_completion_failure.v4"
-EXPERIMENT_DIRECTORY = "unknown_start_horizon_completion_v23"
-ROLLOUT_ID = "unknown-start-e2e-v23-62605-grasp"
+HANDOFF_SCHEMA = "quantis.contact_grasp_horizon_completion.v5"
+FAILURE_SCHEMA = "quantis.contact_grasp_horizon_completion_failure.v5"
+EXPERIMENT_DIRECTORY = "unknown_start_horizon_completion_v24"
+ROLLOUT_ID = "unknown-start-e2e-v24-62605-grasp"
 SOURCE_ROLLOUT_ID = "unknown-start-e2e-v22-62605-grasp"
 SOURCE_SESSION_ID = f"{SOURCE_ROLLOUT_ID}-022"
 RUNTIME_OWNER_SESSION_ID = SOURCE_SESSION_ID
@@ -45,6 +45,12 @@ SOURCE_CLAIM_FINGERPRINT = (
 )
 SOURCE_FAILURE_FINGERPRINT = (
     "8da3383f62a9be866c0d7e6368d4d028cf10b1f21e5930b9657f368c661bd7ce"
+)
+SOURCE_ATTEMPT_CLAIM_FINGERPRINT = (
+    "3bb4f5d9aa3101a9377e177625e2c8b4b92ca31790d036cbd747d0055005521a"
+)
+SOURCE_ATTEMPT_FAILURE_FINGERPRINT = (
+    "0c5fc4a9dc63b605f7d3e06daf1642ea506b57c02ad9747b5d1a89a42795a9b9"
 )
 SOURCE_REPORT_FINGERPRINT = (
     "b637f4f00569967e96dd8c36464f26e4ffeb2d541db05a5cca6ead8a4912d739"
@@ -142,6 +148,17 @@ def handoff_path(data_root: Path, followup_session_id: str) -> Path:
     )
 
 
+def rollback_drive_target(state: Any):
+    """Rebuild the target that generic rollback writes from measured state."""
+
+    from jepa_wm.joint_drive import JointDriveTarget
+
+    return JointDriveTarget.for_command(
+        tuple(state.current_joint_positions),
+        state.current_gripper_width_m,
+    )
+
+
 def retained_drive_target(data_root: Path):
     """Return the exact pre-action drive command restored by V22 rollback."""
 
@@ -150,9 +167,7 @@ def retained_drive_target(data_root: Path):
     _, state = ControlSession.at(
         data_root / "control_sessions", SOURCE_SESSION_ID
     ).load_capture()
-    if state.active_drive_target is None:
-        raise ValueError("contact-grasp rollback drive target is missing")
-    return state.active_drive_target
+    return rollback_drive_target(state)
 
 
 @dataclass(frozen=True)
@@ -187,6 +202,12 @@ class ContactGraspHorizonCompletion:
             "worker_fingerprint": WORKER_FINGERPRINT,
             "source_claim_fingerprint": SOURCE_CLAIM_FINGERPRINT,
             "source_failure_fingerprint": SOURCE_FAILURE_FINGERPRINT,
+            "source_attempt_claim_fingerprint": (
+                SOURCE_ATTEMPT_CLAIM_FINGERPRINT
+            ),
+            "source_attempt_failure_fingerprint": (
+                SOURCE_ATTEMPT_FAILURE_FINGERPRINT
+            ),
             "source_report_fingerprint": SOURCE_REPORT_FINGERPRINT,
             "source_roster_fingerprint": SOURCE_ROSTER_FINGERPRINT,
             "source_attempted_actions": SOURCE_SESSION_COUNT,
@@ -272,18 +293,25 @@ def validate_source(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
     from sim.control_session import ControlResultStatus
 
     source_root = checkpoint_root / "unknown_start_horizon_completion_v22"
+    attempt_root = checkpoint_root / "unknown_start_horizon_completion_v23"
     report_path = data_root / "control_rollouts" / SOURCE_ROLLOUT_ID / "report.json"
     if (
         artifact_fingerprint(source_root / "CLAIM.json")
         != SOURCE_CLAIM_FINGERPRINT
         or artifact_fingerprint(source_root / "FAILURE.json")
         != SOURCE_FAILURE_FINGERPRINT
+        or artifact_fingerprint(attempt_root / "CLAIM.json")
+        != SOURCE_ATTEMPT_CLAIM_FINGERPRINT
+        or artifact_fingerprint(attempt_root / "FAILURE.json")
+        != SOURCE_ATTEMPT_FAILURE_FINGERPRINT
         or artifact_fingerprint(report_path) != SOURCE_REPORT_FINGERPRINT
         or source_roster_fingerprint(data_root) != SOURCE_ROSTER_FINGERPRINT
     ):
         raise ValueError("terminal V22 tracking evidence changed")
     claim = json.loads((source_root / "CLAIM.json").read_text())
     failure = json.loads((source_root / "FAILURE.json").read_text())
+    attempt_claim = json.loads((attempt_root / "CLAIM.json").read_text())
+    attempt_failure = json.loads((attempt_root / "FAILURE.json").read_text())
     report = json.loads(report_path.read_text())
     sessions = tuple(step["session"] for step in report.get("steps", ()))
     reconstructed = ControlRolloutReport.from_sessions(
@@ -338,8 +366,22 @@ def validate_source(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
         or failure.get("error") != "report:exit_1"
         or failure.get("claim_fingerprint") != SOURCE_CLAIM_FINGERPRINT
         or failure.get("retry_authorized") is not False
+        or attempt_claim.get("schema")
+        != "quantis.contact_grasp_horizon_completion.v4"
+        or attempt_claim.get("source_session_id") != SOURCE_SESSION_ID
+        or attempt_claim.get("followup_session_id")
+        != "unknown-start-e2e-v23-62605-grasp-001"
+        or attempt_failure.get("error") != "capture_001:exit_1"
+        or attempt_failure.get("claim_fingerprint")
+        != SOURCE_ATTEMPT_CLAIM_FINGERPRINT
+        or attempt_failure.get("retry_authorized") is not False
+        or (
+            data_root
+            / "control_sessions"
+            / "unknown-start-e2e-v23-62605-grasp-001"
+        ).exists()
     ):
-        raise ValueError("V22 was not the exact safe tracking rollback")
+        raise ValueError("V23 was not the exact no-capture target reject")
     validate_model(checkpoint_root)
     return {
         "source_session_id": SOURCE_SESSION_ID,
@@ -432,7 +474,7 @@ def evaluate(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
         and 1 <= report.get("applied_steps", 0) <= MAXIMUM_ACTIONS
     )
     payload = {
-        "schema": "quantis.contact_grasp_horizon_completion_evaluation.v4",
+        "schema": "quantis.contact_grasp_horizon_completion_evaluation.v5",
         "status": "evaluated_pending_recovery",
         "evaluation_passed": passed,
         "recovery_verified": False,
@@ -497,7 +539,7 @@ def finalize(
     if evaluation.get("evaluation_passed") is not True:
         raise ValueError("contact-grasp horizon evaluation failed")
     payload = {
-        "schema": "quantis.contact_grasp_horizon_completion_terminal.v4",
+        "schema": "quantis.contact_grasp_horizon_completion_terminal.v5",
         "status": "passed",
         "passed": True,
         "recovery_verified": True,

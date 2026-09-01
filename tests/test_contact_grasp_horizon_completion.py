@@ -4,6 +4,7 @@ from dataclasses import replace
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 
 from jepa_wm.contact_grasp_horizon_completion import (
@@ -21,6 +22,7 @@ from jepa_wm.contact_grasp_horizon_completion import (
     ContactGraspHorizonCompletion,
     failure,
     paths,
+    rollback_drive_target,
     runtime_fingerprint,
 )
 
@@ -28,7 +30,7 @@ from jepa_wm.contact_grasp_horizon_completion import (
 class ContactGraspHorizonCompletionTest(unittest.TestCase):
     def test_freezes_the_expanded_model_worker_and_action_horizon(self) -> None:
         handoff = ContactGraspHorizonCompletion(
-            "unknown-start-e2e-v23-62605-grasp-001",
+            "unknown-start-e2e-v24-62605-grasp-001",
             runtime_fingerprint(),
             "1" * 40,
         )
@@ -58,7 +60,7 @@ class ContactGraspHorizonCompletionTest(unittest.TestCase):
 
     def test_rejects_any_changed_frozen_field(self) -> None:
         handoff = ContactGraspHorizonCompletion(
-            "unknown-start-e2e-v23-62605-grasp-001",
+            "unknown-start-e2e-v24-62605-grasp-001",
             "2" * 64,
             "1" * 40,
         )
@@ -87,6 +89,30 @@ class ContactGraspHorizonCompletionTest(unittest.TestCase):
             self.assertEqual(json.loads(failure_path.read_text()), first)
             with self.assertRaisesRegex(ValueError, "invalid"):
                 failure(checkpoint_root, "status_002:exit_1")
+
+    def test_rollback_target_uses_measured_state_not_rejected_drive(self) -> None:
+        state = SimpleNamespace(
+            current_joint_positions=(0.1,) * 7,
+            current_gripper_width_m=0.03,
+            active_drive_target=object(),
+        )
+
+        target = rollback_drive_target(state)
+
+        self.assertLess(
+            max(
+                abs(actual - expected)
+                for actual, expected in zip(
+                    target.joint_positions,
+                    state.current_joint_positions,
+                )
+            ),
+            1e-8,
+        )
+        self.assertAlmostEqual(
+            target.gripper_width_m,
+            state.current_gripper_width_m,
+        )
 
 
 if __name__ == "__main__":
