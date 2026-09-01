@@ -430,6 +430,14 @@ class DriveOnlyMotionTest(unittest.IsolatedAsyncioTestCase):
         actuators.set_reset_state(command)
 
         self.assertEqual(articulation.set_dof_positions.call_count, 2)
+        articulation.set_dof_velocities.assert_called_once()
+        velocity_call = articulation.set_dof_velocities.call_args
+        np.testing.assert_array_equal(
+            velocity_call.kwargs["velocities"], np.zeros(9, dtype=np.float64)
+        )
+        np.testing.assert_array_equal(
+            velocity_call.kwargs["dof_indices"], np.arange(9)
+        )
 
     async def test_runtime_motion_never_sets_articulation_state_directly(self) -> None:
         articulation = Mock()

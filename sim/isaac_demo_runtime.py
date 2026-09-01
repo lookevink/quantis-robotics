@@ -139,6 +139,10 @@ class Actuators:
             positions=np.array([finger_position, finger_position]),
             dof_indices=np.array([7, 8]),
         )
+        self.articulation.set_dof_velocities(
+            velocities=np.zeros(9, dtype=np.float64),
+            dof_indices=np.arange(9),
+        )
 
 
 class PlugMotion(Protocol):
