@@ -12,7 +12,6 @@ import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from jepa_wm.grasp_task import MAXIMUM_CONTACT_GRASP_ACTIONS
 from jepa_wm.persistence import write_json_atomic
 from jepa_wm.training_artifact import artifact_fingerprint
 
@@ -53,7 +52,7 @@ SOURCE_ROSTER_FINGERPRINT = (
     "f149f46bc88d6ccbe127e6156c57ccc7a87dfc46372f63acc55b8ed3798337dc"
 )
 SOURCE_MAXIMUM_ACTIONS = 50
-MAXIMUM_ACTIONS = MAXIMUM_CONTACT_GRASP_ACTIONS
+MAXIMUM_ACTIONS = 192
 SESSION_FILES = (
     "request.json",
     "state.json",
