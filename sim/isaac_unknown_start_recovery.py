@@ -34,6 +34,7 @@ async def recover_unknown_start_candidate_rollback(
     from sim.isaac_demo_runtime import (
         ContactReading,
         JointCommand,
+        advance_physics_updates,
         resume_live_simulation,
     )
     from sim.isaac_unknown_start_shadow import (
@@ -149,7 +150,23 @@ async def recover_unknown_start_candidate_rollback(
         or timeline.is_playing()
     ):
         raise RuntimeError("unknown-start drive recovery did not reach reset floor")
-    runtime.actuators.set_reset_state(target)
+    # Match the authenticated reset initializer: state-setting updates the DOFs,
+    # but Isaac does not refresh articulation-linked world transforms until a
+    # physics update.  Keep this inside the explicit initialization boundary,
+    # observe every update, and pause again before authenticating the result.
+    resume_live_simulation(timeline)
+    try:
+        runtime.actuators.set_reset_state(target)
+        await advance_physics_updates(16, observe_safety)
+    finally:
+        await pause_control_timeline(
+            timeline,
+            omni.kit.app.get_app().next_update_async,
+        )
+    if timeline.is_playing():
+        raise RuntimeError(
+            "unknown-start reset initialization could not pause timeline"
+        )
     reauthenticate_unknown_start_shadow_session(session_id)
     actual = runtime.actuators.actual_command()
     collision, force = read_control_contact(runtime.sensor)

@@ -47,6 +47,14 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
                 "runtime.actuators.set_reset_state(target)", recovery
             ),
             recovery_source.index(
+                "await advance_physics_updates(16, observe_safety)", recovery
+            ),
+        )
+        self.assertLess(
+            recovery_source.index(
+                "await advance_physics_updates(16, observe_safety)", recovery
+            ),
+            recovery_source.index(
                 "reauthenticate_unknown_start_shadow_session(session_id)",
                 recovery,
             ),
