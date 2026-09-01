@@ -295,6 +295,9 @@ class UnknownStartResetContract:
     sampler_source_fingerprint: str = (
         "0ec746dbf12fbed61c66b3c64dee6717fa15f015be4aad23e0f40e5b47a5228d"
     )
+    arm_offset_tolerance_radians: float = 1e-5
+    camera_offset_tolerance_m: float = 1e-6
+    light_exposure_tolerance: float = 1e-6
 
     def __post_init__(self) -> None:
         if (
@@ -307,6 +310,14 @@ class UnknownStartResetContract:
             or not isinstance(self.bounds, UnknownStartResetBounds)
             or not isinstance(self.workspace, UnknownStartWorkspaceBounds)
             or not _valid_fingerprint(self.sampler_source_fingerprint)
+            or any(
+                not isfinite(tolerance) or tolerance < 0.0
+                for tolerance in (
+                    self.arm_offset_tolerance_radians,
+                    self.camera_offset_tolerance_m,
+                    self.light_exposure_tolerance,
+                )
+            )
         ):
             raise ValueError("unknown-start reset contract is invalid")
 
@@ -365,6 +376,11 @@ class UnknownStartResetContract:
             "sampler": "build_exploration_plan.v1",
             "sampler_source_fingerprint": self.sampler_source_fingerprint,
             "bounds": self.bounds.to_dict(),
+            "sample_realization_tolerances": {
+                "initial_arm_offset_radians": self.arm_offset_tolerance_radians,
+                "camera_offset_m": self.camera_offset_tolerance_m,
+                "light_exposure_delta": self.light_exposure_tolerance,
+            },
             "workspace_bounds_m": self.workspace.to_dict(),
             "initialization": "direct_state_setting_once",
             "direct_state_setting_count": 1,
@@ -394,6 +410,9 @@ class UnknownStartResetPhase(str, Enum):
 class UnknownStartResetEvidence:
     sample: UnknownStartResetSample
     workspace: UnknownStartWorkspaceState
+    realized_initial_arm_offset_radians: tuple[float, ...]
+    realized_camera_offset_m: tuple[float, ...]
+    realized_light_exposure_delta: float
     realized_sample_fingerprint: str
     plug_attached: bool
     collision_detected: bool
@@ -406,10 +425,37 @@ class UnknownStartResetEvidence:
     def validate(self, contract: UnknownStartResetContract) -> None:
         contract.validate_sample(self.sample)
         expected = contract.draw(self.sample.seed, forbidden_seeds=set())
+        realized_vectors = (
+            (
+                self.realized_initial_arm_offset_radians,
+                self.sample.initial_arm_offset_radians,
+                contract.arm_offset_tolerance_radians,
+            ),
+            (
+                self.realized_camera_offset_m,
+                self.sample.camera_offset_m,
+                contract.camera_offset_tolerance_m,
+            ),
+        )
         if (
             self.sample != expected
             or not contract.workspace.contains(self.workspace)
             or not contract.workspace.matches_sample(self.sample, self.workspace)
+            or any(
+                len(realized) != len(sampled)
+                or not all(isfinite(value) for value in realized)
+                or any(
+                    abs(actual - intended) > tolerance
+                    for actual, intended in zip(realized, sampled)
+                )
+                for realized, sampled, tolerance in realized_vectors
+            )
+            or not isfinite(self.realized_light_exposure_delta)
+            or abs(
+                self.realized_light_exposure_delta
+                - self.sample.light_exposure_delta
+            )
+            > contract.light_exposure_tolerance
             or not _valid_fingerprint(self.realized_sample_fingerprint)
             or self.realized_sample_fingerprint != self.sample.fingerprint
             or self.plug_attached
