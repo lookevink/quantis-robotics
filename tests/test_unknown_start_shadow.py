@@ -70,11 +70,11 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
             "unknown-start recovery active drive target changed", recovery_source
         )
         self.assertIn(
-            "runtime.actuators.set_reset_state(reset_drive_target)",
+            "drive_target=reset_drive_target",
             recovery_source,
         )
         self.assertIn(
-            "reset_settlement_seconds = 16 * reset_plan.sample_period_seconds",
+            "await RenderingManager.render_async()",
             recovery_source,
         )
         self.assertLess(
@@ -82,17 +82,21 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
                 "runtime.actuators.set_reset_state(", recovery
             ),
             recovery_source.index(
-                "await advance_simulation_period(", recovery
+                "await RenderingManager.render_async()", recovery
             ),
         )
         self.assertLess(
             recovery_source.index(
-                "await advance_simulation_period(", recovery
+                "await RenderingManager.render_async()", recovery
             ),
             recovery_source.index(
                 "reauthenticate_unknown_start_shadow_session(session_id)",
                 recovery,
             ),
+        )
+        self.assertIn(
+            "physics_simulation_time_seconds() != initialization_time",
+            recovery_source,
         )
         runtime = Path("sim/isaac_demo_runtime.py").read_text()
         reset = runtime.split("def set_reset_state", 1)[1].split("\n\n\n", 1)[0]

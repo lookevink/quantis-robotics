@@ -145,10 +145,10 @@ async def recover_unknown_start_candidate_rollback(
     import omni.timeline
     import omni.usd
     import numpy as np
+    from isaacsim.core.rendering_manager import RenderingManager
 
     from jepa_wm.control_policy import ControlExecutionPolicy
     from jepa_wm.joint_drive import JointDriveTarget
-    from sim.exploration import build_exploration_plan
     from sim.control_session import CONTROL_ROOT, ControlResultStatus, ControlSession
     from sim.isaac_control_execution import (
         UNKNOWN_START_ROLLBACK_SETTLEMENT,
@@ -163,12 +163,8 @@ async def recover_unknown_start_candidate_rollback(
     from sim.isaac_demo_runtime import (
         ContactReading,
         JointCommand,
-        advance_simulation_period,
+        physics_simulation_time_seconds,
         resume_live_simulation,
-    )
-    from sim.isaac_exploration import (
-        ExplorationRecordingMode,
-        ExplorationRecordingProfile,
     )
     from sim.isaac_unknown_start_shadow import (
         _load_authenticated_reset,
@@ -207,17 +203,9 @@ async def recover_unknown_start_candidate_rollback(
         or artifact_fingerprint(session.state_path) != handoff.state_fingerprint
     ):
         raise ValueError("unknown-start rollback recovery source is invalid")
-    _, _, reset_evidence, _ = _load_authenticated_reset(
+    _load_authenticated_reset(
         handoff.reset_recording_id,
         handoff.reset_result_fingerprint,
-    )
-    reset_plan = ExplorationRecordingProfile.for_mode(
-        ExplorationRecordingMode.CONTACT_INSERTION
-    ).apply_to_plan(
-        build_exploration_plan(
-            reset_evidence.sample.seed,
-            reset_evidence.sample.split,
-        )
     )
     timeline = omni.timeline.get_timeline_interface()
     await pause_control_timeline(timeline, omni.kit.app.get_app().next_update_async)
@@ -304,28 +292,21 @@ async def recover_unknown_start_candidate_rollback(
         or timeline.is_playing()
     ):
         raise RuntimeError("unknown-start drive recovery did not reach reset floor")
-    # Replay the authenticated reset initializer exactly: it starts at the
-    # authored drive command with zero velocity, then records the observed
-    # gravity-loaded state after sixteen sample periods. Starting from that
-    # observed state would settle the transient twice and cannot reproduce it.
-    # RenderingManager cadence changes invalidate retained physics tensor
-    # handles. Replay the identical authenticated physics duration at the
-    # current cadence instead; the live interlock is polled on every update.
-    reset_settlement_seconds = 16 * reset_plan.sample_period_seconds
-    resume_live_simulation(timeline)
-    try:
-        runtime.actuators.set_reset_state(reset_drive_target)
-        await advance_simulation_period(
-            reset_settlement_seconds,
-            observe_safety,
-        )
-    finally:
-        await pause_control_timeline(
-            timeline,
-            omni.kit.app.get_app().next_update_async,
-        )
+    # The authenticated artifact records positions but not the transient DOF
+    # velocities that produced them.  Finish recovery at the explicit paused
+    # initialization boundary, then synchronize rendering without advancing
+    # physics before authenticating the exact state.
+    initialization_time = physics_simulation_time_seconds()
+    runtime.actuators.set_reset_state(
+        target,
+        drive_target=reset_drive_target,
+    )
+    await RenderingManager.render_async()
+    observe_safety()
     if timeline.is_playing():
-        raise RuntimeError("unknown-start reset initialization could not pause timeline")
+        raise RuntimeError("unknown-start reset initialization resumed timeline")
+    if physics_simulation_time_seconds() != initialization_time:
+        raise RuntimeError("unknown-start reset initialization advanced physics")
     reauthenticate_unknown_start_shadow_session(session_id)
     actual = runtime.actuators.actual_command()
     collision, force = read_control_contact(runtime.sensor)
