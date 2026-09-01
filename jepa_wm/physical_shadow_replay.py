@@ -51,6 +51,26 @@ def load_experiment(path: Path) -> dict[str, Any]:
         or not Path(str(payload.get("output", ""))).is_absolute()
     ):
         raise ValueError("physical shadow replay contract is invalid")
+    repository = Path(__file__).resolve().parents[1]
+    evaluator = payload.get("evaluator", {})
+    sources = payload.get("runtime_sources", {})
+    if (
+        evaluator.get("path") != "jepa_wm/physical_shadow_replay.py"
+        or not isinstance(sources, Mapping)
+        or not sources
+    ):
+        raise ValueError("physical shadow replay runtime identity is invalid")
+    for relative, expected in sources.items():
+        if expected != "PENDING_CHECKPOINT" and artifact_fingerprint(
+            repository / relative
+        ) != expected:
+            raise ValueError(f"physical shadow replay runtime changed: {relative}")
+    if (
+        evaluator.get("fingerprint") != "PENDING_CHECKPOINT"
+        and artifact_fingerprint(repository / evaluator["path"])
+        != evaluator["fingerprint"]
+    ):
+        raise ValueError("physical shadow replay evaluator changed")
     return payload
 
 

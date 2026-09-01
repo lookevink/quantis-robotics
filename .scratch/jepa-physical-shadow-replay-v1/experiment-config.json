@@ -6,6 +6,14 @@
     "fingerprint": "PENDING_CHECKPOINT",
     "implementation_revision": "PENDING_CHECKPOINT"
   },
+  "runtime_sources": {
+    "jepa_wm/control_client.py": "PENDING_CHECKPOINT",
+    "jepa_wm/control_worker.py": "PENDING_CHECKPOINT",
+    "jepa_wm/physical_shadow_replay.py": "PENDING_CHECKPOINT",
+    "jepa_wm/shadow_planning.py": "PENDING_CHECKPOINT",
+    "ops/aws.sh": "PENDING_CHECKPOINT",
+    "ops/run_physical_shadow_replay.sh": "PENDING_CHECKPOINT"
+  },
   "source": {
     "session": "/home/ubuntu/docker/isaac-sim/data/quantis/control_sessions/physical-shadow-canary-12601",
     "files": {
