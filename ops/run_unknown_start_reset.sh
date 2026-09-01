@@ -29,6 +29,10 @@ require_nonnegative_integer "unknown-start reset seed" "${seed}" || exit 1
 cd "${repo_dir}"
 "${python_bin}" -m jepa_wm.unknown_start_reset_runtime authenticate \
   --expected "${runtime_source_fingerprint}"
+if ! mkdir -p "${terminal_root}" 2>/dev/null \
+  || [[ ! -w "${terminal_root}" ]]; then
+  sudo install -d -o "$(id -u)" -g "$(id -g)" "${terminal_root}"
+fi
 "${python_bin}" -m jepa_wm.unknown_start_reset_lifecycle claim \
   --ledger-root "${terminal_root}" --recording-id "${recording_id}" \
   --seed "${seed}" --source-revision "${source_revision}" \
@@ -48,4 +52,7 @@ trap terminalize_failure ERR
 isaac_server_call \
   "await demo.authenticate_unknown_start_reset('${recording_id}',${seed},'${source_revision}','${runtime_source_fingerprint}')" \
   300 true
+phase="artifact_ownership"
+sudo chown -R "$(id -u):$(id -g)" \
+  "${data_root}/recordings/${recording_id}" "${terminal_root}"
 trap - ERR

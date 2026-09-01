@@ -100,6 +100,8 @@ class UnknownStartResetContractTest(unittest.TestCase):
         self.assertNotIn("apply_control_response", runner)
         self.assertNotIn("control-worker-start", runner)
         self.assertIn("300 true", runner)
+        self.assertIn("sudo install -d", runner)
+        self.assertIn("sudo chown -R", runner)
 
     def test_success_is_terminal_only_after_exact_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
