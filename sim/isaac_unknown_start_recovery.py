@@ -201,7 +201,7 @@ async def recover_unknown_start_candidate_rollback(
         or artifact_fingerprint(session.state_path) != handoff.state_fingerprint
     ):
         raise ValueError("unknown-start rollback recovery source is invalid")
-    _load_authenticated_reset(
+    _, _, reset_evidence, _ = _load_authenticated_reset(
         handoff.reset_recording_id,
         handoff.reset_result_fingerprint,
     )
@@ -253,8 +253,11 @@ async def recover_unknown_start_candidate_rollback(
     else:
         raise ValueError("unknown-start recovery active drive target changed")
     target = JointCommand(
-        np.asarray(state.current_joint_positions, dtype=np.float64),
-        state.current_gripper_width_m,
+        np.asarray(
+            reset_evidence.observed_arm_positions_radians,
+            dtype=np.float64,
+        ),
+        reset_evidence.observed_gripper_width_m,
     )
     reset_drive_target = JointCommand(
         np.asarray(state.active_drive_target.joint_positions, dtype=np.float64),

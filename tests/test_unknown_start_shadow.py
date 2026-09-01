@@ -74,6 +74,11 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
             recovery_source,
         )
         self.assertIn(
+            "reset_evidence.observed_arm_positions_radians",
+            recovery_source,
+        )
+        self.assertIn("reset_evidence.observed_gripper_width_m", recovery_source)
+        self.assertIn(
             "deterministic joint FK",
             recovery_source,
         )
