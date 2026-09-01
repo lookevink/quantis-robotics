@@ -226,6 +226,10 @@ async def authenticate_unknown_start_reset(
                 ),
                 light_exposure_delta=float(variant["light_exposure_delta"]),
             ),
+            observed_arm_positions_radians=tuple(
+                float(value) for value in actual.arm_positions
+            ),
+            observed_gripper_width_m=float(actual.gripper_width_m),
             realized_sample_fingerprint=sample.fingerprint,
             plug_attached=attachment.attached,
             collision_detected=safety.collision_detected,

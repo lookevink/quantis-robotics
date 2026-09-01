@@ -8,7 +8,10 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+import secrets
+import struct
 from typing import Any, Sequence
+import zlib
 
 from jepa_wm.identifiers import validate_safe_identifier
 from sim.unknown_start_reset import (
@@ -26,14 +29,19 @@ UNKNOWN_START_RESET_FAILURE_NAME = "milestone-20-unknown-start-reset-failure.jso
 def _write_exclusive(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
     try:
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    except FileExistsError as error:
-        raise ValueError("unknown-start reset was already claimed") from error
-    with os.fdopen(descriptor, "wb") as stream:
-        stream.write(encoded)
-        stream.flush()
-        os.fsync(stream.fileno())
+        descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError as error:
+            raise ValueError("unknown-start reset artifact already exists") from error
+    finally:
+        temporary.unlink(missing_ok=True)
     directory = os.open(path.parent, os.O_RDONLY)
     try:
         os.fsync(directory)
@@ -107,6 +115,14 @@ def failure(ledger_root: Path, error: str) -> dict[str, Any]:
     claim_path, path = terminal_paths(ledger_root)
     if not claim_path.is_file():
         raise ValueError("unknown-start reset has no claim")
+    primary_result = (
+        ledger_root.parent
+        / "recordings"
+        / UNKNOWN_START_RESET_RECORDING_ID
+        / "RESULT.json"
+    )
+    if primary_result.exists():
+        raise ValueError("unknown-start reset is already terminally passed")
     payload = {
         "schema": "quantis.unknown_start_reset_failure.v1",
         "failed_at": datetime.now(timezone.utc).isoformat(),
@@ -166,6 +182,7 @@ def _validate_manifest_and_observation(
         step = json.loads(lines[0])
     except json.JSONDecodeError as error:
         raise ValueError("unknown-start reset observation is invalid") from error
+    _validate_rgb_png(recording / "wrist/frame_000000.png", 512, 512)
     if (
         not isinstance(step, dict)
         or step.get("index") != 0
@@ -176,10 +193,59 @@ def _validate_manifest_and_observation(
         or step.get("plug_attached") is not False
         or step.get("collision_detected") is not False
         or step.get("contact_force_newtons") != 0.0
+        or step.get("arm_positions")
+        != list(evidence.observed_arm_positions_radians)
+        or step.get("gripper_width_m") != evidence.observed_gripper_width_m
+        or step.get("plug_position") != list(evidence.workspace.connector_position_m)
         or step.get("end_effector_world_position")
         != list(evidence.workspace.end_effector_position_m)
     ):
         raise ValueError("unknown-start reset observation is inauthentic")
+
+
+def _validate_rgb_png(path: Path, expected_width: int, expected_height: int) -> None:
+    contents = path.read_bytes()
+    if not contents.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("unknown-start reset camera frame is not PNG")
+    offset = 8
+    chunks: list[tuple[bytes, bytes]] = []
+    while offset + 12 <= len(contents):
+        length = struct.unpack(">I", contents[offset : offset + 4])[0]
+        chunk_type = contents[offset + 4 : offset + 8]
+        end = offset + 12 + length
+        if end > len(contents):
+            raise ValueError("unknown-start reset PNG is truncated")
+        data = contents[offset + 8 : offset + 8 + length]
+        expected_crc = struct.unpack(">I", contents[offset + 8 + length : end])[0]
+        if zlib.crc32(chunk_type + data) & 0xFFFFFFFF != expected_crc:
+            raise ValueError("unknown-start reset PNG checksum is invalid")
+        chunks.append((chunk_type, data))
+        offset = end
+        if chunk_type == b"IEND":
+            break
+    if offset != len(contents) or not chunks or chunks[-1] != (b"IEND", b""):
+        raise ValueError("unknown-start reset PNG terminal chunk is invalid")
+    if chunks[0][0] != b"IHDR" or len(chunks[0][1]) != 13:
+        raise ValueError("unknown-start reset PNG header is invalid")
+    width, height, bit_depth, color_type, compression, filtering, interlace = (
+        struct.unpack(">IIBBBBB", chunks[0][1])
+    )
+    if (
+        (width, height) != (expected_width, expected_height)
+        or (bit_depth, color_type, compression, filtering, interlace)
+        != (8, 2, 0, 0, 0)
+    ):
+        raise ValueError("unknown-start reset PNG format is invalid")
+    compressed = b"".join(data for kind, data in chunks if kind == b"IDAT")
+    try:
+        pixels = zlib.decompress(compressed)
+    except zlib.error as error:
+        raise ValueError("unknown-start reset PNG pixels are invalid") from error
+    row_bytes = width * 3
+    if len(pixels) != height * (row_bytes + 1) or any(
+        pixels[row * (row_bytes + 1)] > 4 for row in range(height)
+    ):
+        raise ValueError("unknown-start reset PNG raster is invalid")
 
 
 def finalize_recovery(
@@ -194,6 +260,8 @@ def finalize_recovery(
 
     _validate_source_revision(source_revision)
     _validate_fingerprint(runtime_source_fingerprint, "runtime source")
+    if primary_claim.with_name(UNKNOWN_START_RESET_FAILURE_NAME).exists():
+        raise ValueError("unknown-start reset is already terminally failed")
     artifact_names = (
         "manifest.json",
         "steps.jsonl",
@@ -268,13 +336,30 @@ def finalize_recovery(
         "training_authorized": False,
         "filming_authorized": False,
     }
+    recovery_marker = recovery_recording / "RECOVERY_VERIFIED.json"
+    recovery_payload = {
+        "schema": "quantis.unknown_start_reset_recovery.v1",
+        "status": "recovery_verified",
+        "passed": False,
+        "recording_id": capture["recording_id"],
+        "source_revision": source_revision,
+        "runtime_source_fingerprint": runtime_source_fingerprint,
+        "claim_fingerprint": primary_claim_fingerprint,
+        "artifacts": recovery_fingerprints,
+    }
+    _write_or_validate(recovery_marker, recovery_payload)
+    payload["recovery_marker_fingerprint"] = _fingerprint(recovery_marker)
     primary_result = primary_recording / "RESULT.json"
-    recovery_result = recovery_recording / "RESULT.json"
-    _write_exclusive(recovery_result, payload)
-    _write_exclusive(primary_result, payload)
-    if _fingerprint(primary_result) != _fingerprint(recovery_result):
-        raise ValueError("unknown-start reset terminal recovery changed")
+    _write_or_validate(primary_result, payload)
     return payload
+
+
+def _write_or_validate(path: Path, payload: dict[str, Any]) -> None:
+    if path.exists():
+        if _load_json(path, "terminal artifact") != payload:
+            raise ValueError("unknown-start reset terminal artifact changed")
+        return
+    _write_exclusive(path, payload)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

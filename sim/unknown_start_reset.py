@@ -519,6 +519,8 @@ class UnknownStartResetEvidence:
     sample: UnknownStartResetSample
     workspace: UnknownStartWorkspaceState
     realization: UnknownStartSampleRealization
+    observed_arm_positions_radians: tuple[float, ...]
+    observed_gripper_width_m: float
     realized_sample_fingerprint: str
     plug_attached: bool
     collision_detected: bool
@@ -541,6 +543,10 @@ class UnknownStartResetEvidence:
             )
             or not _valid_fingerprint(self.realized_sample_fingerprint)
             or self.realized_sample_fingerprint != self.sample.fingerprint
+            or len(self.observed_arm_positions_radians) != 7
+            or not all(isfinite(value) for value in self.observed_arm_positions_radians)
+            or not isfinite(self.observed_gripper_width_m)
+            or not 0.0 <= self.observed_gripper_width_m <= 0.08
             or self.plug_attached
             or self.collision_detected
             or not isfinite(self.contact_force_newtons)
@@ -558,6 +564,10 @@ class UnknownStartResetEvidence:
             "sample": self.sample.to_dict(),
             "workspace": self.workspace.to_dict(),
             "realization": self.realization.to_dict(),
+            "observed_arm_positions_radians": list(
+                self.observed_arm_positions_radians
+            ),
+            "observed_gripper_width_m": self.observed_gripper_width_m,
             "realized_sample_fingerprint": self.realized_sample_fingerprint,
             "plug_attached": self.plug_attached,
             "collision_detected": self.collision_detected,
@@ -583,6 +593,10 @@ class UnknownStartResetEvidence:
             realization=UnknownStartSampleRealization.from_dict(
                 payload.get("realization")
             ),
+            observed_arm_positions_radians=tuple(
+                payload.get("observed_arm_positions_radians", ())
+            ),
+            observed_gripper_width_m=payload.get("observed_gripper_width_m"),
             realized_sample_fingerprint=payload.get("realized_sample_fingerprint"),
             plug_attached=payload["plug_attached"],
             collision_detected=payload["collision_detected"],

@@ -2,8 +2,10 @@ from dataclasses import replace
 from hashlib import sha256
 import json
 from pathlib import Path
+import struct
 import tempfile
 import unittest
+import zlib
 
 from jepa_wm.unknown_start_reset_lifecycle import (
     claim,
@@ -39,6 +41,8 @@ def valid_evidence() -> UnknownStartResetEvidence:
             camera_offset_m=sample.camera_offset_m,
             light_exposure_delta=sample.light_exposure_delta,
         ),
+        observed_arm_positions_radians=(0.1,) * 7,
+        observed_gripper_width_m=0.08,
         realized_sample_fingerprint=sample.fingerprint,
         plug_attached=False,
         collision_detected=False,
@@ -47,6 +51,25 @@ def valid_evidence() -> UnknownStartResetEvidence:
         prefix_replay_frames=0,
         applied_actions=0,
         phase=UnknownStartResetPhase.RESET_AUTHENTICATION,
+    )
+
+
+def rgb_png(width: int, height: int) -> bytes:
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + kind
+            + data
+            + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+        )
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    pixels = b"".join(b"\x00" + bytes(width * 3) for _ in range(height))
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(pixels))
+        + chunk(b"IEND", b"")
     )
 
 
@@ -137,13 +160,15 @@ class UnknownStartResetContractTest(unittest.TestCase):
                         "plug_attached": False,
                         "collision_detected": False,
                         "contact_force_newtons": 0.0,
+                        "arm_positions": list(evidence.observed_arm_positions_radians),
+                        "gripper_width_m": evidence.observed_gripper_width_m,
+                        "plug_position": list(evidence.workspace.connector_position_m),
                         "end_effector_world_position": list(
                             evidence.workspace.end_effector_position_m
                         ),
                     }
                 )
                 + "\n",
-                "wrist/frame_000000.png": "pixels",
                 "unknown_start_reset_evidence.json": evidence_contents,
                 "CAPTURE.json": json.dumps(
                     {
@@ -163,6 +188,10 @@ class UnknownStartResetContractTest(unittest.TestCase):
                 (recovery / name).parent.mkdir(parents=True, exist_ok=True)
                 (primary / name).write_text(contents)
                 (recovery / name).write_text(contents)
+            for recording in (primary, recovery):
+                frame = recording / "wrist/frame_000000.png"
+                frame.parent.mkdir(parents=True, exist_ok=True)
+                frame.write_bytes(rgb_png(512, 512))
 
             payload = finalize_recovery(
                 primary,
@@ -176,10 +205,13 @@ class UnknownStartResetContractTest(unittest.TestCase):
             self.assertTrue(payload["passed"])
             self.assertTrue(payload["recovery_verified"])
             self.assertEqual(payload["applied_actions"], 0)
-            self.assertEqual(
-                (primary / "RESULT.json").read_bytes(),
-                (recovery / "RESULT.json").read_bytes(),
+            self.assertTrue((primary / "RESULT.json").is_file())
+            recovery_payload = json.loads(
+                (recovery / "RECOVERY_VERIFIED.json").read_text()
             )
+            self.assertEqual(recovery_payload["status"], "recovery_verified")
+            self.assertFalse(recovery_payload["passed"])
+            self.assertFalse((recovery / "RESULT.json").exists())
 
     def test_recovery_rejects_semantically_invalid_evidence(self) -> None:
         source = Path("jepa_wm/unknown_start_reset_lifecycle.py").read_text()
@@ -187,6 +219,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
         self.assertIn("UnknownStartResetEvidence.from_dict", source)
         self.assertIn('"steps.jsonl"', source)
         self.assertIn('"wrist/frame_000000.png"', source)
+        self.assertIn("_validate_rgb_png", source)
         with self.assertRaises(ValueError):
             UnknownStartResetEvidence.from_dict({})
 
