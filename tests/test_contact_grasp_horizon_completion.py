@@ -11,8 +11,10 @@ from jepa_wm.contact_grasp_horizon_completion import (
     MAXIMUM_ACTIONS,
     PROPOSAL_FINGERPRINT,
     PROPOSAL_NAME,
-    SOURCE_MAXIMUM_ACTIONS,
+    SOURCE_APPLIED_ACTIONS,
     SOURCE_CUMULATIVE_APPLIED_ACTIONS,
+    SOURCE_HORIZON_ACTIONS,
+    SOURCE_SESSION_COUNT,
     SOURCE_SESSION_ID,
     WORKER_FINGERPRINT,
     WORKER_IDENTITY,
@@ -26,7 +28,7 @@ from jepa_wm.contact_grasp_horizon_completion import (
 class ContactGraspHorizonCompletionTest(unittest.TestCase):
     def test_freezes_the_expanded_model_worker_and_action_horizon(self) -> None:
         handoff = ContactGraspHorizonCompletion(
-            "unknown-start-e2e-v22-62605-grasp-001",
+            "unknown-start-e2e-v23-62605-grasp-001",
             runtime_fingerprint(),
             "1" * 40,
         )
@@ -38,11 +40,13 @@ class ContactGraspHorizonCompletionTest(unittest.TestCase):
         payload = handoff.to_dict()
         self.assertEqual(payload["schema"], HANDOFF_SCHEMA)
         self.assertEqual(payload["source_session_id"], SOURCE_SESSION_ID)
-        self.assertEqual(payload["source_applied_actions"], SOURCE_MAXIMUM_ACTIONS)
+        self.assertEqual(payload["source_attempted_actions"], SOURCE_SESSION_COUNT)
+        self.assertEqual(payload["source_applied_actions"], SOURCE_APPLIED_ACTIONS)
         self.assertEqual(
             payload["source_cumulative_applied_actions"],
             SOURCE_CUMULATIVE_APPLIED_ACTIONS,
         )
+        self.assertEqual(payload["source_horizon_actions"], SOURCE_HORIZON_ACTIONS)
         self.assertEqual(payload["maximum_actions"], MAXIMUM_ACTIONS)
         self.assertEqual(payload["proposal_name"], PROPOSAL_NAME)
         self.assertEqual(payload["proposal_fingerprint"], PROPOSAL_FINGERPRINT)
@@ -54,7 +58,7 @@ class ContactGraspHorizonCompletionTest(unittest.TestCase):
 
     def test_rejects_any_changed_frozen_field(self) -> None:
         handoff = ContactGraspHorizonCompletion(
-            "unknown-start-e2e-v22-62605-grasp-001",
+            "unknown-start-e2e-v23-62605-grasp-001",
             "2" * 64,
             "1" * 40,
         )

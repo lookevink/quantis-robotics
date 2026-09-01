@@ -58,6 +58,9 @@ ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
 EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v10"
 )
+TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+    "quantis.jepa_wm_contact_grasp_target_policy.v11"
+)
 
 
 class _TransportComposition(str, Enum):
@@ -136,6 +139,16 @@ _POLICY_CAPABILITIES = {
         True,
         True,
     ),
+    TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA: _PolicyCapabilities(
+        True,
+        _TransportComposition.TRANSLATION_HORIZON,
+        True,
+        True,
+        0.001,
+        True,
+        True,
+        True,
+    ),
 }
 
 
@@ -186,6 +199,7 @@ class ContactGraspTargetPolicy:
                     TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                    TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 )
                 and self.scene_translation_m != (0.0, 0.0, 0.0)
             )
@@ -198,7 +212,7 @@ class ContactGraspTargetPolicy:
         translation_m: tuple[float, float, float],
     ) -> ContactGraspTargetPolicy:
         return cls(
-            EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             translation_m,
         )
 
@@ -675,6 +689,7 @@ class ContactGraspTargetPolicy:
             TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         ):
             payload["scene_translation_m"] = list(self.scene_translation_m)
         return payload
@@ -694,6 +709,7 @@ class ContactGraspTargetPolicy:
                 TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             )
             else {"schema"}
         )

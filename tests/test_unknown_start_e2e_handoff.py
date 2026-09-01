@@ -7,7 +7,10 @@ from unittest.mock import Mock, patch
 
 from jepa_wm.control_policy import ControlExecutionPolicy
 from sim.control_session import ControlResultStatus
-from sim.isaac_control_followup import _contact_grasp_followup_policy
+from sim.isaac_control_followup import (
+    _contact_grasp_followup_policy,
+    _contact_grasp_rollback_handoff_state,
+)
 
 
 class UnknownStartE2EHandoffTest(unittest.TestCase):
@@ -94,6 +97,46 @@ class UnknownStartE2EHandoffTest(unittest.TestCase):
             side_effect=(candidate_session, source_session),
         ), self.assertRaisesRegex(ValueError, "not bound"):
             _contact_grasp_followup_policy(previous)
+
+    def test_tracking_rollback_handoff_uses_restored_refresh_state(self) -> None:
+        restored_pose = object()
+        restored_safety = SimpleNamespace(
+            plug_attached=False,
+            collision_detected=False,
+            contact_force_newtons=0.0,
+        )
+        result = SimpleNamespace(
+            status=ControlResultStatus.ROLLED_BACK_TRACKING,
+            post_action=SimpleNamespace(
+                plug_attached=False,
+                collision_detected=False,
+                contact_force_newtons=0.0,
+                tracking=SimpleNamespace(
+                    passed=False,
+                    reasons=(SimpleNamespace(value="translation_error"),),
+                ),
+            ),
+            insertion_trial_refresh=SimpleNamespace(
+                live_pose=restored_pose,
+                live_state=restored_safety,
+            ),
+        )
+
+        self.assertEqual(
+            _contact_grasp_rollback_handoff_state(
+                result,
+                horizon_tracking_rollback=True,
+            ),
+            (restored_pose, restored_safety),
+        )
+        result.post_action.tracking.reasons = (
+            SimpleNamespace(value="translation_direction"),
+        )
+        with self.assertRaisesRegex(ValueError, "tracking rollback"):
+            _contact_grasp_rollback_handoff_state(
+                result,
+                horizon_tracking_rollback=True,
+            )
 
 
 if __name__ == "__main__":

@@ -10,20 +10,21 @@ data_root="${HOME}/docker/isaac-sim/data/quantis"
 recovery_data_root="/mnt/quantis-assets/quantis-state/isaac"
 source_revision="${1:-}"
 runtime_fingerprint="${2:-}"
-run_id="unknown-start-e2e-v22-62605-grasp"
-source_session="unknown-start-e2e-v20-62605-grasp-001"
+run_id="unknown-start-e2e-v23-62605-grasp"
+source_session="unknown-start-e2e-v22-62605-grasp-022"
 reference_name="contact-insertion-v10-drive-slow-2600-held-00"
 reference_seed="12600"
 proposal_name="contact-grasp-acquisition-v10-drive-slow-2600_task12_h256_s3000_cfopen-v3-retained"
 worker_identity="contact-insertion-v10-unknown-start-acquisition-v3-retained"
 global_maximum_actions="$(contact_grasp_maximum_actions "${repo_dir}" "${python_bin}")"
-maximum_actions="191"
+source_horizon_actions="23"
+maximum_actions="169"
 first_session="${run_id}-001"
 module="jepa_wm.contact_grasp_horizon_completion"
 
 cd "${repo_dir}"
-[[ "$((maximum_actions + 1))" == "${global_maximum_actions}" ]] || {
-  printf 'error: frozen V21 cumulative action allocation changed\n' >&2
+[[ "$((maximum_actions + source_horizon_actions))" == "${global_maximum_actions}" ]] || {
+  printf 'error: frozen V23 cumulative action allocation changed\n' >&2
   exit 1
 }
 phase="claim"

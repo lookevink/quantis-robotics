@@ -482,6 +482,43 @@ def diagnose_contact_grasp_followup_drive_target(
     }
 
 
+def _contact_grasp_rollback_handoff_state(
+    source_result: Any,
+    *,
+    horizon_tracking_rollback: bool,
+) -> tuple[DroidPose, ControlSafetySnapshot]:
+    """Select the restored state, never the rejected post-action state."""
+
+    post = source_result.post_action
+    if (
+        post is None
+        or post.plug_attached
+        or post.collision_detected
+        or post.contact_force_newtons
+        > SimulatorSafetyLimits().maximum_contact_force_newtons
+    ):
+        raise ValueError("contact-grasp resolution source is not a safe endpoint")
+    if not horizon_tracking_rollback:
+        if source_result.status is not ControlResultStatus.APPLIED:
+            raise ValueError(
+                "contact-grasp resolution source is not an applied endpoint"
+            )
+        return post.pose, post.require_safety_snapshot()
+    refresh = source_result.insertion_trial_refresh
+    if (
+        post.tracking.passed
+        or tuple(reason.value for reason in post.tracking.reasons)
+        != ("translation_error",)
+        or refresh is None
+        or refresh.live_state.plug_attached
+        or refresh.live_state.collision_detected
+        or refresh.live_state.contact_force_newtons
+        > SimulatorSafetyLimits().maximum_contact_force_newtons
+    ):
+        raise ValueError("contact-grasp tracking rollback source is invalid")
+    return refresh.live_pose, refresh.live_state
+
+
 async def capture_contact_grasp_acquisition_handoff(
     session_id: str,
     source_session_id: str,
@@ -598,19 +635,17 @@ async def capture_contact_grasp_acquisition_handoff(
     source_observation, source_state = source.load_capture()
     source_result = source.load_result()
     refresh = source_result.insertion_trial_refresh
+    horizon_tracking_rollback = (
+        horizon_completion_continuation
+        and source_result.status is ControlResultStatus.ROLLED_BACK_TRACKING
+    )
     if rollback_continuation:
-        post = source_result.post_action
-        if (
-            source_result.status is not ControlResultStatus.APPLIED
-            or post is None
-            or post.plug_attached
-            or post.collision_detected
-            or post.contact_force_newtons
-            > SimulatorSafetyLimits().maximum_contact_force_newtons
-        ):
-            raise ValueError("contact-grasp resolution source is not a safe endpoint")
-        expected_source_pose = post.pose
-        expected_source_safety = post.require_safety_snapshot()
+        expected_source_pose, expected_source_safety = (
+            _contact_grasp_rollback_handoff_state(
+                source_result,
+                horizon_tracking_rollback=horizon_tracking_rollback,
+            )
+        )
     else:
         if (
             source_result.status is not ControlResultStatus.BLOCKED
