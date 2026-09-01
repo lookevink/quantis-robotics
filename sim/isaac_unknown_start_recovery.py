@@ -156,16 +156,16 @@ async def recover_unknown_start_candidate_rollback(
         or timeline.is_playing()
     ):
         raise RuntimeError("unknown-start drive recovery did not reach reset floor")
-    # One physics update refreshes articulation-linked world transforms.  The
-    # reset initializer clears DOF velocities first so this update cannot carry
-    # rollback momentum into the exact authenticated state.
+    # Replay the authenticated reset initializer's exact settlement interval.
+    # The reset state and original drive target are distinct under gravity, and
+    # the initializer clears residual rollback velocity before these updates.
     resume_live_simulation(timeline)
     try:
         runtime.actuators.set_reset_state(
             target,
             drive_target=reset_drive_target,
         )
-        await advance_physics_updates(1, observe_safety)
+        await advance_physics_updates(16, observe_safety)
     finally:
         await pause_control_timeline(
             timeline,
