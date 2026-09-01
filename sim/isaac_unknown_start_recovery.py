@@ -283,15 +283,13 @@ async def recover_unknown_start_candidate_rollback(
         or timeline.is_playing()
     ):
         raise RuntimeError("unknown-start drive recovery did not reach reset floor")
-    # Replay the authenticated reset initializer's exact settlement interval.
-    # The reset state and original drive target are distinct under gravity, and
-    # the initializer clears residual rollback velocity before these updates.
+    # Replay the authenticated reset initializer exactly: it starts at the
+    # authored drive command with zero velocity, then records the observed
+    # gravity-loaded state after sixteen updates.  Starting from that observed
+    # state would settle the transient twice and cannot reproduce the evidence.
     resume_live_simulation(timeline)
     try:
-        runtime.actuators.set_reset_state(
-            target,
-            drive_target=reset_drive_target,
-        )
+        runtime.actuators.set_reset_state(reset_drive_target)
         await advance_physics_updates(16, observe_safety)
     finally:
         await pause_control_timeline(

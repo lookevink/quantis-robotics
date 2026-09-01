@@ -56,7 +56,10 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
         self.assertIn(
             "unknown-start recovery active drive target changed", recovery_source
         )
-        self.assertIn("drive_target=reset_drive_target", recovery_source)
+        self.assertIn(
+            "runtime.actuators.set_reset_state(reset_drive_target)",
+            recovery_source,
+        )
         self.assertLess(
             recovery_source.index(
                 "runtime.actuators.set_reset_state(", recovery
