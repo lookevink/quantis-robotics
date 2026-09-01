@@ -13,8 +13,9 @@ from typing import Any, AbstractSet
 from sim.exploration import DatasetSplit, build_exploration_plan
 
 
-UNKNOWN_START_RESET_SCHEMA = "quantis.unknown_start_reset_contract.v1"
+UNKNOWN_START_RESET_SCHEMA = "quantis.unknown_start_reset_contract.v2"
 UNKNOWN_START_RESET_SAMPLE_SCHEMA = "quantis.unknown_start_reset_sample.v1"
+UNKNOWN_START_GRIPPER_FRAME = "right_gripper_control_frame"
 
 
 def _fingerprint(payload: Any) -> str:
@@ -162,7 +163,7 @@ class UnknownStartResetBounds:
 class UnknownStartWorkspaceState:
     connector_position_m: tuple[float, ...]
     socket_position_m: tuple[float, ...]
-    end_effector_position_m: tuple[float, ...]
+    gripper_control_frame_position_m: tuple[float, ...]
     socket_scale: float
 
     def __post_init__(self) -> None:
@@ -171,7 +172,7 @@ class UnknownStartWorkspaceState:
             for position in (
                 self.connector_position_m,
                 self.socket_position_m,
-                self.end_effector_position_m,
+                self.gripper_control_frame_position_m,
             )
         ) or not isfinite(self.socket_scale):
             raise ValueError("unknown-start workspace state is invalid")
@@ -180,18 +181,27 @@ class UnknownStartWorkspaceState:
         return {
             "connector_position_m": list(self.connector_position_m),
             "socket_position_m": list(self.socket_position_m),
-            "end_effector_position_m": list(self.end_effector_position_m),
+            "gripper_control_frame": UNKNOWN_START_GRIPPER_FRAME,
+            "gripper_control_frame_position_m": list(
+                self.gripper_control_frame_position_m
+            ),
             "socket_scale": self.socket_scale,
         }
 
     @classmethod
     def from_dict(cls, payload: Any) -> UnknownStartWorkspaceState:
-        if not isinstance(payload, dict):
+        if (
+            not isinstance(payload, dict)
+            or payload.get("gripper_control_frame")
+            != UNKNOWN_START_GRIPPER_FRAME
+        ):
             raise ValueError("unknown-start workspace payload is invalid")
         return cls(
             connector_position_m=tuple(payload.get("connector_position_m", ())),
             socket_position_m=tuple(payload.get("socket_position_m", ())),
-            end_effector_position_m=tuple(payload.get("end_effector_position_m", ())),
+            gripper_control_frame_position_m=tuple(
+                payload.get("gripper_control_frame_position_m", ())
+            ),
             socket_scale=payload.get("socket_scale"),
         )
 
@@ -208,7 +218,7 @@ class UnknownStartWorkspaceBounds:
         (-0.275, -0.225),
         (1.305, 1.335),
     )
-    initial_end_effector: tuple[tuple[float, float], ...] = (
+    initial_gripper_control_frame: tuple[tuple[float, float], ...] = (
         (0.22, 0.28),
         (-0.30, -0.20),
         (1.43, 1.53),
@@ -219,7 +229,7 @@ class UnknownStartWorkspaceBounds:
     realization_scale_tolerance: float = 1e-9
 
     def __post_init__(self) -> None:
-        groups = (self.connector, self.socket, self.initial_end_effector)
+        groups = (self.connector, self.socket, self.initial_gripper_control_frame)
         if any(
             len(group) != 3
             or any(
@@ -254,8 +264,8 @@ class UnknownStartWorkspaceBounds:
             self._position_in_bounds(state.connector_position_m, self.connector)
             and self._position_in_bounds(state.socket_position_m, self.socket)
             and self._position_in_bounds(
-                state.end_effector_position_m,
-                self.initial_end_effector,
+                state.gripper_control_frame_position_m,
+                self.initial_gripper_control_frame,
             )
         )
 
@@ -311,7 +321,10 @@ class UnknownStartWorkspaceBounds:
             },
             "connector": axes(self.connector),
             "socket": axes(self.socket),
-            "initial_end_effector": axes(self.initial_end_effector),
+            "initial_gripper_control_frame": {
+                "frame": UNKNOWN_START_GRIPPER_FRAME,
+                "bounds": axes(self.initial_gripper_control_frame),
+            },
             "realization_tolerances": {
                 "position_m": self.realization_position_tolerance_m,
                 "socket_scale": self.realization_scale_tolerance,

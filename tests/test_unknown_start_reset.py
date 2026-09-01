@@ -50,7 +50,11 @@ def valid_evidence() -> UnknownStartResetEvidence:
         workspace=UnknownStartWorkspaceState(
             connector_position_m=connector_position,
             socket_position_m=socket_position,
-            end_effector_position_m=(0.25, connector_position[1], 1.48),
+            gripper_control_frame_position_m=(
+                0.25,
+                connector_position[1],
+                1.48,
+            ),
             socket_scale=1.05,
         ),
         realization=UnknownStartSampleRealization(
@@ -191,7 +195,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
                         "gripper_width_m": evidence.observed_gripper_width_m,
                         "plug_position": list(evidence.workspace.connector_position_m),
                         "gripper_frame_world_position": list(
-                            evidence.workspace.end_effector_position_m
+                            evidence.workspace.gripper_control_frame_position_m
                         ),
                     }
                 )
@@ -368,7 +372,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
         self.assertEqual(
             UNKNOWN_START_RESET_CONTRACT.to_dict(),
             {
-                "schema": "quantis.unknown_start_reset_contract.v1",
+                "schema": "quantis.unknown_start_reset_contract.v2",
                 "seed_namespace": {"minimum": 62600, "maximum": 62699},
                 "split": "held_out",
                 "sampler": "build_exploration_plan.v1",
@@ -406,10 +410,13 @@ class UnknownStartResetContractTest(unittest.TestCase):
                         "y": [-0.275, -0.225],
                         "z": [1.305, 1.335],
                     },
-                    "initial_end_effector": {
-                        "x": [0.22, 0.28],
-                        "y": [-0.3, -0.2],
-                        "z": [1.43, 1.53],
+                    "initial_gripper_control_frame": {
+                        "frame": "right_gripper_control_frame",
+                        "bounds": {
+                            "x": [0.22, 0.28],
+                            "y": [-0.3, -0.2],
+                            "z": [1.43, 1.53],
+                        },
                     },
                     "realization_tolerances": {
                         "position_m": 1e-5,

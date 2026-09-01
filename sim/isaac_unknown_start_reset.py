@@ -223,7 +223,7 @@ async def authenticate_unknown_start_reset(
             workspace=UnknownStartWorkspaceState(
                 connector_position_m=tuple(float(value) for value in connector_position),
                 socket_position_m=tuple(float(value) for value in socket_position),
-                end_effector_position_m=tuple(
+                gripper_control_frame_position_m=tuple(
                     float(value) for value in snapshot.gripper_frame_world_position
                 ),
                 socket_scale=float(variant["socket_scale"]),

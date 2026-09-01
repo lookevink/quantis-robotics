@@ -11,6 +11,10 @@ gripper control-frame position rather than the Panda hand-link origin. No
 distribution, tolerance, physics, force, collision, attachment, action,
 training, or filming gate changes.
 
+The contract schema is versioned to v2 and fingerprints the explicit frame
+identifier `right_gripper_control_frame`; old v1/v2 run fingerprints retain
+their original v1 semantics and remain immutable.
+
 Known implementation defects continue to be repaired autonomously. Pause for
 the user only if reproducible evidence proves a representation or model
 insufficiency.

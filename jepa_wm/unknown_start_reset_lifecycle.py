@@ -203,7 +203,7 @@ def _validate_manifest_and_observation(
         or step.get("gripper_width_m") != evidence.observed_gripper_width_m
         or step.get("plug_position") != list(evidence.workspace.connector_position_m)
         or step.get("gripper_frame_world_position")
-        != list(evidence.workspace.end_effector_position_m)
+        != list(evidence.workspace.gripper_control_frame_position_m)
     ):
         raise ValueError("unknown-start reset observation is inauthentic")
 
