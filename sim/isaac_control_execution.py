@@ -105,6 +105,20 @@ from sim.recording import RecordingLabel, RecordingMoment, RecordingSnapshot
 CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS = 5e-3
 
 
+def requires_synchronized_evaluation_refresh(
+    execution_policy: ControlExecutionPolicy,
+    *,
+    contact_grasp_execution: bool,
+) -> bool:
+    """Identify policies reauthorized only after live continuity is proven."""
+
+    return (
+        is_insertion_trial_execution_policy(execution_policy)
+        or contact_grasp_execution
+        or execution_policy is ControlExecutionPolicy.RESET_TRIAL_CANDIDATE
+    )
+
+
 @dataclass(frozen=True)
 class ExecutionSafetyContext:
     observation: ControlObservation
@@ -661,6 +675,10 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         and persisted_state.execution_policy is ControlExecutionPolicy.DIRECT
         and persisted_state.insertion_target_policy is None
     )
+    requires_evaluation_refresh = requires_synchronized_evaluation_refresh(
+        persisted_state.execution_policy,
+        contact_grasp_execution=contact_grasp_execution,
+    )
     if contact_grasp_execution:
         contact_grasp_policy = persisted_state.require_current_contact_grasp_policy()
         execution_action = contact_grasp_policy.action_for_execution(
@@ -758,7 +776,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                 refreshed_drive_target.joint_positions,
                 refreshed_drive_target.gripper_width_m,
             )
-            if insertion_trial_execution or contact_grasp_execution:
+            if requires_evaluation_refresh:
                 insertion_trial_active_drive_target = (
                     persisted_state.active_drive_target
                 )

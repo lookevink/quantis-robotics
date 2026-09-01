@@ -12,6 +12,7 @@ import numpy as np
 
 from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
+from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_safety import (
     ControlInterlockEvidence,
     ControlGateReason,
@@ -37,6 +38,7 @@ from sim.isaac_control_execution import (
     select_safe_projection,
     rollback_control_command,
     rollback_insertion_trial_command,
+    requires_synchronized_evaluation_refresh,
     settle_joint_command,
     settle_tracked_joint_command,
     synchronized_actual_command,
@@ -46,7 +48,19 @@ from sim.isaac_demo_runtime import JointCommand
 
 
 class ControlExecutionLifecycleTest(unittest.TestCase):
-    def test_rejects_invalid_insertion_binding_before_live_synchronization(self) -> None:
+    def test_reset_trial_candidate_reuses_synchronized_freshness_authority(
+        self,
+    ) -> None:
+        self.assertTrue(
+            requires_synchronized_evaluation_refresh(
+                ControlExecutionPolicy.RESET_TRIAL_CANDIDATE,
+                contact_grasp_execution=False,
+            )
+        )
+
+    def test_rejects_invalid_insertion_binding_before_live_synchronization(
+        self,
+    ) -> None:
         session = Mock()
         persisted_state = SimpleNamespace(execution_policy=object())
         session.load.return_value = (object(), object(), persisted_state)
@@ -121,7 +135,9 @@ class ControlExecutionLifecycleTest(unittest.TestCase):
 
 
 class ControlProjectionTest(unittest.TestCase):
-    def test_longer_probe_period_preserves_velocity_limit_without_rejection(self) -> None:
+    def test_longer_probe_period_preserves_velocity_limit_without_rejection(
+        self,
+    ) -> None:
         joints = np.asarray((0.0, -0.5, 0.0, -1.5, 0.0, 1.0, 0.0))
         observation = ControlObservation(
             123,
@@ -152,7 +168,9 @@ class ControlProjectionTest(unittest.TestCase):
         longer_period = replace(fixed_period, control_period_seconds=0.5)
 
         fixed = fixed_period.evaluate(proposal, tuple(proposed), now_unix_seconds=100.2)
-        longer = longer_period.evaluate(proposal, tuple(proposed), now_unix_seconds=100.2)
+        longer = longer_period.evaluate(
+            proposal, tuple(proposed), now_unix_seconds=100.2
+        )
 
         self.assertIn(ControlGateReason.JOINT_VELOCITY_VIOLATION, fixed.reasons)
         self.assertNotIn(ControlGateReason.JOINT_VELOCITY_VIOLATION, longer.reasons)
@@ -346,7 +364,9 @@ class FakeActuators:
 
 
 class IsaacControlExecutionTest(unittest.TestCase):
-    def test_reads_post_action_state_after_camera_capture_advances_physics(self) -> None:
+    def test_reads_post_action_state_after_camera_capture_advances_physics(
+        self,
+    ) -> None:
         before = JointCommand(np.zeros(7), 0.04)
         after = JointCommand(np.ones(7), 0.02)
         actuators = FakeActuators(valid=True)
@@ -360,9 +380,7 @@ class IsaacControlExecutionTest(unittest.TestCase):
             observed += 1
             return object()
 
-        async def capture(
-            *_args: object, observe_safety=None
-        ) -> dict[str, object]:
+        async def capture(*_args: object, observe_safety=None) -> dict[str, object]:
             self.assertIsNotNone(observe_safety)
             observe_safety()
             actuators.command = after
@@ -403,9 +421,7 @@ class IsaacControlExecutionTest(unittest.TestCase):
         async def advance() -> None:
             actuators.articulation.valid = True
 
-        command = asyncio.run(
-            synchronized_actual_command(actuators, timeline, advance)
-        )
+        command = asyncio.run(synchronized_actual_command(actuators, timeline, advance))
 
         self.assertIs(command, actuators.command)
         self.assertEqual(timeline.events, ["play", "pause"])
@@ -419,9 +435,7 @@ class IsaacControlExecutionTest(unittest.TestCase):
             raise AssertionError("failed resume must not advance")
 
         with self.assertRaisesRegex(RuntimeError, "resume failed"):
-            asyncio.run(
-                synchronized_actual_command(actuators, timeline, advance)
-            )
+            asyncio.run(synchronized_actual_command(actuators, timeline, advance))
 
         self.assertEqual(timeline.events, ["pause"])
 
@@ -434,9 +448,7 @@ class IsaacControlExecutionTest(unittest.TestCase):
             nonlocal advanced
             advanced = True
 
-        command = asyncio.run(
-            synchronized_actual_command(actuators, timeline, advance)
-        )
+        command = asyncio.run(synchronized_actual_command(actuators, timeline, advance))
 
         self.assertIs(command, actuators.command)
         self.assertFalse(advanced)
@@ -472,7 +484,9 @@ class IsaacControlExecutionTest(unittest.TestCase):
         self.assertEqual(updates, 2)
         self.assertEqual(observations, 2)
 
-    def test_contact_grasp_settlement_can_observe_beyond_generic_eight_updates(self) -> None:
+    def test_contact_grasp_settlement_can_observe_beyond_generic_eight_updates(
+        self,
+    ) -> None:
         actuators = FakeActuators(valid=True)
         actuators.command = JointCommand(np.ones(7), 0.044)
         updates = 0
@@ -518,7 +532,9 @@ class IsaacControlExecutionTest(unittest.TestCase):
 
         self.assertEqual(updates, 3)
 
-    def test_insertion_settlement_requires_consecutive_command_relative_updates(self) -> None:
+    def test_insertion_settlement_requires_consecutive_command_relative_updates(
+        self,
+    ) -> None:
         actuators = FakeActuators(valid=True)
         readings = iter((4e-4, 8e-4, 4e-4, 3e-4))
         target = np.zeros(7)
@@ -696,7 +712,9 @@ class IsaacControlExecutionTest(unittest.TestCase):
         self.assertEqual(updates, 2)
         self.assertEqual(observations, 2)
 
-    def test_insertion_rollback_separates_loaded_reset_from_active_drive_target(self) -> None:
+    def test_insertion_rollback_separates_loaded_reset_from_active_drive_target(
+        self,
+    ) -> None:
         active_drive_target = JointCommand(np.zeros(7), 0.04)
         stable_loaded_reset = JointCommand(np.full(7, 0.001), 0.04)
         actuators = FakeActuators(valid=True)
@@ -782,7 +800,9 @@ class IsaacControlExecutionTest(unittest.TestCase):
         self.assertEqual(evidence.target_joint_positions, (0.0,) * 7)
         self.assertEqual(evidence.end_joint_positions, (1.0,) * 7)
         self.assertTrue(evidence.plug_attached)
-        self.assertEqual(evidence.settlement_attempt.tracking_errors_radians, (1.0,) * 3)
+        self.assertEqual(
+            evidence.settlement_attempt.tracking_errors_radians, (1.0,) * 3
+        )
         self.assertEqual(
             evidence.settlement_attempt.gripper.trace.errors_meters,
             (0.0,) * 3,
