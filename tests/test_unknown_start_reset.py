@@ -18,6 +18,7 @@ from jepa_wm.unknown_start_reset_runtime import (
 )
 from sim.unknown_start_reset import (
     UNKNOWN_START_RESET_CONTRACT,
+    UNKNOWN_START_RESET_EVIDENCE_SCHEMA,
     UnknownStartResetEvidence,
     UnknownStartResetPhase,
     UnknownStartSampleRealization,
@@ -253,6 +254,18 @@ class UnknownStartResetContractTest(unittest.TestCase):
         self.assertIn("_validate_rgb_png", source)
         with self.assertRaises(ValueError):
             UnknownStartResetEvidence.from_dict({})
+
+    def test_frame_specific_evidence_uses_a_distinct_schema(self) -> None:
+        payload = valid_evidence().to_dict()
+
+        self.assertEqual(payload["schema"], UNKNOWN_START_RESET_EVIDENCE_SCHEMA)
+        self.assertEqual(
+            payload["workspace"]["gripper_control_frame"],
+            "right_gripper_control_frame",
+        )
+        payload["schema"] = "quantis.unknown_start_reset_evidence.v1"
+        with self.assertRaisesRegex(ValueError, "evidence payload is invalid"):
+            UnknownStartResetEvidence.from_dict(payload)
 
     def test_runtime_source_roster_authenticates_exact_bytes(self) -> None:
         fingerprint = runtime_source_fingerprint()

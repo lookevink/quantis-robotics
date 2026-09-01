@@ -15,6 +15,10 @@ The contract schema is versioned to v2 and fingerprints the explicit frame
 identifier `right_gripper_control_frame`; old v1/v2 run fingerprints retain
 their original v1 semantics and remain immutable.
 
+The evidence payload is independently versioned to v2 because its workspace
+wire shape now names and authenticates that control frame. Historical v1
+evidence is not silently reinterpreted as frame-specific v2 evidence.
+
 Known implementation defects continue to be repaired autonomously. Pause for
 the user only if reproducible evidence proves a representation or model
 insufficiency.

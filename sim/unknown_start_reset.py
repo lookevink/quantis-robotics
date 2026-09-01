@@ -15,6 +15,7 @@ from sim.exploration import DatasetSplit, build_exploration_plan
 
 UNKNOWN_START_RESET_SCHEMA = "quantis.unknown_start_reset_contract.v2"
 UNKNOWN_START_RESET_SAMPLE_SCHEMA = "quantis.unknown_start_reset_sample.v1"
+UNKNOWN_START_RESET_EVIDENCE_SCHEMA = "quantis.unknown_start_reset_evidence.v2"
 UNKNOWN_START_GRIPPER_FRAME = "right_gripper_control_frame"
 
 
@@ -573,7 +574,7 @@ class UnknownStartResetEvidence:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema": "quantis.unknown_start_reset_evidence.v1",
+            "schema": UNKNOWN_START_RESET_EVIDENCE_SCHEMA,
             "sample": self.sample.to_dict(),
             "workspace": self.workspace.to_dict(),
             "realization": self.realization.to_dict(),
@@ -595,7 +596,7 @@ class UnknownStartResetEvidence:
     def from_dict(cls, payload: Any) -> UnknownStartResetEvidence:
         if (
             not isinstance(payload, dict)
-            or payload.get("schema") != "quantis.unknown_start_reset_evidence.v1"
+            or payload.get("schema") != UNKNOWN_START_RESET_EVIDENCE_SCHEMA
             or not isinstance(payload.get("plug_attached"), bool)
             or not isinstance(payload.get("collision_detected"), bool)
         ):
