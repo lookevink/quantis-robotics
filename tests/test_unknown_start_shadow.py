@@ -46,6 +46,12 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
             recovery_source.index("runtime = live_runtime_for", recovery),
         )
         self.assertLess(
+            recovery_source.index(
+                "await refresh_paused_live_control_articulation", recovery
+            ),
+            recovery_source.index("await rollback_control_command", recovery),
+        )
+        self.assertLess(
             recovery_source.index("await rollback_control_command", recovery),
             recovery_source.index(
                 "runtime.actuators.set_reset_state(", recovery

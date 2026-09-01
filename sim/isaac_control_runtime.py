@@ -780,6 +780,34 @@ def refresh_live_control_articulation(
     )
 
 
+async def refresh_paused_live_control_articulation(
+    runtime: LiveControlRuntime,
+    timeline: Any,
+    advance: Any,
+    observe_safety: Any,
+) -> LiveControlRuntime:
+    """Repair and replace a retained tensor handle without changing ownership."""
+
+    if timeline.is_playing():
+        raise RuntimeError("live articulation refresh requires a paused timeline")
+    repair_invalid_live_control_physics_view()
+    resume_live_simulation(timeline)
+    try:
+        await advance()
+        observe_safety()
+        refreshed = refresh_live_control_articulation(runtime)
+        if (
+            refreshed is runtime
+            or refreshed.actuators.articulation is runtime.actuators.articulation
+            or not _retains_live_control_ownership(runtime, refreshed)
+            or not refreshed.actuators.articulation.is_physics_tensor_entity_valid()
+        ):
+            raise RuntimeError("live articulation handle refresh failed")
+        return refreshed
+    finally:
+        await pause_control_timeline(timeline, advance)
+
+
 def repair_invalid_live_control_physics_view() -> None:
     """Force normal play warmup when Isaac retains an invalid tensor view."""
 

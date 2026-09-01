@@ -428,6 +428,69 @@ class ContactReadingTest(unittest.TestCase):
 
         SimulationManager.invalidate_physics.assert_not_called()
 
+    def test_paused_refresh_repairs_and_replaces_stale_articulation(self) -> None:
+        timeline = _Timeline(playing=False)
+        events: list[str] = []
+        arm_attributes = [object() for _ in range(7)]
+        finger_attributes = [object(), object()]
+        old_runtime = LiveControlRuntime(
+            "session",
+            object(),
+            SimpleNamespace(
+                articulation=object(),
+                arm_attributes=arm_attributes,
+                finger_attributes=finger_attributes,
+            ),
+            object(),
+            object(),
+        )
+        refreshed = LiveControlRuntime(
+            old_runtime.session_id,
+            old_runtime.stage,
+            SimpleNamespace(
+                articulation=SimpleNamespace(
+                    is_physics_tensor_entity_valid=lambda: True
+                ),
+                arm_attributes=arm_attributes,
+                finger_attributes=finger_attributes,
+            ),
+            old_runtime.attachment,
+            old_runtime.sensor,
+        )
+
+        async def advance() -> None:
+            events.append("advance")
+
+        def observe() -> None:
+            events.append("observe")
+
+        with (
+            patch.object(
+                control_runtime,
+                "repair_invalid_live_control_physics_view",
+                side_effect=lambda: events.append("repair"),
+            ),
+            patch.object(
+                control_runtime,
+                "refresh_live_control_articulation",
+                side_effect=lambda runtime: (
+                    events.append("refresh") or refreshed
+                ),
+            ),
+        ):
+            result = asyncio.run(
+                control_runtime.refresh_paused_live_control_articulation(
+                    old_runtime,
+                    timeline,
+                    advance,
+                    observe,
+                )
+            )
+
+        self.assertIs(result, refreshed)
+        self.assertEqual(events, ["repair", "advance", "observe", "refresh"])
+        self.assertEqual(timeline.events, ["play", "pause"])
+
     def test_insertion_replaces_stale_articulation_after_resume(self) -> None:
         timeline = _Timeline(playing=False)
         events: list[str] = []

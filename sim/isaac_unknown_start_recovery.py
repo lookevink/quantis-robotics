@@ -35,6 +35,7 @@ async def diagnose_unknown_start_candidate_rollback(
         live_runtime_for,
         pause_control_timeline,
         read_control_contact,
+        refresh_paused_live_control_articulation,
     )
     from sim.isaac_demo_kinematics import _solver_for_stage
     from sim.isaac_demo_runtime import recording_snapshot
@@ -226,6 +227,21 @@ async def recover_unknown_start_candidate_rollback(
     runtime = live_runtime_for(session_id, stage)
     if runtime is None:
         raise RuntimeError("unknown-start rollback recovery runtime was lost")
+
+    def observe_safety() -> ContactReading:
+        collision, force = read_control_contact(runtime.sensor)
+        if collision or force > 2.0 or runtime.attachment.attached:
+            raise RuntimeError(
+                "unknown-start rollback recovery exceeded its live safety boundary"
+            )
+        return ContactReading(collision, force)
+
+    runtime = await refresh_paused_live_control_articulation(
+        runtime,
+        timeline,
+        omni.kit.app.get_app().next_update_async,
+        observe_safety,
+    )
     active = runtime.actuators.current_command()
     active_positions = tuple(float(value) for value in active.arm_positions)
     allowed_active_targets = (
@@ -258,14 +274,6 @@ async def recover_unknown_start_candidate_rollback(
         np.asarray(state.active_drive_target.joint_positions, dtype=np.float64),
         state.active_drive_target.gripper_width_m,
     )
-
-    def observe_safety() -> ContactReading:
-        collision, force = read_control_contact(runtime.sensor)
-        if collision or force > 2.0 or runtime.attachment.attached:
-            raise RuntimeError(
-                "unknown-start rollback recovery exceeded its live safety boundary"
-            )
-        return ContactReading(collision, force)
 
     resume_live_simulation(timeline)
     try:
