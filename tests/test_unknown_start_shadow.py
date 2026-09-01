@@ -153,6 +153,10 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
         )
 
         source = Path("sim/isaac_unknown_start_shadow.py").read_text()
+        self.assertIn("def _joint_kinematic_snapshot(", source)
+        self.assertIn('"panda_hand", joints', source)
+        self.assertIn('"right_gripper", joints', source)
+        self.assertIn("snapshot = _joint_kinematic_snapshot(", source)
         self.assertNotIn("set_reset_state(", source)
         self.assertNotIn("apply_control_response", source)
         self.assertNotIn("move_joint_command", source)

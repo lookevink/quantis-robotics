@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from time import time
 from typing import Any
@@ -60,6 +61,42 @@ from sim.unknown_start_shadow import (
     UnknownStartControlHandoff,
     validate_unknown_start_handoff,
 )
+
+
+def _joint_kinematic_snapshot(
+    stage: Any,
+    snapshot: Any,
+    arm_positions: Any,
+) -> Any:
+    """Replace stale paused articulation-link poses with deterministic FK."""
+
+    import numpy as np
+
+    from jepa_wm.action import DroidPose
+    from sim.isaac_demo_kinematics import _solver_for_stage
+    from sim.isaac_demo_scene import matrix_to_wxyz
+
+    solver, base_position, base_orientation = _solver_for_stage(stage)
+    joints = np.asarray(arm_positions, dtype=np.float64)
+    hand_position, hand_rotation = solver.compute_forward_kinematics(
+        "panda_hand", joints
+    )
+    gripper_position = solver.compute_forward_kinematics(
+        "right_gripper", joints
+    )[0]
+    hand_orientation = matrix_to_wxyz(hand_rotation)
+    return replace(
+        snapshot,
+        end_effector_pose=DroidPose.from_world_poses(
+            base_position,
+            base_orientation,
+            hand_position,
+            hand_orientation,
+            snapshot.gripper_width_m,
+        ),
+        end_effector_world_position=hand_position,
+        gripper_frame_world_position=gripper_position,
+    )
 
 
 def _load_authenticated_reset(
@@ -180,6 +217,11 @@ def _validated_live_snapshot(
         actual,
         attachment,
         safety=recording_safety_telemetry(authored, actual, contact),
+    )
+    snapshot = _joint_kinematic_snapshot(
+        stage,
+        snapshot,
+        actual.arm_positions,
     )
     socket_position, socket_orientation = world_pose(stage.GetPrimAtPath(SOCKET_PATH))
     variant = _current_variant_readback(stage)
