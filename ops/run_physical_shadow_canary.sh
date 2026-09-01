@@ -55,7 +55,7 @@ for identifier in "${session_id}" "${reference_name}" "${control_identity}"; do
 done
 require_nonnegative_integer "exploration seed" "${exploration_seed}"
 require_positive_integer "context index" "${context_index}"
-if [[ "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v3" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v4" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v5" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v6" ]]; then
+if [[ "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v3" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v4" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v5" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v6" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v7" ]]; then
   is_safe_identifier "${reset_recording_id}" || {
     printf 'error: invalid unknown-start reset recording ID\n' >&2
     exit 1
@@ -74,7 +74,7 @@ bash "${repo_dir}/ops/jepa_wm.sh" control-worker-stop
 bash "${repo_dir}/ops/jepa_wm.sh" \
   control-worker-start --artifacts "${control_identity}"
 
-if [[ "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v4" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v5" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v6" ]]; then
+if [[ "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v4" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v5" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v6" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v7" ]]; then
   isaac_server_call \
     "await demo.preflight_unknown_start_shadow('${reset_recording_id}','${reset_result_fingerprint}')" \
     180 true
@@ -97,7 +97,7 @@ trap terminalize_failure ERR
   --config "${config}" --session "${session_id}"
 
 phase="capture"
-if [[ "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v3" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v4" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v5" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v6" ]]; then
+if [[ "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v3" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v4" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v5" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v6" || "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v7" ]]; then
   proposal_name="$(control_proposal_from_identity \
     direct "${control_identity}" "${checkpoint_dir}" "${venv_python}")"
   isaac_server_call \

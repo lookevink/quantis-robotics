@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from jepa_wm.physical_shadow_canary import (
+    UNKNOWN_START_EXPERIMENT_SCHEMAS,
     _serialized_action_scale,
     claim_canary,
     finalize_recovery,
@@ -29,6 +30,9 @@ from jepa_wm.physical_shadow_canary_v5_contract import (
 )
 from jepa_wm.physical_shadow_canary_v6_contract import (
     FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V6_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+)
+from jepa_wm.physical_shadow_canary_v7_contract import (
+    FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V7_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
 )
 
 
@@ -163,6 +167,32 @@ class PhysicalShadowCanaryTest(unittest.TestCase):
         self.assertEqual(
             V6_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
             "259f2e1d35be256781def22dce5baf7de31248272fd9ed264e8dce7bb959b871",
+        )
+        self.assertIn(config["schema"], UNKNOWN_START_EXPERIMENT_SCHEMAS)
+
+    def test_every_unknown_start_schema_uses_one_shared_classifier(self) -> None:
+        self.assertEqual(
+            UNKNOWN_START_EXPERIMENT_SCHEMAS,
+            (
+                "quantis.jepa_wm_physical_shadow_canary_experiment.v3",
+                "quantis.jepa_wm_physical_shadow_canary_experiment.v4",
+                "quantis.jepa_wm_physical_shadow_canary_experiment.v5",
+                "quantis.jepa_wm_physical_shadow_canary_experiment.v6",
+                "quantis.jepa_wm_physical_shadow_canary_experiment.v7",
+            ),
+        )
+
+    def test_v7_uses_the_shared_unknown_start_classifier(self) -> None:
+        config = load_experiment_config(
+            Path(".scratch/jepa-physical-shadow-canary-v7/experiment-config.json")
+        )
+
+        self.assertIn(config["schema"], UNKNOWN_START_EXPERIMENT_SCHEMAS)
+        self.assertEqual(config["unknown_start"]["seed"], 62605)
+        self.assertEqual(config["worker"]["planner"]["seed"], 237)
+        self.assertEqual(
+            V7_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+            "PENDING_CHECKPOINT",
         )
 
     def test_recovery_preserves_authenticated_model_rejection(self) -> None:
