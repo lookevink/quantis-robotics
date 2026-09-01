@@ -2284,6 +2284,15 @@ and remediation must be a separately frozen offline milestone; milestone 20,
 live motion, and filming remain closed. Exact evidence is in
 [`RESULT.md`](.scratch/jepa-physical-shadow-canary-v1/RESULT.md).
 
+A separate offline diagnosis reproduced that mismatch deterministically and
+located it in planner orchestration: CEM optimized its objective before the
+first-action direction gate was evaluated. Search now enforces the unchanged
+gate as a candidate constraint and retains a bounded, gate-validated direct
+first action when a sample is ineligible. The exact regression and all `821`
+tests pass. The consumed canary remains terminal; this correction does not
+authorize a retry or live action. Exact evidence is in
+[`RESULT.md`](.scratch/jepa-physical-shadow-direction-diagnosis-v1/RESULT.md).
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

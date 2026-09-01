@@ -167,6 +167,37 @@ CALIBRATED_SHADOW_SEARCH_CONFIG = ShadowSearchConfig(
 
 
 @dataclass(frozen=True)
+class FirstActionConstrainedBounds:
+    """Keep every searched first action inside the frozen acceptance gate."""
+
+    base: ProposalCenteredBounds
+    recorded: DroidAction
+    fallback: DroidAction
+    gate: FirstActionGate
+
+    def __post_init__(self) -> None:
+        if not self.gate.evaluate(self.recorded, self.fallback).passed:
+            raise ValueError("direct first action has no gate-compliant bounded fallback")
+
+    @property
+    def initial_standard_deviation(self) -> np.ndarray:
+        return self.base.initial_standard_deviation
+
+    def clip(self, candidates: np.ndarray) -> np.ndarray:
+        bounded = self.base.clip(candidates)
+        rejected = tuple(
+            index
+            for index, values in enumerate(bounded[:, 0, :])
+            if not self.gate.evaluate(
+                self.recorded, DroidAction(tuple(values))
+            ).passed
+        )
+        if rejected:
+            bounded[np.asarray(rejected), 0, :] = np.asarray(self.fallback.values)
+        return bounded
+
+
+@dataclass(frozen=True)
 class ShadowCandidate:
     actions: tuple[DroidAction, ...]
     latent_energy: float
@@ -455,6 +486,14 @@ def plan_shadow_candidates(
         raise ValueError("direct proposal does not match the CEM horizon")
     center = np.asarray([action.values for action in direct], dtype=np.float64)
     bounds = ProposalCenteredBounds(center, config.global_bounds, config.trust_region)
+    first_action_gate = FirstActionGate(config.first_action_thresholds)
+    bounded_direct = bounds.clip(center[None, :, :])[0]
+    constrained_bounds = FirstActionConstrainedBounds(
+        bounds,
+        direct[0],
+        DroidAction(tuple(bounded_direct[0])),
+        first_action_gate,
+    )
     prior = EmpiricalActionPrior.fit(center[None, :, :], config.prior)
     initial = PlannerDistribution(
         mean=center,
@@ -473,14 +512,14 @@ def plan_shadow_candidates(
         ).total
 
     planning_started = monotonic()
-    result = CEMPlanner(config.planner, bounds).plan(
+    result = CEMPlanner(config.planner, constrained_bounds).plan(
         objective,
         initial_distribution=initial,
     )
     measured_planning_seconds = monotonic() - planning_started
     direct_candidate = _candidate(center, score, prior, task_progress)
     planned_candidate = _candidate(result.actions, score, prior, task_progress)
-    first_action_gate = FirstActionGate(config.first_action_thresholds).evaluate(
+    first_action_decision = first_action_gate.evaluate(
         direct_candidate.actions[0],
         planned_candidate.actions[0],
     )
@@ -491,7 +530,7 @@ def plan_shadow_candidates(
         direct=direct_candidate,
         planned=planned_candidate,
         config=config,
-        first_action_gate=first_action_gate,
+        first_action_gate=first_action_decision,
         candidates_scored=result.candidates_scored,
         iteration_best_objectives=result.iteration_best_energies,
         planning_seconds=measured_planning_seconds,

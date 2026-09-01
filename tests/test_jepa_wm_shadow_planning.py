@@ -172,6 +172,46 @@ class ShadowCandidatePlanningTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "first-action"):
             ShadowSearchEvidence.from_dict(gate_tamper)
 
+    def test_search_cannot_return_an_objective_winner_that_fails_direction_gate(self) -> None:
+        direct = tuple(
+            DroidAction(tuple(values))
+            for values in (
+                (0.0000440, -0.0003946, 0.0000116, -0.0012272, 0.0005037, -0.0014888, 0.0213216),
+                (0.0000717, 0.0002663, -0.0000023, -0.0005082, -0.0004821, 0.0005743, 0.0116688),
+                (0.0000282, -0.0001485, -0.0000206, -0.0012003, -0.0004359, 0.0012253, 0.0029585),
+            )
+        )
+        misaligned_winner = np.asarray(
+            (
+                (0.0008540, -0.0006243, 0.0000673, 0.0007914, 0.0002255, -0.0043348, 0.0031475),
+                (0.0008473, -0.0001678, -0.0000577, -0.0021184, 0.0004819, -0.0013827, 0.0012785),
+                (0.0006127, -0.0006451, 0.0000145, -0.0027045, 0.0027126, 0.0005046, -0.0130534),
+            ),
+            dtype=np.float64,
+        )
+
+        evidence = plan_shadow_candidates(
+            observation_id=9788227250525880740,
+            direct_actions=direct,
+            score=lambda candidates: np.square(
+                candidates - misaligned_winner[None, :, :]
+            ).sum(axis=(1, 2)),
+            proposal=Path("/tmp/proposal.pth"),
+            adapter=Path("/tmp/residual.pth"),
+            config=ShadowSearchConfig(
+                planner=CEMConfig(
+                    iterations=4,
+                    samples=64,
+                    elites=8,
+                    seed=234,
+                )
+            ),
+        )
+
+        self.assertGreater(evidence.objective_improvement, 0.0)
+        self.assertTrue(evidence.first_action_gate.passed)
+        self.assertTrue(evidence.passes_shadow_gate)
+
     def test_task_progress_reranking_rejects_the_latent_winner(self) -> None:
         direct = (DroidAction((0.0,) * 7),) * 3
         latent_winner = np.zeros((3, 7), dtype=np.float64)

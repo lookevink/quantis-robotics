@@ -886,6 +886,12 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     byte-identical. The canary cannot be retried. A separately frozen offline
     diagnosis/remediation milestone is required before milestone 20. Live
     motion, filming, hardware, and production authority remain closed.
+    That separate offline diagnosis reproduced the failure and found the
+    direction gate was post-search validation rather than a search constraint.
+    CEM now preserves a bounded gate-compliant first action while retaining
+    search over the remaining horizon. No threshold changed and all `821` tests
+    pass. The consumed canary remains terminal and live authority remains
+    closed pending a newly frozen experiment.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one
