@@ -51,14 +51,20 @@ def evaluate_replay_action(
 
     action = control.first_action
     goal = observation.goal_action
-    next_pose = observation.pose.applied(action)
+    next_translation = tuple(
+        current + delta
+        for current, delta in zip(
+            observation.pose.values[:3], action.values[:3]
+        )
+    )
+    next_gripper = observation.pose.values[6] + action.values[6]
     next_goal = DroidAction(
         (
             *(target - current for target, current in zip(
-                observation.target_pose.values[:3], next_pose.values[:3]
+                observation.target_pose.values[:3], next_translation
             )),
             *goal.values[3:6],
-            observation.target_pose.values[6] - next_pose.values[6],
+            observation.target_pose.values[6] - next_gripper,
         )
     )
     translation_before = _norm(goal.values[:3])
@@ -67,6 +73,7 @@ def evaluate_replay_action(
     gripper_after = abs(next_goal.values[6])
     passed = (
         PlannerActionBounds().accepts(control.actions)
+        and 0.0 <= next_gripper <= 1.0
         and action.values[6] >= 0.0
         and translation_after < translation_before
         and gripper_after <= gripper_before
@@ -78,7 +85,8 @@ def evaluate_replay_action(
         "translation_error_after_m": translation_after,
         "gripper_error_before": gripper_before,
         "gripper_error_after": gripper_after,
-        "next_pose": list(next_pose.values),
+        "next_translation": list(next_translation),
+        "next_gripper_closedness": next_gripper,
     }
 
 
