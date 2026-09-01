@@ -7,7 +7,7 @@ source "${repo_dir}/ops/shell_helpers.sh"
 venv_python="${HOME}/.venvs/quantis-jepa-wm/bin/python"
 checkpoint_dir="${HOME}/docker/jepa-wm/checkpoints"
 control_root="${HOME}/docker/isaac-sim/data/quantis"
-config="${repo_dir}/.scratch/jepa-physical-shadow-canary-v1/experiment-config.json"
+config="${PHYSICAL_SHADOW_CANARY_CONFIG:-${repo_dir}/.scratch/jepa-physical-shadow-canary-v1/experiment-config.json}"
 deployed_revision="${1:-}"
 mapfile -t frozen_contract < <(
   "${venv_python}" - "${config}" <<'PY'

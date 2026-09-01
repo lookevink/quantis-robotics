@@ -13,7 +13,10 @@ from typing import Any, Mapping, Sequence
 
 from jepa_wm.persistence import write_json_atomic
 from jepa_wm.physical_shadow_canary_contract import (
-    FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+    FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V1_CONFIG_FINGERPRINT,
+)
+from jepa_wm.physical_shadow_canary_v2_contract import (
+    FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V2_CONFIG_FINGERPRINT,
 )
 from jepa_wm.planner import CEMConfig
 from jepa_wm.shadow_planning import CandidateAuthority
@@ -23,21 +26,26 @@ from sim.control_session import ControlSession
 
 
 EXPERIMENT_SCHEMA = "quantis.jepa_wm_physical_shadow_canary_experiment.v1"
+EXPERIMENT_SCHEMA_V2 = "quantis.jepa_wm_physical_shadow_canary_experiment.v2"
 
 
 def load_experiment_config(path: Path) -> dict[str, Any]:
     encoded = path.resolve().read_bytes()
     fingerprint = sha256(encoded).hexdigest()
-    if (
-        FROZEN_EXPERIMENT_CONFIG_FINGERPRINT != "PENDING_CHECKPOINT"
-        and fingerprint != FROZEN_EXPERIMENT_CONFIG_FINGERPRINT
+    payload = json.loads(encoded)
+    expected_fingerprint = {
+        EXPERIMENT_SCHEMA: V1_CONFIG_FINGERPRINT,
+        EXPERIMENT_SCHEMA_V2: V2_CONFIG_FINGERPRINT,
+    }.get(payload.get("schema"))
+    if expected_fingerprint is None or (
+        expected_fingerprint != "PENDING_CHECKPOINT"
+        and fingerprint != expected_fingerprint
     ):
         raise ValueError("physical shadow canary configuration changed")
-    payload = json.loads(encoded)
     execution = payload.get("execution", {})
     gate = payload.get("gate", {})
     if (
-        payload.get("schema") != EXPERIMENT_SCHEMA
+        payload.get("schema") not in (EXPERIMENT_SCHEMA, EXPERIMENT_SCHEMA_V2)
         or not isinstance(payload.get("session_id"), str)
         or not payload["session_id"]
         or gate
@@ -64,13 +72,17 @@ def load_experiment_config(path: Path) -> dict[str, Any]:
 
 def terminal_paths(experiment: Mapping[str, Any]) -> tuple[Path, Path, Path, Path]:
     output = Path(str(experiment.get("output", "")))
-    if not output.is_absolute() or output.name != "known-start-shadow-canary-v1.json":
+    if (
+        not output.is_absolute()
+        or not output.stem.startswith("known-start-shadow-canary-v")
+    ):
         raise ValueError("physical shadow canary output is invalid")
+    stem = output.stem
     return (
         output,
-        output.with_name("known-start-shadow-canary-v1-claim.json"),
-        output.with_name("known-start-shadow-canary-v1-failure.json"),
-        output.with_name("known-start-shadow-canary-v1-evaluation.json"),
+        output.with_name(f"{stem}-claim.json"),
+        output.with_name(f"{stem}-failure.json"),
+        output.with_name(f"{stem}-evaluation.json"),
     )
 
 

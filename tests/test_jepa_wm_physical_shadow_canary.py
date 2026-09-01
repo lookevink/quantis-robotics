@@ -44,6 +44,18 @@ class PhysicalShadowCanaryTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "already claimed"):
                 claim_canary(path, "session-1", "config-sha")
 
+    def test_v2_uses_the_other_held_out_start_and_a_new_terminal_path(self) -> None:
+        config = load_experiment_config(
+            Path(".scratch/jepa-physical-shadow-canary-v2/experiment-config.json")
+        )
+
+        self.assertEqual(config["known_start"]["seed"], 12600)
+        self.assertEqual(
+            config["known_start"]["reference"],
+            "contact-insertion-v10-drive-slow-2600-held-00",
+        )
+        self.assertTrue(config["output"].endswith("shadow-canary-v2.json"))
+
     def test_runner_has_no_actuation_seam(self) -> None:
         runner = Path("ops/run_physical_shadow_canary.sh").read_text()
 
