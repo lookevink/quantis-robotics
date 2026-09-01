@@ -92,6 +92,7 @@ from sim.demo_sequence import Phase
 from sim.isaac_control_runtime import (
     bind_live_runtime,
     contact_sensor,
+    current_drive_target,
     live_runtime_for,
     pause_control_timeline,
     read_control_contact,
@@ -313,6 +314,13 @@ async def capture_contact_grasp_acquisition_handoff(
         runtime = live_runtime_for(ACQUISITION_HOLD_RUNTIME_SESSION_ID, stage)
     if runtime is None:
         raise RuntimeError("live contact-grasp acquisition runtime was lost")
+    expected_active_drive_target = (
+        current_drive_target(runtime)
+        if hold_continuation
+        else source_state.active_drive_target
+    )
+    if expected_active_drive_target is None:
+        raise RuntimeError("contact-grasp acquisition drive target was lost")
     context_path = session.path / "context.png"
 
     async def capture_frame(observe_safety) -> None:
@@ -329,7 +337,7 @@ async def capture_contact_grasp_acquisition_handoff(
         expected_source_safety,
         SimulatorSafetyLimits(),
         capture_frame,
-        expected_active_drive_target=source_state.active_drive_target,
+        expected_active_drive_target=expected_active_drive_target,
         operation="contact-grasp acquisition handoff capture",
         maximum_gripper_error_meters=(
             MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
@@ -337,7 +345,7 @@ async def capture_contact_grasp_acquisition_handoff(
     )
     if (
         synchronized.pose is None
-        or synchronized.active_drive_target != source_state.active_drive_target
+        or synchronized.active_drive_target != expected_active_drive_target
         or synchronized.safety.plug_attached
     ):
         raise RuntimeError("contact-grasp acquisition handoff state changed")

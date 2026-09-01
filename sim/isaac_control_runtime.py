@@ -209,6 +209,12 @@ def _active_drive_target(runtime: LiveControlRuntime) -> JointDriveTarget:
     )
 
 
+def current_drive_target(runtime: LiveControlRuntime) -> JointDriveTarget:
+    """Read the active drive target without advancing physics or changing state."""
+
+    return _active_drive_target(runtime)
+
+
 async def _settle_insertion_frame_capture_gripper(
     runtime: LiveControlRuntime,
     advance: Any,

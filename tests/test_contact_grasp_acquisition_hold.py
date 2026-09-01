@@ -9,7 +9,7 @@ from jepa_wm.contact_grasp_acquisition_hold import ContactGraspAcquisitionHold
 class ContactGraspAcquisitionHoldTest(unittest.TestCase):
     def test_round_trips_frozen_authority_without_filming(self) -> None:
         handoff = ContactGraspAcquisitionHold(
-            "unknown-start-e2e-v9-62605-grasp-01",
+            "unknown-start-e2e-v10-62605-grasp-01",
             "a" * 64,
             "b" * 40,
         )
