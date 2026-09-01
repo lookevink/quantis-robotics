@@ -9,6 +9,133 @@ from jepa_wm.persistence import write_json_atomic
 from jepa_wm.training_artifact import artifact_fingerprint
 
 
+def _host_array(values: Any) -> Any:
+    """Convert one Isaac tensor-like value to a NumPy-compatible host value."""
+
+    if hasattr(values, "cpu"):
+        values = values.cpu()
+    if hasattr(values, "numpy"):
+        values = values.numpy()
+    return values
+
+
+async def diagnose_unknown_start_candidate_rollback(
+    session_id: str,
+) -> dict[str, Any]:
+    """Read exact paused recovery drift without mutating simulator state."""
+
+    import omni.kit.app
+    import omni.timeline
+    import omni.usd
+    import numpy as np
+
+    from jepa.contract import ObservationStage
+    from sim.control_session import CONTROL_ROOT, ControlSession
+    from sim.isaac_control_runtime import (
+        live_runtime_for,
+        pause_control_timeline,
+        read_control_contact,
+    )
+    from sim.isaac_demo_kinematics import _solver_for_stage
+    from sim.isaac_demo_runtime import recording_snapshot
+    from sim.isaac_unknown_start_shadow import _load_authenticated_reset
+    from sim.recording import RecordingLabel, RecordingMoment
+    from sim.unknown_start_shadow import UnknownStartControlHandoff
+
+    session = ControlSession.at(CONTROL_ROOT, session_id)
+    _, state = session.load_capture()
+    handoff = UnknownStartControlHandoff.from_dict(
+        json.loads((session.path / "unknown_start_handoff.json").read_text())
+    )
+    if (
+        handoff.session_id != session_id
+        or artifact_fingerprint(session.request_path) != handoff.request_fingerprint
+        or artifact_fingerprint(session.state_path) != handoff.state_fingerprint
+    ):
+        raise ValueError("unknown-start recovery diagnostic source is invalid")
+    _, _, evidence, _ = _load_authenticated_reset(
+        handoff.reset_recording_id,
+        handoff.reset_result_fingerprint,
+    )
+    timeline = omni.timeline.get_timeline_interface()
+    await pause_control_timeline(timeline, omni.kit.app.get_app().next_update_async)
+    stage = omni.usd.get_context().get_stage()
+    runtime = live_runtime_for(session_id, stage)
+    if runtime is None:
+        raise RuntimeError("unknown-start recovery diagnostic runtime was lost")
+    actual = runtime.actuators.actual_command()
+    authored = runtime.actuators.current_command()
+    snapshot = recording_snapshot(
+        RecordingLabel(RecordingMoment.INITIAL),
+        ObservationStage.APPROACHING_CABLE,
+        actual,
+        runtime.attachment,
+    )
+    velocities = np.asarray(
+        _host_array(runtime.actuators.articulation.get_dof_velocities()),
+        dtype=np.float64,
+    )
+    if velocities.ndim == 2 and velocities.shape[0] == 1:
+        velocities = velocities[0]
+    solver, _, _ = _solver_for_stage(stage)
+    actual_fk = solver.compute_forward_kinematics(
+        "right_gripper", actual.arm_positions
+    )[0]
+    expected_joints = np.asarray(
+        evidence.observed_arm_positions_radians,
+        dtype=np.float64,
+    )
+    expected_fk = solver.compute_forward_kinematics(
+        "right_gripper", expected_joints
+    )[0]
+    expected_gripper_frame = np.asarray(
+        evidence.workspace.gripper_control_frame_position_m,
+        dtype=np.float64,
+    )
+    collision, force = read_control_contact(runtime.sensor)
+    return {
+        "schema": "quantis.unknown_start_rollback_diagnostic.v1",
+        "session_id": session_id,
+        "timeline_playing": timeline.is_playing(),
+        "actual_joint_positions": actual.arm_positions.tolist(),
+        "expected_joint_positions": expected_joints.tolist(),
+        "maximum_joint_error_radians": float(
+            np.max(np.abs(actual.arm_positions - expected_joints))
+        ),
+        "authored_joint_target": authored.arm_positions.tolist(),
+        "captured_drive_target": (
+            list(state.active_drive_target.joint_positions)
+            if state.active_drive_target is not None
+            else None
+        ),
+        "dof_velocities": velocities.tolist(),
+        "maximum_dof_velocity": float(np.max(np.abs(velocities))),
+        "usd_gripper_frame_position": (
+            np.asarray(snapshot.gripper_frame_world_position).tolist()
+        ),
+        "actual_joint_fk_gripper_position": np.asarray(actual_fk).tolist(),
+        "expected_joint_fk_gripper_position": np.asarray(expected_fk).tolist(),
+        "expected_gripper_frame_position": expected_gripper_frame.tolist(),
+        "usd_gripper_frame_error_meters": float(
+            np.max(
+                np.abs(
+                    np.asarray(snapshot.gripper_frame_world_position)
+                    - expected_gripper_frame
+                )
+            )
+        ),
+        "actual_joint_fk_error_meters": float(
+            np.max(np.abs(np.asarray(actual_fk) - expected_gripper_frame))
+        ),
+        "expected_joint_fk_error_meters": float(
+            np.max(np.abs(np.asarray(expected_fk) - expected_gripper_frame))
+        ),
+        "collision_detected": collision,
+        "contact_force_newtons": force,
+        "plug_attached": runtime.attachment.attached,
+    }
+
+
 async def recover_unknown_start_candidate_rollback(
     session_id: str,
 ) -> dict[str, Any]:

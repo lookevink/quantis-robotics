@@ -12,6 +12,19 @@ from tests.test_unknown_start_reset import valid_evidence
 
 
 class UnknownStartShadowHandoffTest(unittest.TestCase):
+    def test_recovery_diagnostic_is_paused_and_read_only(self) -> None:
+        source = Path("sim/isaac_unknown_start_recovery.py").read_text()
+        diagnostic = source.split(
+            "async def diagnose_unknown_start_candidate_rollback", 1
+        )[1].split("async def recover_unknown_start_candidate_rollback", 1)[0]
+
+        self.assertIn("await pause_control_timeline", diagnostic)
+        self.assertIn("get_dof_velocities()", diagnostic)
+        self.assertIn("compute_forward_kinematics(", diagnostic)
+        self.assertNotIn("set_reset_state(", diagnostic)
+        self.assertNotIn("resume_live_simulation(", diagnostic)
+        self.assertNotIn("advance_physics_updates(", diagnostic)
+
     def test_live_candidate_reuses_authenticated_capture_and_reauthenticates(
         self,
     ) -> None:

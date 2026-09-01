@@ -570,6 +570,8 @@ Commands:
   jepa-wm-grasp-to-insertion REFERENCE_RECORDING SEED GRASP_ARTIFACTS INSERTION_ARTIFACTS DEMO_SPEC_ID DEMO_SPEC_FINGERPRINT
   jepa-wm-unknown-start-reset
   jepa-wm-unknown-start-live-action     Apply one recovery-gated unknown-start candidate action
+  jepa-wm-unknown-start-recovery-diagnostic SESSION
+                                        Read paused rollback drift without motion
   jepa-wm-physical-shadow-canary-v5    Run continuity-safe unknown-start zero-actuation canary
   jepa-wm-physical-shadow-canary-v6    Run paused-render unknown-start zero-actuation canary
   jepa-wm-physical-shadow-canary-v7    Run classifier-corrected unknown-start canary
@@ -1247,6 +1249,13 @@ case "${command}" in
     fi
     printf 'Unknown-start live action workflow complete.\n'
     exit "${command_status}"
+    ;;
+  jepa-wm-unknown-start-recovery-diagnostic)
+    session_id="${2:-}"
+    is_safe_identifier "${session_id}" || die "invalid control session name"
+    demo_python \
+      "await demo.diagnose_unknown_start_candidate_rollback('${session_id}')" \
+      120
     ;;
   jepa-wm-physical-shadow-replay)
     deployment_source_revision >/dev/null

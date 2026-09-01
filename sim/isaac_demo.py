@@ -59,6 +59,7 @@ from sim.isaac_unknown_start_shadow import (
     preflight_unknown_start_shadow as _preflight_unknown_start_shadow,
 )
 from sim.isaac_unknown_start_recovery import (
+    diagnose_unknown_start_candidate_rollback as _diagnose_unknown_start_candidate_rollback,
     recover_unknown_start_candidate_rollback as _recover_unknown_start_candidate_rollback,
 )
 from sim.isaac_demo_runtime import (
@@ -216,6 +217,17 @@ async def recover_unknown_start_candidate_rollback(
     return await _RECORDING_JOBS.run_exclusive(
         f"unknown-start-rollback-recovery-{session_id}",
         lambda: _recover_unknown_start_candidate_rollback(session_id),
+    )
+
+
+async def diagnose_unknown_start_candidate_rollback(
+    session_id: str,
+) -> dict[str, Any]:
+    """Read paused rollback drift under the simulator-operation interlock."""
+
+    return await _RECORDING_JOBS.run_exclusive(
+        f"unknown-start-rollback-diagnostic-{session_id}",
+        lambda: _diagnose_unknown_start_candidate_rollback(session_id),
     )
 
 
