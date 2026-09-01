@@ -1491,6 +1491,17 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertNotIn("finalize-recovery", calls)
         self.assertLess(calls.index("worker_stop:exit_7"), calls.index("backup_state.sh"))
 
+    def test_physical_shadow_replay_is_offline_and_recovery_gated(self):
+        result, calls = self.run_command("jepa-wm-physical-shadow-replay")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("run_physical_shadow_replay.sh", calls)
+        self.assertIn("control-worker-stop", calls)
+        self.assertIn("backup_state.sh", calls)
+        self.assertIn("physical_shadow_replay finalize", calls)
+        self.assertNotIn("isaac_container.sh start", calls)
+        self.assertNotIn("run_control_step.sh", calls)
+
     def test_insertion_trial_forwards_exact_source_and_always_backs_up(self):
         result, calls = self.run_command(
             "jepa-wm-insertion-trial",

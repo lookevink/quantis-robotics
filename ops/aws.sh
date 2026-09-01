@@ -553,6 +553,7 @@ Commands:
   jepa-wm-control-worker-start [artifacts] | jepa-wm-control-worker-status | jepa-wm-control-worker-stop
   jepa-wm-control-worker-rebase-proposal SOURCE_ARTIFACTS NEW_ARTIFACTS PROPOSAL
   jepa-wm-physical-shadow-canary       Run the frozen known-start zero-actuation canary
+  jepa-wm-physical-shadow-replay       Replay the failed canary offline with the corrected planner
   jepa-wm-control-step REFERENCE_RECORDING SEED [artifacts] [context-index]
   jepa-wm-insertion-safety REFERENCE_RECORDING SEED [artifacts] [context-index]
   jepa-wm-insertion-trial REFERENCE_RECORDING SEED ARTIFACTS SOURCE_SESSION [context-index]
@@ -1147,6 +1148,41 @@ case "${command}" in
         || true
     fi
     printf 'Physical shadow canary workflow complete.\n'
+    exit "${command_status}"
+    ;;
+  jepa-wm-physical-shadow-replay)
+    deployment_source_revision >/dev/null
+    command_status=0
+    sync_repo || command_status=$?
+    if (( command_status == 0 )); then
+      remote "bash ~/quantis-robotics/ops/run_physical_shadow_replay.sh" \
+        || command_status=$?
+    fi
+    stop_status=0
+    remote "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-stop" \
+      || stop_status=$?
+    if (( command_status == 0 && stop_status != 0 )); then
+      command_status=${stop_status}
+      remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.physical_shadow_replay failure --config .scratch/jepa-physical-shadow-replay-v1/experiment-config.json --error 'worker_stop:exit_${stop_status}'" \
+        || true
+    fi
+    backup_status=0
+    remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' \
+      || backup_status=$?
+    if (( command_status == 0 && backup_status == 0 )); then
+      remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.physical_shadow_replay finalize --config .scratch/jepa-physical-shadow-replay-v1/experiment-config.json --recovery-checkpoint-root /mnt/quantis-assets/quantis-state/jepa-wm/checkpoints" \
+        || command_status=$?
+      if (( command_status != 0 )); then
+        remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.physical_shadow_replay failure --config .scratch/jepa-physical-shadow-replay-v1/experiment-config.json --error 'recovery_finalization:exit_${command_status}'" \
+          || true
+        remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' || true
+      fi
+    elif (( command_status == 0 )); then
+      command_status=${backup_status}
+      remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.physical_shadow_replay failure --config .scratch/jepa-physical-shadow-replay-v1/experiment-config.json --error 'recovery_backup:exit_${backup_status}'" \
+        || true
+    fi
+    printf 'Physical shadow offline replay workflow complete.\n'
     exit "${command_status}"
     ;;
   jepa-wm-control-step)

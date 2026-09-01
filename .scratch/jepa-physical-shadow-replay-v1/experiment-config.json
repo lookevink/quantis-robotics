@@ -1,0 +1,36 @@
+{
+  "schema": "quantis.jepa_wm_physical_shadow_replay_experiment.v1",
+  "experiment_id": "physical-shadow-corrected-planner-replay-v1",
+  "evaluator": {
+    "path": "jepa_wm/physical_shadow_replay.py",
+    "fingerprint": "PENDING_CHECKPOINT",
+    "implementation_revision": "PENDING_CHECKPOINT"
+  },
+  "source": {
+    "session": "/home/ubuntu/docker/isaac-sim/data/quantis/control_sessions/physical-shadow-canary-12601",
+    "files": {
+      "request.json": "f253d5ee767fef6efab4f2991882b8c87da3dd48cfbce7a0214041c4923546e4",
+      "state.json": "7e6e9208f40a39cb4bbc31aaaea3eeaefa8794f0a5e7a5cb0371d59d0937036c",
+      "response.json": "6f4c9c2bf3d391225366562f7144874079f7cc7e2991b64beeaac27d7a45c0ce",
+      "shadow_request.json": "5e7f009cf108a5ece2d18b57ee72776b05b9c5236b0de3a1b166be0b249e9481",
+      "shadow.json": "763e21d08b7b632004442690c8613d0958466b5b0ad01c39fde526e3a35b6d58",
+      "shadow_safety.json": "3b1f3db180c006c776944d3544ebcebe8d287b1b5461c26a91ef8e56d0f4388b"
+    }
+  },
+  "worker": {
+    "name": "contact-insertion-v10-physical-shadow-canary-v1",
+    "manifest": "/home/ubuntu/docker/jepa-wm/checkpoints/contact-insertion-v10-physical-shadow-canary-v1.worker.json",
+    "fingerprint": "0b7b3010bfc39e32e86fa6695173037565a6a202b53cf6baf458629be3a303d0"
+  },
+  "output": "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/corrected-shadow-replay-v1",
+  "execution": {
+    "replays": 1,
+    "isaac": false,
+    "capture": false,
+    "apply_action": false,
+    "train": false,
+    "film": false,
+    "hardware": false,
+    "production": false
+  }
+}
