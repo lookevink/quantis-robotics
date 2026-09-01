@@ -1,4 +1,4 @@
-"""Authenticated V11 continuation after the bounded V10 acquisition negative."""
+"""Authenticated V12 continuation after the bounded V10 acquisition negative."""
 
 from __future__ import annotations
 
@@ -28,9 +28,9 @@ from jepa_wm.persistence import write_json_atomic
 from jepa_wm.training_artifact import artifact_fingerprint
 
 
-HANDOFF_SCHEMA = "quantis.contact_grasp_acquisition_resolution.v1"
-EXPERIMENT_DIRECTORY = "unknown_start_acquisition_resolution_v11"
-ROLLOUT_ID = "unknown-start-e2e-v11-62605-grasp"
+HANDOFF_SCHEMA = "quantis.contact_grasp_acquisition_resolution.v2"
+EXPERIMENT_DIRECTORY = "unknown_start_acquisition_resolution_v12"
+ROLLOUT_ID = "unknown-start-e2e-v12-62605-grasp"
 SOURCE_ROLLOUT_ID = "unknown-start-e2e-v10-62605-grasp"
 SOURCE_SESSION_ID = f"{SOURCE_ROLLOUT_ID}-52"
 MAXIMUM_ACTIONS = 96
@@ -47,6 +47,18 @@ SOURCE_REPORT_FINGERPRINT = (
 SOURCE_ROSTER_FINGERPRINT = (
     "561076bc5ce667d297ed9ba45623c7dc204747c683d12b2ba6ad84c8c4e7f1c7"
 )
+V11_CLAIM_FINGERPRINT = (
+    "3e345a656e255c21af42eccd81496ad53f0816084eab352068a933178b424eac"
+)
+V11_FAILURE_FINGERPRINT = (
+    "ef6157b3816e536f0b9abf3b6824538ad49a3f5c655fa7b7362ecde1946d8912"
+)
+V11_DIAGNOSTIC_FINGERPRINT = (
+    "b32aedf987f5634ff5ad9cbdac2944a54bd94afae5fe7a0b4c79bc50f6e74f30"
+)
+V11_EXPERIMENT_DIRECTORY = "unknown_start_acquisition_resolution_v11"
+V11_ROLLOUT_ID = "unknown-start-e2e-v11-62605-grasp"
+V11_SESSION_ID = f"{V11_ROLLOUT_ID}-01"
 SESSION_FILES = (
     "request.json",
     "state.json",
@@ -142,6 +154,10 @@ class ContactGraspAcquisitionResolution:
             "source_failure_fingerprint": SOURCE_FAILURE_FINGERPRINT,
             "source_report_fingerprint": SOURCE_REPORT_FINGERPRINT,
             "source_roster_fingerprint": SOURCE_ROSTER_FINGERPRINT,
+            "v11_claim_fingerprint": V11_CLAIM_FINGERPRINT,
+            "v11_failure_fingerprint": V11_FAILURE_FINGERPRINT,
+            "v11_diagnostic_fingerprint": V11_DIAGNOSTIC_FINGERPRINT,
+            "v11_simulator_action_applied": False,
             "runtime_fingerprint": self.runtime_fingerprint,
             "source_revision": self.source_revision,
             "no_actuation_diagnostic_required": True,
@@ -237,6 +253,32 @@ def validate_source(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
     return payload
 
 
+def validate_v11_no_action(checkpoint_root: Path, data_root: Path) -> None:
+    root = checkpoint_root / V11_EXPERIMENT_DIRECTORY
+    claim_path = root / "CLAIM.json"
+    failure_path = root / "FAILURE.json"
+    diagnostic = diagnostic_path(data_root, V11_SESSION_ID)
+    if (
+        artifact_fingerprint(claim_path) != V11_CLAIM_FINGERPRINT
+        or artifact_fingerprint(failure_path) != V11_FAILURE_FINGERPRINT
+        or artifact_fingerprint(diagnostic) != V11_DIAGNOSTIC_FINGERPRINT
+    ):
+        raise ValueError("terminal no-action V11 evidence changed")
+    claim_payload = json.loads(claim_path.read_text())
+    failure_payload = json.loads(failure_path.read_text())
+    diagnostic_payload = json.loads(diagnostic.read_text())
+    if (
+        claim_payload.get("followup_session_id") != V11_SESSION_ID
+        or failure_payload.get("error") != "diagnostic_validation:exit_1"
+        or failure_payload.get("retry_authorized") is not False
+        or diagnostic_payload.get("status") != "passed_no_actuation"
+        or diagnostic_payload.get("simulator_action_applied") is not False
+        or (data_root / "control_sessions" / V11_SESSION_ID).exists()
+        or (data_root / "control_rollouts" / V11_ROLLOUT_ID).exists()
+    ):
+        raise ValueError("V11 was not the exact validator-only failure")
+
+
 def claim(
     checkpoint_root: Path,
     recovery_checkpoint_root: Path,
@@ -251,6 +293,8 @@ def claim(
         raise ValueError("contact-grasp acquisition resolution is already terminal")
     validate_source(checkpoint_root, data_root)
     validate_source(recovery_checkpoint_root, recovery_data_root)
+    validate_v11_no_action(checkpoint_root, data_root)
+    validate_v11_no_action(recovery_checkpoint_root, recovery_data_root)
     handoff = ContactGraspAcquisitionResolution(
         followup_session_id,
         runtime_fingerprint(),
@@ -277,10 +321,20 @@ def validate_diagnostic_evidence(
 ) -> dict[str, Any]:
     # Resolve after the persistent Isaac server has completed its ordered module
     # reload, rather than retaining a scale roster from the prior generation.
-    from jepa_wm.control_safety import CONTACT_GRASP_COARSE_ACTION_SCALES
+    from jepa_wm.action import DroidAction
+    from jepa_wm.control_safety import contact_grasp_action_scales
 
     selected = payload.get("selected_scale")
     attempts = payload.get("attempts")
+    action_values = payload.get("action")
+    try:
+        action = DroidAction(tuple(action_values))
+        expected_scales = contact_grasp_action_scales(
+            action,
+            coarse_acquisition=True,
+        )
+    except (TypeError, ValueError):
+        expected_scales = ()
     safe_attempts = (
         tuple(
             attempt
@@ -290,19 +344,27 @@ def validate_diagnostic_evidence(
         if isinstance(attempts, list)
         else ()
     )
-    allowed_scales = tuple(
-        scale.to_dict() for scale in CONTACT_GRASP_COARSE_ACTION_SCALES
+    expected_scale_payloads = tuple(scale.to_dict() for scale in expected_scales)
+    attempted_scale_payloads = (
+        tuple(
+            attempt.get("scale") if isinstance(attempt, dict) else None
+            for attempt in attempts
+        )
+        if isinstance(attempts, list)
+        else ()
     )
     if (
         payload.get("schema")
-        != "quantis.contact_grasp_acquisition_resolution_diagnostic.v1"
+        != "quantis.contact_grasp_acquisition_resolution_diagnostic.v2"
         or payload.get("status") != "passed_no_actuation"
         or payload.get("source_session_id") != SOURCE_SESSION_ID
         or payload.get("followup_session_id") != handoff.followup_session_id
         or payload.get("claim_fingerprint") != claim_fingerprint
         or payload.get("simulator_action_applied") is not False
         or not isinstance(selected, dict)
-        or selected not in allowed_scales
+        or not expected_scale_payloads
+        or attempted_scale_payloads != expected_scale_payloads
+        or selected not in expected_scale_payloads
         or not safe_attempts
         or safe_attempts[0].get("scale") != selected
         or not isinstance(selected.get("translation"), (int, float))

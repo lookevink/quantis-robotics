@@ -4,18 +4,20 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+from jepa_wm.action import DroidAction
 from jepa_wm.contact_grasp_acquisition_resolution import (
     RUNTIME_FILES,
     ContactGraspAcquisitionResolution,
     runtime_fingerprint,
     validate_diagnostic_evidence,
 )
+from jepa_wm.control_safety import contact_grasp_action_scales
 
 
 class ContactGraspAcquisitionResolutionTest(unittest.TestCase):
     def _handoff(self) -> ContactGraspAcquisitionResolution:
         return ContactGraspAcquisitionResolution(
-            "unknown-start-e2e-v11-62605-grasp-01",
+            "unknown-start-e2e-v12-62605-grasp-01",
             "a" * 64,
             "b" * 40,
         )
@@ -72,37 +74,23 @@ class ContactGraspAcquisitionResolutionTest(unittest.TestCase):
     def test_diagnostic_requires_first_safe_frozen_coarse_scale(self) -> None:
         handoff = self._handoff()
         claim_fingerprint = "c" * 64
+        action = DroidAction((0.007, 0.0, 0.0, 0.0, 0.0, 0.0, -0.2))
+        scales = contact_grasp_action_scales(action, coarse_acquisition=True)
+        attempts = [
+            {"scale": scale.to_dict(), "passed": index == 1}
+            for index, scale in enumerate(scales)
+        ]
         payload = {
             "schema": (
-                "quantis.contact_grasp_acquisition_resolution_diagnostic.v1"
+                "quantis.contact_grasp_acquisition_resolution_diagnostic.v2"
             ),
             "status": "passed_no_actuation",
             "source_session_id": "unknown-start-e2e-v10-62605-grasp-52",
             "followup_session_id": handoff.followup_session_id,
             "claim_fingerprint": claim_fingerprint,
-            "selected_scale": {
-                "translation": 0.5,
-                "rotation": 0.125,
-                "gripper": 0.125,
-            },
-            "attempts": [
-                {
-                    "scale": {
-                        "translation": 1.0,
-                        "rotation": 0.125,
-                        "gripper": 0.125,
-                    },
-                    "passed": False,
-                },
-                {
-                    "scale": {
-                        "translation": 0.5,
-                        "rotation": 0.125,
-                        "gripper": 0.125,
-                    },
-                    "passed": True,
-                },
-            ],
+            "action": list(action.values),
+            "selected_scale": scales[1].to_dict(),
+            "attempts": attempts,
             "simulator_action_applied": False,
         }
 
@@ -114,11 +102,7 @@ class ContactGraspAcquisitionResolutionTest(unittest.TestCase):
             ),
             payload,
         )
-        payload["selected_scale"] = {
-            "translation": 1.0,
-            "rotation": 0.125,
-            "gripper": 0.125,
-        }
+        payload["selected_scale"] = scales[0].to_dict()
         with self.assertRaisesRegex(ValueError, "did not pass"):
             validate_diagnostic_evidence(payload, handoff, claim_fingerprint)
 

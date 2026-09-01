@@ -323,11 +323,12 @@ def diagnose_contact_grasp_acquisition_resolution(
         raise ValueError("contact-grasp coarse acquisition has no useful safe scale")
     claim_bytes = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
     result = {
-        "schema": "quantis.contact_grasp_acquisition_resolution_diagnostic.v1",
+        "schema": "quantis.contact_grasp_acquisition_resolution_diagnostic.v2",
         "status": "passed_no_actuation",
         "source_session_id": source_session_id,
         "followup_session_id": handoff.followup_session_id,
         "claim_fingerprint": sha256(claim_bytes).hexdigest(),
+        "action": list(action.values),
         "selected_scale": selected.to_dict(),
         "attempts": attempts,
         "simulator_action_applied": False,
