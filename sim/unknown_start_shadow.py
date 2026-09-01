@@ -181,15 +181,61 @@ def validate_unknown_start_handoff(
 ) -> None:
     """Reject any live-state drift before a model request is created."""
 
+    failures = unknown_start_handoff_failures(
+        evidence,
+        arm_positions=arm_positions,
+        gripper_width_m=gripper_width_m,
+        connector_position_m=connector_position_m,
+        socket_position_m=socket_position_m,
+        gripper_frame_position_m=gripper_frame_position_m,
+        connector_orientation_wxyz=connector_orientation_wxyz,
+        expected_connector_orientation_wxyz=expected_connector_orientation_wxyz,
+        socket_orientation_wxyz=socket_orientation_wxyz,
+        expected_socket_orientation_wxyz=expected_socket_orientation_wxyz,
+        camera_offset_m=camera_offset_m,
+        socket_scale=socket_scale,
+        light_exposure_deltas=light_exposure_deltas,
+        plug_attached=plug_attached,
+        collision_detected=collision_detected,
+        contact_force_newtons=contact_force_newtons,
+    )
+    if failures:
+        raise ValueError(
+            "unknown-start live state drifted after authentication: "
+            + ", ".join(failures)
+        )
+
+
+def unknown_start_handoff_failures(
+    evidence: UnknownStartResetEvidence,
+    *,
+    arm_positions: tuple[float, ...],
+    gripper_width_m: float,
+    connector_position_m: tuple[float, ...],
+    socket_position_m: tuple[float, ...],
+    gripper_frame_position_m: tuple[float, ...],
+    connector_orientation_wxyz: tuple[float, ...],
+    expected_connector_orientation_wxyz: tuple[float, ...],
+    socket_orientation_wxyz: tuple[float, ...],
+    expected_socket_orientation_wxyz: tuple[float, ...],
+    camera_offset_m: tuple[float, ...],
+    socket_scale: float,
+    light_exposure_deltas: tuple[float, ...],
+    plug_attached: bool,
+    collision_detected: bool,
+    contact_force_newtons: float,
+) -> tuple[str, ...]:
+    """Name every failed continuity predicate for pre-claim diagnosis."""
+
     evidence.validate(UNKNOWN_START_RESET_CONTRACT)
-    if (
-        len(arm_positions) != 7
-        or len(connector_position_m) != 3
-        or len(socket_position_m) != 3
-        or len(gripper_frame_position_m) != 3
-        or len(camera_offset_m) != 3
-        or not light_exposure_deltas
-        or not all(
+    structural = (
+        len(arm_positions) == 7
+        and len(connector_position_m) == 3
+        and len(socket_position_m) == 3
+        and len(gripper_frame_position_m) == 3
+        and len(camera_offset_m) == 3
+        and bool(light_exposure_deltas)
+        and all(
             isfinite(float(value))
             for values in (
                 arm_positions,
@@ -205,48 +251,106 @@ def validate_unknown_start_handoff(
             )
             for value in values
         )
-        or not isfinite(gripper_width_m)
-        or not isfinite(contact_force_newtons)
-        or not isfinite(socket_scale)
-        or _maximum_error(arm_positions, evidence.observed_arm_positions_radians)
-        > MAXIMUM_HANDOFF_JOINT_DRIFT_RAD
-        or abs(gripper_width_m - evidence.observed_gripper_width_m)
-        > MAXIMUM_HANDOFF_GRIPPER_DRIFT_M
-        or _maximum_error(
-            connector_position_m,
-            evidence.workspace.connector_position_m,
-        )
-        > MAXIMUM_HANDOFF_POSITION_DRIFT_M
-        or _maximum_error(socket_position_m, evidence.workspace.socket_position_m)
-        > MAXIMUM_HANDOFF_POSITION_DRIFT_M
-        or _maximum_error(
-            gripper_frame_position_m,
-            evidence.workspace.gripper_control_frame_position_m,
-        )
-        > MAXIMUM_HANDOFF_POSITION_DRIFT_M
-        or _quaternion_error(
-            connector_orientation_wxyz,
-            expected_connector_orientation_wxyz,
-        )
-        > MAXIMUM_HANDOFF_ORIENTATION_DRIFT_RAD
-        or _quaternion_error(
-            socket_orientation_wxyz,
-            expected_socket_orientation_wxyz,
-        )
-        > MAXIMUM_HANDOFF_ORIENTATION_DRIFT_RAD
-        or _maximum_error(camera_offset_m, evidence.realization.camera_offset_m)
-        > UNKNOWN_START_RESET_CONTRACT.realization_tolerances.camera_offset_m
-        or abs(socket_scale - evidence.workspace.socket_scale)
-        > UNKNOWN_START_RESET_CONTRACT.workspace.realization_scale_tolerance
-        or any(
-            abs(delta - evidence.realization.light_exposure_delta)
-            > UNKNOWN_START_RESET_CONTRACT.realization_tolerances.light_exposure_delta
-            for delta in light_exposure_deltas
-        )
-        or not isinstance(plug_attached, bool)
-        or not isinstance(collision_detected, bool)
-        or plug_attached
-        or collision_detected
-        or contact_force_newtons != 0.0
-    ):
-        raise ValueError("unknown-start live state drifted after authentication")
+        and isfinite(gripper_width_m)
+        and isfinite(contact_force_newtons)
+        and isfinite(socket_scale)
+        and isinstance(plug_attached, bool)
+        and isinstance(collision_detected, bool)
+    )
+    checks = (
+        ("structure_and_finite_values", structural),
+        (
+            "arm_positions",
+            structural
+            and _maximum_error(
+                arm_positions,
+                evidence.observed_arm_positions_radians,
+            )
+            <= MAXIMUM_HANDOFF_JOINT_DRIFT_RAD,
+        ),
+        (
+            "gripper_width",
+            structural
+            and abs(gripper_width_m - evidence.observed_gripper_width_m)
+            <= MAXIMUM_HANDOFF_GRIPPER_DRIFT_M,
+        ),
+        (
+            "connector_position",
+            structural
+            and _maximum_error(
+                connector_position_m,
+                evidence.workspace.connector_position_m,
+            )
+            <= MAXIMUM_HANDOFF_POSITION_DRIFT_M,
+        ),
+        (
+            "socket_position",
+            structural
+            and _maximum_error(
+                socket_position_m,
+                evidence.workspace.socket_position_m,
+            )
+            <= MAXIMUM_HANDOFF_POSITION_DRIFT_M,
+        ),
+        (
+            "gripper_frame_position",
+            structural
+            and _maximum_error(
+                gripper_frame_position_m,
+                evidence.workspace.gripper_control_frame_position_m,
+            )
+            <= MAXIMUM_HANDOFF_POSITION_DRIFT_M,
+        ),
+        (
+            "connector_orientation",
+            structural
+            and _quaternion_error(
+                connector_orientation_wxyz,
+                expected_connector_orientation_wxyz,
+            )
+            <= MAXIMUM_HANDOFF_ORIENTATION_DRIFT_RAD,
+        ),
+        (
+            "socket_orientation",
+            structural
+            and _quaternion_error(
+                socket_orientation_wxyz,
+                expected_socket_orientation_wxyz,
+            )
+            <= MAXIMUM_HANDOFF_ORIENTATION_DRIFT_RAD,
+        ),
+        (
+            "camera_offset",
+            structural
+            and _maximum_error(
+                camera_offset_m,
+                evidence.realization.camera_offset_m,
+            )
+            <= UNKNOWN_START_RESET_CONTRACT.realization_tolerances.camera_offset_m,
+        ),
+        (
+            "socket_scale",
+            structural
+            and abs(socket_scale - evidence.workspace.socket_scale)
+            <= UNKNOWN_START_RESET_CONTRACT.workspace.realization_scale_tolerance,
+        ),
+        (
+            "light_exposure",
+            structural
+            and all(
+                abs(delta - evidence.realization.light_exposure_delta)
+                <= UNKNOWN_START_RESET_CONTRACT.realization_tolerances.light_exposure_delta
+                for delta in light_exposure_deltas
+            ),
+        ),
+        ("plug_unattached", isinstance(plug_attached, bool) and not plug_attached),
+        (
+            "collision_free",
+            isinstance(collision_detected, bool) and not collision_detected,
+        ),
+        (
+            "contact_force_zero",
+            isfinite(contact_force_newtons) and contact_force_newtons == 0.0,
+        ),
+    )
+    return tuple(name for name, passed in checks if not passed)

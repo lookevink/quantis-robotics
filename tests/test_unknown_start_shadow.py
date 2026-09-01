@@ -5,6 +5,7 @@ import unittest
 
 from sim.unknown_start_shadow import (
     UnknownStartControlHandoff,
+    unknown_start_handoff_failures,
     validate_unknown_start_handoff,
 )
 from tests.test_unknown_start_reset import valid_evidence
@@ -128,6 +129,13 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
                 evidence,
                 **{**arguments, "gripper_width_m": nan},
             )
+        self.assertEqual(
+            unknown_start_handoff_failures(
+                evidence,
+                **{**arguments, "contact_force_newtons": 1e-9},
+            ),
+            ("contact_force_zero",),
+        )
 
 
 if __name__ == "__main__":
