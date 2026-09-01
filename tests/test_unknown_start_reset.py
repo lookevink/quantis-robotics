@@ -8,6 +8,8 @@ import unittest
 import zlib
 
 from jepa_wm.unknown_start_reset_lifecycle import (
+    UNKNOWN_START_RESET_RECORDING_ID,
+    UNKNOWN_START_RESET_SEED,
     claim,
     failure,
     finalize_recovery,
@@ -30,8 +32,8 @@ from sim.exploration import DatasetSplit
 
 def valid_evidence() -> UnknownStartResetEvidence:
     sample = UNKNOWN_START_RESET_CONTRACT.draw(
-        62604,
-        forbidden_seeds={62600, 62601, 62602, 62603},
+        UNKNOWN_START_RESET_SEED,
+        forbidden_seeds={62600, 62601, 62602, 62603, 62604},
     )
     connector_position = tuple(
         baseline + offset
@@ -102,8 +104,8 @@ class UnknownStartResetContractTest(unittest.TestCase):
             ledger_root = Path(directory) / "ledger"
             payload = claim(
                 ledger_root,
-                "unknown-start-reset-v5-62604",
-                62604,
+                UNKNOWN_START_RESET_RECORDING_ID,
+                UNKNOWN_START_RESET_SEED,
                 "a" * 40,
                 "b" * 64,
             )
@@ -113,8 +115,8 @@ class UnknownStartResetContractTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "already claimed"):
                 claim(
                     ledger_root,
-                    "unknown-start-reset-v5-62604",
-                    62604,
+                    UNKNOWN_START_RESET_RECORDING_ID,
+                    UNKNOWN_START_RESET_SEED,
                     "a" * 40,
                     "b" * 64,
                 )
@@ -143,7 +145,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
             recovery.mkdir()
             source_revision = "a" * 40
             runtime_fingerprint = "b" * 64
-            recording_id = "unknown-start-reset-v5-62604"
+            recording_id = UNKNOWN_START_RESET_RECORDING_ID
             evidence = valid_evidence()
             sample = evidence.sample
             primary_ledger = root / "claims"
@@ -254,13 +256,13 @@ class UnknownStartResetContractTest(unittest.TestCase):
             runtime_fingerprint = "b" * 64
             claim_payload = claim(
                 ledger,
-                "unknown-start-reset-v5-62604",
-                62604,
+                UNKNOWN_START_RESET_RECORDING_ID,
+                UNKNOWN_START_RESET_SEED,
                 source_revision,
                 runtime_fingerprint,
             )
             recording = (
-                data_root / "recordings" / "unknown-start-reset-v5-62604"
+                data_root / "recordings" / UNKNOWN_START_RESET_RECORDING_ID
             )
             frame = recording / "wrist/frame_000000.png"
             frame.parent.mkdir(parents=True)
@@ -376,6 +378,8 @@ class UnknownStartResetContractTest(unittest.TestCase):
         self.assertIn("realization_tolerances.light_exposure_delta", source)
         self.assertIn("workspace.realization_scale_tolerance", source)
         self.assertIn("authored = actuators.current_command()", source)
+        self.assertIn("pause_control_timeline(timeline, advance_pause)", source)
+        self.assertNotIn("timeline.stop()", source)
         self.assertIn("snapshot.gripper_frame_world_position", source)
         self.assertIn('"UNKNOWN_START_RESET_NEGATIVE.json"', source)
         self.assertNotIn("plan.light_exposure_delta) > 1e-9", source)
@@ -391,7 +395,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
         self.assertIn("describe --field ledger-name", runner)
         self.assertIn("describe --field recording-id", aws)
         self.assertIn("describe --field claim-name", aws)
-        self.assertNotIn("unknown-start-reset-v5-62604", runner)
+        self.assertNotIn(UNKNOWN_START_RESET_RECORDING_ID, runner)
 
     def test_reserved_seed_draw_is_deterministic_and_bounded(self) -> None:
         sample = UNKNOWN_START_RESET_CONTRACT.draw(62600, forbidden_seeds={12600, 12601})

@@ -15,6 +15,7 @@ from jepa_wm.unknown_start_reset_runtime import authenticate_runtime_source
 from sim.isaac_control_runtime import (
     connector_contact_sensor,
     contact_sensor,
+    pause_control_timeline,
     read_contact,
 )
 from sim.isaac_demo_camera import (
@@ -206,6 +207,13 @@ async def authenticate_unknown_start_reset(
         timeline.play()
         actuators.set_reset_state(command)
         safety = await advance_physics_updates(16, observe_safety)
+
+        async def advance_pause() -> None:
+            await omni.kit.app.get_app().next_update_async()
+            observe_safety()
+
+        await pause_control_timeline(timeline, advance_pause)
+        safety = observe_safety()
         authored = actuators.current_command()
         actual = actuators.actual_command()
         snapshot = recording_snapshot(
@@ -285,8 +293,11 @@ async def authenticate_unknown_start_reset(
         raise
     finally:
         RenderingManager.set_dt(original_rendering_dt)
-        if timeline is not None:
-            timeline.stop()
+        if timeline is not None and timeline.is_playing():
+            await pause_control_timeline(
+                timeline,
+                omni.kit.app.get_app().next_update_async,
+            )
 
     if recorder is None or not completed:
         raise RuntimeError("unknown-start reset did not complete")
