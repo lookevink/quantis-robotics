@@ -924,6 +924,17 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     never reached model inference. The next separate milestone is a frozen
     execution contract plus zero-actuation handoff from this authenticated
     reset, not an automatically authorized JEPA action or filming run.
+    A continuity-safe successor subsequently passed on held-out seed `62605`.
+    It captures the authenticated evidence after pausing Isaac and leaves that
+    exact state paused for handoff. The corresponding zero-actuation shadow
+    gate then passed the unchanged frozen model: `0.999805` first-action
+    cosine, `0.002837` objective improvement across 256 bounded candidates,
+    and a passing independent counterfactual safety projection. Two preceding
+    identities remain immutable non-model negatives from paused-camera and
+    evaluator-schema defects. The terminal evaluation and result match the
+    verified recovery copy; no action was applied and execution never started.
+    This closes model readiness only. A separately frozen live-action contract
+    and explicit authority are still required before motion or filming.
     From that reset, JEPA-controlled, safety-gated actions must approach and
     acquire the connector, retain it through transport, align it with the
     socket, complete contact-aware insertion, and hold the validated seated

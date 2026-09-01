@@ -2329,6 +2329,27 @@ zero-actuation handoff from this authenticated reset; no live JEPA action or
 filming authority is implied. Exact evidence is in
 [`RESULT.md`](.scratch/jepa-unknown-start-reset-v5/RESULT.md).
 
+The continuity-safe reset-v6 successor then passed on unused held-out seed
+`62605`. It pauses Isaac before reading and capturing the authenticated state,
+so reset evidence and the later control handoff bind the same arm and gripper
+frame instead of a post-stop state. The one-set/zero-prefix/zero-action reset
+was unattached, collision-free, and exactly `0 N`; its result and all canonical
+artifacts match the verified 16 GiB recovery copy. Exact evidence is in
+[`RESULT.md`](.scratch/jepa-unknown-start-reset-v6/RESULT.md).
+
+The separately frozen unknown-start shadow gate is also now complete. Two
+terminal non-model negatives identified and preserved a paused-camera render
+defect and a duplicated evaluator schema classifier. After zero-delta paused
+rendering and one shared unknown-start classifier were regression-tested, the
+unchanged frozen model passed on reset seed `62605`: first-action cosine
+`0.999805`, objective improvement `0.002837`, all 256 candidates bounded, and
+the independent Isaac counterfactual safety gate passed. No action was applied
+and execution never started. Evaluation `cf083d1c...22bef` and terminal result
+`4f1ba5c5...3c542` match their recovery copies. This closes unknown-start
+zero-actuation model readiness only; it does not authorize live JEPA action or
+filming. Exact evidence is in
+[`RESULT.md`](.scratch/jepa-physical-shadow-canary-v7/RESULT.md).
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded
