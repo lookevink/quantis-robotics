@@ -2350,6 +2350,18 @@ zero-actuation model readiness only; it does not authorize live JEPA action or
 filming. Exact evidence is in
 [`RESULT.md`](.scratch/jepa-physical-shadow-canary-v7/RESULT.md).
 
+The separately frozen first unknown-start live-action gate is now terminally
+passed on reset seed `62605`. V7 applied exactly one unchanged model action;
+freshness was `8.48 ms`, IK errors were `0.000492 mm` and `0.564 mrad`, and
+tracking passed at `0.228 mm`, `0.738 mrad`, and `0.001139` normalized gripper
+error. Direction cosines were `0.999943` translation and `0.999347` rotation,
+with `0 N`, no collision, and no attachment. Claim `67159b42...d6274`,
+evaluation `181e742c...56e2`, and terminal result `14dcf231...feb2` match the
+verified 16 GiB recovery copy. This closes one-action live realization only:
+the run did not grasp or insert, and no second action, training, filming,
+hardware, or production authority follows. Exact evidence is in
+[`RESULT.md`](.scratch/jepa-unknown-start-live-action-v7/RESULT.md).
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

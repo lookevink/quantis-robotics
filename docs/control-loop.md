@@ -935,6 +935,15 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     verified recovery copy; no action was applied and execution never started.
     This closes model readiness only. A separately frozen live-action contract
     and explicit authority are still required before motion or filming.
+    That separately frozen first live-action gate subsequently passed on the
+    same reset seed. V7 applied exactly one model action with `8.48 ms`
+    freshness, `0.000492 mm`/`0.564 mrad` IK errors, and passing
+    `0.228 mm`/`0.738 mrad`/`0.001139` tracking. Direction cosines were
+    `0.999943`/`0.999347`; force stayed `0 N`, with no collision or attachment.
+    Claim, evaluation, and terminal result match the verified 16 GiB recovery
+    copy. This is a one-action realization checkpoint, not milestone-20 task
+    completion: no grasp, insertion, second action, training, filming, or
+    production authority was established.
     From that reset, JEPA-controlled, safety-gated actions must approach and
     acquire the connector, retain it through transport, align it with the
     socket, complete contact-aware insertion, and hold the validated seated
