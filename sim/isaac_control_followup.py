@@ -12,7 +12,12 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from jepa.contract import ObservationStage
-from jepa_wm.action import ActionSelectionBounds, DroidPose, action_between
+from jepa_wm.action import (
+    ActionSelectionBounds,
+    DroidActionScale,
+    DroidPose,
+    action_between,
+)
 from jepa_wm.contact_grasp_acquisition_handoff import (
     PROPOSAL_NAME as ACQUISITION_PROPOSAL_NAME,
     SOURCE_FINGERPRINTS as ACQUISITION_SOURCE_FINGERPRINTS,
@@ -87,6 +92,7 @@ from sim.isaac_demo_runtime import (
     resume_live_simulation,
 )
 from sim.isaac_demo_scene import ROBOT_PATH
+from sim.isaac_demo_kinematics import solve_droid_pose
 from sim.recording import RecordingLabel, RecordingMoment, validate_recording_id
 
 if TYPE_CHECKING:
@@ -125,6 +131,63 @@ def persist_insertion_proposal_handoff(
         "followup_session_id": followup_session_id,
         "previous": handoff.previous.to_dict(),
         "requested": handoff.requested.to_dict(),
+    }
+
+
+def diagnose_control_ik_scales(session_id: str) -> dict[str, Any]:
+    """Re-solve one blocked command at smaller scales without moving physics."""
+
+    validate_recording_id(session_id)
+    session = ControlSession.at(CONTROL_ROOT, session_id)
+    observation, state = session.load_capture()
+    response = session.load_response()
+    result = session.load_result()
+    if (
+        result.status is not ControlResultStatus.BLOCKED
+        or result.gate.reasons
+        != (ControlGateReason.JOINT_VELOCITY_VIOLATION,)
+        or result.selected_action_scale is not None
+        or result.post_action is not None
+    ):
+        raise ValueError("IK scale diagnosis requires one no-motion velocity block")
+    scales = (
+        DroidActionScale(0.03125, 0.125, 0.125),
+        DroidActionScale(0.03125, 0.0625, 0.125),
+        DroidActionScale(0.03125, 0.03125, 0.125),
+        DroidActionScale(0.03125, 0.0, 0.125),
+    )
+    attempts = []
+    current = np.asarray(state.current_joint_positions, dtype=np.float64)
+    for scale in scales:
+        candidate = observation.pose.applied(scale.apply(response.first_action))
+        try:
+            solved = solve_droid_pose(candidate, current)
+            attempts.append(
+                {
+                    "scale": scale.to_dict(),
+                    "solved": True,
+                    "maximum_joint_delta_rad": float(
+                        np.max(np.abs(solved.arm_positions - current))
+                    ),
+                    "position_error_m": solved.position_error_m,
+                    "orientation_error_rad": solved.orientation_error_rad,
+                    "joint_positions": solved.arm_positions.tolist(),
+                }
+            )
+        except (RuntimeError, ValueError) as error:
+            attempts.append(
+                {
+                    "scale": scale.to_dict(),
+                    "solved": False,
+                    "error": f"{type(error).__name__}: {error}",
+                }
+            )
+    return {
+        "status": "diagnosed_no_actuation",
+        "session": session_id,
+        "source_reasons": [reason.value for reason in result.gate.reasons],
+        "attempts": attempts,
+        "simulator_action_authorized": False,
     }
 
 

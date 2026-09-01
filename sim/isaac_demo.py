@@ -28,6 +28,7 @@ from sim.isaac_control_bridge import (
     capture_control_observation as _capture_control_observation,
     capture_followup_observation as _capture_followup_observation,
     capture_insertion_transition_observation as _capture_insertion_transition_observation,
+    diagnose_control_ik_scales,
     persist_insertion_proposal_handoff,
     restore_insertion_no_actuation_retry as _restore_insertion_no_actuation_retry,
     restore_insertion_retry as _restore_insertion_retry,
