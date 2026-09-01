@@ -1473,7 +1473,6 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("run_physical_shadow_canary.sh", calls)
         self.assertIn("ops/backup_state.sh", calls)
         self.assertIn("finalize-recovery", calls)
-        self.assertIn("runtime-source-fingerprint", calls)
         self.assertIn(
             "/mnt/quantis-assets/quantis-state/jepa-wm/checkpoints", calls
         )
@@ -1522,6 +1521,7 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn(source_revision, calls)
         self.assertIn("ops/backup_state.sh", calls)
         self.assertIn("finalize-recovery", calls)
+        self.assertIn("runtime-source-fingerprint", calls)
         self.assertNotIn("control-worker-start", calls)
         self.assertNotIn("control-apply", calls)
 
