@@ -21,3 +21,10 @@ reconstructs as fully applied on both predeclared held-out seeds under the
 unchanged control and safety gates. It demonstrates repeatable receding-horizon
 control, not full seating, unknown-start insertion, filming authority, or
 production readiness.
+
+## Unknown-start reset
+
+A deterministic held-out sample drawn from a precommitted reserved seed
+namespace. It may set state once during reset/initialization, but replays no
+recorded motion prefix. Its realized state must be unattached, collision-free,
+and at zero contact force; every subsequent movement is drive-only.
