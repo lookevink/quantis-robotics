@@ -1158,22 +1158,36 @@ case "${command}" in
     ;;
   jepa-wm-unknown-start-reset)
     source_revision="$(deployment_source_revision)"
+    runtime_source_fingerprint="$(
+      python3 -m jepa_wm.unknown_start_reset_runtime fingerprint
+    )" || die "cannot fingerprint unknown-start reset runtime"
     recording_id="unknown-start-reset-v1-62600"
     command_status=0
     sync_repo || command_status=$?
     if (( command_status == 0 )); then
-      remote "bash ~/quantis-robotics/ops/run_unknown_start_reset.sh '${recording_id}' 62600 '${source_revision}'" \
+      remote "bash ~/quantis-robotics/ops/run_unknown_start_reset.sh '${recording_id}' 62600 '${source_revision}' '${runtime_source_fingerprint}'" \
         || command_status=$?
     fi
+    run_status=${command_status}
     backup_status=0
     remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' \
       || backup_status=$?
     if (( command_status == 0 && backup_status != 0 )); then
       command_status=${backup_status}
     fi
+    if (( run_status == 0 && backup_status != 0 )); then
+      remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.unknown_start_reset_lifecycle failure --ledger-root ~/docker/isaac-sim/data/quantis/unknown_start_reset_claims --error 'recovery_backup:exit_${backup_status}'" \
+        || true
+      remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' || true
+    fi
     if (( command_status == 0 )); then
-      remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.unknown_start_reset_lifecycle finalize-recovery --primary-recording ~/docker/isaac-sim/data/quantis/recordings/'${recording_id}' --recovery-recording /mnt/quantis-assets/quantis-state/isaac/recordings/'${recording_id}' --claim-path ~/docker/isaac-sim/data/quantis/unknown_start_reset_claims/'${recording_id}'-claim.json --recovery-claim /mnt/quantis-assets/quantis-state/isaac/unknown_start_reset_claims/'${recording_id}'-claim.json --source-revision '${source_revision}'" \
+      remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.unknown_start_reset_lifecycle finalize-recovery --primary-recording ~/docker/isaac-sim/data/quantis/recordings/'${recording_id}' --recovery-recording /mnt/quantis-assets/quantis-state/isaac/recordings/'${recording_id}' --claim-path ~/docker/isaac-sim/data/quantis/unknown_start_reset_claims/milestone-20-unknown-start-reset-claim.json --recovery-claim /mnt/quantis-assets/quantis-state/isaac/unknown_start_reset_claims/milestone-20-unknown-start-reset-claim.json --source-revision '${source_revision}' --runtime-source-fingerprint '${runtime_source_fingerprint}'" \
         || command_status=$?
+      if (( command_status != 0 )); then
+        remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.unknown_start_reset_lifecycle failure --ledger-root ~/docker/isaac-sim/data/quantis/unknown_start_reset_claims --error 'recovery_finalization:exit_${command_status}'" \
+          || true
+        remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' || true
+      fi
     fi
     printf 'Unknown-start reset authentication workflow complete.\n'
     exit "${command_status}"

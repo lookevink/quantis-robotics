@@ -33,7 +33,6 @@ from sim.exploration import (
 )
 from sim.isaac_demo_camera import (
     JEPA_WM_CAMERA_SPECS,
-    WRIST_CAMERA_TRANSLATION_METERS,
     DemoRecorder,
     configure_wrist_camera,
 )
@@ -179,12 +178,12 @@ def _contact_frames(
     return span.frames
 
 
-def apply_variant(stage: Any, plan: ExplorationPlan) -> dict[str, Any]:
+def apply_variant(stage: Any, plan: ExplorationPlan) -> None:
     """Author seeded camera, task-geometry, and lighting changes in-session."""
 
     from pxr import Gf, UsdGeom
 
-    camera = configure_wrist_camera(plan.camera_offset_m)
+    configure_wrist_camera(plan.camera_offset_m)
     scene_offset = np.asarray(plan.scene_offset_m, dtype=np.float64)
     for path in (PLUG_PATH, SOCKET_PATH):
         prim = stage.GetPrimAtPath(path)
@@ -214,31 +213,11 @@ def apply_variant(stage: Any, plan: ExplorationPlan) -> dict[str, Any]:
         scaled = np.asarray(current_scale, dtype=np.float64) * plan.socket_scale
         scale_op.Set(current_scale.__class__(*scaled))
 
-    realized_exposure_deltas = []
     for prim in stage.Traverse():
         exposure = prim.GetAttribute("inputs:exposure")
         current = exposure.Get() if exposure.IsValid() else None
         if isinstance(current, (int, float)):
             exposure.Set(float(current) + plan.light_exposure_delta)
-            realized_exposure_deltas.append(float(exposure.Get()) - float(current))
-    if not realized_exposure_deltas or any(
-        abs(delta - plan.light_exposure_delta) > 1e-9
-        for delta in realized_exposure_deltas
-    ):
-        raise RuntimeError("exploration light exposure did not realize its plan")
-    camera_translation = np.asarray(camera["translation"], dtype=np.float64)
-    realized_camera_offset = camera_translation - np.asarray(
-        WRIST_CAMERA_TRANSLATION_METERS,
-        dtype=np.float64,
-    )
-    realized_scale = np.asarray(scale_op.Get(), dtype=np.float64)
-    if realized_scale.shape != (3,) or not np.all(np.isfinite(realized_scale)):
-        raise RuntimeError("exploration socket scale realization is invalid")
-    return {
-        "camera_offset_m": realized_camera_offset.tolist(),
-        "light_exposure_delta": realized_exposure_deltas[0],
-        "socket_scale": float(realized_scale[0]),
-    }
 
 
 def _recording_label(outcome: SegmentOutcome) -> RecordingLabel:

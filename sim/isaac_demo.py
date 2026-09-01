@@ -91,12 +91,18 @@ async def authenticate_unknown_start_reset(
     recording_id: str,
     seed: int,
     source_revision: str,
+    runtime_source_fingerprint: str,
 ) -> dict[str, Any]:
     """Run one exclusive reset-only milestone-20 authentication."""
 
     return await _RECORDING_JOBS.run_exclusive(
         f"unknown-start-reset-{recording_id}",
-        lambda: _authenticate_unknown_start_reset(recording_id, seed, source_revision),
+        lambda: _authenticate_unknown_start_reset(
+            recording_id,
+            seed,
+            source_revision,
+            runtime_source_fingerprint,
+        ),
     )
 
 

@@ -11,12 +11,17 @@ from jepa.contract import ObservationStage
 from jepa_wm.action import DROID_FPS
 from jepa_wm.persistence import write_json_atomic
 from jepa_wm.insertion_task import InsertionTaskLimits
+from jepa_wm.unknown_start_reset_runtime import authenticate_runtime_source
 from sim.isaac_control_runtime import (
     connector_contact_sensor,
     contact_sensor,
     read_contact,
 )
-from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, DemoRecorder
+from sim.isaac_demo_camera import (
+    JEPA_WM_CAMERA_SPECS,
+    WRIST_CAMERA_TRANSLATION_METERS,
+    DemoRecorder,
+)
 from sim.isaac_demo_kinematics import solve_waypoints
 from sim.isaac_demo_runtime import (
     ContactReading,
@@ -27,13 +32,73 @@ from sim.isaac_demo_runtime import (
     recording_safety_telemetry,
     recording_snapshot,
 )
-from sim.isaac_demo_scene import PLUG_PATH, ROBOT_PATH, SOCKET_PATH, world_pose
+from sim.isaac_demo_scene import (
+    PLUG_PATH,
+    ROBOT_PATH,
+    SOCKET_PATH,
+    WRIST_CAMERA_PATH,
+    world_pose,
+)
 from sim.isaac_exploration import (
     ExplorationRecordingMode,
     ExplorationRecordingProfile,
     apply_variant,
     prepare_recording_stage,
 )
+
+
+def _apply_variant_with_readback(stage: Any, plan: Any) -> dict[str, Any]:
+    """Apply the shared variant, then authenticate its authored USD state."""
+
+    from pxr import UsdGeom
+
+    exposure_baseline: dict[str, float] = {}
+    for prim in stage.Traverse():
+        exposure = prim.GetAttribute("inputs:exposure")
+        current = exposure.Get() if exposure.IsValid() else None
+        if isinstance(current, (int, float)):
+            exposure_baseline[str(prim.GetPath())] = float(current)
+    apply_variant(stage, plan)
+    camera_translation = stage.GetPrimAtPath(WRIST_CAMERA_PATH).GetAttribute(
+        "xformOp:translate"
+    )
+    if not camera_translation.IsValid():
+        raise RuntimeError("unknown-start wrist camera translation is missing")
+    realized_camera_offset = np.asarray(
+        camera_translation.Get(),
+        dtype=np.float64,
+    ) - np.asarray(WRIST_CAMERA_TRANSLATION_METERS, dtype=np.float64)
+    socket = UsdGeom.Xformable(stage.GetPrimAtPath(SOCKET_PATH))
+    scale_operations = [
+        operation
+        for operation in socket.GetOrderedXformOps()
+        if operation.GetOpType() == UsdGeom.XformOp.TypeScale
+    ]
+    if len(scale_operations) != 1:
+        raise RuntimeError("unknown-start socket scale realization is ambiguous")
+    realized_scale = np.asarray(scale_operations[0].Get(), dtype=np.float64)
+    realized_exposure_deltas = []
+    for prim_path, baseline in exposure_baseline.items():
+        exposure = stage.GetPrimAtPath(prim_path).GetAttribute("inputs:exposure")
+        realized_exposure_deltas.append(float(exposure.Get()) - baseline)
+    if (
+        realized_camera_offset.shape != (3,)
+        or not np.all(np.isfinite(realized_camera_offset))
+        or realized_scale.shape != (3,)
+        or not np.all(np.isfinite(realized_scale))
+        or not np.allclose(realized_scale, realized_scale[0], atol=1e-12, rtol=0.0)
+        or not realized_exposure_deltas
+        or any(
+            abs(delta - plan.light_exposure_delta) > 1e-9
+            for delta in realized_exposure_deltas
+        )
+    ):
+        raise RuntimeError("unknown-start variant did not realize its plan")
+    return {
+        "camera_offset_m": realized_camera_offset.tolist(),
+        "light_exposure_delta": realized_exposure_deltas[0],
+        "socket_scale": float(realized_scale[0]),
+    }
 from sim.exploration import build_exploration_plan
 from sim.recording import RecordingLabel, RecordingMoment
 from sim.unknown_start_reset import (
@@ -49,6 +114,7 @@ async def authenticate_unknown_start_reset(
     recording_id: str,
     seed: int,
     source_revision: str,
+    runtime_source_fingerprint: str,
 ) -> dict[str, Any]:
     """Capture and authenticate one reset without running inference or motion."""
 
@@ -63,6 +129,7 @@ async def authenticate_unknown_start_reset(
         character not in "0123456789abcdef" for character in source_revision
     ):
         raise ValueError("unknown-start reset source revision is invalid")
+    authenticate_runtime_source(runtime_source_fingerprint)
     sample = UNKNOWN_START_RESET_CONTRACT.draw(seed, forbidden_seeds=set())
     profile = ExplorationRecordingProfile.for_mode(
         ExplorationRecordingMode.CONTACT_INSERTION
@@ -77,7 +144,7 @@ async def authenticate_unknown_start_reset(
     try:
         stage = omni.usd.get_context().get_stage()
         stage.SetEditTarget(stage.GetSessionLayer())
-        variant = apply_variant(stage, plan)
+        variant = _apply_variant_with_readback(stage, plan)
         preparation = prepare_fixed_joint_plug(stage)
         recorder = DemoRecorder(
             recording_id,
@@ -90,6 +157,7 @@ async def authenticate_unknown_start_reset(
                 "sample": sample.to_dict(),
                 "sample_fingerprint": sample.fingerprint,
                 "source_revision": source_revision,
+                "runtime_source_fingerprint": runtime_source_fingerprint,
                 "applied_actions": 0,
                 "prefix_replay_frames": 0,
             },
@@ -101,8 +169,11 @@ async def authenticate_unknown_start_reset(
 
         def observe_safety() -> ContactReading:
             hand_collision, hand_force = read_contact(hand_sensor)
-            _, plug_force = read_contact(plug_sensor)
-            reading = ContactReading(hand_collision, max(hand_force, plug_force))
+            plug_collision, plug_force = read_contact(plug_sensor)
+            reading = ContactReading(
+                hand_collision or plug_collision,
+                max(hand_force, plug_force),
+            )
             if (
                 reading.collision_detected
                 or reading.force_newtons
@@ -185,6 +256,7 @@ async def authenticate_unknown_start_reset(
         "status": "captured",
         "recording_id": recording_id,
         "source_revision": source_revision,
+        "runtime_source_fingerprint": runtime_source_fingerprint,
         "contract_fingerprint": UNKNOWN_START_RESET_CONTRACT.fingerprint,
         "sample_fingerprint": sample.fingerprint,
         "evidence": str(evidence_path),

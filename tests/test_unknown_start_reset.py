@@ -1,10 +1,19 @@
 from dataclasses import replace
+from hashlib import sha256
 import json
 from pathlib import Path
 import tempfile
 import unittest
 
-from jepa_wm.unknown_start_reset_lifecycle import claim, finalize_recovery
+from jepa_wm.unknown_start_reset_lifecycle import (
+    claim,
+    finalize_recovery,
+    terminal_paths,
+)
+from jepa_wm.unknown_start_reset_runtime import (
+    authenticate_runtime_source,
+    runtime_source_fingerprint,
+)
 from sim.unknown_start_reset import (
     UNKNOWN_START_RESET_CONTRACT,
     UnknownStartResetEvidence,
@@ -15,25 +24,59 @@ from sim.unknown_start_reset import (
 from sim.exploration import DatasetSplit
 
 
+def valid_evidence() -> UnknownStartResetEvidence:
+    sample = UNKNOWN_START_RESET_CONTRACT.draw(62600, forbidden_seeds=set())
+    return UnknownStartResetEvidence(
+        sample=sample,
+        workspace=UnknownStartWorkspaceState(
+            connector_position_m=(-0.0256, -0.247813, 1.323126),
+            socket_position_m=(-0.071, -0.247563, 1.323126),
+            end_effector_position_m=(0.25, -0.247813, 1.48),
+            socket_scale=1.05,
+        ),
+        realization=UnknownStartSampleRealization(
+            initial_arm_offset_radians=sample.initial_arm_offset_radians,
+            camera_offset_m=sample.camera_offset_m,
+            light_exposure_delta=sample.light_exposure_delta,
+        ),
+        realized_sample_fingerprint=sample.fingerprint,
+        plug_attached=False,
+        collision_detected=False,
+        contact_force_newtons=0.0,
+        direct_state_setting_count=1,
+        prefix_replay_frames=0,
+        applied_actions=0,
+        phase=UnknownStartResetPhase.RESET_AUTHENTICATION,
+    )
+
+
 class UnknownStartResetContractTest(unittest.TestCase):
     def test_live_claim_is_exclusive_and_runner_has_no_actuation_seam(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "claim.json"
+            ledger_root = Path(directory) / "ledger"
             payload = claim(
-                path,
+                ledger_root,
                 "unknown-start-reset-v1-62600",
                 62600,
                 "a" * 40,
+                "b" * 64,
             )
 
             self.assertEqual(payload["evaluations_claimed"], 1)
             self.assertEqual(payload["applied_actions"], 0)
             with self.assertRaisesRegex(ValueError, "already claimed"):
-                claim(path, "unknown-start-reset-v1-62600", 62600, "a" * 40)
+                claim(
+                    ledger_root,
+                    "unknown-start-reset-v1-62600",
+                    62600,
+                    "a" * 40,
+                    "b" * 64,
+                )
         runner = Path("ops/run_unknown_start_reset.sh").read_text()
         self.assertIn("authenticate_unknown_start_reset", runner)
         self.assertNotIn("apply_control_response", runner)
         self.assertNotIn("control-worker-start", runner)
+        self.assertIn("300 true", runner)
 
     def test_success_is_terminal_only_after_exact_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -43,31 +86,81 @@ class UnknownStartResetContractTest(unittest.TestCase):
             primary.mkdir()
             recovery.mkdir()
             source_revision = "a" * 40
+            runtime_fingerprint = "b" * 64
             recording_id = "unknown-start-reset-v1-62600"
-            sample = UNKNOWN_START_RESET_CONTRACT.draw(
-                62600,
-                forbidden_seeds=set(),
+            evidence = valid_evidence()
+            sample = evidence.sample
+            primary_ledger = root / "claims"
+            recovery_ledger = root / "recovery-claims"
+            claim(
+                primary_ledger,
+                recording_id,
+                sample.seed,
+                source_revision,
+                runtime_fingerprint,
             )
-            primary_claim = root / "claims" / "claim.json"
-            recovery_claim = root / "recovery-claims" / "claim.json"
-            claim(primary_claim, recording_id, sample.seed, source_revision)
-            recovery_claim.parent.mkdir()
+            primary_claim, _ = terminal_paths(primary_ledger)
+            recovery_claim, _ = terminal_paths(recovery_ledger)
+            recovery_claim.parent.mkdir(parents=True)
             recovery_claim.write_bytes(primary_claim.read_bytes())
+            evidence_contents = json.dumps(evidence.to_dict(), sort_keys=True) + "\n"
+            evidence_fingerprint = sha256(evidence_contents.encode()).hexdigest()
             artifacts = {
-                "manifest.json": "{}\n",
-                "unknown_start_reset_evidence.json": "{}\n",
+                "manifest.json": json.dumps(
+                    {
+                        "schema": "quantis.demo_recording.v9",
+                        "recording_id": recording_id,
+                        "fps": 4,
+                        "frames": 1,
+                        "stage_frames": {"approaching_cable": 1},
+                        "cameras": ["wrist"],
+                        "resolutions": {"wrist": [512, 512]},
+                        "metadata": {
+                            "task": "unknown_start_reset_authentication",
+                            "contract_fingerprint": UNKNOWN_START_RESET_CONTRACT.fingerprint,
+                            "sample": sample.to_dict(),
+                            "sample_fingerprint": sample.fingerprint,
+                            "source_revision": source_revision,
+                            "runtime_source_fingerprint": runtime_fingerprint,
+                            "applied_actions": 0,
+                            "prefix_replay_frames": 0,
+                        },
+                    }
+                ),
+                "steps.jsonl": json.dumps(
+                    {
+                        "index": 0,
+                        "phase": "initial",
+                        "stage": "approaching_cable",
+                        "frames": {"wrist": "wrist/frame_000000.png"},
+                        "action_from_previous": None,
+                        "plug_attached": False,
+                        "collision_detected": False,
+                        "contact_force_newtons": 0.0,
+                        "end_effector_world_position": list(
+                            evidence.workspace.end_effector_position_m
+                        ),
+                    }
+                )
+                + "\n",
+                "wrist/frame_000000.png": "pixels",
+                "unknown_start_reset_evidence.json": evidence_contents,
                 "CAPTURE.json": json.dumps(
                     {
                         "status": "captured",
                         "recording_id": recording_id,
                         "source_revision": source_revision,
+                        "runtime_source_fingerprint": runtime_fingerprint,
                         "contract_fingerprint": UNKNOWN_START_RESET_CONTRACT.fingerprint,
                         "sample_fingerprint": sample.fingerprint,
+                        "evidence_fingerprint": evidence_fingerprint,
                         "applied_actions": 0,
                     }
                 ),
             }
             for name, contents in artifacts.items():
+                (primary / name).parent.mkdir(parents=True, exist_ok=True)
+                (recovery / name).parent.mkdir(parents=True, exist_ok=True)
                 (primary / name).write_text(contents)
                 (recovery / name).write_text(contents)
 
@@ -77,6 +170,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
                 primary_claim,
                 recovery_claim,
                 source_revision,
+                runtime_fingerprint,
             )
 
             self.assertTrue(payload["passed"])
@@ -87,6 +181,22 @@ class UnknownStartResetContractTest(unittest.TestCase):
                 (recovery / "RESULT.json").read_bytes(),
             )
 
+    def test_recovery_rejects_semantically_invalid_evidence(self) -> None:
+        source = Path("jepa_wm/unknown_start_reset_lifecycle.py").read_text()
+
+        self.assertIn("UnknownStartResetEvidence.from_dict", source)
+        self.assertIn('"steps.jsonl"', source)
+        self.assertIn('"wrist/frame_000000.png"', source)
+        with self.assertRaises(ValueError):
+            UnknownStartResetEvidence.from_dict({})
+
+    def test_runtime_source_roster_authenticates_exact_bytes(self) -> None:
+        fingerprint = runtime_source_fingerprint()
+
+        self.assertEqual(authenticate_runtime_source(fingerprint), fingerprint)
+        with self.assertRaisesRegex(ValueError, "source changed"):
+            authenticate_runtime_source("f" * 64)
+
     def test_runtime_has_one_reset_and_no_action_application(self) -> None:
         source = Path("sim/isaac_unknown_start_reset.py").read_text()
 
@@ -94,6 +204,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
         self.assertNotIn("apply_control_response", source)
         self.assertNotIn("move_joint_command_over_physics_steps", source)
         self.assertNotIn("control-worker", source)
+        self.assertIn("hand_collision or plug_collision", source)
 
     def test_reserved_seed_draw_is_deterministic_and_bounded(self) -> None:
         sample = UNKNOWN_START_RESET_CONTRACT.draw(62600, forbidden_seeds={12600, 12601})
@@ -116,29 +227,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
             UNKNOWN_START_RESET_CONTRACT.draw(62600, forbidden_seeds={62600})
 
     def test_reset_evidence_requires_exact_safe_unattached_realization(self) -> None:
-        sample = UNKNOWN_START_RESET_CONTRACT.draw(62600, forbidden_seeds=set())
-        evidence = UnknownStartResetEvidence(
-            sample=sample,
-            workspace=UnknownStartWorkspaceState(
-                connector_position_m=(-0.0256, -0.247813, 1.323126),
-                socket_position_m=(-0.071, -0.247563, 1.323126),
-                end_effector_position_m=(0.25, -0.247813, 1.48),
-                socket_scale=1.05,
-            ),
-            realization=UnknownStartSampleRealization(
-                initial_arm_offset_radians=sample.initial_arm_offset_radians,
-                camera_offset_m=sample.camera_offset_m,
-                light_exposure_delta=sample.light_exposure_delta,
-            ),
-            realized_sample_fingerprint=sample.fingerprint,
-            plug_attached=False,
-            collision_detected=False,
-            contact_force_newtons=0.0,
-            direct_state_setting_count=1,
-            prefix_replay_frames=0,
-            applied_actions=0,
-            phase=UnknownStartResetPhase.RESET_AUTHENTICATION,
-        )
+        evidence = valid_evidence()
 
         evidence.validate(UNKNOWN_START_RESET_CONTRACT)
         with self.assertRaisesRegex(ValueError, "unsafe or inauthentic"):

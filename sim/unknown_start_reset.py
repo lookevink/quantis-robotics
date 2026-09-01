@@ -73,6 +73,20 @@ class UnknownStartResetSample:
             "light_exposure_delta": self.light_exposure_delta,
         }
 
+    @classmethod
+    def from_dict(cls, payload: Any) -> UnknownStartResetSample:
+        if not isinstance(payload, dict) or payload.get("schema") != UNKNOWN_START_RESET_SAMPLE_SCHEMA:
+            raise ValueError("unknown-start reset sample payload is invalid")
+        return cls(
+            seed=payload.get("seed"),
+            split=DatasetSplit(payload.get("split")),
+            initial_arm_offset_radians=tuple(payload.get("initial_arm_offset_radians", ())),
+            camera_offset_m=tuple(payload.get("camera_offset_m", ())),
+            scene_offset_m=tuple(payload.get("scene_offset_m", ())),
+            socket_scale=payload.get("socket_scale"),
+            light_exposure_delta=payload.get("light_exposure_delta"),
+        )
+
     @property
     def fingerprint(self) -> str:
         return _fingerprint(self.to_dict())
@@ -169,6 +183,17 @@ class UnknownStartWorkspaceState:
             "end_effector_position_m": list(self.end_effector_position_m),
             "socket_scale": self.socket_scale,
         }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> UnknownStartWorkspaceState:
+        if not isinstance(payload, dict):
+            raise ValueError("unknown-start workspace payload is invalid")
+        return cls(
+            connector_position_m=tuple(payload.get("connector_position_m", ())),
+            socket_position_m=tuple(payload.get("socket_position_m", ())),
+            end_effector_position_m=tuple(payload.get("end_effector_position_m", ())),
+            socket_scale=payload.get("socket_scale"),
+        )
 
 
 @dataclass(frozen=True)
@@ -316,6 +341,16 @@ class UnknownStartSampleRealization:
             "camera_offset_m": list(self.camera_offset_m),
             "light_exposure_delta": self.light_exposure_delta,
         }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> UnknownStartSampleRealization:
+        if not isinstance(payload, dict):
+            raise ValueError("unknown-start realization payload is invalid")
+        return cls(
+            initial_arm_offset_radians=tuple(payload.get("initial_arm_offset_radians", ())),
+            camera_offset_m=tuple(payload.get("camera_offset_m", ())),
+            light_exposure_delta=payload.get("light_exposure_delta"),
+        )
 
 
 @dataclass(frozen=True)
@@ -532,6 +567,33 @@ class UnknownStartResetEvidence:
             "applied_actions": self.applied_actions,
             "phase": self.phase.value,
         }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> UnknownStartResetEvidence:
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema") != "quantis.unknown_start_reset_evidence.v1"
+            or not isinstance(payload.get("plug_attached"), bool)
+            or not isinstance(payload.get("collision_detected"), bool)
+        ):
+            raise ValueError("unknown-start reset evidence payload is invalid")
+        evidence = cls(
+            sample=UnknownStartResetSample.from_dict(payload.get("sample")),
+            workspace=UnknownStartWorkspaceState.from_dict(payload.get("workspace")),
+            realization=UnknownStartSampleRealization.from_dict(
+                payload.get("realization")
+            ),
+            realized_sample_fingerprint=payload.get("realized_sample_fingerprint"),
+            plug_attached=payload["plug_attached"],
+            collision_detected=payload["collision_detected"],
+            contact_force_newtons=payload.get("contact_force_newtons"),
+            direct_state_setting_count=payload.get("direct_state_setting_count"),
+            prefix_replay_frames=payload.get("prefix_replay_frames"),
+            applied_actions=payload.get("applied_actions"),
+            phase=UnknownStartResetPhase(payload.get("phase")),
+        )
+        evidence.validate(UNKNOWN_START_RESET_CONTRACT)
+        return evidence
 
 
 UNKNOWN_START_RESET_CONTRACT = UnknownStartResetContract()

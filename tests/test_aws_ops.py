@@ -1473,12 +1473,23 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("run_physical_shadow_canary.sh", calls)
         self.assertIn("ops/backup_state.sh", calls)
         self.assertIn("finalize-recovery", calls)
+        self.assertIn("runtime-source-fingerprint", calls)
         self.assertIn(
             "/mnt/quantis-assets/quantis-state/jepa-wm/checkpoints", calls
         )
         self.assertNotIn("contact-insertion-v10-drive-slow-2600-held-01", calls)
         self.assertNotIn("run_control_step.sh", calls)
         self.assertNotIn("control-apply", calls)
+
+    def test_unknown_start_reset_terminalizes_a_recovery_failure(self):
+        result, calls = self.run_command(
+            "jepa-wm-unknown-start-reset",
+            extra_env={"FAKE_SSH_FAIL_MATCH": "finalize-recovery"},
+        )
+
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertIn("recovery_finalization:exit_7", calls)
+        self.assertGreaterEqual(calls.count("ops/backup_state.sh"), 2)
 
     def test_physical_shadow_canary_cannot_pass_when_worker_stop_fails(self):
         result, calls = self.run_command(
