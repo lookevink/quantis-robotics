@@ -570,6 +570,7 @@ Commands:
   jepa-wm-grasp-to-insertion REFERENCE_RECORDING SEED GRASP_ARTIFACTS INSERTION_ARTIFACTS DEMO_SPEC_ID DEMO_SPEC_FINGERPRINT
   jepa-wm-unknown-start-reset
   jepa-wm-physical-shadow-canary-v5    Run continuity-safe unknown-start zero-actuation canary
+  jepa-wm-physical-shadow-canary-v6    Run paused-render unknown-start zero-actuation canary
   jepa-wm-grasp-transition-trial RUN_ID PREVIOUS_GRASP_SESSION REFERENCE_RECORDING SEED INSERTION_ARTIFACTS [ROLLED_BACK_SESSION]
   jepa-wm-grasp-transition-milestone RUN_ID REFERENCE_RECORDING SEED GRASP_ARTIFACTS INSERTION_ARTIFACTS
   jepa-wm-insertion-resolution REFERENCE_RECORDING SEED [context-index] [attached|unloaded]
@@ -1114,7 +1115,7 @@ case "${command}" in
       "bash ~/quantis-robotics/ops/jepa_wm.sh control-worker-rebase-proposal --source '${source_identity}' --name '${new_identity}' --proposal '${proposal_name}'"
     guarded_insertion_summary="Control worker proposal: ${new_identity}"
     ;;
-  jepa-wm-physical-shadow-canary|jepa-wm-physical-shadow-canary-v2|jepa-wm-physical-shadow-canary-v3|jepa-wm-physical-shadow-canary-v4|jepa-wm-physical-shadow-canary-v5)
+  jepa-wm-physical-shadow-canary|jepa-wm-physical-shadow-canary-v2|jepa-wm-physical-shadow-canary-v3|jepa-wm-physical-shadow-canary-v4|jepa-wm-physical-shadow-canary-v5|jepa-wm-physical-shadow-canary-v6)
     source_revision="$(deployment_source_revision)"
     canary_config=".scratch/jepa-physical-shadow-canary-v1/experiment-config.json"
     if [[ "${command}" == "jepa-wm-physical-shadow-canary-v2" ]]; then
@@ -1125,6 +1126,8 @@ case "${command}" in
       canary_config=".scratch/jepa-physical-shadow-canary-v4/experiment-config.json"
     elif [[ "${command}" == "jepa-wm-physical-shadow-canary-v5" ]]; then
       canary_config=".scratch/jepa-physical-shadow-canary-v5/experiment-config.json"
+    elif [[ "${command}" == "jepa-wm-physical-shadow-canary-v6" ]]; then
+      canary_config=".scratch/jepa-physical-shadow-canary-v6/experiment-config.json"
     fi
     command_status=0
     sync_repo || command_status=$?

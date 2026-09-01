@@ -27,6 +27,9 @@ from jepa_wm.physical_shadow_canary_v4_contract import (
 from jepa_wm.physical_shadow_canary_v5_contract import (
     FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V5_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
 )
+from jepa_wm.physical_shadow_canary_v6_contract import (
+    FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V6_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+)
 
 
 class PhysicalShadowCanaryTest(unittest.TestCase):
@@ -146,6 +149,20 @@ class PhysicalShadowCanaryTest(unittest.TestCase):
         self.assertLess(
             runner.index("demo.preflight_unknown_start_shadow"),
             runner.index("physical_shadow_canary claim"),
+        )
+
+    def test_v6_freezes_paused_render_without_changing_model_gate(self) -> None:
+        config = load_experiment_config(
+            Path(".scratch/jepa-physical-shadow-canary-v6/experiment-config.json")
+        )
+
+        self.assertEqual(config["unknown_start"]["seed"], 62605)
+        self.assertEqual(config["worker"]["planner"]["seed"], 237)
+        self.assertFalse(config["execution"]["apply_action"])
+        self.assertTrue(config["output"].endswith("unknown-start-shadow-canary-v4.json"))
+        self.assertEqual(
+            V6_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+            "PENDING_CHECKPOINT",
         )
 
     def test_recovery_preserves_authenticated_model_rejection(self) -> None:
