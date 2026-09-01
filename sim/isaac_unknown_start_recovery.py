@@ -28,6 +28,7 @@ async def diagnose_unknown_start_candidate_rollback(
     import omni.timeline
     import omni.usd
     import numpy as np
+    from isaacsim.core.experimental.prims import Articulation
 
     from jepa.contract import ObservationStage
     from sim.control_session import CONTROL_ROOT, ControlSession
@@ -37,7 +38,8 @@ async def diagnose_unknown_start_candidate_rollback(
         read_control_contact,
     )
     from sim.isaac_demo_kinematics import _solver_for_stage
-    from sim.isaac_demo_runtime import recording_snapshot
+    from sim.isaac_demo_runtime import create_actuators, recording_snapshot
+    from sim.isaac_demo_scene import ROBOT_PATH
     from sim.isaac_unknown_start_shadow import _load_authenticated_reset
     from sim.recording import RecordingLabel, RecordingMoment
     from sim.unknown_start_shadow import UnknownStartControlHandoff
@@ -81,6 +83,13 @@ async def diagnose_unknown_start_candidate_rollback(
     actual_fk = solver.compute_forward_kinematics(
         "right_gripper", actual.arm_positions
     )[0]
+    rebound_actual = create_actuators(
+        stage,
+        Articulation(ROBOT_PATH),
+    ).actual_command()
+    rebound_fk = solver.compute_forward_kinematics(
+        "right_gripper", rebound_actual.arm_positions
+    )[0]
     expected_joints = np.asarray(
         evidence.observed_arm_positions_radians,
         dtype=np.float64,
@@ -114,6 +123,8 @@ async def diagnose_unknown_start_candidate_rollback(
             np.asarray(snapshot.gripper_frame_world_position).tolist()
         ),
         "actual_joint_fk_gripper_position": np.asarray(actual_fk).tolist(),
+        "rebound_joint_positions": rebound_actual.arm_positions.tolist(),
+        "rebound_joint_fk_gripper_position": np.asarray(rebound_fk).tolist(),
         "expected_joint_fk_gripper_position": np.asarray(expected_fk).tolist(),
         "expected_gripper_frame_position": expected_gripper_frame.tolist(),
         "usd_gripper_frame_error_meters": float(
@@ -126,6 +137,9 @@ async def diagnose_unknown_start_candidate_rollback(
         ),
         "actual_joint_fk_error_meters": float(
             np.max(np.abs(np.asarray(actual_fk) - expected_gripper_frame))
+        ),
+        "rebound_joint_fk_error_meters": float(
+            np.max(np.abs(np.asarray(rebound_fk) - expected_gripper_frame))
         ),
         "expected_joint_fk_error_meters": float(
             np.max(np.abs(np.asarray(expected_fk) - expected_gripper_frame))
