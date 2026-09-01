@@ -102,10 +102,10 @@ from sim.isaac_demo_scene import ROBOT_PATH, world_pose
 from sim.recording import RecordingLabel, RecordingMoment, RecordingSnapshot
 
 
-# Match the follow-up capture continuity tolerance before evaluating Cartesian
-# tracking.  A looser 5 mrad early exit made larger safe commands look
-# under-realized even though the unchanged drive target continued settling.
-CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS = 2e-3
+# Settle below the 2 mrad follow-up continuity bound before evaluating
+# Cartesian tracking.  V28 showed that exiting near 1.1 mrad can leave a
+# 1 mm orientation-hold command on the 0.5 mm Cartesian error boundary.
+CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS = 1e-3
 EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS = 1e-3
 EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_GRIPPER_ERROR_METERS = 5e-4
 

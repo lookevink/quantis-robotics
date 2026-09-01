@@ -30,6 +30,7 @@ from jepa_wm.insertion_trial import (
     InsertionTrialRollbackFailureReason,
 )
 from sim.isaac_control_execution import (
+    CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS,
     EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS,
     EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_GRIPPER_ERROR_METERS,
     UNKNOWN_START_ROLLBACK_SETTLEMENT,
@@ -51,6 +52,18 @@ from sim.isaac_demo_runtime import JointCommand
 
 
 class ControlExecutionLifecycleTest(unittest.TestCase):
+    def test_contact_grasp_settles_below_the_followup_continuity_bound(
+        self,
+    ) -> None:
+        self.assertLessEqual(
+            CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS,
+            1e-3,
+        )
+        self.assertLess(
+            CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS,
+            SimulatorSafetyLimits().maximum_observation_joint_drift_radians,
+        )
+
     def test_reset_trial_candidate_reuses_synchronized_freshness_authority(
         self,
     ) -> None:

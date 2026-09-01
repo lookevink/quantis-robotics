@@ -808,11 +808,28 @@ async def capture_contact_grasp_acquisition_handoff(
         if horizon_completion_continuation
         else None
     )
+    horizon_source_tracking_reasons = (
+        tuple(handoff.to_dict().get("source_tracking_reasons", ()))
+        if horizon_completion_continuation
+        else ()
+    )
     if horizon_completion_continuation and horizon_source_endpoint_status not in (
         ControlResultStatus.APPLIED.value,
         ControlResultStatus.ROLLED_BACK_TRACKING.value,
     ):
         raise ValueError("contact-grasp horizon source endpoint is invalid")
+    if horizon_completion_continuation and (
+        (
+            horizon_source_endpoint_status == ControlResultStatus.APPLIED.value
+            and horizon_source_tracking_reasons
+        )
+        or (
+            horizon_source_endpoint_status
+            == ControlResultStatus.ROLLED_BACK_TRACKING.value
+            and not horizon_source_tracking_reasons
+        )
+    ):
+        raise ValueError("contact-grasp horizon tracking reasons are invalid")
     if resolution_continuation:
         diagnostic = json.loads(
             acquisition_resolution_diagnostic_path(
@@ -837,7 +854,7 @@ async def capture_contact_grasp_acquisition_handoff(
     source_result = source.load_result()
     refresh = source_result.insertion_trial_refresh
     horizon_tracking_rollback_reasons = (
-        ("translation_direction",)
+        horizon_source_tracking_reasons
         if horizon_source_endpoint_status
         == ControlResultStatus.ROLLED_BACK_TRACKING.value
         else None
