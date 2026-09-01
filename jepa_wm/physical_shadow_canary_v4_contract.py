@@ -1,5 +1,5 @@
 """Immutable configuration identity for paused unknown-start shadow canary."""
 
 FROZEN_EXPERIMENT_CONFIG_FINGERPRINT = (
-    "63778c9db832ffca391d0392bd8689910b19aafeec60b7cbfa60b0e2755fd95b"
+    "1f4bf1b56ccbbb3a346e1574c6801bb6d4d86899afe4303f896c2b4e4a63b4e5"
 )

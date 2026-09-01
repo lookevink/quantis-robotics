@@ -5,7 +5,7 @@
   "evaluator": {
     "path": "jepa_wm/physical_shadow_canary.py",
     "fingerprint": "26410d27dbcd5d30ad773d9cbfa6468d5c93dfa97a7fe20bbd0ed2809d1fff5a",
-    "implementation_revision": "46f17485f2bb00439a1a460da0eab7ae7fababf6"
+    "implementation_revision": "ba0c21d37d643ed32e8158f939936c6e0266e8c4"
   },
   "runtime_sources": {
     "jepa_wm/action.py": "1061836b0bc14da8713b135bc8f9f957bc0e52c3079a485553eeb6b6baecd18a",
@@ -36,7 +36,7 @@
     "sim/isaac_shadow_safety.py": "5c24cbb20529380aadea055362180662dcc744f807f00cb73fc083de748ff40f",
     "sim/isaac_unknown_start_shadow.py": "760069596a2125fa1156b6ec46f68e55070be636a25ae8578e9de2bbe0b87250",
     "sim/unknown_start_reset.py": "ca08cff18d90757f48ea5394616c27286cd4e1b8a2499b0e98dcee1c870da83e",
-    "sim/unknown_start_shadow.py": "9f3c031f26c483890b5a4ac863004609d7829630172271f9c53ca0cc229297db",
+    "sim/unknown_start_shadow.py": "bd20b3bbdbd7f5e5a5e4a139b5e1be7ea33578387dd95c1e33c4de442e5cb0ea",
     "sim/runtime_loader.py": "d9266586b327be49666b04e4f3b045c86e9f0be04f39cb9393b65b3d2c133820"
   },
   "proposal": {
