@@ -264,6 +264,10 @@ class ControlStepSummary:
         contact_grasp_execution = (
             potential_contact_grasp and reference_task == INSERTION_TASK_ID
         )
+        reset_trial_candidate = (
+            state.execution_policy
+            is ControlExecutionPolicy.RESET_TRIAL_CANDIDATE
+        )
         if is_insertion_trial_execution_policy(state.execution_policy):
             binding = session.load_insertion_trial_binding(response)
             attempted_scales = tuple(
@@ -565,6 +569,34 @@ class ControlStepSummary:
             ):
                 raise ValueError(
                     f"insertion trial rollback settlement is missing: {session.session_id}"
+                )
+        elif reset_trial_candidate:
+            session.load_candidate_binding(response)
+            refresh = result.insertion_trial_refresh
+            if (
+                refresh is None
+                or refresh.live_pose is None
+                or result.execution_interlock is None
+            ):
+                raise ValueError(
+                    f"reset candidate refresh evidence is missing: {session.session_id}"
+                )
+            observation, response = refresh.authorize(
+                observation,
+                response,
+                state.require_safety_snapshot(),
+            )
+            if (
+                result.insertion_trial_drive is not None
+                or result.insertion_trial_rollback is not None
+                or result.insertion_trial_settlement_failure is not None
+                or (
+                    result.post_action is not None
+                    and result.post_action.insertion_trial is not None
+                )
+            ):
+                raise ValueError(
+                    f"reset candidate has insertion-trial evidence: {session.session_id}"
                 )
         elif contact_grasp_execution:
             contact_grasp_policy = (

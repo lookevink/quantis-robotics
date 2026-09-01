@@ -14,15 +14,15 @@ from jepa_wm.persistence import write_json_atomic
 from jepa_wm.training_artifact import artifact_fingerprint
 
 
-EXPERIMENT_ID = "unknown-start-grasp-continuation-v1"
-ROLLOUT_ID = "unknown-start-e2e-v1-62605-grasp"
+EXPERIMENT_ID = "unknown-start-grasp-continuation-v2"
+ROLLOUT_ID = "unknown-start-e2e-v2-62605-grasp"
 PREDECESSOR_SESSION_ID = "unknown-start-live-action-v7-62605"
 REFERENCE_RECORDING = "contact-insertion-v10-drive-slow-2600-held-00"
 REFERENCE_SEED = 12600
 PROPOSAL_NAME = "contact-grasp-v10-drive-slow-2600_task12_h256_s3000"
 WORKER_IDENTITY = "contact-insertion-v10-unknown-start-shadow-canary-v5"
 MAXIMUM_CONTINUATION_ACTIONS = 51
-OUTPUT_DIRECTORY = "unknown_start_grasp_continuation_v1"
+OUTPUT_DIRECTORY = "unknown_start_grasp_continuation_v2"
 
 SOURCE_FINGERPRINTS = {
     "terminal": "14dcf231b035a6481e1c79b1e538358383d3c2f0246d7e983ad0e7eae92efeb2",

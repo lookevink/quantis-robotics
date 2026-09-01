@@ -88,6 +88,93 @@ from sim.control_session import (
 
 
 class ControlRolloutTest(unittest.TestCase):
+    def test_reconstructs_reset_candidate_refresh_as_candidate_evidence(self) -> None:
+        session_id = "unknown-start-candidate"
+        joints = (0.0, -0.5, 0.0, -1.5, 0.0, 1.0, 0.0)
+        pose = DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+        action = DroidAction((0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+        observation = ControlObservation(
+            123,
+            100.0,
+            Path("context.png"),
+            ControlTarget(Path("target.png"), pose.applied(action)),
+            Path("/tmp/proposal.pth"),
+            pose,
+            DroidAction((0.0,) * 7),
+            4,
+        )
+        response = ProposedControl(
+            123,
+            100.1,
+            (action,) * 3,
+            Path("/tmp/proposal.pth"),
+        )
+        state = ControlSessionState(
+            session_id,
+            "held-reference",
+            12600,
+            "unknown-reset",
+            joints,
+            False,
+            0.0,
+            execution_policy=ControlExecutionPolicy.RESET_TRIAL_CANDIDATE,
+            plug_position=(0.0, 0.0, 1.0),
+            current_gripper_width_m=0.04,
+            active_drive_target=JointDriveTarget(joints, 0.04),
+        )
+        refresh = InsertionEvaluationRefresh(
+            100.15,
+            state.require_safety_snapshot(),
+            pose,
+        )
+        gate = ControlGateDecision(123, pose.applied(action), ())
+        actual = action_between(pose, pose.applied(action))
+        tracking = evaluate_action_tracking(
+            action,
+            actual,
+            tracking_limits_for_policy(
+                ControlExecutionPolicy.RESET_TRIAL_CANDIDATE
+            ),
+        )
+        result = ControlResult(
+            ControlResultStatus.APPLIED,
+            session_id,
+            gate,
+            (SafetyProjectionAttempt(ACTION_SCALES[0], gate, 0.0, joints),),
+            ACTION_SCALES[0],
+            0.2,
+            0.0,
+            0.0,
+            0.0,
+            PostActionEvidence(
+                action,
+                action,
+                actual,
+                tracking,
+                pose.applied(action),
+                joints,
+                0.0,
+                0.0,
+                False,
+                {"path": "/tmp/post.png", "shape": [512, 512, 4]},
+                (0.0, 0.0, 1.0),
+                False,
+            ),
+            execution_interlock=ControlInterlockEvidence(0.0, False),
+            insertion_trial_refresh=refresh,
+        )
+        session = Mock(session_id=session_id)
+        session.load_capture.return_value = (observation, state)
+        session.load_response.return_value = response
+        session.load_result.return_value = result
+        session.shadow_path = Path("/tmp/no-shadow")
+        session.shadow_safety_path = Path("/tmp/no-shadow-safety")
+
+        summary = ControlStepSummary.from_session(session)
+
+        self.assertEqual(summary.result.status, ControlResultStatus.APPLIED)
+        session.load_candidate_binding.assert_called_once_with(response)
+
     def test_current_contact_grasp_derives_reference_transport_direction(self) -> None:
         acquisition = SimpleNamespace(
             state=SimpleNamespace(
