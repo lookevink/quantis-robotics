@@ -7,6 +7,7 @@ from jepa_wm.control_safety import (
     ACTION_SCALES,
     CONTACT_GRASP_ACTION_SCALES,
     CONTACT_GRASP_CLOSING_ACTION_SCALE_POLICIES,
+    CONTACT_GRASP_COARSE_ACTION_SCALE_POLICIES,
     CONTACT_GRASP_REDUCED_CLOSING_ACTION_SCALE_POLICIES,
     CONTACT_GRASP_FINE_ACTION_SCALES,
     CONTACT_GRASP_MICRO_ACTION_SCALES,
@@ -27,6 +28,37 @@ from jepa_wm.shadow_safety import ShadowSafetyEvidence
 
 
 class ShadowSafetyEvidenceTest(unittest.TestCase):
+    def test_coarse_acquisition_decouples_opening_from_arm_scale(self) -> None:
+        action = DroidAction(
+            (0.0038, 0.0007, -0.0021, 0.0, 0.0, 0.0, -0.02)
+        )
+
+        scales = contact_grasp_action_scales(action, coarse_acquisition=True)
+
+        self.assertEqual(scales, CONTACT_GRASP_COARSE_ACTION_SCALE_POLICIES[0])
+        self.assertEqual(scales[0], DroidActionScale(1.0, 0.125, 0.125))
+        self.assertEqual(scales[-1], DroidActionScale(0.03125, 0.0, 0.125))
+        self.assertLessEqual(
+            sum(value * value for value in scales[0].apply(action).values[:3])
+            ** 0.5,
+            0.005,
+        )
+
+    def test_coarse_acquisition_bounds_large_arm_and_closing_commands(self) -> None:
+        action = DroidAction(
+            (0.015, 0.001, -0.001, 0.0, 0.0, 0.0, 0.2)
+        )
+
+        scales = contact_grasp_action_scales(action, coarse_acquisition=True)
+        commanded = scales[0].apply(action)
+
+        self.assertEqual(scales[0].translation, 0.25)
+        self.assertLessEqual(
+            sum(value * value for value in commanded.values[:3]) ** 0.5,
+            0.005,
+        )
+        self.assertLessEqual(commanded.values[6] * 0.08, 0.0015)
+
     def test_reads_the_historical_positional_tracking_roster(self) -> None:
         self.assertEqual(
             insertion_projection_policy_for_attempts(

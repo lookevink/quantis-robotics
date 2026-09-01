@@ -58,6 +58,7 @@ ACTION_SCALES = (
 # reference gripper delta. Keep small proposals above the measured translation
 # noise floor, while bounding larger proposals to a one-millimetre command.
 MAXIMUM_CONTACT_GRASP_TRANSLATION_COMMAND_METERS = 0.001
+MAXIMUM_CONTACT_GRASP_COARSE_TRANSLATION_COMMAND_METERS = 0.005
 MAXIMUM_CONTACT_GRASP_FINE_CLOSURE_COMMAND_METERS = 0.0015
 MINIMUM_CONTACT_GRASP_TRANSPORT_COMMAND_METERS = 0.0005
 MAXIMUM_CONTACT_GRASP_TRANSPORT_COMMAND_METERS = 0.00075
@@ -92,6 +93,20 @@ CONTACT_GRASP_ACTION_SCALE_LEVELS = (
     CONTACT_GRASP_FINE_ACTION_SCALES,
     CONTACT_GRASP_ULTRAFINE_ACTION_SCALES,
     CONTACT_GRASP_MICRO_ACTION_SCALES,
+)
+
+# The authenticated acquisition trajectory contains native 4-FPS approach
+# steps up to 6.81 mm. Before the demonstrated close phase, permit at most a
+# 5 mm arm command and retain every smaller scale as an IK/velocity fallback.
+# Gripper scaling remains independent, so a harmless opening correction can no
+# longer collapse an otherwise resolvable arm command to 1/32 scale.
+CONTACT_GRASP_COARSE_ACTION_SCALES = tuple(
+    DroidActionScale(translation, 0.125, 0.125)
+    for translation in (1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125)
+) + (DroidActionScale(0.03125, 0.0, 0.125),)
+CONTACT_GRASP_COARSE_ACTION_SCALE_POLICIES = tuple(
+    CONTACT_GRASP_COARSE_ACTION_SCALES[index:]
+    for index in range(len(CONTACT_GRASP_COARSE_ACTION_SCALES) - 1)
 )
 
 # Once the fixed-joint attachment is live, gripper intent no longer controls
@@ -170,6 +185,32 @@ CONTACT_GRASP_REDUCED_CLOSING_ACTION_SCALE_POLICIES = tuple(
     for policy in CONTACT_GRASP_ACTION_SCALE_LEVELS
 )
 
+
+def _with_gripper_scale(
+    policy: Sequence[DroidActionScale],
+    gripper_scale: float,
+) -> tuple[DroidActionScale, ...]:
+    return tuple(
+        DroidActionScale(scale.translation, scale.rotation, gripper_scale)
+        for scale in policy
+    )
+
+
+def _bounded_closing_policy(
+    policy: tuple[DroidActionScale, ...],
+    gripper_delta: float,
+) -> tuple[DroidActionScale, ...]:
+    for gripper_scale in (0.25, 0.125, 0.0625, 0.03125, 0.015625):
+        candidate = _with_gripper_scale(policy, gripper_scale)
+        if (
+            gripper_delta
+            * gripper_scale
+            * MAX_GRIPPER_WIDTH_M
+            <= MAXIMUM_CONTACT_GRASP_FINE_CLOSURE_COMMAND_METERS
+        ):
+            return candidate
+    return _with_gripper_scale(policy, 0.015625)
+
 # These policies were exercised by earlier guarded contact-grasp checkpoints.
 # They remain reconstruction-only so their persisted negative evidence stays
 # readable after the magnitude-aware policy was introduced.
@@ -208,9 +249,12 @@ def contact_grasp_action_scales(
     attachment_acquired: bool = False,
     require_directional_transport_progress: bool = False,
     require_resolvable_transport: bool = False,
+    coarse_acquisition: bool = False,
 ) -> tuple[DroidActionScale, ...]:
     """Bound approach motion and calibrate gripper closure independently."""
 
+    if not isinstance(coarse_acquisition, bool):
+        raise ValueError("contact-grasp acquisition scale phase is invalid")
     translation_norm = sqrt(sum(value * value for value in action.values[:3]))
     if attachment_acquired:
         if require_resolvable_transport:
@@ -241,6 +285,19 @@ def contact_grasp_action_scales(
             ):
                 return scales
         return policies[-1]
+
+    if coarse_acquisition:
+        for policy in CONTACT_GRASP_COARSE_ACTION_SCALE_POLICIES:
+            if (
+                translation_norm * policy[0].translation
+                <= MAXIMUM_CONTACT_GRASP_COARSE_TRANSLATION_COMMAND_METERS
+            ):
+                return (
+                    _bounded_closing_policy(policy, action.values[6])
+                    if action.values[6] > 0.0
+                    else policy
+                )
+        return CONTACT_GRASP_COARSE_ACTION_SCALE_POLICIES[-1]
 
     # Negative DROID gripper action decreases closedness and therefore opens the
     # fingers. A live post-contact opening request jumped from 0.509 mm back to

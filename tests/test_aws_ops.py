@@ -1694,6 +1694,16 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("ops/backup_state.sh", calls)
         self.assertIn("contact_grasp_acquisition_hold finalize", calls)
 
+    def test_unknown_start_acquisition_resolution_is_recovery_gated(self):
+        result, calls = self.run_command(
+            "jepa-wm-unknown-start-acquisition-resolution"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("run_unknown_start_acquisition_resolution.sh", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+        self.assertIn("contact_grasp_acquisition_resolution finalize", calls)
+
 
     def test_sync_does_not_deploy_local_log_artifacts(self):
         result, calls = self.run_command("sync")

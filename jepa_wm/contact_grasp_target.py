@@ -45,6 +45,9 @@ TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
 ACQUISITION_PROGRESS_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v6"
 )
+RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+    "quantis.jepa_wm_contact_grasp_target_policy.v7"
+)
 
 
 class _TransportComposition(str, Enum):
@@ -58,6 +61,7 @@ class _PolicyCapabilities:
     directional_progress: bool
     transport_composition: _TransportComposition
     acquisition_progress: bool = False
+    coarse_acquisition: bool = False
 
 
 _POLICY_CAPABILITIES = {
@@ -84,6 +88,12 @@ _POLICY_CAPABILITIES = {
     ACQUISITION_PROGRESS_CONTACT_GRASP_TARGET_POLICY_SCHEMA: _PolicyCapabilities(
         True,
         _TransportComposition.TRANSLATION_HORIZON,
+        True,
+    ),
+    RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA: _PolicyCapabilities(
+        True,
+        _TransportComposition.TRANSLATION_HORIZON,
+        True,
         True,
     ),
 }
@@ -132,6 +142,7 @@ class ContactGraspTargetPolicy:
                 not in (
                     TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     ACQUISITION_PROGRESS_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                    RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 )
                 and self.scene_translation_m != (0.0, 0.0, 0.0)
             )
@@ -144,7 +155,7 @@ class ContactGraspTargetPolicy:
         translation_m: tuple[float, float, float],
     ) -> ContactGraspTargetPolicy:
         return cls(
-            ACQUISITION_PROGRESS_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             translation_m,
         )
 
@@ -204,6 +215,28 @@ class ContactGraspTargetPolicy:
     @property
     def uses_measured_acquisition_progress(self) -> bool:
         return _POLICY_CAPABILITIES[self.schema].acquisition_progress
+
+    def uses_coarse_acquisition_action(
+        self,
+        target: Path,
+        *,
+        plug_attached: bool,
+    ) -> bool:
+        """Permit reference-rate motion only before the demonstrated close phase."""
+
+        if not isinstance(plug_attached, bool):
+            raise ValueError("contact-grasp attachment state is invalid")
+        target_index = _frame_index(target)
+        if target_index not in self.target_indices:
+            raise ValueError("contact-grasp target is outside the trained window")
+        return (
+            _POLICY_CAPABILITIES[self.schema].coarse_acquisition
+            and not plug_attached
+            and target_index
+            < CONTACT_INSERTION_RECORDING.start_index(
+                ContactInsertionSegment.GRASP_CLOSE
+            )
+        )
 
     @property
     def acquisition_context_indices(self) -> tuple[int, ...]:
@@ -568,6 +601,7 @@ class ContactGraspTargetPolicy:
         if self.schema in (
             TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             ACQUISITION_PROGRESS_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         ):
             payload["scene_translation_m"] = list(self.scene_translation_m)
         return payload
@@ -583,6 +617,7 @@ class ContactGraspTargetPolicy:
             in (
                 TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 ACQUISITION_PROGRESS_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             )
             else {"schema"}
         )

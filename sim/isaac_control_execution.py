@@ -707,6 +707,10 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             require_resolvable_transport=(
                 contact_grasp_policy.uses_horizon_transport_action
             ),
+            coarse_acquisition=contact_grasp_policy.uses_coarse_acquisition_action(
+                observation.target_frame,
+                plug_attached=persisted_state.plug_attached,
+            ),
         )
     from sim.isaac_unknown_start_shadow import (
         reauthenticate_unknown_start_shadow_session,

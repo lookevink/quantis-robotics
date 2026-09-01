@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from base64 import b64decode
+from hashlib import sha256
 import json
 from pathlib import Path
 from time import time
@@ -14,6 +15,7 @@ from scipy.spatial.transform import Rotation
 from jepa.contract import ObservationStage
 from jepa_wm.action import (
     ActionSelectionBounds,
+    DROID_FPS,
     DroidActionScale,
     DroidPose,
     action_between,
@@ -38,6 +40,14 @@ from jepa_wm.contact_grasp_acquisition_hold import (
     V6_SESSION_ID as ACQUISITION_HOLD_RUNTIME_SESSION_ID,
     ContactGraspAcquisitionHold,
     runtime_fingerprint as acquisition_hold_runtime_fingerprint,
+)
+from jepa_wm.contact_grasp_acquisition_resolution import (
+    HANDOFF_SCHEMA as ACQUISITION_RESOLUTION_SCHEMA,
+    SOURCE_SESSION_ID as ACQUISITION_RESOLUTION_SOURCE_SESSION_ID,
+    ContactGraspAcquisitionResolution,
+    diagnostic_path as acquisition_resolution_diagnostic_path,
+    runtime_fingerprint as acquisition_resolution_runtime_fingerprint,
+    validate_diagnostic_evidence as validate_acquisition_resolution_diagnostic,
 )
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.control_policy import (
@@ -69,7 +79,11 @@ from jepa_wm.grasp_contract import GRASP_TASK_ID
 from jepa_wm.trajectory import load_rollout_at
 from jepa_wm.training_artifact import artifact_fingerprint
 from sim.control_context import recording_task
-from jepa_wm.control_safety import ControlGateReason, SimulatorSafetyLimits
+from jepa_wm.control_safety import (
+    ControlGateReason,
+    SimulatorSafetyLimits,
+    contact_grasp_action_scales,
+)
 from jepa_wm.insertion_refresh import (
     MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
     ControlSafetySnapshot,
@@ -206,6 +220,128 @@ def diagnose_control_ik_scales(session_id: str) -> dict[str, Any]:
     }
 
 
+def diagnose_contact_grasp_acquisition_resolution(
+    source_session_id: str,
+    encoded_evidence: str,
+) -> dict[str, Any]:
+    """Check the V11 coarse scale roster against live IK without actuation."""
+
+    validate_recording_id(source_session_id)
+    try:
+        payload = json.loads(b64decode(encoded_evidence, validate=True).decode())
+        handoff = ContactGraspAcquisitionResolution.from_dict(payload)
+    except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(
+            "contact-grasp resolution diagnostic authority is invalid"
+        ) from error
+    if (
+        source_session_id != ACQUISITION_RESOLUTION_SOURCE_SESSION_ID
+        or handoff.runtime_fingerprint != acquisition_resolution_runtime_fingerprint()
+    ):
+        raise ValueError("contact-grasp resolution diagnostic authority changed")
+
+    from jepa_wm.control_rollout import ControlStepSummary
+
+    source = ControlSession.at(CONTROL_ROOT, source_session_id)
+    step = ControlStepSummary.from_session(source)
+    post = step.result.post_action
+    if (
+        step.result.status is not ControlResultStatus.APPLIED
+        or post is None
+        or post.plug_attached
+        or post.collision_detected
+        or post.contact_force_newtons
+        > SimulatorSafetyLimits().maximum_contact_force_newtons
+    ):
+        raise ValueError("contact-grasp resolution diagnostic source is unsafe")
+    historical_policy = step.state.require_current_contact_grasp_policy()
+    policy = ContactGraspTargetPolicy.for_scene_translation(
+        historical_policy.scene_translation_m
+    )
+    if not policy.uses_coarse_acquisition_action(
+        step.observation.target_frame,
+        plug_attached=False,
+    ):
+        raise ValueError("contact-grasp resolution diagnostic is not far approach")
+    action = policy.action_for_execution(step.response.actions, plug_attached=False)
+    scales = contact_grasp_action_scales(action, coarse_acquisition=True)
+    limits = SimulatorSafetyLimits()
+    maximum_joint_delta = (
+        limits.maximum_joint_velocity_radians_per_second / DROID_FPS
+    )
+    current = np.asarray(post.joint_positions, dtype=np.float64)
+    attempts = []
+    selected = None
+    for scale in scales:
+        candidate = post.pose.applied(scale.apply(action))
+        workspace_passed = all(
+            lower <= value <= upper
+            for value, lower, upper in zip(
+                candidate.values[:3],
+                limits.minimum_workspace_xyz,
+                limits.maximum_workspace_xyz,
+            )
+        )
+        try:
+            solved = solve_droid_pose(candidate, current)
+            delta = float(np.max(np.abs(solved.arm_positions - current)))
+            joint_limits_passed = all(
+                lower <= value <= upper
+                for value, lower, upper in zip(
+                    solved.arm_positions,
+                    limits.lower_joint_limits,
+                    limits.upper_joint_limits,
+                )
+            )
+            passed = (
+                workspace_passed
+                and joint_limits_passed
+                and delta <= maximum_joint_delta
+            )
+            attempt = {
+                "scale": scale.to_dict(),
+                "solved": True,
+                "passed": passed,
+                "maximum_joint_delta_rad": delta,
+                "position_error_m": solved.position_error_m,
+                "orientation_error_rad": solved.orientation_error_rad,
+                "workspace_passed": workspace_passed,
+                "joint_limits_passed": joint_limits_passed,
+                "joint_velocity_passed": delta <= maximum_joint_delta,
+            }
+        except (RuntimeError, ValueError) as error:
+            attempt = {
+                "scale": scale.to_dict(),
+                "solved": False,
+                "passed": False,
+                "error": f"{type(error).__name__}: {error}",
+            }
+        attempts.append(attempt)
+        if attempt["passed"] and selected is None:
+            selected = scale
+    if selected is None or selected.translation <= 0.125:
+        raise ValueError("contact-grasp coarse acquisition has no useful safe scale")
+    claim_bytes = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
+    result = {
+        "schema": "quantis.contact_grasp_acquisition_resolution_diagnostic.v1",
+        "status": "passed_no_actuation",
+        "source_session_id": source_session_id,
+        "followup_session_id": handoff.followup_session_id,
+        "claim_fingerprint": sha256(claim_bytes).hexdigest(),
+        "selected_scale": selected.to_dict(),
+        "attempts": attempts,
+        "simulator_action_applied": False,
+    }
+    output = acquisition_resolution_diagnostic_path(
+        QUANTIS_DATA_ROOT,
+        handoff.followup_session_id,
+    )
+    if output.exists():
+        raise ValueError("contact-grasp resolution diagnostic already exists")
+    write_json_atomic(output, result)
+    return result
+
+
 async def capture_contact_grasp_acquisition_handoff(
     session_id: str,
     source_session_id: str,
@@ -223,12 +359,24 @@ async def capture_contact_grasp_acquisition_handoff(
     validate_recording_id(proposal_name)
     try:
         payload = json.loads(b64decode(encoded_evidence, validate=True).decode())
+        resolution_continuation = (
+            payload.get("schema") == ACQUISITION_RESOLUTION_SCHEMA
+        )
         hold_continuation = payload.get("schema") == ACQUISITION_HOLD_SCHEMA
         continuation = (
             payload.get("schema") == ACQUISITION_CONTINUATION_SCHEMA
             or hold_continuation
         )
-        if hold_continuation:
+        if resolution_continuation:
+            handoff = ContactGraspAcquisitionResolution.from_dict(payload)
+            expected_source_session = ACQUISITION_RESOLUTION_SOURCE_SESSION_ID
+            expected_proposal = handoff.to_dict()["proposal_name"]
+            expected_fingerprints = None
+            expected_runtime_fingerprint = (
+                acquisition_resolution_runtime_fingerprint()
+            )
+            expected_gate_reason = None
+        elif hold_continuation:
             handoff = ContactGraspAcquisitionHold.from_dict(payload)
             expected_source_session = ACQUISITION_CONTINUATION_SOURCE_SESSION_ID
             expected_proposal = ACQUISITION_CONTINUATION_PROPOSAL_NAME
@@ -260,9 +408,22 @@ async def capture_contact_grasp_acquisition_handoff(
         or handoff.runtime_fingerprint != expected_runtime_fingerprint
     ):
         raise ValueError("contact-grasp acquisition handoff authority changed")
+    if resolution_continuation:
+        diagnostic = json.loads(
+            acquisition_resolution_diagnostic_path(
+                QUANTIS_DATA_ROOT,
+                handoff.followup_session_id,
+            ).read_text()
+        )
+        claim_bytes = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
+        validate_acquisition_resolution_diagnostic(
+            diagnostic,
+            handoff,
+            sha256(claim_bytes).hexdigest(),
+        )
 
     source = ControlSession.at(CONTROL_ROOT, source_session_id)
-    if any(
+    if expected_fingerprints is not None and any(
         artifact_fingerprint(source.path / name) != expected
         for name, expected in expected_fingerprints.items()
     ):
@@ -270,20 +431,34 @@ async def capture_contact_grasp_acquisition_handoff(
     source_observation, source_state = source.load_capture()
     source_result = source.load_result()
     refresh = source_result.insertion_trial_refresh
-    if (
-        source_result.status is not ControlResultStatus.BLOCKED
-        or source_result.gate.reasons != (expected_gate_reason,)
-        or source_result.selected_action_scale is not None
-        or source_result.post_action is not None
-        or refresh is None
-        or source_state.plug_attached
-        or source_state.collision_detected
-        or source_state.contact_force_newtons
-        > SimulatorSafetyLimits().maximum_contact_force_newtons
-        or source_state.active_drive_target is None
-    ):
-        raise ValueError("contact-grasp acquisition source is not a no-motion block")
-    if continuation:
+    if resolution_continuation:
+        post = source_result.post_action
+        if (
+            source_result.status is not ControlResultStatus.APPLIED
+            or post is None
+            or post.plug_attached
+            or post.collision_detected
+            or post.contact_force_newtons
+            > SimulatorSafetyLimits().maximum_contact_force_newtons
+        ):
+            raise ValueError("contact-grasp resolution source is not a safe endpoint")
+        expected_source_pose = post.pose
+        expected_source_safety = post.require_safety_snapshot()
+    else:
+        if (
+            source_result.status is not ControlResultStatus.BLOCKED
+            or source_result.gate.reasons != (expected_gate_reason,)
+            or source_result.selected_action_scale is not None
+            or source_result.post_action is not None
+            or refresh is None
+            or source_state.plug_attached
+            or source_state.collision_detected
+            or source_state.contact_force_newtons
+            > SimulatorSafetyLimits().maximum_contact_force_newtons
+            or source_state.active_drive_target is None
+        ):
+            raise ValueError("contact-grasp acquisition source is not a no-motion block")
+    if continuation and not resolution_continuation:
         expected_source_pose = refresh.live_pose
         expected_source_safety = refresh.live_state
         if (
@@ -293,7 +468,7 @@ async def capture_contact_grasp_acquisition_handoff(
             > SimulatorSafetyLimits().maximum_contact_force_newtons
         ):
             raise ValueError("contact-grasp continuation refresh is unsafe")
-    else:
+    elif not resolution_continuation:
         if (
             refresh.live_pose != source_observation.pose
             or refresh.live_state != source_state.require_safety_snapshot()
@@ -314,11 +489,18 @@ async def capture_contact_grasp_acquisition_handoff(
         runtime = live_runtime_for(ACQUISITION_HOLD_RUNTIME_SESSION_ID, stage)
     if runtime is None:
         raise RuntimeError("live contact-grasp acquisition runtime was lost")
-    expected_active_drive_target = (
-        current_drive_target(runtime)
-        if hold_continuation
-        else source_state.active_drive_target
-    )
+    if resolution_continuation:
+        from jepa_wm.control_rollout import ControlStepSummary
+
+        expected_active_drive_target = ControlStepSummary.from_session(
+            source
+        ).contact_grasp_drive_target()
+    else:
+        expected_active_drive_target = (
+            current_drive_target(runtime)
+            if hold_continuation
+            else source_state.active_drive_target
+        )
     if expected_active_drive_target is None:
         raise RuntimeError("contact-grasp acquisition drive target was lost")
     context_path = session.path / "context.png"
@@ -354,10 +536,20 @@ async def capture_contact_grasp_acquisition_handoff(
         source_policy.scene_translation_m
     )
     reference_path = QUANTIS_DATA_ROOT / "recordings" / source_state.reference_recording
-    target = target_policy.initial_target(
-        reference_path,
-        frame_root=QUANTIS_DATA_ROOT,
-        live_pose=synchronized.pose,
+    target = (
+        target_policy.select(
+            reference_path,
+            frame_root=QUANTIS_DATA_ROOT,
+            live_pose=synchronized.pose,
+            plug_attached=False,
+            previous_target=source_observation.target_frame,
+        )
+        if resolution_continuation
+        else target_policy.initial_target(
+            reference_path,
+            frame_root=QUANTIS_DATA_ROOT,
+            live_pose=synchronized.pose,
+        )
     )
     context_index = target_policy.context_index_for_target(target.frame)
     observation = ControlObservation(

@@ -15,6 +15,7 @@ from jepa_wm.contact_grasp_target import (
     DIRECTIONAL_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     HORIZON_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+    RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     ContactGraspTargetPolicy,
 )
@@ -198,7 +199,7 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
             self.assertAlmostEqual(actual, expected)
         self.assertEqual(
             policy.schema,
-            ACQUISITION_PROGRESS_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         )
         self.assertTrue(policy.uses_measured_acquisition_progress)
         self.assertEqual(ContactGraspTargetPolicy.from_dict(policy.to_dict()), policy)
@@ -211,6 +212,39 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
         self.assertEqual(
             ContactGraspTargetPolicy.from_dict(historical.to_dict()),
             historical,
+        )
+
+        acquisition_v6 = ContactGraspTargetPolicy(
+            ACQUISITION_PROGRESS_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            (0.01, -0.02, 0.03),
+        )
+        self.assertFalse(
+            acquisition_v6.uses_coarse_acquisition_action(
+                self._target_path(96),
+                plug_attached=False,
+            )
+        )
+
+    def test_resolution_aware_policy_uses_coarse_motion_only_before_close(self) -> None:
+        policy = ContactGraspTargetPolicy.for_scene_translation((0.0, 0.0, 0.0))
+
+        self.assertTrue(
+            policy.uses_coarse_acquisition_action(
+                self._target_path(96),
+                plug_attached=False,
+            )
+        )
+        self.assertFalse(
+            policy.uses_coarse_acquisition_action(
+                self._target_path(97),
+                plug_attached=False,
+            )
+        )
+        self.assertFalse(
+            policy.uses_coarse_acquisition_action(
+                self._target_path(96),
+                plug_attached=True,
+            )
         )
 
     def test_current_policy_binds_initial_target_to_measured_acquisition_pose(self) -> None:

@@ -615,6 +615,10 @@ class ControlStepSummary:
                 require_resolvable_transport=(
                     contact_grasp_policy.uses_horizon_transport_action
                 ),
+                coarse_acquisition=contact_grasp_policy.uses_coarse_acquisition_action(
+                    observation.target_frame,
+                    plug_attached=state.plug_attached,
+                ),
             )
             attempted_projection_policy = tuple(
                 attempt.scale for attempt in result.projection_attempts
