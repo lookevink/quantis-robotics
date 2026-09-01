@@ -1033,9 +1033,9 @@ replay_contact_grasp_acquisition_failure() {
     --source "${source_dir}" \
     --checkpoint "${jepa_checkpoint}" \
     --data-root "${control_frame_root}" \
-    --worker "${checkpoint_dir}/contact-insertion-v10-unknown-start-acquisition-v1.worker.json" \
-    --readiness "${checkpoint_dir}/experiments/contact-grasp-acquisition-v10-drive-slow-2600_task12_h256_s3000_contact_grasp_acquisition_readiness.json" \
-    --output "${checkpoint_dir}/experiments/contact-grasp-acquisition-v10-drive-slow-2600_task12_h256_s3000_v4_failure_replay.json"
+    --worker "${checkpoint_dir}/contact-insertion-v10-unknown-start-acquisition-v2.worker.json" \
+    --readiness "${checkpoint_dir}/experiments/contact-grasp-acquisition-v10-drive-slow-2600_task12_h256_s3000_cfopen-v2_contact_grasp_acquisition_readiness.json" \
+    --output "${checkpoint_dir}/experiments/contact-grasp-acquisition-v10-drive-slow-2600_task12_h256_s3000_cfopen-v2_v4_failure_replay.json"
 }
 
 summarize_insertion_action_proposal() {
