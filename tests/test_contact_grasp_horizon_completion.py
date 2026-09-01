@@ -26,7 +26,7 @@ from jepa_wm.contact_grasp_horizon_completion import (
 class ContactGraspHorizonCompletionTest(unittest.TestCase):
     def test_freezes_the_expanded_model_worker_and_action_horizon(self) -> None:
         handoff = ContactGraspHorizonCompletion(
-            "unknown-start-e2e-v21-62605-grasp-001",
+            "unknown-start-e2e-v22-62605-grasp-001",
             runtime_fingerprint(),
             "1" * 40,
         )
@@ -54,7 +54,7 @@ class ContactGraspHorizonCompletionTest(unittest.TestCase):
 
     def test_rejects_any_changed_frozen_field(self) -> None:
         handoff = ContactGraspHorizonCompletion(
-            "unknown-start-e2e-v21-62605-grasp-001",
+            "unknown-start-e2e-v22-62605-grasp-001",
             "2" * 64,
             "1" * 40,
         )

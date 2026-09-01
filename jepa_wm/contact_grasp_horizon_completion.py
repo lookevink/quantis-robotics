@@ -1,4 +1,4 @@
-"""Authenticated V21 continuation after the V20 report-only defect."""
+"""Authenticated V22 continuation after the V21 reload-only defect."""
 
 from __future__ import annotations
 
@@ -16,12 +16,13 @@ from jepa_wm.persistence import write_json_atomic
 from jepa_wm.training_artifact import artifact_fingerprint
 
 
-HANDOFF_SCHEMA = "quantis.contact_grasp_horizon_completion.v2"
-FAILURE_SCHEMA = "quantis.contact_grasp_horizon_completion_failure.v2"
-EXPERIMENT_DIRECTORY = "unknown_start_horizon_completion_v21"
-ROLLOUT_ID = "unknown-start-e2e-v21-62605-grasp"
+HANDOFF_SCHEMA = "quantis.contact_grasp_horizon_completion.v3"
+FAILURE_SCHEMA = "quantis.contact_grasp_horizon_completion_failure.v3"
+EXPERIMENT_DIRECTORY = "unknown_start_horizon_completion_v22"
+ROLLOUT_ID = "unknown-start-e2e-v22-62605-grasp"
 SOURCE_ROLLOUT_ID = "unknown-start-e2e-v20-62605-grasp"
 SOURCE_SESSION_ID = f"{SOURCE_ROLLOUT_ID}-001"
+SOURCE_ATTEMPT_SESSION_ID = "unknown-start-e2e-v21-62605-grasp-001"
 RUNTIME_OWNER_SESSION_ID = SOURCE_SESSION_ID
 SOURCE_PREDECESSOR_SESSION_ID = "unknown-start-e2e-v19-62605-grasp-50"
 REFERENCE_RECORDING = "contact-insertion-v10-drive-slow-2600-held-00"
@@ -41,10 +42,10 @@ WORKER_FINGERPRINT = (
     "6e34cf0f1cd6ad3a894d18fe2f157b3a33802e4a3a19d45350e019a6b86401ed"
 )
 SOURCE_CLAIM_FINGERPRINT = (
-    "8dea8c2ab1e66233ce30219a6abb0e8641468406aace6b4de081d9c37d7346ad"
+    "ea51d591f1561223afab37633792bdf859f6c6de491b9ee56e8f0410ed98abe0"
 )
 SOURCE_FAILURE_FINGERPRINT = (
-    "55a645d9c7dd4264ab2d3f04ce4da1cce7bd2b7875b5bcdd21c37c71c0485da2"
+    "5558721d88b30e5dd80c01a04ae65d8d2a08a77ae35157a6c6fd0389d28e3c2d"
 )
 SOURCE_ROSTER_FINGERPRINT = (
     "3e7168828875c1625ba68eb5ff5aca0ffb2007923a2552dc8087ed5a77438b5d"
@@ -165,6 +166,7 @@ class ContactGraspHorizonCompletion:
             "schema": self.schema,
             "source_rollout_id": SOURCE_ROLLOUT_ID,
             "source_session_id": SOURCE_SESSION_ID,
+            "source_attempt_session_id": SOURCE_ATTEMPT_SESSION_ID,
             "runtime_owner_session_id": RUNTIME_OWNER_SESSION_ID,
             "followup_session_id": self.followup_session_id,
             "reference_recording": REFERENCE_RECORDING,
@@ -257,7 +259,7 @@ def validate_source(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
     from jepa_wm.control_rollout import ControlStepSummary
     from sim.control_session import ControlResultStatus, ControlSession
 
-    source_root = checkpoint_root / "unknown_start_horizon_completion_v20"
+    source_root = checkpoint_root / "unknown_start_horizon_completion_v21"
     if (
         artifact_fingerprint(source_root / "CLAIM.json")
         != SOURCE_CLAIM_FINGERPRINT
@@ -265,7 +267,7 @@ def validate_source(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
         != SOURCE_FAILURE_FINGERPRINT
         or source_roster_fingerprint(data_root) != SOURCE_ROSTER_FINGERPRINT
     ):
-        raise ValueError("terminal V20 validator evidence changed")
+        raise ValueError("terminal V21 reload evidence changed")
     claim = json.loads((source_root / "CLAIM.json").read_text())
     failure = json.loads((source_root / "FAILURE.json").read_text())
     step = ControlStepSummary.from_session(
@@ -273,9 +275,9 @@ def validate_source(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
     )
     post = step.result.post_action
     if (
-        claim.get("schema") != "quantis.contact_grasp_horizon_completion.v1"
-        or claim.get("source_session_id") != SOURCE_PREDECESSOR_SESSION_ID
-        or claim.get("followup_session_id") != SOURCE_SESSION_ID
+        claim.get("schema") != "quantis.contact_grasp_horizon_completion.v2"
+        or claim.get("source_session_id") != SOURCE_SESSION_ID
+        or claim.get("followup_session_id") != SOURCE_ATTEMPT_SESSION_ID
         or claim.get("proposal_fingerprint") != PROPOSAL_FINGERPRINT
         or step.result.status is not ControlResultStatus.APPLIED
         or step.state.previous_session_id != SOURCE_PREDECESSOR_SESSION_ID
@@ -285,14 +287,15 @@ def validate_source(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
         or post.plug_attached
         or post.collision_detected
         or post.contact_force_newtons != 0.0
-        or failure.get("error") != "status_001:exit_1"
+        or failure.get("error") != "capture_001:exit_1"
         or failure.get("claim_fingerprint") != SOURCE_CLAIM_FINGERPRINT
         or failure.get("retry_authorized") is not False
     ):
-        raise ValueError("V20 was not the exact safe report-only failure")
+        raise ValueError("V21 was not the exact no-actuation reload failure")
     validate_model(checkpoint_root)
     return {
         "source_session_id": SOURCE_SESSION_ID,
+        "source_attempt_session_id": SOURCE_ATTEMPT_SESSION_ID,
         "source_roster_fingerprint": SOURCE_ROSTER_FINGERPRINT,
         "source_applied_actions": SOURCE_MAXIMUM_ACTIONS,
         "source_cumulative_applied_actions": SOURCE_CUMULATIVE_APPLIED_ACTIONS,
@@ -380,7 +383,7 @@ def evaluate(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
         and 1 <= report.get("applied_steps", 0) <= MAXIMUM_ACTIONS
     )
     payload = {
-        "schema": "quantis.contact_grasp_horizon_completion_evaluation.v2",
+        "schema": "quantis.contact_grasp_horizon_completion_evaluation.v3",
         "status": "evaluated_pending_recovery",
         "evaluation_passed": passed,
         "recovery_verified": False,
@@ -445,7 +448,7 @@ def finalize(
     if evaluation.get("evaluation_passed") is not True:
         raise ValueError("contact-grasp horizon evaluation failed")
     payload = {
-        "schema": "quantis.contact_grasp_horizon_completion_terminal.v2",
+        "schema": "quantis.contact_grasp_horizon_completion_terminal.v3",
         "status": "passed",
         "passed": True,
         "recovery_verified": True,
