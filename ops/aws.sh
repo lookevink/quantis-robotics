@@ -269,7 +269,7 @@ sync_repo() {
   done
   rsync -az --delete \
     --exclude .git --exclude .env --exclude .runtime --exclude .agents \
-    --exclude data --exclude outputs --exclude supabase \
+    --exclude data --exclude outputs --exclude supabase --exclude '*.log' \
     -e "${remote_shell}" \
     "${repo_root}/" "${ssh_user}@$(instance_ip):~/quantis-robotics/"
 }

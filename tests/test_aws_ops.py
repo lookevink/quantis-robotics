@@ -1514,6 +1514,12 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertNotIn("control-worker-start", calls)
         self.assertNotIn("control-apply", calls)
 
+    def test_sync_does_not_deploy_local_log_artifacts(self):
+        result, calls = self.run_command("sync")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--exclude *.log", calls)
+
     def test_physical_shadow_replay_is_offline_and_recovery_gated(self):
         result, calls = self.run_command("jepa-wm-physical-shadow-replay")
 
