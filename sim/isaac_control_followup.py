@@ -33,6 +33,11 @@ from jepa_wm.contact_grasp_acquisition_continuation import (
     ContactGraspAcquisitionContinuation,
     runtime_fingerprint as acquisition_continuation_runtime_fingerprint,
 )
+from jepa_wm.contact_grasp_acquisition_hold import (
+    HANDOFF_SCHEMA as ACQUISITION_HOLD_SCHEMA,
+    ContactGraspAcquisitionHold,
+    runtime_fingerprint as acquisition_hold_runtime_fingerprint,
+)
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.control_policy import (
     ControlExecutionPolicy,
@@ -216,8 +221,19 @@ async def capture_contact_grasp_acquisition_handoff(
     validate_recording_id(proposal_name)
     try:
         payload = json.loads(b64decode(encoded_evidence, validate=True).decode())
-        continuation = payload.get("schema") == ACQUISITION_CONTINUATION_SCHEMA
-        if continuation:
+        hold_continuation = payload.get("schema") == ACQUISITION_HOLD_SCHEMA
+        continuation = (
+            payload.get("schema") == ACQUISITION_CONTINUATION_SCHEMA
+            or hold_continuation
+        )
+        if hold_continuation:
+            handoff = ContactGraspAcquisitionHold.from_dict(payload)
+            expected_source_session = ACQUISITION_CONTINUATION_SOURCE_SESSION_ID
+            expected_proposal = ACQUISITION_CONTINUATION_PROPOSAL_NAME
+            expected_fingerprints = ACQUISITION_CONTINUATION_SOURCE_FINGERPRINTS
+            expected_runtime_fingerprint = acquisition_hold_runtime_fingerprint()
+            expected_gate_reason = ControlGateReason.JOINT_VELOCITY_VIOLATION
+        elif continuation:
             handoff = ContactGraspAcquisitionContinuation.from_dict(payload)
             expected_source_session = ACQUISITION_CONTINUATION_SOURCE_SESSION_ID
             expected_proposal = ACQUISITION_CONTINUATION_PROPOSAL_NAME

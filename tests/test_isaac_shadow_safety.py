@@ -98,7 +98,7 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
         ) ** 0.5
         self.assertLess(translation_norm * scales[0].translation, 0.0005)
 
-    def test_contact_grasp_micro_policy_reduces_rotation_independently(self) -> None:
+    def test_contact_grasp_micro_policy_falls_back_to_orientation_hold(self) -> None:
         action = DroidAction(
             (0.001072, 0.001511, -0.000810, 0.003429, -0.017439, -0.003272, -0.000746)
         )
@@ -112,7 +112,7 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
         self.assertTrue(all(scale.gripper == 0.125 for scale in scales))
         self.assertEqual(
             tuple(scale.rotation for scale in scales),
-            (0.125, 0.0625, 0.03125, 0.0),
+            (0.125, 0.0),
         )
         self.assertEqual(
             insertion_projection_policy_for_attempts(scales[:2]),
