@@ -70,7 +70,7 @@ class ControlExecutionLifecycleTest(unittest.TestCase):
         )
         self.assertEqual(
             UNKNOWN_START_ROLLBACK_SETTLEMENT.maximum_arm_error_radians,
-            1e-4,
+            1e-3,
         )
 
     def test_rejects_invalid_insertion_binding_before_live_synchronization(

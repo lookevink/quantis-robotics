@@ -16,6 +16,7 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
         self,
     ) -> None:
         capture = Path("sim/isaac_unknown_start_shadow.py").read_text()
+        recovery_source = Path("sim/isaac_unknown_start_recovery.py").read_text()
         execution = Path("sim/isaac_control_execution.py").read_text()
 
         self.assertIn("capture_unknown_start_candidate_observation", capture)
@@ -24,10 +25,27 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
             execution.index("reauthenticate_unknown_start_shadow_session(session_id)"),
             execution.index("session.claim_execution()"),
         )
-        recovery = capture.index("async def recover_unknown_start_candidate_rollback")
+        recovery = recovery_source.index(
+            "async def recover_unknown_start_candidate_rollback"
+        )
         self.assertLess(
-            capture.index("await pause_control_timeline", recovery),
-            capture.index("runtime = live_runtime_for", recovery),
+            recovery_source.index("await pause_control_timeline", recovery),
+            recovery_source.index("runtime = live_runtime_for", recovery),
+        )
+        self.assertLess(
+            recovery_source.index("await rollback_control_command", recovery),
+            recovery_source.index(
+                "runtime.actuators.set_reset_state(target)", recovery
+            ),
+        )
+        self.assertLess(
+            recovery_source.index(
+                "runtime.actuators.set_reset_state(target)", recovery
+            ),
+            recovery_source.index(
+                "reauthenticate_unknown_start_shadow_session(session_id)",
+                recovery,
+            ),
         )
 
     def test_handoff_wire_contract_rejects_added_authority(self) -> None:

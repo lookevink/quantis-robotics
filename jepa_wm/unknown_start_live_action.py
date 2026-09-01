@@ -84,6 +84,7 @@ RUNTIME_FILES = (
     "sim/isaac_demo_runtime.py",
     "sim/isaac_demo_scene.py",
     "sim/isaac_unknown_start_shadow.py",
+    "sim/isaac_unknown_start_recovery.py",
     "sim/recording.py",
     "sim/runtime_loader.py",
     "sim/trial_source_cache.py",
@@ -146,11 +147,14 @@ def predecessor_recovery_fingerprint(data_root: Path) -> str:
         payload.get("schema") != "quantis.unknown_start_rollback_recovery.v1"
         or payload.get("session_id") != PREDECESSOR_SESSION_ID
         or payload.get("recovered") is not True
+        or payload.get("recovery_mode") != "drive_then_paused_reset_initialization"
         or payload.get("applied_model_actions") != 0
         or payload.get("collision_detected") is not False
         or payload.get("plug_attached") is not False
         or payload.get("timeline_playing") is not False
         or payload.get("contact_force_newtons", float("inf")) > 2.0
+        or payload.get("drive_arm_error_radians", float("inf")) > 1e-3
+        or payload.get("drive_gripper_error_meters", float("inf")) > 1e-4
     ):
         raise ValueError("unknown-start predecessor recovery is invalid")
     return artifact_fingerprint(path)

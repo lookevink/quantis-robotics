@@ -87,7 +87,9 @@ def _plug_motion_handoff(
     )
 
 
-def _resident_live_runtime_handoff(module: ModuleType | None) -> _LiveRuntimeHandoff | None:
+def _resident_live_runtime_handoff(
+    module: ModuleType | None,
+) -> _LiveRuntimeHandoff | None:
     """Read both current and pre-handoff resident runtime generations."""
 
     if module is None:
@@ -124,9 +126,7 @@ def _reload_project_module_from_source(module_name: str) -> ModuleType:
     importlib.invalidate_caches()
     module = sys.modules.get(module_name)
     spec = (
-        module.__spec__
-        if module is not None
-        else importlib.util.find_spec(module_name)
+        module.__spec__ if module is not None else importlib.util.find_spec(module_name)
     )
     if spec is None or spec.origin is None or not spec.origin.endswith(".py"):
         raise RuntimeError(f"project module has no Python source: {module_name}")
@@ -271,6 +271,7 @@ def reload_demo_runtime() -> ModuleType:
         "sim.control_capture_schedule",
         "sim.isaac_control_capture",
         "sim.isaac_control_execution",
+        "sim.isaac_unknown_start_recovery",
         "sim.isaac_control_resolution",
         "sim.isaac_control_followup",
         "sim.isaac_shadow_safety",
@@ -284,9 +285,6 @@ def reload_demo_runtime() -> ModuleType:
         "sim.isaac_control_bridge",
     ):
         reloaded = _reload_project_module_from_source(module_name)
-        if (
-            module_name == "sim.isaac_control_runtime"
-            and runtime_handoff is not None
-        ):
+        if module_name == "sim.isaac_control_runtime" and runtime_handoff is not None:
             reloaded.restore_live_runtime_handoff(runtime_handoff)
     return _reload_project_module_from_source("sim.isaac_demo")

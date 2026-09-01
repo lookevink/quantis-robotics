@@ -409,7 +409,7 @@ class RollbackSettlementPolicy:
 
 
 UNKNOWN_START_ROLLBACK_SETTLEMENT = RollbackSettlementPolicy(
-    maximum_arm_error_radians=1e-4,
+    maximum_arm_error_radians=1e-3,
     maximum_gripper_error_meters=1e-4,
     maximum_updates=MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES,
 )
