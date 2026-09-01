@@ -4,13 +4,13 @@ set -eEuo pipefail
 repo_dir="${HOME}/quantis-robotics"
 # shellcheck source=ops/shell_helpers.sh
 source "${repo_dir}/ops/shell_helpers.sh"
-recording_id="${1:-unknown-start-reset-v1-62600}"
-seed="${2:-62600}"
+recording_id="${1:-unknown-start-reset-v2-62601}"
+seed="${2:-62601}"
 source_revision="${3:-}"
 runtime_source_fingerprint="${4:-}"
 data_root="${HOME}/docker/isaac-sim/data/quantis"
 python_bin="${HOME}/.venvs/quantis-jepa-wm/bin/python"
-terminal_root="${data_root}/unknown_start_reset_claims"
+terminal_root="${data_root}/unknown_start_reset_v2_claims"
 
 is_safe_identifier "${recording_id}" || {
   printf 'error: invalid unknown-start reset recording id\n' >&2

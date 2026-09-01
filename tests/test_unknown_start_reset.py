@@ -27,13 +27,27 @@ from sim.exploration import DatasetSplit
 
 
 def valid_evidence() -> UnknownStartResetEvidence:
-    sample = UNKNOWN_START_RESET_CONTRACT.draw(62600, forbidden_seeds=set())
+    sample = UNKNOWN_START_RESET_CONTRACT.draw(62601, forbidden_seeds={62600})
+    connector_position = tuple(
+        baseline + offset
+        for baseline, offset in zip(
+            UNKNOWN_START_RESET_CONTRACT.workspace.connector_baseline_m,
+            sample.scene_offset_m,
+        )
+    )
+    socket_position = tuple(
+        baseline + offset
+        for baseline, offset in zip(
+            UNKNOWN_START_RESET_CONTRACT.workspace.socket_baseline_m,
+            sample.scene_offset_m,
+        )
+    )
     return UnknownStartResetEvidence(
         sample=sample,
         workspace=UnknownStartWorkspaceState(
-            connector_position_m=(-0.0256, -0.247813, 1.323126),
-            socket_position_m=(-0.071, -0.247563, 1.323126),
-            end_effector_position_m=(0.25, -0.247813, 1.48),
+            connector_position_m=connector_position,
+            socket_position_m=socket_position,
+            end_effector_position_m=(0.25, connector_position[1], 1.48),
             socket_scale=1.05,
         ),
         realization=UnknownStartSampleRealization(
@@ -79,8 +93,8 @@ class UnknownStartResetContractTest(unittest.TestCase):
             ledger_root = Path(directory) / "ledger"
             payload = claim(
                 ledger_root,
-                "unknown-start-reset-v1-62600",
-                62600,
+                "unknown-start-reset-v2-62601",
+                62601,
                 "a" * 40,
                 "b" * 64,
             )
@@ -90,6 +104,14 @@ class UnknownStartResetContractTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "already claimed"):
                 claim(
                     ledger_root,
+                    "unknown-start-reset-v2-62601",
+                    62601,
+                    "a" * 40,
+                    "b" * 64,
+                )
+            with self.assertRaisesRegex(ValueError, "frozen run"):
+                claim(
+                    Path(directory) / "different-ledger",
                     "unknown-start-reset-v1-62600",
                     62600,
                     "a" * 40,
@@ -112,7 +134,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
             recovery.mkdir()
             source_revision = "a" * 40
             runtime_fingerprint = "b" * 64
-            recording_id = "unknown-start-reset-v1-62600"
+            recording_id = "unknown-start-reset-v2-62601"
             evidence = valid_evidence()
             sample = evidence.sample
             primary_ledger = root / "claims"
@@ -240,6 +262,8 @@ class UnknownStartResetContractTest(unittest.TestCase):
         self.assertNotIn("move_joint_command_over_physics_steps", source)
         self.assertNotIn("control-worker", source)
         self.assertIn("hand_collision or plug_collision", source)
+        self.assertIn("realization_tolerances.light_exposure_delta", source)
+        self.assertNotIn("plan.light_exposure_delta) > 1e-9", source)
 
     def test_reserved_seed_draw_is_deterministic_and_bounded(self) -> None:
         sample = UNKNOWN_START_RESET_CONTRACT.draw(62600, forbidden_seeds={12600, 12601})

@@ -20,10 +20,11 @@ from sim.unknown_start_reset import (
 )
 
 
-UNKNOWN_START_RESET_RECORDING_ID = "unknown-start-reset-v1-62600"
-UNKNOWN_START_RESET_SEED = 62600
-UNKNOWN_START_RESET_CLAIM_NAME = "milestone-20-unknown-start-reset-claim.json"
-UNKNOWN_START_RESET_FAILURE_NAME = "milestone-20-unknown-start-reset-failure.json"
+UNKNOWN_START_RESET_RECORDING_ID = "unknown-start-reset-v2-62601"
+UNKNOWN_START_RESET_SEED = 62601
+UNKNOWN_START_RESET_PREVIOUS_SEEDS = frozenset({62600})
+UNKNOWN_START_RESET_CLAIM_NAME = "milestone-20-unknown-start-reset-v2-claim.json"
+UNKNOWN_START_RESET_FAILURE_NAME = "milestone-20-unknown-start-reset-v2-failure.json"
 
 
 def _write_exclusive(path: Path, payload: dict[str, Any]) -> None:
@@ -94,7 +95,10 @@ def claim(
     path, failure_path = terminal_paths(ledger_root)
     if failure_path.exists() or any(ledger_root.glob("*-claim.json")):
         raise ValueError("unknown-start reset milestone was already claimed")
-    sample = UNKNOWN_START_RESET_CONTRACT.draw(seed, forbidden_seeds=set())
+    sample = UNKNOWN_START_RESET_CONTRACT.draw(
+        seed,
+        forbidden_seeds=UNKNOWN_START_RESET_PREVIOUS_SEEDS,
+    )
     payload = {
         "schema": "quantis.unknown_start_reset_claim.v1",
         "claimed_at": datetime.now(timezone.utc).isoformat(),

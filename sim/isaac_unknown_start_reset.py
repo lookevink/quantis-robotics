@@ -81,6 +81,9 @@ def _apply_variant_with_readback(stage: Any, plan: Any) -> dict[str, Any]:
     for prim_path, baseline in exposure_baseline.items():
         exposure = stage.GetPrimAtPath(prim_path).GetAttribute("inputs:exposure")
         realized_exposure_deltas.append(float(exposure.Get()) - baseline)
+    light_tolerance = (
+        UNKNOWN_START_RESET_CONTRACT.realization_tolerances.light_exposure_delta
+    )
     if (
         realized_camera_offset.shape != (3,)
         or not np.all(np.isfinite(realized_camera_offset))
@@ -89,7 +92,7 @@ def _apply_variant_with_readback(stage: Any, plan: Any) -> dict[str, Any]:
         or not np.allclose(realized_scale, realized_scale[0], atol=1e-12, rtol=0.0)
         or not realized_exposure_deltas
         or any(
-            abs(delta - plan.light_exposure_delta) > 1e-9
+            abs(delta - plan.light_exposure_delta) > light_tolerance
             for delta in realized_exposure_deltas
         )
     ):
