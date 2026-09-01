@@ -30,7 +30,7 @@ from jepa_wm.contact_grasp_horizon_completion import (
 class ContactGraspHorizonCompletionTest(unittest.TestCase):
     def test_freezes_the_expanded_model_worker_and_action_horizon(self) -> None:
         handoff = ContactGraspHorizonCompletion(
-            "unknown-start-e2e-v25-62605-grasp-001",
+            "unknown-start-e2e-v26-62605-grasp-001",
             runtime_fingerprint(),
             "1" * 40,
         )
@@ -60,7 +60,7 @@ class ContactGraspHorizonCompletionTest(unittest.TestCase):
 
     def test_rejects_any_changed_frozen_field(self) -> None:
         handoff = ContactGraspHorizonCompletion(
-            "unknown-start-e2e-v25-62605-grasp-001",
+            "unknown-start-e2e-v26-62605-grasp-001",
             "2" * 64,
             "1" * 40,
         )
@@ -120,13 +120,13 @@ class ContactGraspHorizonCompletionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "rollback refresh is missing"):
             rollback_drive_target(SimpleNamespace(insertion_trial_refresh=None))
 
-    def test_aws_workflow_gates_v25_on_the_no_actuation_diagnostic(self) -> None:
+    def test_aws_workflow_gates_v26_on_the_no_actuation_diagnostic(self) -> None:
         aws = (Path(__file__).resolve().parents[1] / "ops" / "aws.sh").read_text()
         workflow = aws[aws.index("jepa-wm-contact-grasp-horizon-completion)") :]
 
         diagnostic = workflow.index(
             "demo.diagnose_contact_grasp_tracking_rollback("
-            "'unknown-start-e2e-v22-62605-grasp-022')"
+            "'unknown-start-e2e-v25-62605-grasp-066')"
         )
         physical_run = workflow.index("run_unknown_start_horizon_completion.sh")
         self.assertLess(diagnostic, physical_run)
