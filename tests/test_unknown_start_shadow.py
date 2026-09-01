@@ -41,6 +41,13 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
         recovery = recovery_source.index(
             "async def recover_unknown_start_candidate_rollback"
         )
+        recovery_imports = recovery_source[recovery:].split(
+            "session = ControlSession.at", 1
+        )[0]
+        self.assertIn(
+            "refresh_paused_live_control_articulation,",
+            recovery_imports,
+        )
         self.assertLess(
             recovery_source.index("await pause_control_timeline", recovery),
             recovery_source.index("runtime = live_runtime_for", recovery),

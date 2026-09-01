@@ -35,7 +35,6 @@ async def diagnose_unknown_start_candidate_rollback(
         live_runtime_for,
         pause_control_timeline,
         read_control_contact,
-        refresh_paused_live_control_articulation,
     )
     from sim.isaac_demo_kinematics import _solver_for_stage
     from sim.isaac_demo_runtime import recording_snapshot
@@ -159,6 +158,7 @@ async def recover_unknown_start_candidate_rollback(
         live_runtime_for,
         pause_control_timeline,
         read_control_contact,
+        refresh_paused_live_control_articulation,
     )
     from sim.isaac_demo_runtime import (
         ContactReading,
