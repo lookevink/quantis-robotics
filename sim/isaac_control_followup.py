@@ -35,6 +35,7 @@ from jepa_wm.contact_grasp_acquisition_continuation import (
 )
 from jepa_wm.contact_grasp_acquisition_hold import (
     HANDOFF_SCHEMA as ACQUISITION_HOLD_SCHEMA,
+    V6_SESSION_ID as ACQUISITION_HOLD_RUNTIME_SESSION_ID,
     ContactGraspAcquisitionHold,
     runtime_fingerprint as acquisition_hold_runtime_fingerprint,
 )
@@ -308,6 +309,8 @@ async def capture_contact_grasp_acquisition_handoff(
         raise ValueError("contact-grasp acquisition handoff already exists")
     stage = omni.usd.get_context().get_stage()
     runtime = live_runtime_for(source_session_id, stage)
+    if runtime is None and hold_continuation:
+        runtime = live_runtime_for(ACQUISITION_HOLD_RUNTIME_SESSION_ID, stage)
     if runtime is None:
         raise RuntimeError("live contact-grasp acquisition runtime was lost")
     context_path = session.path / "context.png"
