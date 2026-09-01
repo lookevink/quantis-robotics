@@ -79,7 +79,17 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
         )
         self.assertIn("reset_evidence.observed_gripper_width_m", recovery_source)
         self.assertIn("if existing_is_exact:", recovery_source)
-        self.assertIn("return existing", recovery_source)
+        self.assertIn("existing_recovery = existing", recovery_source)
+        self.assertIn("timeline.set_auto_update(False)", recovery_source)
+        reuse = recovery_source.index("if existing_recovery is not None:", recovery)
+        self.assertGreater(
+            reuse,
+            recovery_source.index(
+                "reauthenticate_unknown_start_shadow_session(session_id)",
+                recovery,
+            ),
+        )
+        self.assertIn("return existing_recovery", recovery_source[reuse:])
         self.assertIn("rollback_recovery.superseded-", recovery_source)
         self.assertIn("recovery_path.replace(superseded_path)", recovery_source)
         self.assertIn(

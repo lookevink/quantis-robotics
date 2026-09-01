@@ -228,6 +228,7 @@ async def recover_unknown_start_candidate_rollback(
         np.asarray(state.active_drive_target.joint_positions, dtype=np.float64),
         state.active_drive_target.gripper_width_m,
     )
+    existing_recovery: dict[str, Any] | None = None
     if recovery_path.exists():
         existing = json.loads(recovery_path.read_text())
         existing_joints = np.asarray(
@@ -259,14 +260,15 @@ async def recover_unknown_start_candidate_rollback(
             <= 1e-7
         )
         if existing_is_exact:
-            return existing
-        superseded_path = recovery_path.with_name(
-            "rollback_recovery.superseded-"
-            f"{artifact_fingerprint(recovery_path)}.json"
-        )
-        if superseded_path.exists():
-            raise ValueError("unknown-start superseded recovery already exists")
-        recovery_path.replace(superseded_path)
+            existing_recovery = existing
+        else:
+            superseded_path = recovery_path.with_name(
+                "rollback_recovery.superseded-"
+                f"{artifact_fingerprint(recovery_path)}.json"
+            )
+            if superseded_path.exists():
+                raise ValueError("unknown-start superseded recovery already exists")
+            recovery_path.replace(superseded_path)
     timeline = omni.timeline.get_timeline_interface()
     await pause_control_timeline(timeline, omni.kit.app.get_app().next_update_async)
     if timeline.is_playing():
@@ -351,10 +353,13 @@ async def recover_unknown_start_candidate_rollback(
         target,
         drive_target=reset_drive_target,
     )
+    timeline.set_auto_update(False)
     observe_safety()
     if timeline.is_playing():
         raise RuntimeError("unknown-start reset initialization resumed timeline")
     reauthenticate_unknown_start_shadow_session(session_id)
+    if existing_recovery is not None:
+        return existing_recovery
     actual = runtime.actuators.actual_command()
     collision, force = read_control_contact(runtime.sensor)
     payload = {
