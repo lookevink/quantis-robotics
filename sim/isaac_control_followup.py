@@ -482,6 +482,79 @@ def diagnose_contact_grasp_followup_drive_target(
     }
 
 
+def diagnose_contact_grasp_tracking_rollback(
+    session_id: str,
+) -> dict[str, Any]:
+    """Read every live equality required to resume a tracking rollback."""
+
+    import omni.usd
+    from jepa_wm.control_rollout import ControlStepSummary
+
+    validate_recording_id(session_id)
+    step = ControlStepSummary.from_session(
+        ControlSession.at(CONTROL_ROOT, session_id)
+    )
+    refresh = step.result.insertion_trial_refresh
+    if (
+        step.result.status is not ControlResultStatus.ROLLED_BACK_TRACKING
+        or refresh is None
+    ):
+        raise ValueError("tracking rollback diagnostic source is invalid")
+    stage = omni.usd.get_context().get_stage()
+    runtime = live_runtime_for(session_id, stage)
+    if runtime is None:
+        raise RuntimeError("tracking rollback runtime was lost")
+    expected = horizon_completion_drive_target(QUANTIS_DATA_ROOT)
+    active = current_drive_target(runtime)
+    actual = runtime.actuators.actual_command()
+    collision_detected, contact_force = read_control_contact(runtime.sensor)
+    joint_errors = tuple(
+        float(actual_value) - expected_value
+        for actual_value, expected_value in zip(
+            actual.arm_positions,
+            expected.joint_positions,
+        )
+    )
+    maximum_joint_error = max(abs(value) for value in joint_errors)
+    gripper_error = actual.gripper_width_m - expected.gripper_width_m
+    limits = SimulatorSafetyLimits()
+    if (
+        active != expected
+        or maximum_joint_error > limits.maximum_observation_joint_drift_radians
+        or abs(gripper_error) > MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+        or contact_force > limits.maximum_contact_force_newtons
+        or collision_detected
+        or runtime.attachment.attached
+    ):
+        raise RuntimeError("tracking rollback continuity is unsafe")
+    return {
+        "status": "diagnosed_no_actuation",
+        "diagnostic_passed": True,
+        "session_id": session_id,
+        "runtime_owner_matches": True,
+        "expected_rollback_target": expected.to_dict(),
+        "active_drive_target": active.to_dict(),
+        "active_target_matches": active == expected,
+        "refresh_matches_captured_state": (
+            tuple(step.state.current_joint_positions)
+            == tuple(refresh.live_state.joint_positions)
+            and step.state.current_gripper_width_m
+            == refresh.live_state.gripper_width_m
+        ),
+        "actual_joint_positions": [
+            float(value) for value in actual.arm_positions
+        ],
+        "actual_gripper_width_m": actual.gripper_width_m,
+        "joint_errors_rad": list(joint_errors),
+        "maximum_joint_error_rad": maximum_joint_error,
+        "gripper_error_m": gripper_error,
+        "maximum_contact_force_newtons": contact_force,
+        "collision_detected": collision_detected,
+        "plug_attached": runtime.attachment.attached,
+        "simulator_action_applied": False,
+    }
+
+
 def _contact_grasp_rollback_handoff_state(
     source_result: Any,
     *,

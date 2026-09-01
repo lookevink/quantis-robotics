@@ -110,6 +110,10 @@ class ContactGraspRotationResolutionTest(unittest.TestCase):
         self.assertIn("jepa-wm-contact-grasp-rollback-diagnostic)", aws)
         self.assertIn("jepa-wm-contact-grasp-followup-diagnostic)", aws)
         self.assertIn(
+            "jepa-wm-contact-grasp-tracking-rollback-diagnostic)",
+            aws,
+        )
+        self.assertIn(
             "demo.diagnose_contact_grasp_rollback_drive_target(${rotation_resolution})",
             aws,
         )
