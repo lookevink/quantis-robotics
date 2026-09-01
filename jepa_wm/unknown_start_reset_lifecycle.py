@@ -23,6 +23,7 @@ from sim.unknown_start_reset import (
 UNKNOWN_START_RESET_RECORDING_ID = "unknown-start-reset-v2-62601"
 UNKNOWN_START_RESET_SEED = 62601
 UNKNOWN_START_RESET_PREVIOUS_SEEDS = frozenset({62600})
+UNKNOWN_START_RESET_LEDGER_NAME = "unknown_start_reset_v2_claims"
 UNKNOWN_START_RESET_CLAIM_NAME = "milestone-20-unknown-start-reset-v2-claim.json"
 UNKNOWN_START_RESET_FAILURE_NAME = "milestone-20-unknown-start-reset-v2-failure.json"
 
@@ -368,7 +369,14 @@ def _write_or_validate(path: Path, payload: dict[str, Any]) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("claim", "failure", "finalize-recovery"))
+    parser.add_argument(
+        "command",
+        choices=("describe", "claim", "failure", "finalize-recovery"),
+    )
+    parser.add_argument(
+        "--field",
+        choices=("recording-id", "seed", "ledger-name", "claim-name"),
+    )
     parser.add_argument("--ledger-root", type=Path)
     parser.add_argument("--claim-path", type=Path)
     parser.add_argument("--recording-id")
@@ -380,6 +388,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--recovery-recording", type=Path)
     parser.add_argument("--recovery-claim", type=Path)
     arguments = parser.parse_args(argv)
+    if arguments.command == "describe":
+        if arguments.field is None:
+            parser.error("describe requires --field")
+        value = {
+            "recording-id": UNKNOWN_START_RESET_RECORDING_ID,
+            "seed": str(UNKNOWN_START_RESET_SEED),
+            "ledger-name": UNKNOWN_START_RESET_LEDGER_NAME,
+            "claim-name": UNKNOWN_START_RESET_CLAIM_NAME,
+        }[arguments.field]
+        print(value)
+        return 0
     if arguments.command == "claim":
         if (
             arguments.ledger_root is None

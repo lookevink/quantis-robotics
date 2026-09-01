@@ -84,12 +84,20 @@ def _apply_variant_with_readback(stage: Any, plan: Any) -> dict[str, Any]:
     light_tolerance = (
         UNKNOWN_START_RESET_CONTRACT.realization_tolerances.light_exposure_delta
     )
+    scale_tolerance = (
+        UNKNOWN_START_RESET_CONTRACT.workspace.realization_scale_tolerance
+    )
     if (
         realized_camera_offset.shape != (3,)
         or not np.all(np.isfinite(realized_camera_offset))
         or realized_scale.shape != (3,)
         or not np.all(np.isfinite(realized_scale))
-        or not np.allclose(realized_scale, realized_scale[0], atol=1e-12, rtol=0.0)
+        or not np.allclose(
+            realized_scale,
+            plan.socket_scale,
+            atol=scale_tolerance,
+            rtol=0.0,
+        )
         or not realized_exposure_deltas
         or any(
             abs(delta - plan.light_exposure_delta) > light_tolerance

@@ -263,7 +263,21 @@ class UnknownStartResetContractTest(unittest.TestCase):
         self.assertNotIn("control-worker", source)
         self.assertIn("hand_collision or plug_collision", source)
         self.assertIn("realization_tolerances.light_exposure_delta", source)
+        self.assertIn("workspace.realization_scale_tolerance", source)
         self.assertNotIn("plan.light_exposure_delta) > 1e-9", source)
+        self.assertNotIn("atol=1e-12", source)
+
+    def test_v2_run_descriptor_is_the_single_shell_identity_source(self) -> None:
+        lifecycle = Path("jepa_wm/unknown_start_reset_lifecycle.py").read_text()
+        runner = Path("ops/run_unknown_start_reset.sh").read_text()
+        aws = Path("ops/aws.sh").read_text()
+
+        self.assertIn("UNKNOWN_START_RESET_LEDGER_NAME", lifecycle)
+        self.assertIn("describe --field recording-id", runner)
+        self.assertIn("describe --field ledger-name", runner)
+        self.assertIn("describe --field recording-id", aws)
+        self.assertIn("describe --field claim-name", aws)
+        self.assertNotIn("unknown-start-reset-v2-62601", runner)
 
     def test_reserved_seed_draw_is_deterministic_and_bounded(self) -> None:
         sample = UNKNOWN_START_RESET_CONTRACT.draw(62600, forbidden_seeds={12600, 12601})

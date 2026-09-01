@@ -76,11 +76,16 @@ sync_tree "${isaac_data_root}/quantis/scenes" "${backup_root}/isaac/scenes"
 sync_tree "${isaac_data_root}/quantis/recordings" "${backup_root}/isaac/recordings"
 for state_tree in \
   control_sessions control_rollouts control_baselines control_readiness \
-  control_candidates unknown_start_reset_claims unknown_start_reset_v2_claims; do
+  control_candidates; do
   if [[ -d "${isaac_data_root}/quantis/${state_tree}" ]]; then
     sync_tree \
       "${isaac_data_root}/quantis/${state_tree}" \
       "${backup_root}/isaac/${state_tree}"
+  fi
+done
+for source in "${isaac_data_root}/quantis"/unknown_start_reset*_claims; do
+  if [[ -d "${source}" ]]; then
+    sync_tree "${source}" "${backup_root}/isaac/$(basename "${source}")"
   fi
 done
 sync_tree "${checkpoint_dir}" "${backup_root}/jepa-wm/checkpoints"
