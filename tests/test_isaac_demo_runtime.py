@@ -420,16 +420,31 @@ class DriveOnlyMotionTest(unittest.IsolatedAsyncioTestCase):
 
     def test_explicit_reset_retains_direct_state_initialization(self) -> None:
         articulation = Mock()
+        arm_attributes = [Mock() for _ in range(7)]
+        finger_attributes = [Mock(), Mock()]
         actuators = Actuators(
             articulation,
-            [Mock() for _ in range(7)],
-            [Mock(), Mock()],
+            arm_attributes,
+            finger_attributes,
         )
         command = JointCommand(np.full(7, 0.001), 0.04)
+        drive_target = JointCommand(np.full(7, 0.002), 0.06)
 
-        actuators.set_reset_state(command)
+        actuators.set_reset_state(command, drive_target=drive_target)
 
         self.assertEqual(articulation.set_dof_positions.call_count, 2)
+        for attribute in arm_attributes:
+            attribute.Set.assert_called_once_with(float(np.rad2deg(0.002)))
+        for attribute in finger_attributes:
+            attribute.Set.assert_called_once_with(0.03)
+        np.testing.assert_array_equal(
+            articulation.set_dof_positions.call_args_list[0].kwargs["positions"],
+            command.arm_positions,
+        )
+        np.testing.assert_array_equal(
+            articulation.set_dof_positions.call_args_list[1].kwargs["positions"],
+            np.asarray([0.02, 0.02]),
+        )
         articulation.set_dof_velocities.assert_called_once()
         velocity_call = articulation.set_dof_velocities.call_args
         np.testing.assert_array_equal(

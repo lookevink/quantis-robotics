@@ -64,6 +64,7 @@ async def recover_unknown_start_candidate_rollback(
         or refresh is None
         or refresh.live_state.plug_attached
         or interlock is None
+        or state.active_drive_target is None
         or interlock.collision_detected
         or interlock.maximum_contact_force_newtons > 2.0
         or handoff.session_id != session_id
@@ -96,6 +97,7 @@ async def recover_unknown_start_candidate_rollback(
             state.current_joint_positions,
             state.current_gripper_width_m,
         ),
+        state.active_drive_target,
     )
     for expected_active in allowed_active_targets:
         try:
@@ -112,6 +114,10 @@ async def recover_unknown_start_candidate_rollback(
         np.asarray(state.current_joint_positions, dtype=np.float64),
         state.current_gripper_width_m,
     )
+    reset_drive_target = JointCommand(
+        np.asarray(state.active_drive_target.joint_positions, dtype=np.float64),
+        state.active_drive_target.gripper_width_m,
+    )
 
     def observe_safety() -> ContactReading:
         collision, force = read_control_contact(runtime.sensor)
@@ -125,7 +131,7 @@ async def recover_unknown_start_candidate_rollback(
     try:
         await rollback_control_command(
             runtime.actuators,
-            target,
+            reset_drive_target,
             runtime.attachment,
             omni.kit.app.get_app().next_update_async,
             expected_attachment=False,
@@ -155,7 +161,10 @@ async def recover_unknown_start_candidate_rollback(
     # rollback momentum into the exact authenticated state.
     resume_live_simulation(timeline)
     try:
-        runtime.actuators.set_reset_state(target)
+        runtime.actuators.set_reset_state(
+            target,
+            drive_target=reset_drive_target,
+        )
         await advance_physics_updates(1, observe_safety)
     finally:
         await pause_control_timeline(

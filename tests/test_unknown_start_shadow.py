@@ -35,16 +35,18 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
         self.assertLess(
             recovery_source.index("await rollback_control_command", recovery),
             recovery_source.index(
-                "runtime.actuators.set_reset_state(target)", recovery
+                "runtime.actuators.set_reset_state(", recovery
             ),
         )
         self.assertIn("allowed_active_targets = (", recovery_source)
+        self.assertIn("state.active_drive_target,", recovery_source)
         self.assertIn(
             "unknown-start recovery active drive target changed", recovery_source
         )
+        self.assertIn("drive_target=reset_drive_target", recovery_source)
         self.assertLess(
             recovery_source.index(
-                "runtime.actuators.set_reset_state(target)", recovery
+                "runtime.actuators.set_reset_state(", recovery
             ),
             recovery_source.index(
                 "await advance_physics_updates(1, observe_safety)", recovery

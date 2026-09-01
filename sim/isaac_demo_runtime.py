@@ -126,10 +126,17 @@ class Actuators:
             dof_indices=np.asarray([7]),
         )
 
-    def set_reset_state(self, command: JointCommand) -> None:
+    def set_reset_state(
+        self,
+        command: JointCommand,
+        *,
+        drive_target: JointCommand | None = None,
+    ) -> None:
         """Set targets and DOF state for explicit reset or initialization only."""
 
-        finger_position = self._set_drive_targets(command)
+        target = drive_target if drive_target is not None else command
+        self._set_drive_targets(target)
+        finger_position = command.gripper_width_m / 2.0
 
         self.articulation.set_dof_positions(
             positions=command.arm_positions,
