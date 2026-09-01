@@ -115,7 +115,10 @@ class PhysicalShadowCanaryTest(unittest.TestCase):
 
         self.assertEqual(config["unknown_start"]["seed"], 62604)
         self.assertTrue(config["output"].endswith("unknown-start-shadow-canary-v2.json"))
-        self.assertEqual(V4_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT, "PENDING_CHECKPOINT")
+        self.assertEqual(
+            V4_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+            "63778c9db832ffca391d0392bd8689910b19aafeec60b7cbfa60b0e2755fd95b",
+        )
         self.assertLess(
             runner.index("demo.preflight_unknown_start_shadow"),
             runner.index("physical_shadow_canary claim"),
