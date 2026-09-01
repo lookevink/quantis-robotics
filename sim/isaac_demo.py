@@ -50,6 +50,9 @@ from sim.isaac_control_bridge import (
 from sim.isaac_candidate_demo import record_candidate_demo as _record_candidate_demo
 from sim.isaac_grasp_demo import record_grasp_demo as _record_grasp_demo
 from sim.isaac_insertion_demo import record_insertion_demo as _record_insertion_demo
+from sim.isaac_unknown_start_reset import (
+    authenticate_unknown_start_reset as _authenticate_unknown_start_reset,
+)
 from sim.isaac_demo_runtime import (
     Actuators,
     JointCommand,
@@ -82,6 +85,19 @@ def preflight_report() -> dict[str, Any]:
     """Read the live stage only while the simulator runtime is unowned."""
 
     return _RECORDING_JOBS.run_exclusive_sync("preflight-report", _preflight_report)
+
+
+async def authenticate_unknown_start_reset(
+    recording_id: str,
+    seed: int,
+    source_revision: str,
+) -> dict[str, Any]:
+    """Run one exclusive reset-only milestone-20 authentication."""
+
+    return await _RECORDING_JOBS.run_exclusive(
+        f"unknown-start-reset-{recording_id}",
+        lambda: _authenticate_unknown_start_reset(recording_id, seed, source_revision),
+    )
 
 
 async def capture_cameras(

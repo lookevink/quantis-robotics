@@ -1499,6 +1499,21 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("run_physical_shadow_canary.sh", calls)
         self.assertNotIn("run_control_step.sh", calls)
 
+    def test_unknown_start_reset_is_zero_actuation_and_recovery_gated(self):
+        source_revision = "a" * 40
+        result, calls = self.run_command(
+            "jepa-wm-unknown-start-reset",
+            extra_env={"FAKE_GIT_REVISION": source_revision},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("run_unknown_start_reset.sh", calls)
+        self.assertIn(source_revision, calls)
+        self.assertIn("ops/backup_state.sh", calls)
+        self.assertIn("finalize-recovery", calls)
+        self.assertNotIn("control-worker-start", calls)
+        self.assertNotIn("control-apply", calls)
+
     def test_physical_shadow_replay_is_offline_and_recovery_gated(self):
         result, calls = self.run_command("jepa-wm-physical-shadow-replay")
 

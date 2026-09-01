@@ -162,6 +162,14 @@ class UnknownStartWorkspaceState:
         ) or not isfinite(self.socket_scale):
             raise ValueError("unknown-start workspace state is invalid")
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "connector_position_m": list(self.connector_position_m),
+            "socket_position_m": list(self.socket_position_m),
+            "end_effector_position_m": list(self.end_effector_position_m),
+            "socket_scale": self.socket_scale,
+        }
+
 
 @dataclass(frozen=True)
 class UnknownStartWorkspaceBounds:
@@ -301,6 +309,13 @@ class UnknownStartSampleRealization:
             or not isfinite(self.light_exposure_delta)
         ):
             raise ValueError("unknown-start sample realization is invalid")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "initial_arm_offset_radians": list(self.initial_arm_offset_radians),
+            "camera_offset_m": list(self.camera_offset_m),
+            "light_exposure_delta": self.light_exposure_delta,
+        }
 
 
 @dataclass(frozen=True)
@@ -501,6 +516,22 @@ class UnknownStartResetEvidence:
             or self.phase is not UnknownStartResetPhase.RESET_AUTHENTICATION
         ):
             raise ValueError("unknown-start reset evidence is unsafe or inauthentic")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema": "quantis.unknown_start_reset_evidence.v1",
+            "sample": self.sample.to_dict(),
+            "workspace": self.workspace.to_dict(),
+            "realization": self.realization.to_dict(),
+            "realized_sample_fingerprint": self.realized_sample_fingerprint,
+            "plug_attached": self.plug_attached,
+            "collision_detected": self.collision_detected,
+            "contact_force_newtons": self.contact_force_newtons,
+            "direct_state_setting_count": self.direct_state_setting_count,
+            "prefix_replay_frames": self.prefix_replay_frames,
+            "applied_actions": self.applied_actions,
+            "phase": self.phase.value,
+        }
 
 
 UNKNOWN_START_RESET_CONTRACT = UnknownStartResetContract()

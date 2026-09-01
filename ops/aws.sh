@@ -568,6 +568,7 @@ Commands:
   jepa-wm-insertion-two-step REFERENCE_RECORDING SEED ARTIFACTS [context-index]
   jepa-wm-insertion-demo-rollout REFERENCE_RECORDING SEED ARTIFACTS [context-index]
   jepa-wm-grasp-to-insertion REFERENCE_RECORDING SEED GRASP_ARTIFACTS INSERTION_ARTIFACTS DEMO_SPEC_ID DEMO_SPEC_FINGERPRINT
+  jepa-wm-unknown-start-reset
   jepa-wm-grasp-transition-trial RUN_ID PREVIOUS_GRASP_SESSION REFERENCE_RECORDING SEED INSERTION_ARTIFACTS [ROLLED_BACK_SESSION]
   jepa-wm-grasp-transition-milestone RUN_ID REFERENCE_RECORDING SEED GRASP_ARTIFACTS INSERTION_ARTIFACTS
   jepa-wm-insertion-resolution REFERENCE_RECORDING SEED [context-index] [attached|unloaded]
@@ -1153,6 +1154,28 @@ case "${command}" in
         || true
     fi
     printf 'Physical shadow canary workflow complete.\n'
+    exit "${command_status}"
+    ;;
+  jepa-wm-unknown-start-reset)
+    source_revision="$(deployment_source_revision)"
+    recording_id="unknown-start-reset-v1-62600"
+    command_status=0
+    sync_repo || command_status=$?
+    if (( command_status == 0 )); then
+      remote "bash ~/quantis-robotics/ops/run_unknown_start_reset.sh '${recording_id}' 62600 '${source_revision}'" \
+        || command_status=$?
+    fi
+    backup_status=0
+    remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' \
+      || backup_status=$?
+    if (( command_status == 0 && backup_status != 0 )); then
+      command_status=${backup_status}
+    fi
+    if (( command_status == 0 )); then
+      remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.unknown_start_reset_lifecycle finalize-recovery --primary-recording ~/docker/isaac-sim/data/quantis/recordings/'${recording_id}' --recovery-recording /mnt/quantis-assets/quantis-state/isaac/recordings/'${recording_id}' --claim-path ~/docker/isaac-sim/data/quantis/unknown_start_reset_claims/'${recording_id}'-claim.json --recovery-claim /mnt/quantis-assets/quantis-state/isaac/unknown_start_reset_claims/'${recording_id}'-claim.json --source-revision '${source_revision}'" \
+        || command_status=$?
+    fi
+    printf 'Unknown-start reset authentication workflow complete.\n'
     exit "${command_status}"
     ;;
   jepa-wm-physical-shadow-replay)

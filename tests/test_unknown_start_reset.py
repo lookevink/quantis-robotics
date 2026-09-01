@@ -1,6 +1,10 @@
 from dataclasses import replace
+import json
+from pathlib import Path
+import tempfile
 import unittest
 
+from jepa_wm.unknown_start_reset_lifecycle import claim, finalize_recovery
 from sim.unknown_start_reset import (
     UNKNOWN_START_RESET_CONTRACT,
     UnknownStartResetEvidence,
@@ -12,6 +16,85 @@ from sim.exploration import DatasetSplit
 
 
 class UnknownStartResetContractTest(unittest.TestCase):
+    def test_live_claim_is_exclusive_and_runner_has_no_actuation_seam(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "claim.json"
+            payload = claim(
+                path,
+                "unknown-start-reset-v1-62600",
+                62600,
+                "a" * 40,
+            )
+
+            self.assertEqual(payload["evaluations_claimed"], 1)
+            self.assertEqual(payload["applied_actions"], 0)
+            with self.assertRaisesRegex(ValueError, "already claimed"):
+                claim(path, "unknown-start-reset-v1-62600", 62600, "a" * 40)
+        runner = Path("ops/run_unknown_start_reset.sh").read_text()
+        self.assertIn("authenticate_unknown_start_reset", runner)
+        self.assertNotIn("apply_control_response", runner)
+        self.assertNotIn("control-worker-start", runner)
+
+    def test_success_is_terminal_only_after_exact_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            primary = root / "primary"
+            recovery = root / "recovery"
+            primary.mkdir()
+            recovery.mkdir()
+            source_revision = "a" * 40
+            recording_id = "unknown-start-reset-v1-62600"
+            sample = UNKNOWN_START_RESET_CONTRACT.draw(
+                62600,
+                forbidden_seeds=set(),
+            )
+            primary_claim = root / "claims" / "claim.json"
+            recovery_claim = root / "recovery-claims" / "claim.json"
+            claim(primary_claim, recording_id, sample.seed, source_revision)
+            recovery_claim.parent.mkdir()
+            recovery_claim.write_bytes(primary_claim.read_bytes())
+            artifacts = {
+                "manifest.json": "{}\n",
+                "unknown_start_reset_evidence.json": "{}\n",
+                "CAPTURE.json": json.dumps(
+                    {
+                        "status": "captured",
+                        "recording_id": recording_id,
+                        "source_revision": source_revision,
+                        "contract_fingerprint": UNKNOWN_START_RESET_CONTRACT.fingerprint,
+                        "sample_fingerprint": sample.fingerprint,
+                        "applied_actions": 0,
+                    }
+                ),
+            }
+            for name, contents in artifacts.items():
+                (primary / name).write_text(contents)
+                (recovery / name).write_text(contents)
+
+            payload = finalize_recovery(
+                primary,
+                recovery,
+                primary_claim,
+                recovery_claim,
+                source_revision,
+            )
+
+            self.assertTrue(payload["passed"])
+            self.assertTrue(payload["recovery_verified"])
+            self.assertEqual(payload["applied_actions"], 0)
+            self.assertEqual(
+                (primary / "RESULT.json").read_bytes(),
+                (recovery / "RESULT.json").read_bytes(),
+            )
+
+    def test_runtime_has_one_reset_and_no_action_application(self) -> None:
+        source = Path("sim/isaac_unknown_start_reset.py").read_text()
+
+        self.assertEqual(source.count("actuators.set_reset_state("), 1)
+        self.assertNotIn("apply_control_response", source)
+        self.assertNotIn("move_joint_command_over_physics_steps", source)
+        self.assertNotIn("control-worker", source)
+
     def test_reserved_seed_draw_is_deterministic_and_bounded(self) -> None:
         sample = UNKNOWN_START_RESET_CONTRACT.draw(62600, forbidden_seeds={12600, 12601})
 
