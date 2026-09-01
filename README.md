@@ -2293,6 +2293,16 @@ tests pass. The consumed canary remains terminal; this correction does not
 authorize a retry or live action. Exact evidence is in
 [`RESULT.md`](.scratch/jepa-physical-shadow-direction-diagnosis-v1/RESULT.md).
 
+The separately frozen offline replay then exercised the actual GPU model on the
+immutable failed-canary observation. Under the same proposal, residual, seed,
+and 256-candidate budget, the corrected planner retained `0.008096` objective
+improvement and raised first-action cosine from `0.617079` to `0.996140`; the
+unchanged direction and complete shadow gates passed. Source artifacts stayed
+byte-identical, recovered evaluation/result copies match, and Isaac remained
+stopped. This opens only a separately frozen zero-actuation canary on a
+different held-out start. Exact evidence is in
+[`RESULT.md`](.scratch/jepa-physical-shadow-replay-v1/RESULT.md).
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded

@@ -892,6 +892,12 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     search over the remaining horizon. No threshold changed and all `821` tests
     pass. The consumed canary remains terminal and live authority remains
     closed pending a newly frozen experiment.
+    A separately frozen actual-model replay over the immutable failed-canary
+    observation subsequently passed: objective improvement remained `0.008096`
+    while direction cosine rose to `0.996140` under the unchanged gate. Its
+    evaluation and terminal result have byte-identical recovery copies, the
+    source session remained unchanged, and Isaac stayed stopped. This opens
+    only a new zero-actuation canary on a different held-out start.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one
