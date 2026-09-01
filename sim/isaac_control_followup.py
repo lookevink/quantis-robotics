@@ -555,6 +555,112 @@ def diagnose_contact_grasp_tracking_rollback(
     }
 
 
+def diagnose_contact_grasp_tracking_rollback_ik(
+    session_id: str,
+) -> dict[str, Any]:
+    """Compare rotation-preserving and orientation-hold IK without motion."""
+
+    from math import isclose, sqrt
+
+    from jepa_wm.control_rollout import ControlStepSummary
+    from sim.isaac_demo_kinematics import solve_droid_pose
+
+    validate_recording_id(session_id)
+    step = ControlStepSummary.from_session(
+        ControlSession.at(CONTROL_ROOT, session_id)
+    )
+    post = step.result.post_action
+    refresh = step.result.insertion_trial_refresh
+    selected = step.result.selected_action_scale
+    if (
+        step.result.status is not ControlResultStatus.ROLLED_BACK_TRACKING
+        or post is None
+        or refresh is None
+        or selected is None
+    ):
+        raise ValueError("tracking rollback IK diagnostic source is invalid")
+    raw = post.raw_proposed_action
+    translation_norm = sqrt(sum(value * value for value in raw.values[:3]))
+    maximum_scale = min(1.0, 0.001 / max(translation_norm, 1e-12))
+    source_attempts = step.result.projection_attempts
+    if (
+        len(source_attempts) != 3
+        or not isclose(
+            source_attempts[0].scale.translation,
+            maximum_scale,
+            rel_tol=0.0,
+            abs_tol=1e-15,
+        )
+        or not isclose(
+            source_attempts[1].scale.translation,
+            maximum_scale / 2.0,
+            rel_tol=0.0,
+            abs_tol=1e-15,
+        )
+        or tuple(reason.value for reason in source_attempts[0].gate.reasons)
+        != ("joint_velocity_violation",)
+        or tuple(reason.value for reason in source_attempts[1].gate.reasons)
+        != ("joint_velocity_violation",)
+    ):
+        raise ValueError("tracking rollback IK source attempts changed")
+    warm_start = np.asarray(refresh.live_state.joint_positions)
+    limits = SimulatorSafetyLimits()
+    maximum_joint_delta = (
+        limits.maximum_joint_velocity_radians_per_second / DROID_FPS
+    )
+    attempts = []
+    for translation_scale in (maximum_scale, maximum_scale / 2.0):
+        for rotation_scale in (selected.rotation, 0.0):
+            scale = DroidActionScale(
+                translation_scale,
+                rotation_scale,
+                selected.gripper,
+            )
+            candidate = refresh.live_pose.applied(scale.apply(raw))
+            try:
+                solved = solve_droid_pose(candidate, warm_start)
+            except (RuntimeError, ValueError) as error:
+                attempts.append(
+                    {
+                        "scale": scale.to_dict(),
+                        "translation_command_m": (
+                            translation_norm * translation_scale
+                        ),
+                        "ik_error": f"{type(error).__name__}: {error}",
+                        "joint_velocity_passed": False,
+                    }
+                )
+                continue
+            joint_delta = float(
+                np.max(np.abs(solved.arm_positions - warm_start))
+            )
+            attempts.append(
+                {
+                    "scale": scale.to_dict(),
+                    "translation_command_m": (
+                        translation_norm * translation_scale
+                    ),
+                    "maximum_joint_delta_rad": joint_delta,
+                    "joint_velocity_passed": joint_delta <= maximum_joint_delta,
+                    "ik_position_error_m": solved.position_error_m,
+                    "ik_orientation_error_rad": solved.orientation_error_rad,
+                }
+            )
+    if not (
+        attempts[0].get("joint_velocity_passed") is False
+        and attempts[1].get("joint_velocity_passed") is True
+        and attempts[2].get("joint_velocity_passed") is False
+    ):
+        raise RuntimeError("tracking rollback IK counterfactual did not pass")
+    return {
+        "status": "diagnosed_no_actuation",
+        "session_id": session_id,
+        "attempts": attempts,
+        "maximum_joint_delta_rad": maximum_joint_delta,
+        "simulator_action_applied": False,
+    }
+
+
 def _contact_grasp_rollback_handoff_state(
     source_result: Any,
     *,

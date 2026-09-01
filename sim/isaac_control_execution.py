@@ -723,6 +723,12 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             exact_coarse_translation_projection=(
                 contact_grasp_policy.uses_exact_coarse_translation_projection
             ),
+            coarse_orientation_hold_fallback=(
+                contact_grasp_policy.uses_coarse_orientation_hold_fallback
+            ),
+            minimum_coarse_translation_command_meters=(
+                contact_grasp_policy.minimum_coarse_translation_command_meters
+            ),
         )
     from sim.isaac_unknown_start_shadow import (
         reauthenticate_unknown_start_shadow_session,

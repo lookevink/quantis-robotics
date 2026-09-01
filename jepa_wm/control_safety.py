@@ -258,11 +258,20 @@ def _bounded_closing_policy(
 def _exact_coarse_translation_policy(
     translation_norm: float,
     coarse_limit: float,
+    minimum_command: float | None = None,
+    orientation_hold_fallback: bool = False,
 ) -> tuple[DroidActionScale, ...]:
     """Fill the safe coarse bound, retaining ordered IK fallbacks."""
 
     maximum_scale = min(1.0, coarse_limit / max(translation_norm, 1e-12))
-    minimum_scale = min(maximum_scale, 0.03125)
+    minimum_scale = min(
+        maximum_scale,
+        (
+            minimum_command / max(translation_norm, 1e-12)
+            if minimum_command is not None
+            else 0.03125
+        ),
+    )
     translations = tuple(
         dict.fromkeys(
             (
@@ -280,7 +289,10 @@ def _exact_coarse_translation_policy(
         for translation in translations
         if translation >= minimum_scale
     )
-    return (*scales, DroidActionScale(minimum_scale, 0.0, 0.125))
+    hold = DroidActionScale(maximum_scale, 0.0, 0.125)
+    ordered = (scales[0], hold, *scales[1:]) if orientation_hold_fallback else scales
+    final_hold = DroidActionScale(minimum_scale, 0.0, 0.125)
+    return (*ordered, *((final_hold,) if final_hold not in ordered else ()))
 
 
 # These policies were exercised by earlier guarded contact-grasp checkpoints.
@@ -325,6 +337,8 @@ def contact_grasp_action_scales(
     maximum_coarse_translation_command_meters: float | None = None,
     require_resolvable_rotation: bool = False,
     exact_coarse_translation_projection: bool = False,
+    coarse_orientation_hold_fallback: bool = False,
+    minimum_coarse_translation_command_meters: float | None = None,
 ) -> tuple[DroidActionScale, ...]:
     """Bound approach motion and calibrate gripper closure independently."""
 
@@ -332,14 +346,28 @@ def contact_grasp_action_scales(
         not isinstance(coarse_acquisition, bool)
         or not isinstance(require_resolvable_rotation, bool)
         or not isinstance(exact_coarse_translation_projection, bool)
+        or not isinstance(coarse_orientation_hold_fallback, bool)
     ):
         raise ValueError("contact-grasp acquisition scale phase is invalid")
+    if minimum_coarse_translation_command_meters is not None and (
+        isinstance(minimum_coarse_translation_command_meters, bool)
+        or not isfinite(minimum_coarse_translation_command_meters)
+        or minimum_coarse_translation_command_meters <= 0.0
+    ):
+        raise ValueError("contact-grasp acquisition resolution floor is invalid")
     if maximum_coarse_translation_command_meters is not None and (
         isinstance(maximum_coarse_translation_command_meters, bool)
         or not isfinite(maximum_coarse_translation_command_meters)
         or maximum_coarse_translation_command_meters <= 0.0
     ):
         raise ValueError("contact-grasp acquisition translation limit is invalid")
+    if (
+        minimum_coarse_translation_command_meters is not None
+        and maximum_coarse_translation_command_meters is not None
+        and minimum_coarse_translation_command_meters
+        > maximum_coarse_translation_command_meters
+    ):
+        raise ValueError("contact-grasp acquisition resolution floor is invalid")
     translation_norm = sqrt(sum(value * value for value in action.values[:3]))
     if attachment_acquired:
         if require_resolvable_transport:
@@ -389,12 +417,21 @@ def contact_grasp_action_scales(
             if maximum_coarse_translation_command_meters is not None
             else MAXIMUM_CONTACT_GRASP_COARSE_TRANSLATION_COMMAND_METERS
         )
+        if (
+            minimum_coarse_translation_command_meters is not None
+            and translation_norm < minimum_coarse_translation_command_meters
+        ):
+            raise ValueError(
+                "contact-grasp coarse proposal is below controller resolution"
+            )
         policies = CONTACT_GRASP_COARSE_ACTION_SCALE_POLICIES
         if exact_coarse_translation_projection:
             policies = (
                 _exact_coarse_translation_policy(
                     translation_norm,
                     coarse_limit,
+                    minimum_coarse_translation_command_meters,
+                    coarse_orientation_hold_fallback,
                 ),
             )
         for policy in policies:

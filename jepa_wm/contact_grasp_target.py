@@ -61,6 +61,9 @@ EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
 TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v11"
 )
+RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+    "quantis.jepa_wm_contact_grasp_target_policy.v12"
+)
 
 
 class _TransportComposition(str, Enum):
@@ -79,6 +82,8 @@ class _PolicyCapabilities:
     resolvable_rotation: bool = False
     exact_coarse_translation_projection: bool = False
     extended_retained_window: bool = False
+    coarse_orientation_hold_fallback: bool = False
+    minimum_coarse_translation_command_meters: float | None = None
 
 
 _POLICY_CAPABILITIES = {
@@ -149,6 +154,18 @@ _POLICY_CAPABILITIES = {
         True,
         True,
     ),
+    RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA: _PolicyCapabilities(
+        True,
+        _TransportComposition.TRANSLATION_HORIZON,
+        True,
+        True,
+        0.001,
+        True,
+        True,
+        True,
+        True,
+        0.0005,
+    ),
 }
 
 
@@ -200,6 +217,7 @@ class ContactGraspTargetPolicy:
                     ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                    RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 )
                 and self.scene_translation_m != (0.0, 0.0, 0.0)
             )
@@ -212,7 +230,7 @@ class ContactGraspTargetPolicy:
         translation_m: tuple[float, float, float],
     ) -> ContactGraspTargetPolicy:
         return cls(
-            TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             translation_m,
         )
 
@@ -316,6 +334,18 @@ class ContactGraspTargetPolicy:
         return _POLICY_CAPABILITIES[
             self.schema
         ].exact_coarse_translation_projection
+
+    @property
+    def uses_coarse_orientation_hold_fallback(self) -> bool:
+        return _POLICY_CAPABILITIES[
+            self.schema
+        ].coarse_orientation_hold_fallback
+
+    @property
+    def minimum_coarse_translation_command_meters(self) -> float | None:
+        return _POLICY_CAPABILITIES[
+            self.schema
+        ].minimum_coarse_translation_command_meters
 
     @property
     def acquisition_context_indices(self) -> tuple[int, ...]:
@@ -690,6 +720,7 @@ class ContactGraspTargetPolicy:
             ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         ):
             payload["scene_translation_m"] = list(self.scene_translation_m)
         return payload
@@ -710,6 +741,7 @@ class ContactGraspTargetPolicy:
                 ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             )
             else {"schema"}
         )

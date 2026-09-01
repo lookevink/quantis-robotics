@@ -122,6 +122,54 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
         self.assertGreater(scales[0].translation, 0.25)
         self.assertEqual(scales[-1].rotation, 0.0)
 
+    def test_exact_coarse_rotation_tries_resolvable_translation_hold_before_halving(
+        self,
+    ) -> None:
+        action = DroidAction(
+            (
+                0.0027388702146708965,
+                -0.00015498205902986228,
+                0.0011964633595198393,
+                -0.0027516658883541822,
+                -0.0020346895325928926,
+                -0.00192593305837363,
+                -0.0006209798157215118,
+            )
+        )
+
+        scales = contact_grasp_action_scales(
+            action,
+            coarse_acquisition=True,
+            maximum_coarse_translation_command_meters=0.001,
+            require_resolvable_rotation=True,
+            exact_coarse_translation_projection=True,
+            coarse_orientation_hold_fallback=True,
+            minimum_coarse_translation_command_meters=0.0005,
+        )
+        projected_norms = tuple(
+            sum(value * value for value in scale.apply(action).values[:3]) ** 0.5
+            for scale in scales
+        )
+
+        self.assertAlmostEqual(projected_norms[0], 0.001)
+        self.assertAlmostEqual(projected_norms[1], 0.001)
+        self.assertEqual(scales[0].rotation, 1.0)
+        self.assertEqual(scales[1].rotation, 0.0)
+
+    def test_resolution_floored_coarse_policy_rejects_sub_resolution_action(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(ValueError, "below controller resolution"):
+            contact_grasp_action_scales(
+                DroidAction((0.00049, 0.0, 0.0, 0.004, 0.0, 0.0, 0.0)),
+                coarse_acquisition=True,
+                maximum_coarse_translation_command_meters=0.001,
+                require_resolvable_rotation=True,
+                exact_coarse_translation_projection=True,
+                coarse_orientation_hold_fallback=True,
+                minimum_coarse_translation_command_meters=0.0005,
+            )
+
     def test_reads_the_historical_positional_tracking_roster(self) -> None:
         self.assertEqual(
             insertion_projection_policy_for_attempts(

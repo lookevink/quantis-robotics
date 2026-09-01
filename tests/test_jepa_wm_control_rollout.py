@@ -368,6 +368,16 @@ class ControlRolloutTest(unittest.TestCase):
             scale_policy.call_args.kwargs["exact_coarse_translation_projection"],
             CONTACT_GRASP_TARGET_POLICY.uses_exact_coarse_translation_projection,
         )
+        self.assertEqual(
+            scale_policy.call_args.kwargs["coarse_orientation_hold_fallback"],
+            CONTACT_GRASP_TARGET_POLICY.uses_coarse_orientation_hold_fallback,
+        )
+        self.assertEqual(
+            scale_policy.call_args.kwargs[
+                "minimum_coarse_translation_command_meters"
+            ],
+            CONTACT_GRASP_TARGET_POLICY.minimum_coarse_translation_command_meters,
+        )
 
     def test_parses_reset_trial_preflight_failure(self) -> None:
         failure = OrchestrationFailure.parse(

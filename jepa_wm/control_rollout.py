@@ -628,6 +628,12 @@ class ControlStepSummary:
                 exact_coarse_translation_projection=(
                     contact_grasp_policy.uses_exact_coarse_translation_projection
                 ),
+                coarse_orientation_hold_fallback=(
+                    contact_grasp_policy.uses_coarse_orientation_hold_fallback
+                ),
+                minimum_coarse_translation_command_meters=(
+                    contact_grasp_policy.minimum_coarse_translation_command_meters
+                ),
             )
             attempted_projection_policy = tuple(
                 attempt.scale for attempt in result.projection_attempts
