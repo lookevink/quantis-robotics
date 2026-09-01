@@ -145,7 +145,6 @@ async def recover_unknown_start_candidate_rollback(
     import omni.timeline
     import omni.usd
     import numpy as np
-    from isaacsim.core.rendering_manager import RenderingManager
 
     from jepa_wm.control_policy import ControlExecutionPolicy
     from jepa_wm.joint_drive import JointDriveTarget
@@ -163,7 +162,6 @@ async def recover_unknown_start_candidate_rollback(
     from sim.isaac_demo_runtime import (
         ContactReading,
         JointCommand,
-        physics_simulation_time_seconds,
         resume_live_simulation,
     )
     from sim.isaac_unknown_start_shadow import (
@@ -293,20 +291,16 @@ async def recover_unknown_start_candidate_rollback(
     ):
         raise RuntimeError("unknown-start drive recovery did not reach reset floor")
     # The authenticated artifact records positions but not the transient DOF
-    # velocities that produced them.  Finish recovery at the explicit paused
-    # initialization boundary, then synchronize rendering without advancing
-    # physics before authenticating the exact state.
-    initialization_time = physics_simulation_time_seconds()
+    # velocities that produced them. Finish recovery at the explicit paused
+    # initialization boundary and authenticate its deterministic joint FK
+    # without an app update or physics tick.
     runtime.actuators.set_reset_state(
         target,
         drive_target=reset_drive_target,
     )
-    await RenderingManager.render_async()
     observe_safety()
     if timeline.is_playing():
         raise RuntimeError("unknown-start reset initialization resumed timeline")
-    if physics_simulation_time_seconds() != initialization_time:
-        raise RuntimeError("unknown-start reset initialization advanced physics")
     reauthenticate_unknown_start_shadow_session(session_id)
     actual = runtime.actuators.actual_command()
     collision, force = read_control_contact(runtime.sensor)

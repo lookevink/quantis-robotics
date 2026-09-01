@@ -74,29 +74,20 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
             recovery_source,
         )
         self.assertIn(
-            "await RenderingManager.render_async()",
+            "deterministic joint FK",
             recovery_source,
         )
-        self.assertLess(
-            recovery_source.index(
-                "runtime.actuators.set_reset_state(", recovery
-            ),
-            recovery_source.index(
-                "await RenderingManager.render_async()", recovery
-            ),
+        reset_state = recovery_source.index(
+            "runtime.actuators.set_reset_state(", recovery
         )
+        reset_safety = recovery_source.index("observe_safety()", reset_state)
+        self.assertLess(reset_state, reset_safety)
         self.assertLess(
-            recovery_source.index(
-                "await RenderingManager.render_async()", recovery
-            ),
+            reset_safety,
             recovery_source.index(
                 "reauthenticate_unknown_start_shadow_session(session_id)",
                 recovery,
             ),
-        )
-        self.assertIn(
-            "physics_simulation_time_seconds() != initialization_time",
-            recovery_source,
         )
         runtime = Path("sim/isaac_demo_runtime.py").read_text()
         reset = runtime.split("def set_reset_state", 1)[1].split("\n\n\n", 1)[0]
