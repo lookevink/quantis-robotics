@@ -25,6 +25,7 @@ def main() -> None:
     grasp_status.add_argument("--proposal", type=Path, required=True)
     grasp_status.add_argument("--sessions", required=True)
     grasp_status.add_argument("--requested-steps", type=int, required=True)
+    grasp_status.add_argument("--predecessor-session")
     report = subparsers.add_parser("report")
     report.add_argument("--data-root", type=Path, required=True)
     report.add_argument("--rollout-id", required=True)
@@ -50,6 +51,7 @@ def main() -> None:
             seed=args.seed,
             proposal=args.proposal,
             requested_steps=args.requested_steps,
+            predecessor_session_id=args.predecessor_session,
         )
         decision = rollout.reach_and_grasp
         print("ready" if decision is not None and decision.passed else "pending")

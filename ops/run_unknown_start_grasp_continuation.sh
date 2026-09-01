@@ -8,13 +8,15 @@ checkpoint_root="${HOME}/docker/jepa-wm/checkpoints"
 data_root="${HOME}/docker/isaac-sim/data/quantis"
 source_revision="${1:-}"
 runtime_fingerprint="${2:-}"
-run_id="unknown-start-e2e-v3-62605-grasp"
-previous_session="unknown-start-live-action-v7-62605"
+run_id="unknown-start-e2e-v4-62605-grasp"
+source_session="unknown-start-e2e-v3-62605-grasp-00"
+previous_session="${source_session}"
 reference_name="contact-insertion-v10-drive-slow-2600-held-00"
 reference_seed="12600"
 proposal_name="contact-grasp-v10-drive-slow-2600_task12_h256_s3000"
 worker_identity="contact-insertion-v10-unknown-start-shadow-canary-v5"
-maximum_actions="51"
+maximum_actions="50"
+requested_actions="51"
 
 cd "${repo_dir}"
 phase="resident_preflight"
@@ -45,10 +47,10 @@ bash "${repo_dir}/ops/jepa_wm.sh" control-worker-stop
 bash "${repo_dir}/ops/jepa_wm.sh" control-worker-start \
   --artifacts "${worker_identity}"
 
-sessions=""
+sessions="${source_session}"
 status="applied"
 grasp_ready="false"
-for ((index=0; index<maximum_actions; index++)); do
+for ((index=1; index<=maximum_actions; index++)); do
   printf -v suffix '%02d' "${index}"
   session_id="${run_id}-${suffix}"
   phase="followup_capture_${suffix}"
@@ -59,11 +61,7 @@ for ((index=0; index<maximum_actions; index++)); do
   respond_to_control_session "${repo_dir}" "${session_id}" direct
   phase="followup_apply_${suffix}"
   isaac_server_call "await demo.apply_control_response('${session_id}')" 180
-  if [[ -z "${sessions}" ]]; then
-    sessions="${session_id}"
-  else
-    sessions="${sessions},${session_id}"
-  fi
+  sessions="${sessions},${session_id}"
   phase="followup_status_${suffix}"
   status="$(${python_bin} -m jepa_wm.control_rollout_cli status \
     --data-root "${data_root}" --session "${session_id}")"
@@ -76,7 +74,8 @@ for ((index=0; index<maximum_actions; index++)); do
     --seed "${reference_seed}" \
     --proposal "${checkpoint_root}/${proposal_name}.pth" \
     --sessions "${sessions}" \
-    --requested-steps "${maximum_actions}")"
+    --requested-steps "${requested_actions}" \
+    --predecessor-session "unknown-start-live-action-v7-62605")"
   if [[ "${grasp_status}" == "ready" ]]; then
     grasp_ready="true"
     break
@@ -92,7 +91,7 @@ bash "${repo_dir}/ops/jepa_wm.sh" control-rollout-report \
   --proposal "${proposal_name}" \
   --policy direct \
   --sessions "${sessions}" \
-  --requested-steps "${maximum_actions}" \
+  --requested-steps "${requested_actions}" \
   --predecessor-session "unknown-start-live-action-v7-62605"
 [[ "${status}" == "applied" && "${grasp_ready}" == "true" ]] || {
   printf 'error: unknown-start grasp continuation did not reach retained grasp\n' >&2

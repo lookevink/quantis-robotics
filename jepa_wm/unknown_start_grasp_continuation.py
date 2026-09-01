@@ -14,15 +14,17 @@ from jepa_wm.persistence import write_json_atomic
 from jepa_wm.training_artifact import artifact_fingerprint
 
 
-EXPERIMENT_ID = "unknown-start-grasp-continuation-v3"
-ROLLOUT_ID = "unknown-start-e2e-v3-62605-grasp"
+EXPERIMENT_ID = "unknown-start-grasp-continuation-v4"
+ROLLOUT_ID = "unknown-start-e2e-v4-62605-grasp"
 PREDECESSOR_SESSION_ID = "unknown-start-live-action-v7-62605"
+SOURCE_SESSION_ID = "unknown-start-e2e-v3-62605-grasp-00"
 REFERENCE_RECORDING = "contact-insertion-v10-drive-slow-2600-held-00"
 REFERENCE_SEED = 12600
 PROPOSAL_NAME = "contact-grasp-v10-drive-slow-2600_task12_h256_s3000"
 WORKER_IDENTITY = "contact-insertion-v10-unknown-start-shadow-canary-v5"
 MAXIMUM_CONTINUATION_ACTIONS = 51
-OUTPUT_DIRECTORY = "unknown_start_grasp_continuation_v3"
+MAXIMUM_NEW_ACTIONS = 50
+OUTPUT_DIRECTORY = "unknown_start_grasp_continuation_v4"
 
 SOURCE_FINGERPRINTS = {
     "terminal": "14dcf231b035a6481e1c79b1e538358383d3c2f0246d7e983ad0e7eae92efeb2",
@@ -35,8 +37,21 @@ SOURCE_FINGERPRINTS = {
     "handoff": "30bba34e99eae680d007f540d2a10ff7c0cb87b34078984a019c7801ee84f38a",
 }
 
+CONTINUATION_SOURCE_FINGERPRINTS = {
+    "claim": "66b36bce3df1df2a6775f1c45bbbf94437922512e05d99400b87843431b47656",
+    "failure": "90262811f261f2dae7e8620ce6d9dca89c46f9a4ec10829c594cf72a8652d4ef",
+    "request": "3494133dcbe89ed087574ba426360716cd17eefa8b10c141d2122ca275be36bf",
+    "state": "a6fe326bb57706fbcde03e4738045d740f7e72cc29716605ede2a10c857569b4",
+    "response": "d807e378943e4c4ac0d4ed4cc856ecddc098041326923dc5bee014f0d5d7fcc9",
+    "execution": "290c197ac0e78efd1b7b4c521355714520a1145cb3a7fdb13c01914a2646430b",
+    "result": "c4dcf5b5bd7653202d3efc8208ce13a495926638a76b063c8b57f996b99e287e",
+    "context": "ce0ce690d96ab9bae81c97ae5c40985eec2c0c057b8cb17af485627547c86c4f",
+    "post_action": "2c301a086afdb6234c07a18a618801064f26355114ca62f32b507d218ff90e68",
+}
+
 RUNTIME_FILES = (
     "jepa_wm/control_rollout.py",
+    "jepa_wm/control_rollout_cli.py",
     "jepa_wm/unknown_start_grasp_continuation.py",
     "ops/aws.sh",
     "ops/run_unknown_start_grasp_continuation.sh",
@@ -128,6 +143,39 @@ def authenticate_source(checkpoint_root: Path, data_root: Path) -> None:
         or result.get("action_tracking", {}).get("passed") is not True
     ):
         raise ValueError("unknown-start grasp predecessor did not pass")
+    continuation_session = data_root / "control_sessions" / SOURCE_SESSION_ID
+    continuation_paths = {
+        "claim": checkpoint_root
+        / "unknown_start_grasp_continuation_v3"
+        / "CLAIM.json",
+        "failure": checkpoint_root
+        / "unknown_start_grasp_continuation_v3"
+        / "FAILURE.json",
+        "request": continuation_session / "request.json",
+        "state": continuation_session / "state.json",
+        "response": continuation_session / "response.json",
+        "execution": continuation_session / "execution_started.json",
+        "result": continuation_session / "result.json",
+        "context": continuation_session / "context.png",
+        "post_action": continuation_session / "post_action.png",
+    }
+    if any(
+        artifact_fingerprint(continuation_paths[name]) != expected
+        for name, expected in CONTINUATION_SOURCE_FINGERPRINTS.items()
+    ):
+        raise ValueError("unknown-start grasp continuation source changed")
+    continuation_result = json.loads(continuation_paths["result"].read_text())
+    if (
+        continuation_result.get("status") != "applied"
+        or continuation_result.get("post_action_plug_attached") is not False
+        or continuation_result.get("post_action_collision_detected") is not False
+        or continuation_result.get(
+            "post_action_contact_force_newtons", float("inf")
+        )
+        > 2.0
+        or continuation_result.get("action_tracking", {}).get("passed") is not True
+    ):
+        raise ValueError("unknown-start grasp continuation source did not pass")
 
 
 def claim(
@@ -149,15 +197,18 @@ def claim(
         "experiment_id": EXPERIMENT_ID,
         "rollout_id": ROLLOUT_ID,
         "predecessor_session_id": PREDECESSOR_SESSION_ID,
+        "source_session_id": SOURCE_SESSION_ID,
         "reference_recording": REFERENCE_RECORDING,
         "reference_seed": REFERENCE_SEED,
         "proposal_name": PROPOSAL_NAME,
         "worker_identity": WORKER_IDENTITY,
         "maximum_continuation_actions": MAXIMUM_CONTINUATION_ACTIONS,
+        "maximum_new_actions": MAXIMUM_NEW_ACTIONS,
         "maximum_total_grasp_actions": MAXIMUM_CONTINUATION_ACTIONS + 1,
         "source_revision": source_revision,
         "runtime_fingerprint": actual_runtime,
         "source_fingerprints": SOURCE_FINGERPRINTS,
+        "continuation_source_fingerprints": CONTINUATION_SOURCE_FINGERPRINTS,
         "filming_authorized": False,
         "production_authority_granted": False,
     }
