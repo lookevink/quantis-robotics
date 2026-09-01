@@ -5,6 +5,7 @@ from sim.unknown_start_reset import (
     UNKNOWN_START_RESET_CONTRACT,
     UnknownStartResetEvidence,
     UnknownStartResetPhase,
+    UnknownStartSampleRealization,
     UnknownStartWorkspaceState,
 )
 from sim.exploration import DatasetSplit
@@ -41,9 +42,11 @@ class UnknownStartResetContractTest(unittest.TestCase):
                 end_effector_position_m=(0.25, -0.247813, 1.48),
                 socket_scale=1.05,
             ),
-            realized_initial_arm_offset_radians=sample.initial_arm_offset_radians,
-            realized_camera_offset_m=sample.camera_offset_m,
-            realized_light_exposure_delta=sample.light_exposure_delta,
+            realization=UnknownStartSampleRealization(
+                initial_arm_offset_radians=sample.initial_arm_offset_radians,
+                camera_offset_m=sample.camera_offset_m,
+                light_exposure_delta=sample.light_exposure_delta,
+            ),
             realized_sample_fingerprint=sample.fingerprint,
             plug_attached=False,
             collision_detected=False,
@@ -89,17 +92,27 @@ class UnknownStartResetContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsafe or inauthentic"):
             replace(
                 evidence,
-                realized_initial_arm_offset_radians=(0.0,) * 7,
+                realization=replace(
+                    evidence.realization,
+                    initial_arm_offset_radians=(0.0,) * 7,
+                ),
             ).validate(UNKNOWN_START_RESET_CONTRACT)
         with self.assertRaisesRegex(ValueError, "unsafe or inauthentic"):
             replace(
                 evidence,
-                realized_camera_offset_m=(0.0,) * 3,
+                realization=replace(
+                    evidence.realization,
+                    camera_offset_m=(0.0,) * 3,
+                ),
             ).validate(UNKNOWN_START_RESET_CONTRACT)
         with self.assertRaisesRegex(ValueError, "unsafe or inauthentic"):
-            replace(evidence, realized_light_exposure_delta=0.0).validate(
-                UNKNOWN_START_RESET_CONTRACT
-            )
+            replace(
+                evidence,
+                realization=replace(
+                    evidence.realization,
+                    light_exposure_delta=0.0,
+                ),
+            ).validate(UNKNOWN_START_RESET_CONTRACT)
 
     def test_contract_freezes_distribution_and_authority_boundary(self) -> None:
         self.assertEqual(
