@@ -84,15 +84,29 @@ async def recover_unknown_start_candidate_rollback(
     runtime = live_runtime_for(session_id, stage)
     if runtime is None:
         raise RuntimeError("unknown-start rollback recovery runtime was lost")
-    expected_active = JointDriveTarget.for_command(
-        refresh.live_state.joint_positions,
-        refresh.live_state.gripper_width_m,
-    )
     active = runtime.actuators.current_command()
-    expected_active.validate_active(
-        tuple(float(value) for value in active.arm_positions),
-        active.gripper_width_m,
+    active_positions = tuple(float(value) for value in active.arm_positions)
+    allowed_active_targets = (
+        JointDriveTarget.for_command(
+            refresh.live_state.joint_positions,
+            refresh.live_state.gripper_width_m,
+        ),
+        JointDriveTarget.for_command(
+            state.current_joint_positions,
+            state.current_gripper_width_m,
+        ),
     )
+    for expected_active in allowed_active_targets:
+        try:
+            expected_active.validate_active(
+                active_positions,
+                active.gripper_width_m,
+            )
+            break
+        except ValueError:
+            continue
+    else:
+        raise ValueError("unknown-start recovery active drive target changed")
     target = JointCommand(
         np.asarray(state.current_joint_positions, dtype=np.float64),
         state.current_gripper_width_m,

@@ -38,6 +38,10 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
                 "runtime.actuators.set_reset_state(target)", recovery
             ),
         )
+        self.assertIn("allowed_active_targets = (", recovery_source)
+        self.assertIn(
+            "unknown-start recovery active drive target changed", recovery_source
+        )
         self.assertLess(
             recovery_source.index(
                 "runtime.actuators.set_reset_state(target)", recovery
