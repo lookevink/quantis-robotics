@@ -172,8 +172,6 @@ async def recover_unknown_start_candidate_rollback(
 
     session = ControlSession.at(CONTROL_ROOT, session_id)
     recovery_path = session.path / "rollback_recovery.json"
-    if recovery_path.exists():
-        raise ValueError("unknown-start rollback recovery already exists")
     _, state = session.load_capture()
     result = session.load_result()
     handoff_path = session.path / "unknown_start_handoff.json"
@@ -205,6 +203,56 @@ async def recover_unknown_start_candidate_rollback(
         handoff.reset_recording_id,
         handoff.reset_result_fingerprint,
     )
+    target = JointCommand(
+        np.asarray(
+            reset_evidence.observed_arm_positions_radians,
+            dtype=np.float64,
+        ),
+        reset_evidence.observed_gripper_width_m,
+    )
+    reset_drive_target = JointCommand(
+        np.asarray(state.active_drive_target.joint_positions, dtype=np.float64),
+        state.active_drive_target.gripper_width_m,
+    )
+    if recovery_path.exists():
+        existing = json.loads(recovery_path.read_text())
+        existing_joints = np.asarray(
+            existing.get("joint_positions", ()),
+            dtype=np.float64,
+        )
+        existing_gripper = existing.get("gripper_width_m")
+        existing_is_authentic = (
+            existing.get("schema")
+            == "quantis.unknown_start_rollback_recovery.v1"
+            and existing.get("session_id") == session_id
+            and existing.get("source_result_fingerprint")
+            == artifact_fingerprint(session.result_path)
+            and existing.get("recovered") is True
+            and existing.get("applied_model_actions") == 0
+            and existing.get("collision_detected") is False
+            and existing.get("plug_attached") is False
+            and existing.get("timeline_playing") is False
+            and existing_joints.shape == (7,)
+            and np.all(np.isfinite(existing_joints))
+            and isinstance(existing_gripper, (int, float))
+            and np.isfinite(existing_gripper)
+        )
+        if not existing_is_authentic:
+            raise ValueError("existing unknown-start rollback recovery is invalid")
+        existing_is_exact = (
+            float(np.max(np.abs(existing_joints - target.arm_positions))) <= 1e-7
+            and abs(float(existing_gripper) - target.gripper_width_m)
+            <= 1e-7
+        )
+        if existing_is_exact:
+            return existing
+        superseded_path = recovery_path.with_name(
+            "rollback_recovery.superseded-"
+            f"{artifact_fingerprint(recovery_path)}.json"
+        )
+        if superseded_path.exists():
+            raise ValueError("unknown-start superseded recovery already exists")
+        recovery_path.replace(superseded_path)
     timeline = omni.timeline.get_timeline_interface()
     await pause_control_timeline(timeline, omni.kit.app.get_app().next_update_async)
     if timeline.is_playing():
@@ -252,18 +300,6 @@ async def recover_unknown_start_candidate_rollback(
             continue
     else:
         raise ValueError("unknown-start recovery active drive target changed")
-    target = JointCommand(
-        np.asarray(
-            reset_evidence.observed_arm_positions_radians,
-            dtype=np.float64,
-        ),
-        reset_evidence.observed_gripper_width_m,
-    )
-    reset_drive_target = JointCommand(
-        np.asarray(state.active_drive_target.joint_positions, dtype=np.float64),
-        state.active_drive_target.gripper_width_m,
-    )
-
     resume_live_simulation(timeline)
     try:
         await rollback_control_command(

@@ -78,6 +78,10 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
             recovery_source,
         )
         self.assertIn("reset_evidence.observed_gripper_width_m", recovery_source)
+        self.assertIn("if existing_is_exact:", recovery_source)
+        self.assertIn("return existing", recovery_source)
+        self.assertIn("rollback_recovery.superseded-", recovery_source)
+        self.assertIn("recovery_path.replace(superseded_path)", recovery_source)
         self.assertIn(
             "deterministic joint FK",
             recovery_source,
