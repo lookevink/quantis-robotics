@@ -1011,6 +1011,19 @@ summarize_contact_grasp_acquisition_action_proposal() {
   summarize_task_action_proposal contact-grasp-acquisition "$@"
 }
 
+replay_contact_grasp_acquisition_failure() {
+  require_runtime
+  cd "${repo_dir}"
+  "${venv_dir}/bin/python" \
+    -m jepa_wm.contact_grasp_acquisition_failure_replay \
+    --source "${source_dir}" \
+    --checkpoint "${jepa_checkpoint}" \
+    --data-root "${control_frame_root}" \
+    --worker "${checkpoint_dir}/contact-insertion-v10-unknown-start-acquisition-v1.worker.json" \
+    --readiness "${checkpoint_dir}/experiments/contact-grasp-acquisition-v10-drive-slow-2600_task12_h256_s3000_contact_grasp_acquisition_readiness.json" \
+    --output "${checkpoint_dir}/experiments/contact-grasp-acquisition-v10-drive-slow-2600_task12_h256_s3000_v4_failure_replay.json"
+}
+
 summarize_insertion_action_proposal() {
   summarize_task_action_proposal insertion "$@"
 }
@@ -1749,6 +1762,9 @@ case "${1:-}" in
     ;;
   contact-grasp-acquisition-proposal-summarize)
     summarize_contact_grasp_acquisition_action_proposal "${@:2}"
+    ;;
+  contact-grasp-acquisition-failure-replay)
+    replay_contact_grasp_acquisition_failure
     ;;
   insertion-proposal-summarize)
     summarize_insertion_action_proposal "${@:2}"

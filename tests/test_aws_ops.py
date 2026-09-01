@@ -1191,6 +1191,12 @@ class AwsLifecycleTests(unittest.TestCase):
             "contact-grasp-acquisition-proposal-summarize", summary_calls
         )
 
+        replayed, replay_calls = self.run_command(
+            "jepa-wm-contact-grasp-acquisition-failure-replay"
+        )
+        self.assertEqual(replayed.returncode, 0, replayed.stderr)
+        self.assertIn("contact-grasp-acquisition-failure-replay", replay_calls)
+
     def test_jepa_wm_insertion_proposal_commands_bind_the_post_attachment_window(self):
         trained, training_calls = self.run_command(
             "jepa-wm-insertion-proposal-train",
