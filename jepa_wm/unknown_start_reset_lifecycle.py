@@ -20,12 +20,12 @@ from sim.unknown_start_reset import (
 )
 
 
-UNKNOWN_START_RESET_RECORDING_ID = "unknown-start-reset-v2-62601"
-UNKNOWN_START_RESET_SEED = 62601
-UNKNOWN_START_RESET_PREVIOUS_SEEDS = frozenset({62600})
-UNKNOWN_START_RESET_LEDGER_NAME = "unknown_start_reset_v2_claims"
-UNKNOWN_START_RESET_CLAIM_NAME = "milestone-20-unknown-start-reset-v2-claim.json"
-UNKNOWN_START_RESET_FAILURE_NAME = "milestone-20-unknown-start-reset-v2-failure.json"
+UNKNOWN_START_RESET_RECORDING_ID = "unknown-start-reset-v3-62602"
+UNKNOWN_START_RESET_SEED = 62602
+UNKNOWN_START_RESET_PREVIOUS_SEEDS = frozenset({62600, 62601})
+UNKNOWN_START_RESET_LEDGER_NAME = "unknown_start_reset_v3_claims"
+UNKNOWN_START_RESET_CLAIM_NAME = "milestone-20-unknown-start-reset-v3-claim.json"
+UNKNOWN_START_RESET_FAILURE_NAME = "milestone-20-unknown-start-reset-v3-failure.json"
 
 
 def _write_exclusive(path: Path, payload: dict[str, Any]) -> None:
@@ -202,7 +202,7 @@ def _validate_manifest_and_observation(
         != list(evidence.observed_arm_positions_radians)
         or step.get("gripper_width_m") != evidence.observed_gripper_width_m
         or step.get("plug_position") != list(evidence.workspace.connector_position_m)
-        or step.get("end_effector_world_position")
+        or step.get("gripper_frame_world_position")
         != list(evidence.workspace.end_effector_position_m)
     ):
         raise ValueError("unknown-start reset observation is inauthentic")

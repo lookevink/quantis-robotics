@@ -206,6 +206,7 @@ async def authenticate_unknown_start_reset(
         timeline.play()
         actuators.set_reset_state(command)
         safety = await advance_physics_updates(16, observe_safety)
+        authored = actuators.current_command()
         actual = actuators.actual_command()
         snapshot = recording_snapshot(
             RecordingLabel(RecordingMoment.INITIAL),
@@ -223,14 +224,14 @@ async def authenticate_unknown_start_reset(
                 connector_position_m=tuple(float(value) for value in connector_position),
                 socket_position_m=tuple(float(value) for value in socket_position),
                 end_effector_position_m=tuple(
-                    float(value) for value in snapshot.end_effector_world_position
+                    float(value) for value in snapshot.gripper_frame_world_position
                 ),
                 socket_scale=float(variant["socket_scale"]),
             ),
             realization=UnknownStartSampleRealization(
                 initial_arm_offset_radians=tuple(
                     float(value)
-                    for value in actual.arm_positions - ready.arm_positions
+                    for value in authored.arm_positions - ready.arm_positions
                 ),
                 camera_offset_m=tuple(
                     float(value) for value in variant["camera_offset_m"]

@@ -27,7 +27,10 @@ from sim.exploration import DatasetSplit
 
 
 def valid_evidence() -> UnknownStartResetEvidence:
-    sample = UNKNOWN_START_RESET_CONTRACT.draw(62601, forbidden_seeds={62600})
+    sample = UNKNOWN_START_RESET_CONTRACT.draw(
+        62602,
+        forbidden_seeds={62600, 62601},
+    )
     connector_position = tuple(
         baseline + offset
         for baseline, offset in zip(
@@ -93,8 +96,8 @@ class UnknownStartResetContractTest(unittest.TestCase):
             ledger_root = Path(directory) / "ledger"
             payload = claim(
                 ledger_root,
-                "unknown-start-reset-v2-62601",
-                62601,
+                "unknown-start-reset-v3-62602",
+                62602,
                 "a" * 40,
                 "b" * 64,
             )
@@ -104,8 +107,8 @@ class UnknownStartResetContractTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "already claimed"):
                 claim(
                     ledger_root,
-                    "unknown-start-reset-v2-62601",
-                    62601,
+                    "unknown-start-reset-v3-62602",
+                    62602,
                     "a" * 40,
                     "b" * 64,
                 )
@@ -134,7 +137,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
             recovery.mkdir()
             source_revision = "a" * 40
             runtime_fingerprint = "b" * 64
-            recording_id = "unknown-start-reset-v2-62601"
+            recording_id = "unknown-start-reset-v3-62602"
             evidence = valid_evidence()
             sample = evidence.sample
             primary_ledger = root / "claims"
@@ -187,7 +190,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
                         "arm_positions": list(evidence.observed_arm_positions_radians),
                         "gripper_width_m": evidence.observed_gripper_width_m,
                         "plug_position": list(evidence.workspace.connector_position_m),
-                        "end_effector_world_position": list(
+                        "gripper_frame_world_position": list(
                             evidence.workspace.end_effector_position_m
                         ),
                     }
@@ -264,10 +267,12 @@ class UnknownStartResetContractTest(unittest.TestCase):
         self.assertIn("hand_collision or plug_collision", source)
         self.assertIn("realization_tolerances.light_exposure_delta", source)
         self.assertIn("workspace.realization_scale_tolerance", source)
+        self.assertIn("authored = actuators.current_command()", source)
+        self.assertIn("snapshot.gripper_frame_world_position", source)
         self.assertNotIn("plan.light_exposure_delta) > 1e-9", source)
         self.assertNotIn("atol=1e-12", source)
 
-    def test_v2_run_descriptor_is_the_single_shell_identity_source(self) -> None:
+    def test_versioned_run_descriptor_is_the_single_shell_identity_source(self) -> None:
         lifecycle = Path("jepa_wm/unknown_start_reset_lifecycle.py").read_text()
         runner = Path("ops/run_unknown_start_reset.sh").read_text()
         aws = Path("ops/aws.sh").read_text()
@@ -277,7 +282,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
         self.assertIn("describe --field ledger-name", runner)
         self.assertIn("describe --field recording-id", aws)
         self.assertIn("describe --field claim-name", aws)
-        self.assertNotIn("unknown-start-reset-v2-62601", runner)
+        self.assertNotIn("unknown-start-reset-v3-62602", runner)
 
     def test_reserved_seed_draw_is_deterministic_and_bounded(self) -> None:
         sample = UNKNOWN_START_RESET_CONTRACT.draw(62600, forbidden_seeds={12600, 12601})
