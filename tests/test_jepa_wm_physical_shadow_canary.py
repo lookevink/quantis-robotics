@@ -192,7 +192,7 @@ class PhysicalShadowCanaryTest(unittest.TestCase):
         self.assertEqual(config["worker"]["planner"]["seed"], 237)
         self.assertEqual(
             V7_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
-            "PENDING_CHECKPOINT",
+            "d39cade2d2f80aa80825bc1050df3030b7e1ccd0c8c1783e214dbdba5571d7a3",
         )
 
     def test_recovery_preserves_authenticated_model_rejection(self) -> None:
