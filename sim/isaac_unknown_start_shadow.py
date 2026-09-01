@@ -342,8 +342,12 @@ async def recover_unknown_start_candidate_rollback(
         handoff.reset_result_fingerprint,
     )
     timeline = omni.timeline.get_timeline_interface()
+    await pause_control_timeline(
+        timeline,
+        omni.kit.app.get_app().next_update_async,
+    )
     if timeline.is_playing():
-        raise RuntimeError("unknown-start rollback recovery requires a paused timeline")
+        raise RuntimeError("unknown-start rollback recovery could not pause timeline")
     stage = omni.usd.get_context().get_stage()
     runtime = live_runtime_for(session_id, stage)
     if runtime is None:

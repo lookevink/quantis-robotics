@@ -24,6 +24,11 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
             execution.index("reauthenticate_unknown_start_shadow_session(session_id)"),
             execution.index("session.claim_execution()"),
         )
+        recovery = capture.index("async def recover_unknown_start_candidate_rollback")
+        self.assertLess(
+            capture.index("await pause_control_timeline", recovery),
+            capture.index("runtime = live_runtime_for", recovery),
+        )
 
     def test_handoff_wire_contract_rejects_added_authority(self) -> None:
         handoff = UnknownStartControlHandoff(
