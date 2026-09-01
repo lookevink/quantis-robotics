@@ -879,9 +879,13 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     with `1.0` retreat recall, `0.990566` advance recall, and no owned-route
     activation on semantic holds. Its report and exclusive claim match the
     verified recovery copy. This closes the offline gate only. The next bounded
-    milestone is one known-start, zero-actuation shadow/safety canary using the
-    exact artifact; only a pass may open a separately frozen milestone-20 run.
-    Live motion, filming, hardware, and production authority remain closed.
+    milestone was one known-start, zero-actuation shadow/safety canary using the
+    exact artifact. Capture and counterfactual safety passed, but latent search
+    failed the frozen first-action direction gate (`0.617079` versus `0.9`). No
+    action was applied; the terminal failure and recovery copies are
+    byte-identical. The canary cannot be retried. A separately frozen offline
+    diagnosis/remediation milestone is required before milestone 20. Live
+    motion, filming, hardware, and production authority remain closed.
 20. [ ] Complete one end-to-end bounded unknown-start run in Isaac Sim. Freeze
     the training artifacts and a versioned reset-sampling contract first,
     including its workspace/geometry bounds and distribution, then draw one

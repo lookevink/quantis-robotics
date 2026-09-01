@@ -2274,11 +2274,15 @@ copies. No training, Isaac, live action, filming, hardware, or production
 authority was exercised. Exact evidence is in
 [`RESULT.md`](.scratch/jepa-physical-state-held-out-v2/RESULT.md).
 
-The next bounded milestone is deployment integration and one zero-actuation
-known-start shadow/safety canary. It must bind the same frozen residual artifact
-and produce candidate plus counterfactual safety evidence without applying a
-command. A pass opens only a separately frozen milestone-20 unknown-start run;
-it does not itself authorize motion or filming.
+The deployment integration milestone then ran one zero-actuation known-start
+shadow/safety canary. Capture was safe and its counterfactual safety projection
+passed, but latent search failed the frozen first-action direction gate
+(`0.617079` cosine versus `0.9`) despite improving latent energy. No command was
+applied, the worker stopped, and the terminal failure report has a
+byte-identical recovery copy. The exclusive canary cannot be retried. Diagnosis
+and remediation must be a separately frozen offline milestone; milestone 20,
+live motion, and filming remain closed. Exact evidence is in
+[`RESULT.md`](.scratch/jepa-physical-shadow-canary-v1/RESULT.md).
 
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
