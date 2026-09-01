@@ -576,6 +576,8 @@ Commands:
   jepa-wm-unknown-start-live-action     Apply one recovery-gated unknown-start candidate action
   jepa-wm-unknown-start-grasp-continuation
                                         Continue V7 to one retained grasp
+  jepa-wm-unknown-start-acquisition-recovery
+                                        Recover V4 with the frozen V2 acquisition model
   jepa-wm-unknown-start-recovery-diagnostic SESSION
                                         Read paused rollback drift without motion
   jepa-wm-physical-shadow-canary-v5    Run continuity-safe unknown-start zero-actuation canary
@@ -1297,6 +1299,36 @@ case "${command}" in
         || true
     fi
     printf 'Unknown-start grasp continuation workflow complete.\n'
+    exit "${command_status}"
+    ;;
+  jepa-wm-unknown-start-acquisition-recovery)
+    source_revision="$(deployment_source_revision)"
+    runtime_fingerprint="$(
+      python3 -m jepa_wm.contact_grasp_acquisition_handoff fingerprint
+    )"
+    command_status=0
+    sync_repo || command_status=$?
+    if (( command_status == 0 )); then
+      remote "bash ~/quantis-robotics/ops/run_unknown_start_acquisition_recovery.sh '${source_revision}' '${runtime_fingerprint}'" \
+        || command_status=$?
+    fi
+    backup_status=0
+    remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' \
+      || backup_status=$?
+    if (( command_status == 0 && backup_status == 0 )); then
+      remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.contact_grasp_acquisition_handoff finalize --checkpoint-root ~/docker/jepa-wm/checkpoints --recovery-checkpoint-root /mnt/quantis-assets/quantis-state/jepa-wm/checkpoints --data-root ~/docker/isaac-sim/data/quantis --recovery-data-root /mnt/quantis-assets/quantis-state/isaac" \
+        || command_status=$?
+      if (( command_status != 0 )); then
+        remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.contact_grasp_acquisition_handoff failure --checkpoint-root ~/docker/jepa-wm/checkpoints --error 'recovery_finalization:exit_${command_status}'" \
+          || true
+        remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' || true
+      fi
+    elif (( command_status == 0 )); then
+      command_status=${backup_status}
+      remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.contact_grasp_acquisition_handoff failure --checkpoint-root ~/docker/jepa-wm/checkpoints --error 'recovery_backup:exit_${backup_status}'" \
+        || true
+    fi
+    printf 'Unknown-start acquisition recovery workflow complete.\n'
     exit "${command_status}"
     ;;
   jepa-wm-unknown-start-recovery-diagnostic)

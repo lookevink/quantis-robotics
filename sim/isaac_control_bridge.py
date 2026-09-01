@@ -4,6 +4,7 @@ from sim.isaac_control_capture import capture_control_observation
 from sim.isaac_control_execution import apply_control_response
 from sim.isaac_control_resolution import measure_insertion_control_resolution
 from sim.isaac_control_followup import (
+    capture_contact_grasp_acquisition_handoff,
     capture_followup_observation,
     capture_insertion_transition_observation,
     persist_insertion_proposal_handoff,
@@ -35,6 +36,7 @@ from sim.isaac_insertion_trial import (
 __all__ = (
     "apply_control_response",
     "capture_control_observation",
+    "capture_contact_grasp_acquisition_handoff",
     "capture_followup_observation",
     "capture_insertion_transition_observation",
     "persist_insertion_proposal_handoff",

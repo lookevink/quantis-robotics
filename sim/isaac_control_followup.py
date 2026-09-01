@@ -13,6 +13,13 @@ from scipy.spatial.transform import Rotation
 
 from jepa.contract import ObservationStage
 from jepa_wm.action import ActionSelectionBounds, DroidPose, action_between
+from jepa_wm.contact_grasp_acquisition_handoff import (
+    PROPOSAL_NAME as ACQUISITION_PROPOSAL_NAME,
+    SOURCE_FINGERPRINTS as ACQUISITION_SOURCE_FINGERPRINTS,
+    SOURCE_SESSION_ID as ACQUISITION_SOURCE_SESSION_ID,
+    ContactGraspAcquisitionHandoff,
+    runtime_fingerprint as acquisition_runtime_fingerprint,
+)
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.control_policy import (
     ControlExecutionPolicy,
@@ -41,6 +48,7 @@ from jepa_wm.persistence import write_json_atomic
 from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.grasp_contract import GRASP_TASK_ID
 from jepa_wm.trajectory import load_rollout_at
+from jepa_wm.training_artifact import artifact_fingerprint
 from sim.control_context import recording_task
 from jepa_wm.control_safety import ControlGateReason, SimulatorSafetyLimits
 from jepa_wm.insertion_refresh import (
@@ -118,6 +126,152 @@ def persist_insertion_proposal_handoff(
         "previous": handoff.previous.to_dict(),
         "requested": handoff.requested.to_dict(),
     }
+
+
+async def capture_contact_grasp_acquisition_handoff(
+    session_id: str,
+    source_session_id: str,
+    proposal_name: str,
+    encoded_evidence: str,
+) -> dict[str, Any]:
+    """Start one V6 acquisition chain from the exact no-motion V4 failure."""
+
+    import omni.kit.app
+    import omni.timeline
+    import omni.usd
+
+    validate_recording_id(session_id)
+    validate_recording_id(source_session_id)
+    validate_recording_id(proposal_name)
+    try:
+        payload = json.loads(b64decode(encoded_evidence, validate=True).decode())
+        handoff = ContactGraspAcquisitionHandoff.from_dict(payload)
+    except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("contact-grasp acquisition handoff is invalid") from error
+    if (
+        source_session_id != ACQUISITION_SOURCE_SESSION_ID
+        or proposal_name != ACQUISITION_PROPOSAL_NAME
+        or handoff.followup_session_id != session_id
+        or handoff.runtime_fingerprint != acquisition_runtime_fingerprint()
+    ):
+        raise ValueError("contact-grasp acquisition handoff authority changed")
+
+    source = ControlSession.at(CONTROL_ROOT, source_session_id)
+    if any(
+        artifact_fingerprint(source.path / name) != expected
+        for name, expected in ACQUISITION_SOURCE_FINGERPRINTS.items()
+    ):
+        raise ValueError("contact-grasp acquisition source changed")
+    source_observation, source_state = source.load_capture()
+    source_result = source.load_result()
+    refresh = source_result.insertion_trial_refresh
+    if (
+        source_result.status is not ControlResultStatus.BLOCKED
+        or source_result.gate.reasons != (ControlGateReason.GRIPPER_VIOLATION,)
+        or source_result.selected_action_scale is not None
+        or source_result.post_action is not None
+        or refresh is None
+        or refresh.live_pose != source_observation.pose
+        or refresh.live_state != source_state.require_safety_snapshot()
+        or source_state.plug_attached
+        or source_state.collision_detected
+        or source_state.contact_force_newtons
+        > SimulatorSafetyLimits().maximum_contact_force_newtons
+        or source_state.active_drive_target is None
+    ):
+        raise ValueError("contact-grasp acquisition source is not a no-motion block")
+
+    session = ControlSession.at(CONTROL_ROOT, session_id)
+    if session.path.exists():
+        raise ValueError(f"control session already exists: {session_id}")
+    handoff_path = source.contact_grasp_acquisition_handoff_path(session_id)
+    if handoff_path.exists():
+        raise ValueError("contact-grasp acquisition handoff already exists")
+    stage = omni.usd.get_context().get_stage()
+    runtime = live_runtime_for(source_session_id, stage)
+    if runtime is None:
+        raise RuntimeError("live contact-grasp acquisition runtime was lost")
+    context_path = session.path / "context.png"
+
+    async def capture_frame(observe_safety) -> None:
+        await capture_camera_frame(
+            JEPA_WM_CAMERA_SPECS[0],
+            context_path,
+            observe_safety=observe_safety,
+        )
+
+    synchronized = await synchronized_insertion_frame_capture(
+        runtime,
+        omni.timeline.get_timeline_interface(),
+        omni.kit.app.get_app().next_update_async,
+        source_state.require_safety_snapshot(),
+        SimulatorSafetyLimits(),
+        capture_frame,
+        expected_active_drive_target=source_state.active_drive_target,
+        operation="contact-grasp acquisition handoff capture",
+        maximum_gripper_error_meters=(
+            MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+        ),
+    )
+    if (
+        synchronized.pose is None
+        or synchronized.active_drive_target != source_state.active_drive_target
+        or synchronized.safety.plug_attached
+    ):
+        raise RuntimeError("contact-grasp acquisition handoff state changed")
+    source_policy = source_state.require_current_contact_grasp_policy()
+    target_policy = ContactGraspTargetPolicy.for_scene_translation(
+        source_policy.scene_translation_m
+    )
+    reference_path = QUANTIS_DATA_ROOT / "recordings" / source_state.reference_recording
+    target = target_policy.initial_target(
+        reference_path,
+        frame_root=QUANTIS_DATA_ROOT,
+        live_pose=synchronized.pose,
+    )
+    context_index = target_policy.context_index_for_target(target.frame)
+    observation = ControlObservation(
+        observation_id=observation_id_for_session(session_id),
+        captured_at_unix_seconds=time(),
+        context_frame=context_path.relative_to(QUANTIS_DATA_ROOT),
+        target=target,
+        expected_proposal=control_proposal_path(proposal_name),
+        pose=synchronized.pose,
+        previous_action=action_between(source_observation.pose, synchronized.pose),
+        warmup_frames=context_index,
+    )
+    state = ControlSessionState(
+        session_id=session_id,
+        reference_recording=source_state.reference_recording,
+        seed=source_state.seed,
+        recording=source_state.recording,
+        current_joint_positions=synchronized.safety.joint_positions,
+        collision_detected=synchronized.safety.collision_detected,
+        contact_force_newtons=synchronized.safety.contact_force_newtons,
+        previous_session_id=source_session_id,
+        execution_policy=ControlExecutionPolicy.DIRECT,
+        plug_position=synchronized.safety.plug_position,
+        plug_attached=synchronized.safety.plug_attached,
+        current_gripper_width_m=synchronized.safety.gripper_width_m,
+        active_drive_target=synchronized.active_drive_target,
+        contact_grasp_target_policy=target_policy,
+    )
+    session.write_capture(observation, state)
+    write_json_atomic(handoff_path, handoff.to_dict())
+    bind_live_runtime(
+        session_id,
+        stage,
+        synchronized.runtime.actuators,
+        synchronized.runtime.attachment,
+        synchronized.runtime.sensor,
+    )
+    return ControlCaptureResult(
+        session_id,
+        observation,
+        session.request_path,
+        synchronized.safety.contact_force_newtons,
+        synchronized.safety.collision_detected,
+    ).to_dict()
 
 
 def restore_insertion_no_actuation_retry(

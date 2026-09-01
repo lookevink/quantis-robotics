@@ -24,6 +24,7 @@ from sim.isaac_demo_kinematics import (
 )
 from sim.isaac_control_bridge import (
     apply_control_response as _apply_control_response,
+    capture_contact_grasp_acquisition_handoff as _capture_contact_grasp_acquisition_handoff,
     capture_control_observation as _capture_control_observation,
     capture_followup_observation as _capture_followup_observation,
     capture_insertion_transition_observation as _capture_insertion_transition_observation,
@@ -258,6 +259,25 @@ async def capture_followup_observation(
             previous_session_id,
             proposal_name,
             insertion_rollout_maximum_steps,
+        ),
+    )
+
+
+async def capture_contact_grasp_acquisition_handoff(
+    session_id: str,
+    source_session_id: str,
+    proposal_name: str,
+    encoded_evidence: str,
+) -> dict[str, Any]:
+    """Capture the frozen V4-to-V6 handoff under the simulator interlock."""
+
+    return await _RECORDING_JOBS.run_exclusive(
+        f"control-acquisition-handoff-{session_id}",
+        lambda: _capture_contact_grasp_acquisition_handoff(
+            session_id,
+            source_session_id,
+            proposal_name,
+            encoded_evidence,
         ),
     )
 

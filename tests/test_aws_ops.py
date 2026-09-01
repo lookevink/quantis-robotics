@@ -1642,6 +1642,28 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("recovery_finalization:exit_7", calls)
         self.assertGreaterEqual(calls.count("ops/backup_state.sh"), 2)
 
+    def test_unknown_start_acquisition_recovery_is_one_recovery_gated_workflow(
+        self,
+    ):
+        result, calls = self.run_command(
+            "jepa-wm-unknown-start-acquisition-recovery"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("run_unknown_start_acquisition_recovery.sh", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+        self.assertIn("contact_grasp_acquisition_handoff finalize", calls)
+
+    def test_unknown_start_acquisition_recovery_terminalizes_backup_failure(self):
+        result, calls = self.run_command(
+            "jepa-wm-unknown-start-acquisition-recovery",
+            extra_env={"FAKE_SSH_FAIL_MATCH": "ops/backup_state.sh"},
+        )
+
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertIn("recovery_backup:exit_7", calls)
+
+
     def test_sync_does_not_deploy_local_log_artifacts(self):
         result, calls = self.run_command("sync")
 

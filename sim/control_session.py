@@ -1076,6 +1076,13 @@ class ControlSession:
         validate_recording_id(followup_session_id)
         return self.path / f"proposal_handoff_{followup_session_id}.json"
 
+    def contact_grasp_acquisition_handoff_path(
+        self,
+        followup_session_id: str,
+    ) -> Path:
+        validate_recording_id(followup_session_id)
+        return self.path / f"acquisition_handoff_{followup_session_id}.json"
+
     def load_insertion_proposal_handoff(
         self,
         followup_session_id: str,
