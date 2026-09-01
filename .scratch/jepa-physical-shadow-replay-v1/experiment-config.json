@@ -3,16 +3,16 @@
   "experiment_id": "physical-shadow-corrected-planner-replay-v1",
   "evaluator": {
     "path": "jepa_wm/physical_shadow_replay.py",
-    "fingerprint": "PENDING_CHECKPOINT",
-    "implementation_revision": "PENDING_CHECKPOINT"
+    "fingerprint": "b0d553a821c7ff54a0741ef70d5d3502281d2ed6d486bb951b609e96518967e9",
+    "implementation_revision": "f927565513dbdb78e90e2e692d05ed0712251857"
   },
   "runtime_sources": {
-    "jepa_wm/control_client.py": "PENDING_CHECKPOINT",
-    "jepa_wm/control_worker.py": "PENDING_CHECKPOINT",
-    "jepa_wm/physical_shadow_replay.py": "PENDING_CHECKPOINT",
-    "jepa_wm/shadow_planning.py": "PENDING_CHECKPOINT",
-    "ops/aws.sh": "PENDING_CHECKPOINT",
-    "ops/run_physical_shadow_replay.sh": "PENDING_CHECKPOINT"
+    "jepa_wm/control_client.py": "f55a745f0f8a0b0c579dad5bbb0f8743167da12d514de17f4b0b6cb33804af01",
+    "jepa_wm/control_worker.py": "55f06eb221487cbabb63f0881cba2634888179718b5f7e3ebd8344718442006b",
+    "jepa_wm/physical_shadow_replay.py": "b0d553a821c7ff54a0741ef70d5d3502281d2ed6d486bb951b609e96518967e9",
+    "jepa_wm/shadow_planning.py": "c0dd2ae4669e508120ea31e2fb9191dbc6330c134b76f885d2151e6c3392b651",
+    "ops/aws.sh": "0e64de31a0e3e446bd844897616824013b15502cf939559a3b694aa95ab6e591",
+    "ops/run_physical_shadow_replay.sh": "bd298633e09ad3f826788cb3c333d8d27991868570a69a7b8828dadb75d958bd"
   },
   "source": {
     "session": "/home/ubuntu/docker/isaac-sim/data/quantis/control_sessions/physical-shadow-canary-12601",

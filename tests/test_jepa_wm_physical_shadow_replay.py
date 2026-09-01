@@ -4,6 +4,9 @@ import tempfile
 import unittest
 
 from jepa_wm.physical_shadow_replay import claim, load_experiment
+from jepa_wm.physical_shadow_replay_contract import (
+    FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+)
 
 
 class PhysicalShadowReplayTest(unittest.TestCase):
@@ -16,6 +19,10 @@ class PhysicalShadowReplayTest(unittest.TestCase):
         self.assertFalse(experiment["execution"]["isaac"])
         self.assertFalse(experiment["execution"]["apply_action"])
         self.assertFalse(experiment["execution"]["train"])
+        self.assertEqual(
+            FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+            "b5b75a688a667f77ec9755cc8846a115f258f400f425b8260d3065ec5b36023a",
+        )
 
     def test_claim_authenticates_inputs_and_is_exclusive(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
