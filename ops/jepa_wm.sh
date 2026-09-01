@@ -644,7 +644,7 @@ benchmark_insertion_planner() {
 train_action_proposal() {
   local -A options=()
   parse_named_options options \
-    "recordings camera steps proposal start-index count stride hidden-dimension learning-rate weight-decay seed goal-consistency-weight first-action-weight active-direction-weight goal-direction-weight inactive-gripper-weight first-gripper-weight" "$@"
+    "recordings camera steps proposal start-index count stride hidden-dimension learning-rate weight-decay seed goal-consistency-weight first-action-weight active-direction-weight goal-direction-weight inactive-gripper-weight first-gripper-weight open-gripper-counterfactuals" "$@"
   local recording_list="${options[recordings]:-}"
   local camera_name="${options[camera]:-wrist}"
   local training_steps="${options[steps]:-2000}"
@@ -662,6 +662,7 @@ train_action_proposal() {
   local goal_direction_weight="${options[goal-direction-weight]:-0}"
   local inactive_gripper_weight="${options[inactive-gripper-weight]:-0.01}"
   local first_gripper_weight="${options[first-gripper-weight]:-1.0}"
+  local open_gripper_counterfactuals="${options[open-gripper-counterfactuals]:-false}"
   is_safe_identifier_list "${recording_list}" || die "invalid recording list"
   is_safe_identifier "${camera_name}" || die "invalid camera name"
   is_safe_identifier "${proposal_name}" || die "invalid proposal name"
@@ -682,7 +683,14 @@ train_action_proposal() {
     "${inactive_gripper_weight}" || exit 1
   require_nonnegative_number "first gripper weight" \
     "${first_gripper_weight}" || exit 1
+  [[ "${open_gripper_counterfactuals}" == "true" \
+    || "${open_gripper_counterfactuals}" == "false" ]] \
+    || die "open-gripper-counterfactuals must be true or false"
   local -a window_arguments=()
+  local -a counterfactual_arguments=()
+  if [[ "${open_gripper_counterfactuals}" == "true" ]]; then
+    counterfactual_arguments=(--open-gripper-counterfactuals)
+  fi
   if [[ -n "${start_index}${rollout_count}${rollout_stride}" ]]; then
     require_nonnegative_integer "start index" "${start_index}" || exit 1
     require_positive_integer "rollout count" "${rollout_count}" || exit 1
@@ -724,6 +732,7 @@ train_action_proposal() {
     --goal-direction-weight "${goal_direction_weight}" \
     --inactive-gripper-weight "${inactive_gripper_weight}" \
     --first-gripper-weight "${first_gripper_weight}" \
+    "${counterfactual_arguments[@]}" \
     "${window_arguments[@]}"
 }
 
@@ -732,8 +741,12 @@ train_task_action_proposal() {
   shift
   local -A options=()
   local window_start window_count window_stride
+  local open_gripper_counterfactuals=false
   read -r window_start window_count window_stride \
     <<<"$(task_proposal_window "${task_name}")"
+  if [[ "${task_name}" == "contact-grasp-acquisition" ]]; then
+    open_gripper_counterfactuals=true
+  fi
   parse_named_options options \
     "recordings steps proposal hidden-dimension learning-rate weight-decay seed goal-consistency-weight first-action-weight active-direction-weight goal-direction-weight inactive-gripper-weight first-gripper-weight" "$@"
   train_action_proposal \
@@ -751,6 +764,7 @@ train_task_action_proposal() {
     --goal-direction-weight "${options[goal-direction-weight]:-$(task_proposal_setting "${task_name}" goal_direction)}" \
     --inactive-gripper-weight "${options[inactive-gripper-weight]:-$(task_proposal_setting "${task_name}" inactive_gripper)}" \
     --first-gripper-weight "${options[first-gripper-weight]:-1.0}" \
+    --open-gripper-counterfactuals "${open_gripper_counterfactuals}" \
     --start-index "${window_start}" \
     --count "${window_count}" \
     --stride "${window_stride}"

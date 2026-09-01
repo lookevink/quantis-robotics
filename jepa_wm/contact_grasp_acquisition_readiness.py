@@ -111,6 +111,44 @@ def summarize_contact_grasp_acquisition_readiness(
     evaluation_reports: Sequence[Path],
     output: Path,
 ) -> dict[str, object]:
+    training = CONTACT_GRASP_ACQUISITION_READINESS.training_report(
+        proposal.resolve()
+    )
+    config = training.get("config")
+    metadata = training.get("metadata")
+    training_recordings = (
+        metadata.get("training_recordings")
+        if isinstance(metadata, dict)
+        else None
+    )
+    training_rollouts = training.get("rollouts")
+    if (
+        not isinstance(training_recordings, list)
+        or type(training_rollouts) is not int
+        or not isinstance(config, dict)
+    ):
+        raise ValueError(
+            "contact-grasp acquisition proposal lacks open-gripper recovery evidence"
+        )
+    expected_counterfactuals = (
+        len(training_recordings)
+        * (
+            CONTACT_INSERTION_LAYOUT.start_index(
+                ContactInsertionSegment.GRASP_CLOSE
+            )
+            - 1
+        )
+    )
+    if (
+        config.get("open_gripper_counterfactuals") is not True
+        or training.get("open_gripper_counterfactual_examples")
+        != expected_counterfactuals
+        or training.get("training_examples")
+        != training_rollouts + expected_counterfactuals
+    ):
+        raise ValueError(
+            "contact-grasp acquisition proposal lacks open-gripper recovery evidence"
+        )
     phase_evidence = tuple(
         _gripper_phase_evidence(report.resolve()) for report in evaluation_reports
     )

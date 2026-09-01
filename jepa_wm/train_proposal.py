@@ -16,6 +16,7 @@ import torch
 from jepa_wm.action import ActionSelectionBounds
 from jepa_wm.contract import MODEL_ID
 from jepa_wm.frames import encode_clips
+from jepa_wm.insertion_layout import CONTACT_INSERTION_LAYOUT, ContactInsertionSegment
 from jepa_wm.model import load_headless_model
 from jepa_wm.planner_readiness import FirstActionThresholds
 from jepa_wm.proposal import (
@@ -76,6 +77,7 @@ class ProposalTrainingConfig:
     loss_weights: ProposalLossWeights = ProposalLossWeights()
     conditioning_residual: bool = True
     conditioned_gripper_head: bool = True
+    open_gripper_counterfactuals: bool = False
 
     def __post_init__(self) -> None:
         dimensions = (
@@ -113,6 +115,67 @@ class ProposalLoss:
             + weights.inactive_gripper * self.inactive_gripper_loss
             + weights.first_gripper_mse * self.first_gripper_mse
         )
+
+
+def augment_open_gripper_counterfactuals(
+    rollouts: Sequence[RecordedRollout],
+    action_sequences: np.ndarray,
+    inputs: ProposalInputs,
+) -> tuple[np.ndarray, ProposalInputs, np.ndarray, int]:
+    """Add TRAIN-only recovery labels for an unexpectedly open approach gripper."""
+
+    if any(value is None for value in inputs.values):
+        raise ValueError("counterfactual augmentation requires complete inputs")
+    close_context = CONTACT_INSERTION_LAYOUT.start_index(
+        ContactInsertionSegment.GRASP_CLOSE
+    ) - 1
+    selected = np.asarray(
+        [
+            index
+            for index, rollout in enumerate(rollouts)
+            if rollout.context[0].index < close_context
+        ],
+        dtype=np.int64,
+    )
+    if not len(selected):
+        raise ValueError("counterfactual augmentation found no approach examples")
+    augmented_actions = action_sequences[selected].copy()
+    target_closedness = np.asarray(
+        [rollouts[index].target_pose.values[6] for index in selected],
+        dtype=augmented_actions.dtype,
+    )
+    augmented_actions[:, :, 6] = (
+        target_closedness[:, None] / augmented_actions.shape[1]
+    )
+
+    assert inputs.pose is not None
+    assert inputs.previous_action is not None
+    assert inputs.goal_delta is not None
+    assert inputs.task_progress is not None
+    counterfactual_pose = inputs.pose[selected].clone()
+    counterfactual_pose[:, 6] = 0.0
+    counterfactual_previous = inputs.previous_action[selected].clone()
+    counterfactual_previous[:, 6] = 0.0
+    counterfactual_goal = inputs.goal_delta[selected].clone()
+    counterfactual_goal[:, 6] = torch.as_tensor(
+        target_closedness,
+        dtype=counterfactual_goal.dtype,
+    )
+    augmented_inputs = ProposalInputs(
+        torch.cat((inputs.pose, counterfactual_pose)),
+        torch.cat((inputs.previous_action, counterfactual_previous)),
+        torch.cat((inputs.goal_delta, counterfactual_goal)),
+        torch.cat((inputs.task_progress, inputs.task_progress[selected])),
+    )
+    source_indices = np.concatenate(
+        (np.arange(len(rollouts), dtype=np.int64), selected)
+    )
+    return (
+        np.concatenate((action_sequences, augmented_actions)),
+        augmented_inputs,
+        source_indices,
+        len(selected),
+    )
 
 
 @dataclass(frozen=True)
@@ -277,10 +340,25 @@ def train_action_proposal(
         [[action.values for action in rollout.actions] for rollout in rollouts],
         dtype=np.float32,
     )
-    action_mean, action_std = action_normalization(action_sequences)
     proposal_inputs = ProposalInputs.from_rollouts(rollouts)
     if any(value is None for value in proposal_inputs.values):
         raise ValueError("training rollouts did not produce complete proposal inputs")
+    counterfactual_count = 0
+    if config.open_gripper_counterfactuals:
+        (
+            action_sequences,
+            proposal_inputs,
+            sample_source_indices,
+            counterfactual_count,
+        ) = augment_open_gripper_counterfactuals(
+            rollouts,
+            action_sequences,
+            proposal_inputs,
+        )
+        source_indices = torch.from_numpy(sample_source_indices)
+        contexts = contexts[source_indices]
+        targets = targets[source_indices]
+    action_mean, action_std = action_normalization(action_sequences)
     pose_normalization = DroidValueNormalization.from_samples(
         proposal_inputs.pose.numpy()
     )
@@ -323,7 +401,7 @@ def train_action_proposal(
     proposal.train()
     for _ in range(config.steps):
         indices = torch.randint(
-            len(rollouts),
+            len(action_sequences),
             (config.batch_size,),
             generator=generator,
         )
@@ -371,6 +449,8 @@ def train_action_proposal(
         **selection_payload,
         "training_selection_fingerprint": selection_fingerprint,
         "conditioning": proposal.conditioning.to_dict(),
+        "training_examples": len(action_sequences),
+        "open_gripper_counterfactual_examples": counterfactual_count,
         "trainable_parameters": sum(
             parameter.numel() for parameter in proposal.parameters()
         ),
@@ -449,6 +529,11 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=ProposalTrainingConfig.conditioned_gripper_head,
     )
+    parser.add_argument(
+        "--open-gripper-counterfactuals",
+        action=argparse.BooleanOptionalAction,
+        default=ProposalTrainingConfig.open_gripper_counterfactuals,
+    )
     parser.add_argument("--start-index", type=int)
     parser.add_argument("--count", type=int)
     parser.add_argument("--stride", type=int)
@@ -487,6 +572,9 @@ def main() -> None:
                     ),
                     conditioning_residual=args.conditioning_residual,
                     conditioned_gripper_head=args.conditioned_gripper_head,
+                    open_gripper_counterfactuals=(
+                        args.open_gripper_counterfactuals
+                    ),
                 ),
                 window=window,
             ),

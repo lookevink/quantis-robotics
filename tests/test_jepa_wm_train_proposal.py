@@ -1,22 +1,60 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 
 try:
+    import numpy as np
     import torch
 except ModuleNotFoundError:
+    np = None
     torch = None
 
 if torch is not None:
     from jepa_wm.train_proposal import (
         ProposalLossWeights,
         ProposalTrainingConfig,
+        augment_open_gripper_counterfactuals,
         proposal_loss,
     )
+    from jepa_wm.proposal import ProposalInputs
 
 
 @unittest.skipIf(torch is None, "PyTorch is not installed in the local test runtime")
 class ProposalTrainingLossTest(unittest.TestCase):
+    def test_open_gripper_counterfactual_closes_over_native_horizon(self) -> None:
+        rollouts = (
+            SimpleNamespace(
+                context=(SimpleNamespace(index=13),),
+                target_pose=SimpleNamespace(values=(0.0,) * 6 + (0.12,)),
+            ),
+            SimpleNamespace(
+                context=(SimpleNamespace(index=100),),
+                target_pose=SimpleNamespace(values=(0.0,) * 6 + (0.5,)),
+            ),
+        )
+        inputs = ProposalInputs(
+            torch.ones((2, 7)),
+            torch.ones((2, 7)),
+            torch.zeros((2, 7)),
+            torch.tensor([[13.0], [100.0]]),
+        )
+
+        actions, augmented, source_indices, count = (
+            augment_open_gripper_counterfactuals(
+                rollouts,
+                np.zeros((2, 3, 7), dtype=np.float32),
+                inputs,
+            )
+        )
+
+        self.assertEqual(count, 1)
+        np.testing.assert_array_equal(source_indices, (0, 1, 0))
+        np.testing.assert_allclose(actions[2, :, 6], (0.04, 0.04, 0.04))
+        self.assertEqual(float(augmented.pose[2, 6]), 0.0)
+        self.assertEqual(float(augmented.previous_action[2, 6]), 0.0)
+        self.assertAlmostEqual(float(augmented.goal_delta[2, 6]), 0.12)
+
     def test_goal_consistency_is_zero_when_sequence_reaches_goal(self) -> None:
         predicted = torch.zeros((2, 3, 7))
         action_mean = torch.full((3, 7), 0.25)
