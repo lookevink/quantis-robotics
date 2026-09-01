@@ -4,7 +4,9 @@ import unittest
 from sim.unknown_start_reset import (
     UNKNOWN_START_RESET_CONTRACT,
     UnknownStartResetEvidence,
+    UnknownStartWorkspaceState,
 )
+from sim.exploration import DatasetSplit
 
 
 class UnknownStartResetContractTest(unittest.TestCase):
@@ -19,7 +21,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
         self.assertEqual(sample.scene_offset_m, (0.0, 0.002437, 0.003126))
         self.assertEqual(sample.socket_scale, 1.05)
         self.assertEqual(sample.light_exposure_delta, 0.370041)
-        self.assertEqual(sample.split, "held_out")
+        self.assertIs(sample.split, DatasetSplit.HELD_OUT)
         self.assertEqual(sample.seed, 62600)
 
     def test_draw_rejects_unreserved_or_previously_used_seed(self) -> None:
@@ -32,12 +34,19 @@ class UnknownStartResetContractTest(unittest.TestCase):
         sample = UNKNOWN_START_RESET_CONTRACT.draw(62600, forbidden_seeds=set())
         evidence = UnknownStartResetEvidence(
             sample=sample,
+            workspace=UnknownStartWorkspaceState(
+                connector_position_m=(-0.0256, -0.247813, 1.323126),
+                socket_position_m=(-0.071, -0.247563, 1.323126),
+                end_effector_position_m=(0.25, -0.247813, 1.48),
+            ),
             realized_sample_fingerprint=sample.fingerprint,
             plug_attached=False,
             collision_detected=False,
             contact_force_newtons=0.0,
+            direct_state_setting_count=1,
             prefix_replay_frames=0,
-            runtime_motion="drive_only",
+            applied_actions=0,
+            phase="reset_authentication",
         )
 
         evidence.validate(UNKNOWN_START_RESET_CONTRACT)
@@ -51,6 +60,22 @@ class UnknownStartResetContractTest(unittest.TestCase):
             replace(evidence, realized_sample_fingerprint="f" * 64).validate(
                 UNKNOWN_START_RESET_CONTRACT
             )
+        with self.assertRaisesRegex(ValueError, "unsafe or inauthentic"):
+            replace(evidence, direct_state_setting_count=2).validate(
+                UNKNOWN_START_RESET_CONTRACT
+            )
+        with self.assertRaisesRegex(ValueError, "unsafe or inauthentic"):
+            replace(evidence, applied_actions=1).validate(
+                UNKNOWN_START_RESET_CONTRACT
+            )
+        with self.assertRaisesRegex(ValueError, "unsafe or inauthentic"):
+            replace(
+                evidence,
+                workspace=replace(
+                    evidence.workspace,
+                    connector_position_m=(0.0, 0.0, 0.0),
+                ),
+            ).validate(UNKNOWN_START_RESET_CONTRACT)
 
     def test_contract_freezes_distribution_and_authority_boundary(self) -> None:
         self.assertEqual(
@@ -60,6 +85,9 @@ class UnknownStartResetContractTest(unittest.TestCase):
                 "seed_namespace": {"minimum": 62600, "maximum": 62699},
                 "split": "held_out",
                 "sampler": "build_exploration_plan.v1",
+                "sampler_source_fingerprint": (
+                    "0ec746dbf12fbed61c66b3c64dee6717fa15f015be4aad23e0f40e5b47a5228d"
+                ),
                 "bounds": {
                     "initial_arm_offset_radians": [-0.01, 0.01],
                     "camera_offset_m": [-0.012, 0.012],
@@ -71,12 +99,36 @@ class UnknownStartResetContractTest(unittest.TestCase):
                     "socket_scale": [1.05, 1.05],
                     "light_exposure_delta": [-0.4, 0.4],
                 },
+                "workspace_bounds_m": {
+                    "connector": {
+                        "x": [-0.0256, -0.0256],
+                        "y": [-0.27525, -0.22525],
+                        "z": [1.305, 1.335],
+                    },
+                    "socket": {
+                        "x": [-0.071, -0.071],
+                        "y": [-0.275, -0.225],
+                        "z": [1.305, 1.335],
+                    },
+                    "initial_end_effector": {
+                        "x": [0.22, 0.28],
+                        "y": [-0.3, -0.2],
+                        "z": [1.43, 1.53],
+                    },
+                },
                 "initialization": "direct_state_setting_once",
+                "direct_state_setting_count": 1,
                 "prefix_replay_frames": 0,
                 "runtime_motion": "drive_only",
                 "maximum_initial_contact_force_newtons": 0.0,
                 "require_unattached": True,
                 "require_collision_free": True,
+                "authority": {
+                    "reset_authentication_only": True,
+                    "apply_actions": False,
+                    "train": False,
+                    "film": False,
+                },
             },
         )
 
