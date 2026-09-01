@@ -57,6 +57,7 @@ from sim.isaac_unknown_start_shadow import (
     capture_unknown_start_candidate_observation as _capture_unknown_start_candidate_observation,
     capture_unknown_start_shadow_observation as _capture_unknown_start_shadow_observation,
     preflight_unknown_start_shadow as _preflight_unknown_start_shadow,
+    recover_unknown_start_candidate_rollback as _recover_unknown_start_candidate_rollback,
 )
 from sim.isaac_demo_runtime import (
     Actuators,
@@ -202,6 +203,17 @@ async def preflight_unknown_start_shadow(
             reset_recording_id,
             reset_result_fingerprint,
         ),
+    )
+
+
+async def recover_unknown_start_candidate_rollback(
+    session_id: str,
+) -> dict[str, Any]:
+    """Finish one exact failed rollback under the simulator interlock."""
+
+    return await _RECORDING_JOBS.run_exclusive(
+        f"unknown-start-rollback-recovery-{session_id}",
+        lambda: _recover_unknown_start_candidate_rollback(session_id),
     )
 
 

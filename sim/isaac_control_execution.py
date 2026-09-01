@@ -103,6 +103,8 @@ from sim.recording import RecordingLabel, RecordingMoment, RecordingSnapshot
 
 
 CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS = 5e-3
+EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS = 1e-3
+EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_GRIPPER_ERROR_METERS = 5e-4
 
 
 def requires_synchronized_evaluation_refresh(
@@ -406,6 +408,13 @@ class RollbackSettlementPolicy:
             raise ValueError("rollback settlement policy is invalid")
 
 
+UNKNOWN_START_ROLLBACK_SETTLEMENT = RollbackSettlementPolicy(
+    maximum_arm_error_radians=1e-4,
+    maximum_gripper_error_meters=1e-4,
+    maximum_updates=MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES,
+)
+
+
 async def rollback_control_command(
     actuators: Actuators,
     target: JointCommand,
@@ -674,6 +683,9 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         contact_insertion_execution
         and persisted_state.execution_policy is ControlExecutionPolicy.DIRECT
         and persisted_state.insertion_target_policy is None
+    )
+    reset_trial_candidate_execution = (
+        persisted_state.execution_policy is ControlExecutionPolicy.RESET_TRIAL_CANDIDATE
     )
     requires_evaluation_refresh = requires_synchronized_evaluation_refresh(
         persisted_state.execution_policy,
@@ -974,13 +986,17 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                             else None
                         ),
                         settlement=(
-                            RollbackSettlementPolicy(
-                                maximum_updates=(
-                                    MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES
+                            UNKNOWN_START_ROLLBACK_SETTLEMENT
+                            if reset_trial_candidate_execution
+                            else (
+                                RollbackSettlementPolicy(
+                                    maximum_updates=(
+                                        MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES
+                                    )
                                 )
+                                if contact_grasp_execution
+                                else RollbackSettlementPolicy()
                             )
-                            if contact_grasp_execution
-                            else RollbackSettlementPolicy()
                         ),
                     )
                     return None
@@ -1037,19 +1053,29 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                         maximum_updates=(
                             MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES
                             if contact_grasp_execution
+                            or reset_trial_candidate_execution
                             else 8
                         ),
                         maximum_arm_error_radians=(
-                            CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS
-                            if contact_grasp_execution
-                            else 0.01
+                            EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS
+                            if reset_trial_candidate_execution
+                            else (
+                                CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS
+                                if contact_grasp_execution
+                                else 0.01
+                            )
                         ),
                         gripper=(
                             GripperSettlementCriterion(
                                 target.gripper_width_m,
-                                MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
+                                (
+                                    EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_GRIPPER_ERROR_METERS
+                                    if reset_trial_candidate_execution
+                                    else MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+                                ),
                             )
                             if contact_grasp_execution
+                            or reset_trial_candidate_execution
                             else None
                         ),
                     )

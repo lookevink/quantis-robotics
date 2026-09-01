@@ -14,8 +14,9 @@ from jepa_wm.persistence import write_json_atomic
 from jepa_wm.training_artifact import artifact_fingerprint
 
 
-EXPERIMENT_ID = "unknown-start-live-action-v4"
-EXECUTION_SESSION_ID = "unknown-start-live-action-v4-62605"
+EXPERIMENT_ID = "unknown-start-live-action-v5"
+EXECUTION_SESSION_ID = "unknown-start-live-action-v5-62605"
+PREDECESSOR_SESSION_ID = "unknown-start-live-action-v4-62605"
 SOURCE_SESSION_ID = "unknown-start-shadow-canary-v5-62605"
 RESET_RECORDING_ID = "unknown-start-reset-v6-62605"
 RESET_RESULT_FINGERPRINT = (
@@ -41,7 +42,7 @@ SOURCE_HANDOFF_FINGERPRINT = (
 )
 REFERENCE_RECORDING = "contact-insertion-v10-drive-slow-2600-held-00"
 REFERENCE_SEED = 12600
-OUTPUT_DIRECTORY = "unknown_start_live_action_v4"
+OUTPUT_DIRECTORY = "unknown_start_live_action_v5"
 
 RUNTIME_FILES = (
     "jepa_wm/action.py",
@@ -133,10 +134,34 @@ def paths(checkpoint_root: Path) -> tuple[Path, Path, Path, Path]:
     )
 
 
+def predecessor_recovery_fingerprint(data_root: Path) -> str:
+    path = (
+        data_root
+        / "control_sessions"
+        / PREDECESSOR_SESSION_ID
+        / "rollback_recovery.json"
+    )
+    payload = json.loads(path.read_text())
+    if (
+        payload.get("schema") != "quantis.unknown_start_rollback_recovery.v1"
+        or payload.get("session_id") != PREDECESSOR_SESSION_ID
+        or payload.get("recovered") is not True
+        or payload.get("applied_model_actions") != 0
+        or payload.get("collision_detected") is not False
+        or payload.get("plug_attached") is not False
+        or payload.get("timeline_playing") is not False
+        or payload.get("contact_force_newtons", float("inf")) > 2.0
+    ):
+        raise ValueError("unknown-start predecessor recovery is invalid")
+    return artifact_fingerprint(path)
+
+
 def claim(
     checkpoint_root: Path,
     source_revision: str,
     expected_runtime_fingerprint: str,
+    data_root: Path,
+    expected_predecessor_recovery_fingerprint: str,
 ) -> dict[str, Any]:
     claim_path, evaluation_path, result_path, failure_path = paths(checkpoint_root)
     if any(path.exists() for path in (evaluation_path, result_path, failure_path)):
@@ -146,11 +171,16 @@ def claim(
         raise ValueError("unknown-start live action runtime changed")
     if len(source_revision) != 40:
         raise ValueError("unknown-start live action revision is invalid")
+    recovery_fingerprint = predecessor_recovery_fingerprint(data_root)
+    if recovery_fingerprint != expected_predecessor_recovery_fingerprint:
+        raise ValueError("unknown-start predecessor recovery changed")
     payload = {
         "schema": "quantis.unknown_start_live_action_claim.v1",
         "claimed_at": datetime.now(timezone.utc).isoformat(),
         "experiment_id": EXPERIMENT_ID,
         "execution_session_id": EXECUTION_SESSION_ID,
+        "predecessor_session_id": PREDECESSOR_SESSION_ID,
+        "predecessor_recovery_fingerprint": recovery_fingerprint,
         "source_session_id": SOURCE_SESSION_ID,
         "reset_recording_id": RESET_RECORDING_ID,
         "reset_result_fingerprint": RESET_RESULT_FINGERPRINT,
@@ -302,6 +332,25 @@ def finalize(
     ):
         if artifact_fingerprint(primary) != artifact_fingerprint(recovery):
             raise ValueError("unknown-start live action recovery changed")
+    claim_payload = json.loads(claim_path.read_text())
+    predecessor_recovery = (
+        data_root
+        / "control_sessions"
+        / PREDECESSOR_SESSION_ID
+        / "rollback_recovery.json"
+    )
+    recovery_predecessor_recovery = (
+        recovery_data_root
+        / "control_sessions"
+        / PREDECESSOR_SESSION_ID
+        / "rollback_recovery.json"
+    )
+    if artifact_fingerprint(predecessor_recovery) != claim_payload.get(
+        "predecessor_recovery_fingerprint"
+    ) or artifact_fingerprint(predecessor_recovery) != artifact_fingerprint(
+        recovery_predecessor_recovery
+    ):
+        raise ValueError("unknown-start predecessor recovery backup changed")
     session = ControlSession.at(data_root / "control_sessions", EXECUTION_SESSION_ID)
     recovery_session = ControlSession.at(
         recovery_data_root / "control_sessions", EXECUTION_SESSION_ID
@@ -385,7 +434,15 @@ def failure(checkpoint_root: Path, error: str) -> dict[str, Any]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "command", choices=("fingerprint", "claim", "evaluate", "finalize", "failure")
+        "command",
+        choices=(
+            "fingerprint",
+            "recovery-fingerprint",
+            "claim",
+            "evaluate",
+            "finalize",
+            "failure",
+        ),
     )
     parser.add_argument("--checkpoint-root", type=Path)
     parser.add_argument("--recovery-checkpoint-root", type=Path)
@@ -393,13 +450,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--recovery-data-root", type=Path)
     parser.add_argument("--source-revision")
     parser.add_argument("--runtime-fingerprint")
+    parser.add_argument("--predecessor-recovery-fingerprint")
     parser.add_argument("--error")
     args = parser.parse_args(argv)
     if args.command == "fingerprint":
         payload: Any = runtime_fingerprint()
+    elif args.command == "recovery-fingerprint":
+        payload = predecessor_recovery_fingerprint(args.data_root)
     elif args.command == "claim":
         payload = claim(
-            args.checkpoint_root, args.source_revision, args.runtime_fingerprint
+            args.checkpoint_root,
+            args.source_revision,
+            args.runtime_fingerprint,
+            args.data_root,
+            args.predecessor_recovery_fingerprint,
         )
     elif args.command == "evaluate":
         payload = evaluate(args.checkpoint_root, args.data_root)

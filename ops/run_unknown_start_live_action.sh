@@ -8,7 +8,8 @@ checkpoint_root="${HOME}/docker/jepa-wm/checkpoints"
 data_root="${HOME}/docker/isaac-sim/data/quantis"
 source_revision="${1:-}"
 runtime_fingerprint="${2:-}"
-session_id="unknown-start-live-action-v4-62605"
+session_id="unknown-start-live-action-v5-62605"
+predecessor_session_id="unknown-start-live-action-v4-62605"
 source_session_id="unknown-start-shadow-canary-v5-62605"
 proposal_name="contact-grasp-v10-drive-slow-2600_task12_h256_s3000"
 reset_recording_id="unknown-start-reset-v6-62605"
@@ -17,10 +18,18 @@ source_shadow_fingerprint="75b77d011c314db3118993723755ea1524ec2eab22bd141d98543
 source_safety_fingerprint="467a62dae7ed8728e536e81f3b6b58dad3aa3702b12477ab6cdeac52b7506bae"
 
 cd "${repo_dir}"
+phase="recovery"
+isaac_server_call \
+  "await demo.recover_unknown_start_candidate_rollback('${predecessor_session_id}')" \
+  180 true
+predecessor_recovery_fingerprint="$(
+  "${python_bin}" -m jepa_wm.unknown_start_live_action recovery-fingerprint \
+    --data-root "${data_root}"
+)"
 phase="preflight"
 isaac_server_call \
   "await demo.preflight_unknown_start_shadow('${reset_recording_id}','${reset_result_fingerprint}')" \
-  180 true
+  180
 phase="source"
 isaac_server_call \
   "demo.prepare_experimental_candidate_source('${source_session_id}','${source_shadow_fingerprint}','${source_safety_fingerprint}')" 180
@@ -28,7 +37,9 @@ isaac_server_call \
 "${python_bin}" -m jepa_wm.unknown_start_live_action claim \
   --checkpoint-root "${checkpoint_root}" \
   --source-revision "${source_revision}" \
-  --runtime-fingerprint "${runtime_fingerprint}"
+  --runtime-fingerprint "${runtime_fingerprint}" \
+  --data-root "${data_root}" \
+  --predecessor-recovery-fingerprint "${predecessor_recovery_fingerprint}"
 
 phase="execute"
 terminalize_failure() {

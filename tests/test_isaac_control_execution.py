@@ -30,6 +30,9 @@ from jepa_wm.insertion_trial import (
     InsertionTrialRollbackFailureReason,
 )
 from sim.isaac_control_execution import (
+    EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS,
+    EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_GRIPPER_ERROR_METERS,
+    UNKNOWN_START_ROLLBACK_SETTLEMENT,
     ExecutionSafetyContext,
     InsertionTrialRollbackFailed,
     UnsettledJointCommand,
@@ -56,6 +59,18 @@ class ControlExecutionLifecycleTest(unittest.TestCase):
                 ControlExecutionPolicy.RESET_TRIAL_CANDIDATE,
                 contact_grasp_execution=False,
             )
+        )
+        self.assertLessEqual(
+            EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS,
+            1e-3,
+        )
+        self.assertLessEqual(
+            EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_GRIPPER_ERROR_METERS,
+            5e-4,
+        )
+        self.assertEqual(
+            UNKNOWN_START_ROLLBACK_SETTLEMENT.maximum_arm_error_radians,
+            1e-4,
         )
 
     def test_rejects_invalid_insertion_binding_before_live_synchronization(
