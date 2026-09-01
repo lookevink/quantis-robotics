@@ -368,6 +368,41 @@ def diagnose_contact_grasp_acquisition_resolution(
     return result
 
 
+def diagnose_contact_grasp_rollback_drive_target() -> dict[str, Any]:
+    """Compare the retained V12 drive attributes with its rollback command."""
+
+    import omni.usd
+
+    stage = omni.usd.get_context().get_stage()
+    runtime = live_runtime_for(
+        ACQUISITION_RESOLUTION_RUNTIME_SESSION_ID,
+        stage,
+    )
+    if runtime is None:
+        raise RuntimeError("contact-grasp rollback runtime was lost")
+    expected = acquisition_resolution_drive_target(QUANTIS_DATA_ROOT)
+    actual = current_drive_target(runtime)
+    joint_deltas = tuple(
+        actual_value - expected_value
+        for actual_value, expected_value in zip(
+            actual.joint_positions,
+            expected.joint_positions,
+        )
+    )
+    return {
+        "status": "diagnosed_no_actuation",
+        "runtime_owner_session_id": ACQUISITION_RESOLUTION_RUNTIME_SESSION_ID,
+        "expected_rollback_target": expected.to_dict(),
+        "actual_drive_target": actual.to_dict(),
+        "joint_deltas_rad": list(joint_deltas),
+        "maximum_joint_delta_rad": max(abs(value) for value in joint_deltas),
+        "gripper_delta_m": (
+            actual.gripper_width_m - expected.gripper_width_m
+        ),
+        "simulator_action_applied": False,
+    }
+
+
 async def capture_contact_grasp_acquisition_handoff(
     session_id: str,
     source_session_id: str,

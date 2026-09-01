@@ -17,7 +17,7 @@ from jepa_wm.control_safety import contact_grasp_action_scales
 class ContactGraspAcquisitionResolutionTest(unittest.TestCase):
     def _handoff(self) -> ContactGraspAcquisitionResolution:
         return ContactGraspAcquisitionResolution(
-            "unknown-start-e2e-v14-62605-grasp-01",
+            "unknown-start-e2e-v15-62605-grasp-01",
             "a" * 64,
             "b" * 40,
         )

@@ -1,4 +1,4 @@
-"""Authenticated V14 continuation after the bounded V10 acquisition negative."""
+"""Authenticated V15 continuation after the bounded V10 acquisition negative."""
 
 from __future__ import annotations
 
@@ -28,9 +28,9 @@ from jepa_wm.persistence import write_json_atomic
 from jepa_wm.training_artifact import artifact_fingerprint
 
 
-HANDOFF_SCHEMA = "quantis.contact_grasp_acquisition_resolution.v4"
-EXPERIMENT_DIRECTORY = "unknown_start_acquisition_resolution_v14"
-ROLLOUT_ID = "unknown-start-e2e-v14-62605-grasp"
+HANDOFF_SCHEMA = "quantis.contact_grasp_acquisition_resolution.v5"
+EXPERIMENT_DIRECTORY = "unknown_start_acquisition_resolution_v15"
+ROLLOUT_ID = "unknown-start-e2e-v15-62605-grasp"
 SOURCE_ROLLOUT_ID = "unknown-start-e2e-v10-62605-grasp"
 SOURCE_SESSION_ID = f"{SOURCE_ROLLOUT_ID}-52"
 MAXIMUM_ACTIONS = 52
@@ -93,6 +93,15 @@ V13_DIAGNOSTIC_FINGERPRINT = (
 V13_EXPERIMENT_DIRECTORY = "unknown_start_acquisition_resolution_v13"
 V13_ROLLOUT_ID = "unknown-start-e2e-v13-62605-grasp"
 V13_SESSION_ID = f"{V13_ROLLOUT_ID}-01"
+V14_CLAIM_FINGERPRINT = (
+    "bda86bbe875774d7ad47e4ef2c3da03a2c03d49bf4a1c756269f8292fda27ace"
+)
+V14_FAILURE_FINGERPRINT = (
+    "07b0b21a5248ac31ce530dbde3a064314ec180947c35d8e9b980fdb0e114f8a8"
+)
+V14_EXPERIMENT_DIRECTORY = "unknown_start_acquisition_resolution_v14"
+V14_ROLLOUT_ID = "unknown-start-e2e-v14-62605-grasp"
+V14_SESSION_ID = f"{V14_ROLLOUT_ID}-01"
 SESSION_FILES = (
     "request.json",
     "state.json",
@@ -203,6 +212,10 @@ class ContactGraspAcquisitionResolution:
             "v13_failure_fingerprint": V13_FAILURE_FINGERPRINT,
             "v13_diagnostic_fingerprint": V13_DIAGNOSTIC_FINGERPRINT,
             "v13_simulator_action_applied": False,
+            "v14_claim_fingerprint": V14_CLAIM_FINGERPRINT,
+            "v14_failure_fingerprint": V14_FAILURE_FINGERPRINT,
+            "v14_diagnostic_persisted": False,
+            "v14_simulator_action_applied": False,
             "runtime_fingerprint": self.runtime_fingerprint,
             "source_revision": self.source_revision,
             "no_actuation_diagnostic_required": True,
@@ -408,7 +421,7 @@ def v12_rollback_drive_target(data_root: Path):
         data_root / "control_sessions",
         V12_SESSION_ID,
     ).load_capture()
-    return JointDriveTarget(
+    return JointDriveTarget.for_command(
         tuple(state.current_joint_positions),
         state.current_gripper_width_m,
     )
@@ -438,6 +451,27 @@ def validate_v13_no_action(checkpoint_root: Path, data_root: Path) -> None:
         raise ValueError("V13 was not the exact no-capture target-owner failure")
 
 
+def validate_v14_no_action(checkpoint_root: Path, data_root: Path) -> None:
+    root = checkpoint_root / V14_EXPERIMENT_DIRECTORY
+    claim_path = root / "CLAIM.json"
+    failure_path = root / "FAILURE.json"
+    diagnostic = diagnostic_path(data_root, V14_SESSION_ID)
+    if (
+        artifact_fingerprint(claim_path) != V14_CLAIM_FINGERPRINT
+        or artifact_fingerprint(failure_path) != V14_FAILURE_FINGERPRINT
+    ):
+        raise ValueError("terminal no-action V14 evidence changed")
+    failure_payload = json.loads(failure_path.read_text())
+    if (
+        failure_payload.get("error") != "diagnostic:exit_1"
+        or failure_payload.get("retry_authorized") is not False
+        or diagnostic.exists()
+        or (data_root / "control_sessions" / V14_SESSION_ID).exists()
+        or (data_root / "control_rollouts" / V14_ROLLOUT_ID).exists()
+    ):
+        raise ValueError("V14 was not the exact no-diagnostic target failure")
+
+
 def claim(
     checkpoint_root: Path,
     recovery_checkpoint_root: Path,
@@ -458,6 +492,8 @@ def claim(
     validate_v12_tracking_rollback(recovery_checkpoint_root, recovery_data_root)
     validate_v13_no_action(checkpoint_root, data_root)
     validate_v13_no_action(recovery_checkpoint_root, recovery_data_root)
+    validate_v14_no_action(checkpoint_root, data_root)
+    validate_v14_no_action(recovery_checkpoint_root, recovery_data_root)
     handoff = ContactGraspAcquisitionResolution(
         followup_session_id,
         runtime_fingerprint(),
