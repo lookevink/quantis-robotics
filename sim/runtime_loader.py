@@ -206,6 +206,7 @@ def reload_demo_runtime() -> ModuleType:
         "jepa_wm.contact_grasp_acquisition_continuation",
         "jepa_wm.contact_grasp_acquisition_hold",
         "jepa_wm.contact_grasp_acquisition_resolution",
+        "jepa_wm.contact_grasp_rotation_resolution",
         "jepa_wm.control_policy",
         "jepa_wm.planner",
         "jepa_wm.action_prior",

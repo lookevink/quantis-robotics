@@ -51,6 +51,14 @@ from jepa_wm.contact_grasp_acquisition_resolution import (
     validate_diagnostic_evidence as validate_acquisition_resolution_diagnostic,
     v12_rollback_drive_target as acquisition_resolution_drive_target,
 )
+from jepa_wm.contact_grasp_rotation_resolution import (
+    HANDOFF_SCHEMA as ROTATION_RESOLUTION_SCHEMA,
+    ROLLED_BACK_SESSION_ID as ROTATION_RESOLUTION_RUNTIME_SESSION_ID,
+    SOURCE_SESSION_ID as ROTATION_RESOLUTION_SOURCE_SESSION_ID,
+    ContactGraspRotationResolution,
+    rollback_drive_target as rotation_resolution_drive_target,
+    runtime_fingerprint as rotation_resolution_runtime_fingerprint,
+)
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.control_policy import (
     ControlExecutionPolicy,
@@ -423,12 +431,27 @@ async def capture_contact_grasp_acquisition_handoff(
         resolution_continuation = (
             payload.get("schema") == ACQUISITION_RESOLUTION_SCHEMA
         )
+        rotation_resolution_continuation = (
+            payload.get("schema") == ROTATION_RESOLUTION_SCHEMA
+        )
+        rollback_continuation = (
+            resolution_continuation or rotation_resolution_continuation
+        )
         hold_continuation = payload.get("schema") == ACQUISITION_HOLD_SCHEMA
         continuation = (
             payload.get("schema") == ACQUISITION_CONTINUATION_SCHEMA
             or hold_continuation
         )
-        if resolution_continuation:
+        if rotation_resolution_continuation:
+            handoff = ContactGraspRotationResolution.from_dict(payload)
+            expected_source_session = ROTATION_RESOLUTION_SOURCE_SESSION_ID
+            expected_proposal = handoff.to_dict()["proposal_name"]
+            expected_fingerprints = None
+            expected_runtime_fingerprint = (
+                rotation_resolution_runtime_fingerprint()
+            )
+            expected_gate_reason = None
+        elif resolution_continuation:
             handoff = ContactGraspAcquisitionResolution.from_dict(payload)
             expected_source_session = ACQUISITION_RESOLUTION_SOURCE_SESSION_ID
             expected_proposal = handoff.to_dict()["proposal_name"]
@@ -492,7 +515,7 @@ async def capture_contact_grasp_acquisition_handoff(
     source_observation, source_state = source.load_capture()
     source_result = source.load_result()
     refresh = source_result.insertion_trial_refresh
-    if resolution_continuation:
+    if rollback_continuation:
         post = source_result.post_action
         if (
             source_result.status is not ControlResultStatus.APPLIED
@@ -519,7 +542,7 @@ async def capture_contact_grasp_acquisition_handoff(
             or source_state.active_drive_target is None
         ):
             raise ValueError("contact-grasp acquisition source is not a no-motion block")
-    if continuation and not resolution_continuation:
+    if continuation and not rollback_continuation:
         expected_source_pose = refresh.live_pose
         expected_source_safety = refresh.live_state
         if (
@@ -529,7 +552,7 @@ async def capture_contact_grasp_acquisition_handoff(
             > SimulatorSafetyLimits().maximum_contact_force_newtons
         ):
             raise ValueError("contact-grasp continuation refresh is unsafe")
-    elif not resolution_continuation:
+    elif not rollback_continuation:
         if (
             refresh.live_pose != source_observation.pose
             or refresh.live_state != source_state.require_safety_snapshot()
@@ -546,6 +569,11 @@ async def capture_contact_grasp_acquisition_handoff(
         raise ValueError("contact-grasp acquisition handoff already exists")
     stage = omni.usd.get_context().get_stage()
     runtime = live_runtime_for(source_session_id, stage)
+    if runtime is None and rotation_resolution_continuation:
+        runtime = live_runtime_for(
+            ROTATION_RESOLUTION_RUNTIME_SESSION_ID,
+            stage,
+        )
     if runtime is None and resolution_continuation:
         runtime = live_runtime_for(
             ACQUISITION_RESOLUTION_RUNTIME_SESSION_ID,
@@ -555,9 +583,11 @@ async def capture_contact_grasp_acquisition_handoff(
         runtime = live_runtime_for(ACQUISITION_HOLD_RUNTIME_SESSION_ID, stage)
     if runtime is None:
         raise RuntimeError("live contact-grasp acquisition runtime was lost")
-    if resolution_continuation:
-        expected_active_drive_target = acquisition_resolution_drive_target(
-            QUANTIS_DATA_ROOT
+    if rollback_continuation:
+        expected_active_drive_target = (
+            rotation_resolution_drive_target(QUANTIS_DATA_ROOT)
+            if rotation_resolution_continuation
+            else acquisition_resolution_drive_target(QUANTIS_DATA_ROOT)
         )
         if current_drive_target(runtime) != expected_active_drive_target:
             raise RuntimeError(
@@ -612,7 +642,7 @@ async def capture_contact_grasp_acquisition_handoff(
             plug_attached=False,
             previous_target=source_observation.target_frame,
         )
-        if resolution_continuation
+        if rollback_continuation
         else target_policy.initial_target(
             reference_path,
             frame_root=QUANTIS_DATA_ROOT,
@@ -1012,96 +1042,6 @@ def restore_grasp_transition_retry(
         "rolled_back_session_id": rolled_back_session_id,
         "active_drive_target": lineage.active_drive_target.to_dict(),
     }
-
-
-def restore_contact_grasp_tracking_retry(
-    previous_session_id: str,
-    rolled_back_session_id: str,
-    followup_session_id: str,
-) -> dict[str, Any]:
-    """Rebind one safe unattached tracking rollback to its applied predecessor."""
-
-    import omni.usd
-    from jepa_wm.control_rollout import ControlStepSummary
-
-    validate_recording_id(followup_session_id)
-    previous_session = ControlSession.at(CONTROL_ROOT, previous_session_id)
-    rolled_back_session = ControlSession.at(CONTROL_ROOT, rolled_back_session_id)
-    diagnostic_path = (
-        rolled_back_session.path
-        / f"tracking_retry_{followup_session_id}.json"
-    )
-    if diagnostic_path.exists():
-        raise ValueError("contact-grasp tracking retry was already restored")
-    previous = ControlStepSummary.from_session(previous_session)
-    rolled_back = ControlStepSummary.from_session(rolled_back_session)
-    previous_post = previous.result.post_action
-    rollback_post = rolled_back.result.post_action
-    expected_drive_target = previous.contact_grasp_drive_target()
-    if (
-        previous.result.status is not ControlResultStatus.APPLIED
-        or previous_post is None
-        or previous_post.plug_attached
-        or rolled_back.result.status is not ControlResultStatus.ROLLED_BACK_TRACKING
-        or rolled_back.state.previous_session_id != previous_session_id
-        or rolled_back.state.active_drive_target != expected_drive_target
-        or rollback_post is None
-        or rollback_post.plug_attached
-        or rollback_post.collision_detected
-        or rollback_post.contact_force_newtons != 0.0
-        or tuple(reason.value for reason in rollback_post.tracking.reasons)
-        != ("rotation_direction",)
-        or rolled_back.result.insertion_trial_rollback is not None
-    ):
-        raise ValueError("contact-grasp tracking retry source is invalid")
-    stage = omni.usd.get_context().get_stage()
-    runtime = live_runtime_for(rolled_back_session_id, stage)
-    if runtime is None:
-        raise RuntimeError("live rolled-back contact-grasp runtime was lost")
-    active_drive_target = current_drive_target(runtime)
-    if active_drive_target != expected_drive_target:
-        raise RuntimeError("contact-grasp rollback drive target changed")
-    current = runtime.actuators.actual_command()
-    collision, force = read_control_contact(runtime.sensor)
-    snapshot = recording_snapshot(
-        RecordingLabel(RecordingMoment.MOTION, Phase.READY),
-        ObservationStage.APPROACHING_CABLE,
-        current,
-        runtime.attachment,
-    )
-    live = ControlSafetySnapshot(
-        tuple(float(value) for value in current.arm_positions),
-        current.gripper_width_m,
-        tuple(float(value) for value in snapshot.plug_position),
-        force,
-        collision,
-        snapshot.plug_attached,
-    )
-    live.validate_followup_continuity(
-        previous_post.require_safety_snapshot(),
-        expected_drive_target,
-        maximum_gripper_error_meters=MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
-    )
-    payload = {
-        "status": "contact_grasp_tracking_retry_ready",
-        "previous_session_id": previous_session_id,
-        "rolled_back_session_id": rolled_back_session_id,
-        "followup_session_id": followup_session_id,
-        "active_drive_target": expected_drive_target.to_dict(),
-        "contact_force_newtons": force,
-        "collision_detected": collision,
-        "plug_attached": snapshot.plug_attached,
-        "simulator_action_applied": False,
-    }
-    write_json_atomic(diagnostic_path, payload)
-    bind_live_runtime(
-        previous_session_id,
-        stage,
-        runtime.actuators,
-        runtime.attachment,
-        runtime.sensor,
-    )
-    return payload
 
 
 def _verify_insertion_rollout_result(

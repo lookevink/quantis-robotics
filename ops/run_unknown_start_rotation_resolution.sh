@@ -10,9 +10,8 @@ data_root="${HOME}/docker/isaac-sim/data/quantis"
 recovery_data_root="/mnt/quantis-assets/quantis-state/isaac"
 source_revision="${1:-}"
 runtime_fingerprint="${2:-}"
-run_id="unknown-start-e2e-v16-62605-grasp"
+run_id="unknown-start-e2e-v17-62605-grasp"
 source_session="unknown-start-e2e-v15-62605-grasp-36"
-rolled_back_session="unknown-start-e2e-v15-62605-grasp-37"
 reference_name="contact-insertion-v10-drive-slow-2600-held-00"
 reference_seed="12600"
 proposal_name="contact-grasp-acquisition-v10-drive-slow-2600_task12_h256_s3000_cfopen-v2"
@@ -41,13 +40,9 @@ terminalize_failure() {
 }
 trap terminalize_failure ERR
 
-phase="restore"
-isaac_server_call \
-  "demo.restore_contact_grasp_tracking_retry('${source_session}','${rolled_back_session}','${first_session}')" \
-  180 true
-phase="restore_validation"
-"${python_bin}" -m "${module}" validate-retry \
-  --checkpoint-root "${checkpoint_root}" --data-root "${data_root}"
+phase="encode_handoff"
+encoded_handoff="$("${python_bin}" -m "${module}" encode \
+  --checkpoint-root "${checkpoint_root}")"
 
 phase="worker_start"
 bash "${repo_dir}/ops/jepa_wm.sh" control-worker-stop
@@ -61,8 +56,17 @@ for ((index=1; index<=maximum_actions; index++)); do
   printf -v suffix '%02d' "${index}"
   session_id="${run_id}-${suffix}"
   phase="capture_${suffix}"
-  isaac_server_call \
-    "await demo.capture_followup_observation('${session_id}','${previous_session}','${proposal_name}')" 180
+  if (( index == 1 )); then
+    isaac_server_call \
+      "await demo.capture_contact_grasp_acquisition_handoff('${session_id}','${source_session}','${proposal_name}','${encoded_handoff}')" \
+      180 true
+    phase="handoff_validation"
+    "${python_bin}" -m "${module}" validate-handoff \
+      --checkpoint-root "${checkpoint_root}" --data-root "${data_root}"
+  else
+    isaac_server_call \
+      "await demo.capture_followup_observation('${session_id}','${previous_session}','${proposal_name}')" 180
+  fi
   phase="inference_${suffix}"
   respond_to_control_session "${repo_dir}" "${session_id}" direct
   phase="apply_${suffix}"

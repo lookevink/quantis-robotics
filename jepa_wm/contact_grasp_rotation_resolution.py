@@ -1,4 +1,4 @@
-"""Authenticated V16 retry after the V15 rotation-resolution rollback."""
+"""Authenticated V17 handoff after the V15 rotation-resolution rollback."""
 
 from __future__ import annotations
 
@@ -21,9 +21,9 @@ from jepa_wm.persistence import write_json_atomic
 from jepa_wm.training_artifact import artifact_fingerprint
 
 
-HANDOFF_SCHEMA = "quantis.contact_grasp_rotation_resolution.v1"
-EXPERIMENT_DIRECTORY = "unknown_start_rotation_resolution_v16"
-ROLLOUT_ID = "unknown-start-e2e-v16-62605-grasp"
+HANDOFF_SCHEMA = "quantis.contact_grasp_rotation_resolution.v2"
+EXPERIMENT_DIRECTORY = "unknown_start_rotation_resolution_v17"
+ROLLOUT_ID = "unknown-start-e2e-v17-62605-grasp"
 SOURCE_ROLLOUT_ID = "unknown-start-e2e-v15-62605-grasp"
 SOURCE_SESSION_ID = f"{SOURCE_ROLLOUT_ID}-36"
 ROLLED_BACK_SESSION_ID = f"{SOURCE_ROLLOUT_ID}-37"
@@ -40,6 +40,14 @@ SOURCE_FAILURE_FINGERPRINT = (
 )
 SOURCE_ROSTER_FINGERPRINT = (
     "f6d3d15ae888732238568112c4b482ee1a7fde35ea03eb9469ff778ad6a44a0a"
+)
+V16_EXPERIMENT_DIRECTORY = "unknown_start_rotation_resolution_v16"
+V16_ROLLOUT_ID = "unknown-start-e2e-v16-62605-grasp"
+V16_CLAIM_FINGERPRINT = (
+    "5786115a58256886d630001ac3bc5f24ae605b41532172e31ae2c64e42768b33"
+)
+V16_FAILURE_FINGERPRINT = (
+    "3aaca80b884739a3f028a0482934c3500c34a8ccbc77bcf0fda261b99a9ca54c"
 )
 SESSION_FILES = (
     "request.json",
@@ -95,12 +103,28 @@ def source_roster_fingerprint(data_root: Path) -> str:
     return digest.hexdigest()
 
 
-def retry_path(data_root: Path, followup_session_id: str) -> Path:
+def handoff_path(data_root: Path, followup_session_id: str) -> Path:
     return (
         data_root
         / "control_sessions"
-        / ROLLED_BACK_SESSION_ID
-        / f"tracking_retry_{followup_session_id}.json"
+        / SOURCE_SESSION_ID
+        / f"acquisition_handoff_{followup_session_id}.json"
+    )
+
+
+def rollback_drive_target(data_root: Path):
+    """Canonicalize the exact measured target written by the V15 rollback."""
+
+    from jepa_wm.joint_drive import JointDriveTarget
+    from sim.control_session import ControlSession
+
+    _, state = ControlSession.at(
+        data_root / "control_sessions",
+        ROLLED_BACK_SESSION_ID,
+    ).load_capture()
+    return JointDriveTarget.for_command(
+        tuple(state.current_joint_positions),
+        state.current_gripper_width_m,
     )
 
 
@@ -135,6 +159,9 @@ class ContactGraspRotationResolution:
             "source_claim_fingerprint": SOURCE_CLAIM_FINGERPRINT,
             "source_failure_fingerprint": SOURCE_FAILURE_FINGERPRINT,
             "source_roster_fingerprint": SOURCE_ROSTER_FINGERPRINT,
+            "v16_claim_fingerprint": V16_CLAIM_FINGERPRINT,
+            "v16_failure_fingerprint": V16_FAILURE_FINGERPRINT,
+            "v16_simulator_action_applied": False,
             "runtime_fingerprint": self.runtime_fingerprint,
             "source_revision": self.source_revision,
             "simulator_action_authorized": True,
@@ -230,6 +257,28 @@ def validate_source(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
     return payload
 
 
+def validate_v16_no_action(checkpoint_root: Path, data_root: Path) -> None:
+    root = checkpoint_root / V16_EXPERIMENT_DIRECTORY
+    claim_path = root / "CLAIM.json"
+    failure_path = root / "FAILURE.json"
+    if (
+        artifact_fingerprint(claim_path) != V16_CLAIM_FINGERPRINT
+        or artifact_fingerprint(failure_path) != V16_FAILURE_FINGERPRINT
+    ):
+        raise ValueError("terminal no-action V16 evidence changed")
+    failure_payload = json.loads(failure_path.read_text())
+    if (
+        failure_payload.get("error") != "restore:exit_1"
+        or failure_payload.get("retry_authorized") is not False
+        or (data_root / "control_rollouts" / V16_ROLLOUT_ID).exists()
+        or any(
+            (data_root / "control_sessions" / f"{V16_ROLLOUT_ID}-{index:02d}").exists()
+            for index in range(1, MAXIMUM_ACTIONS + 1)
+        )
+    ):
+        raise ValueError("V16 was not the exact no-action ownership failure")
+
+
 def claim(
     checkpoint_root: Path,
     recovery_checkpoint_root: Path,
@@ -244,6 +293,8 @@ def claim(
         raise ValueError("contact-grasp rotation resolution is already terminal")
     validate_source(checkpoint_root, data_root)
     validate_source(recovery_checkpoint_root, recovery_data_root)
+    validate_v16_no_action(checkpoint_root, data_root)
+    validate_v16_no_action(recovery_checkpoint_root, recovery_data_root)
     handoff = ContactGraspRotationResolution(
         followup_session_id,
         runtime_fingerprint(),
@@ -256,26 +307,25 @@ def claim(
     return payload
 
 
-def validate_retry(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
+def encode_claim(checkpoint_root: Path) -> str:
+    from base64 import b64encode
+
+    claim_path, _, _, _ = paths(checkpoint_root)
+    payload = json.loads(claim_path.read_text())
+    ContactGraspRotationResolution.from_dict(payload)
+    return b64encode(json.dumps(payload, sort_keys=True).encode()).decode()
+
+
+def validate_handoff(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
     claim_path, _, _, failure_path = paths(checkpoint_root)
     if not claim_path.is_file() or failure_path.exists():
         raise ValueError("contact-grasp rotation-resolution claim is invalid")
     handoff = ContactGraspRotationResolution.from_dict(
         json.loads(claim_path.read_text())
     )
-    payload = json.loads(retry_path(data_root, handoff.followup_session_id).read_text())
-    if (
-        payload.get("status") != "contact_grasp_tracking_retry_ready"
-        or payload.get("previous_session_id") != SOURCE_SESSION_ID
-        or payload.get("rolled_back_session_id") != ROLLED_BACK_SESSION_ID
-        or payload.get("followup_session_id") != handoff.followup_session_id
-        or payload.get("contact_force_newtons") != 0.0
-        or payload.get("collision_detected") is not False
-        or payload.get("plug_attached") is not False
-        or payload.get("simulator_action_applied") is not False
-        or not isinstance(payload.get("active_drive_target"), dict)
-    ):
-        raise ValueError("contact-grasp tracking retry diagnostic is invalid")
+    payload = json.loads(handoff_path(data_root, handoff.followup_session_id).read_text())
+    if payload != handoff.to_dict():
+        raise ValueError("contact-grasp rotation-resolution handoff changed")
     return payload
 
 
@@ -286,7 +336,7 @@ def evaluate(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
     if not claim_path.is_file() or result_path.exists() or failure_path.exists():
         raise ValueError("contact-grasp rotation-resolution claim is invalid")
     handoff = ContactGraspRotationResolution.from_dict(json.loads(claim_path.read_text()))
-    diagnostic = validate_retry(checkpoint_root, data_root)
+    validate_handoff(checkpoint_root, data_root)
     report_path = data_root / "control_rollouts" / ROLLOUT_ID / "report.json"
     report = json.loads(report_path.read_text())
     sessions = tuple(step["session"] for step in report.get("steps", ()))
@@ -317,8 +367,8 @@ def evaluate(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
         "evaluation_passed": passed,
         "recovery_verified": False,
         "claim_fingerprint": artifact_fingerprint(claim_path),
-        "retry_fingerprint": artifact_fingerprint(
-            retry_path(data_root, handoff.followup_session_id)
+        "handoff_fingerprint": artifact_fingerprint(
+            handoff_path(data_root, handoff.followup_session_id)
         ),
         "report_fingerprint": artifact_fingerprint(report_path),
         "applied_actions": report.get("applied_steps"),
@@ -351,8 +401,8 @@ def finalize(
         (evaluation_path, recovery_evaluation),
         (report_path, recovery_report),
         (
-            retry_path(data_root, handoff.followup_session_id),
-            retry_path(recovery_data_root, handoff.followup_session_id),
+            handoff_path(data_root, handoff.followup_session_id),
+            handoff_path(recovery_data_root, handoff.followup_session_id),
         ),
     ):
         if artifact_fingerprint(primary) != artifact_fingerprint(recovery):
@@ -410,7 +460,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "command",
-        choices=("fingerprint", "claim", "validate-retry", "evaluate", "finalize", "failure"),
+        choices=("fingerprint", "claim", "encode", "validate-handoff", "evaluate", "finalize", "failure"),
     )
     parser.add_argument("--checkpoint-root", type=Path)
     parser.add_argument("--recovery-checkpoint-root", type=Path)
@@ -433,8 +483,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.source_revision,
             args.runtime_fingerprint,
         )
-    elif args.command == "validate-retry":
-        payload = validate_retry(args.checkpoint_root, args.data_root)
+    elif args.command == "encode":
+        payload = encode_claim(args.checkpoint_root)
+    elif args.command == "validate-handoff":
+        payload = validate_handoff(args.checkpoint_root, args.data_root)
     elif args.command == "evaluate":
         payload = evaluate(args.checkpoint_root, args.data_root)
     elif args.command == "finalize":

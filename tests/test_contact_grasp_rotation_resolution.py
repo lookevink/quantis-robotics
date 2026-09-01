@@ -15,7 +15,7 @@ from jepa_wm.contact_grasp_rotation_resolution import (
 class ContactGraspRotationResolutionTest(unittest.TestCase):
     def test_authority_round_trips_without_filming(self) -> None:
         authority = ContactGraspRotationResolution(
-            "unknown-start-e2e-v16-62605-grasp-01",
+            "unknown-start-e2e-v17-62605-grasp-01",
             "a" * 64,
             "b" * 40,
         )
@@ -42,16 +42,17 @@ class ContactGraspRotationResolutionTest(unittest.TestCase):
 
             self.assertNotEqual(runtime_fingerprint(root), first)
 
-    def test_runner_restores_before_capture_and_never_resets(self) -> None:
+    def test_runner_uses_authenticated_handoff_before_followup_and_never_resets(self) -> None:
         runner = (
             Path(__file__).resolve().parents[1]
             / "ops"
             / "run_unknown_start_rotation_resolution.sh"
         ).read_text()
 
-        restore = runner.index("demo.restore_contact_grasp_tracking_retry")
-        capture = runner.index("demo.capture_followup_observation")
-        self.assertLess(restore, capture)
+        handoff = runner.index("demo.capture_contact_grasp_acquisition_handoff")
+        followup = runner.index("demo.capture_followup_observation")
+        self.assertLess(handoff, followup)
+        self.assertNotIn("restore_contact_grasp_tracking_retry", runner)
         self.assertNotIn("reset_stage", runner)
         self.assertNotIn("record_", runner)
         self.assertIn('maximum_actions="52"', runner)
