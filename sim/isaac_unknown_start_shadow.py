@@ -428,6 +428,7 @@ async def _capture_unknown_start_observation(
 ) -> dict[str, Any]:
     """Capture one authenticated unknown-start observation without motion."""
 
+    import omni.kit.app
     import omni.timeline
     import omni.usd
     from isaacsim.core.experimental.prims import Articulation, RigidPrim
@@ -442,7 +443,13 @@ async def _capture_unknown_start_observation(
     session = ControlSession.at(CONTROL_ROOT, session_id)
     if session.path.exists():
         raise ValueError(f"control session already exists: {session_id}")
-    if omni.timeline.get_timeline_interface().is_playing():
+    timeline = omni.timeline.get_timeline_interface()
+    await pause_control_timeline(
+        timeline,
+        omni.kit.app.get_app().next_update_async,
+    )
+    timeline.set_auto_update(False)
+    if timeline.is_playing():
         raise RuntimeError("unknown-start shadow capture requires a paused timeline")
     reset_recording, _, evidence, reset_step = _load_authenticated_reset(
         reset_recording_id,

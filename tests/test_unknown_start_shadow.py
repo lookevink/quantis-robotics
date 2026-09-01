@@ -173,6 +173,14 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
         self.assertNotIn("timeline.play", source)
         self.assertNotIn("advance_physics", source)
         self.assertIn("pause_control_timeline(", source)
+        capture = source.index("async def _capture_unknown_start_observation")
+        capture_imports = source[capture:].split("for identifier in", 1)[0]
+        self.assertIn("import omni.kit.app", capture_imports)
+        self.assertLess(
+            source.index("await pause_control_timeline(", capture),
+            source.index("_validated_live_snapshot(", capture),
+        )
+        self.assertIn("timeline.set_auto_update(False)", source[capture:])
         self.assertNotIn("timeline.stop()", source)
         self.assertIn('"applied_actions": 0', source)
         self.assertIn("UnknownStartControlHandoff(", source)

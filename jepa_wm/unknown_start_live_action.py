@@ -14,8 +14,8 @@ from jepa_wm.persistence import write_json_atomic
 from jepa_wm.training_artifact import artifact_fingerprint
 
 
-EXPERIMENT_ID = "unknown-start-live-action-v5"
-EXECUTION_SESSION_ID = "unknown-start-live-action-v5-62605"
+EXPERIMENT_ID = "unknown-start-live-action-v6"
+EXECUTION_SESSION_ID = "unknown-start-live-action-v6-62605"
 PREDECESSOR_SESSION_ID = "unknown-start-live-action-v4-62605"
 SOURCE_SESSION_ID = "unknown-start-shadow-canary-v5-62605"
 RESET_RECORDING_ID = "unknown-start-reset-v6-62605"
@@ -42,7 +42,7 @@ SOURCE_HANDOFF_FINGERPRINT = (
 )
 REFERENCE_RECORDING = "contact-insertion-v10-drive-slow-2600-held-00"
 REFERENCE_SEED = 12600
-OUTPUT_DIRECTORY = "unknown_start_live_action_v5"
+OUTPUT_DIRECTORY = "unknown_start_live_action_v6"
 
 RUNTIME_FILES = (
     "jepa_wm/action.py",
