@@ -82,6 +82,32 @@ async def _wait_for_rgb(
     raise RuntimeError(f"cameras did not produce complete RGB frames: {last_shapes}")
 
 
+async def _advance_rgb_frame(
+    timeline: Any,
+    replicator: Any,
+    advance: Any,
+    observe_safety: Callable[[], Any] | None,
+) -> None:
+    """Render without advancing physics when a capture starts paused."""
+
+    if timeline.is_playing():
+        await advance()
+        if observe_safety is not None:
+            observe_safety()
+        return
+    if observe_safety is not None:
+        observe_safety()
+    await replicator.orchestrator.step_async(
+        rt_subframes=4,
+        pause_timeline=True,
+        delta_time=0.0,
+    )
+    if timeline.is_playing():
+        raise RuntimeError("paused camera render resumed the physics timeline")
+    if observe_safety is not None:
+        observe_safety()
+
+
 def configure_wrist_camera(
     translation_offset: Sequence[float] = (0.0, 0.0, 0.0),
 ) -> dict[str, Any]:
@@ -317,6 +343,7 @@ async def capture_camera_frame(
 
     import omni.replicator.core as rep
     import omni.kit.app
+    import omni.timeline
     import omni.usd
     from PIL import Image
 
@@ -325,13 +352,17 @@ async def capture_camera_frame(
         raise RuntimeError(f"camera prim is missing: {spec.path}")
     render_product = rep.create.render_product(spec.path, spec.resolution)
     annotator = rep.AnnotatorRegistry.get_annotator("rgb")
+    timeline = omni.timeline.get_timeline_interface()
     try:
         annotator.attach([render_product])
 
         async def advance_and_observe() -> None:
-            await omni.kit.app.get_app().next_update_async()
-            if observe_safety is not None:
-                observe_safety()
+            await _advance_rgb_frame(
+                timeline,
+                rep,
+                omni.kit.app.get_app().next_update_async,
+                observe_safety,
+            )
 
         pixels = (
             await _wait_for_rgb(

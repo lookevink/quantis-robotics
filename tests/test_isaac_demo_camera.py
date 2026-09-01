@@ -7,10 +7,46 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import numpy as np
 
-from sim.isaac_demo_camera import DemoRecorder, JEPA_WM_CAMERA_SPECS
+from sim.isaac_demo_camera import (
+    DemoRecorder,
+    JEPA_WM_CAMERA_SPECS,
+    _advance_rgb_frame,
+)
 
 
 class DemoRecorderTest(unittest.IsolatedAsyncioTestCase):
+    async def test_paused_camera_render_uses_zero_delta_replicator_step(self) -> None:
+        timeline = Mock()
+        timeline.is_playing.return_value = False
+        step = AsyncMock()
+        replicator = SimpleNamespace(orchestrator=SimpleNamespace(step_async=step))
+        advance = AsyncMock()
+        observe = Mock()
+
+        await _advance_rgb_frame(timeline, replicator, advance, observe)
+
+        advance.assert_not_awaited()
+        step.assert_awaited_once_with(
+            rt_subframes=4,
+            pause_timeline=True,
+            delta_time=0.0,
+        )
+        self.assertEqual(observe.call_count, 2)
+
+    async def test_live_camera_render_keeps_normal_kit_update(self) -> None:
+        timeline = Mock()
+        timeline.is_playing.return_value = True
+        step = AsyncMock()
+        replicator = SimpleNamespace(orchestrator=SimpleNamespace(step_async=step))
+        advance = AsyncMock()
+        observe = Mock()
+
+        await _advance_rgb_frame(timeline, replicator, advance, observe)
+
+        advance.assert_awaited_once()
+        step.assert_not_awaited()
+        observe.assert_called_once()
+
     async def test_deferred_camera_completes_and_detaches_terminal_lifecycle(
         self,
     ) -> None:
