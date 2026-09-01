@@ -162,7 +162,7 @@ class PhysicalShadowCanaryTest(unittest.TestCase):
         self.assertTrue(config["output"].endswith("unknown-start-shadow-canary-v4.json"))
         self.assertEqual(
             V6_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
-            "PENDING_CHECKPOINT",
+            "259f2e1d35be256781def22dce5baf7de31248272fd9ed264e8dce7bb959b871",
         )
 
     def test_recovery_preserves_authenticated_model_rejection(self) -> None:
