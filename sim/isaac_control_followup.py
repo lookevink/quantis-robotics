@@ -667,9 +667,7 @@ async def _capture_contact_grasp_followup(
         raise RuntimeError("contact grasp follow-up pose was not refreshed")
     if synchronized.active_drive_target != active_drive_target:
         raise RuntimeError("contact grasp follow-up drive target changed")
-    target_policy = previous_state.contact_grasp_target_policy
-    if not isinstance(target_policy, ContactGraspTargetPolicy):
-        raise ValueError("contact grasp follow-up target policy is missing")
+    target_policy = _contact_grasp_followup_policy(previous_step)
     target = target_policy.select(
         reference_path,
         frame_root=QUANTIS_DATA_ROOT,
@@ -726,6 +724,51 @@ async def _capture_contact_grasp_followup(
         synchronized.safety.contact_force_newtons,
         synchronized.safety.collision_detected,
     ).to_dict()
+
+
+def _contact_grasp_followup_policy(
+    previous_step: ControlStepSummary,
+) -> ContactGraspTargetPolicy:
+    """Recover current grasp authority, including one consumed reset candidate."""
+
+    previous_state = previous_step.state
+    if previous_state.execution_policy is ControlExecutionPolicy.DIRECT:
+        return previous_state.require_current_contact_grasp_policy()
+    if (
+        previous_state.execution_policy
+        is not ControlExecutionPolicy.RESET_TRIAL_CANDIDATE
+    ):
+        raise ValueError("contact grasp follow-up source policy is invalid")
+
+    previous_session = ControlSession.at(
+        CONTROL_ROOT,
+        previous_step.result.session_id,
+    )
+    binding = previous_session.load_candidate_binding(previous_step.response)
+    source_session = ControlSession.at(CONTROL_ROOT, binding.source_session_id)
+    source_observation, source_state = source_session.load_capture()
+    policy = source_state.require_current_contact_grasp_policy()
+    if (
+        source_state.reference_recording != previous_state.reference_recording
+        or source_state.seed != previous_state.seed
+        or source_state.recording != previous_state.recording
+        or source_observation.target != previous_step.observation.target
+        or source_observation.warmup_frames
+        != previous_step.observation.warmup_frames
+        or source_observation.expected_proposal
+        != previous_step.observation.expected_proposal
+        or previous_step.result.status is not ControlResultStatus.APPLIED
+        or previous_step.result.post_action is None
+        or not previous_step.result.gate.passed
+        or not previous_step.result.post_action.tracking.passed
+        or previous_step.result.post_action.collision_detected
+        or previous_step.result.post_action.contact_force_newtons
+        > SimulatorSafetyLimits().maximum_contact_force_newtons
+    ):
+        raise ValueError(
+            "unknown-start contact grasp handoff is not bound to its source"
+        )
+    return policy
 
 
 async def capture_insertion_transition_observation(
@@ -987,11 +1030,24 @@ async def capture_followup_observation(
     reference_path = QUANTIS_DATA_ROOT / "recordings" / previous_state.reference_recording
     reference_task = recording_task(reference_path)
     session = ControlSession.at(CONTROL_ROOT, session_id)
-    if (
+    contact_grasp_source = (
         reference_task == INSERTION_TASK_ID
-        and previous_state.execution_policy is ControlExecutionPolicy.DIRECT
-    ):
+        and previous_state.execution_policy
+        in (
+            ControlExecutionPolicy.DIRECT,
+            ControlExecutionPolicy.RESET_TRIAL_CANDIDATE,
+        )
+        and previous_state.insertion_target_policy is None
+    )
+    if contact_grasp_source:
         if proposal_changed:
+            if (
+                previous_state.execution_policy
+                is ControlExecutionPolicy.RESET_TRIAL_CANDIDATE
+            ):
+                raise ValueError(
+                    "unknown-start contact grasp cannot change proposal at handoff"
+                )
             return await capture_insertion_transition_observation(
                 session_id,
                 previous_session_id,

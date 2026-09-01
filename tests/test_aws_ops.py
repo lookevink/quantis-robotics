@@ -1581,6 +1581,28 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("recovery_finalization:exit_7", calls)
         self.assertGreaterEqual(calls.count("ops/backup_state.sh"), 2)
 
+    def test_unknown_start_grasp_continuation_is_recovery_gated(self):
+        result, calls = self.run_command(
+            "jepa-wm-unknown-start-grasp-continuation"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("run_unknown_start_grasp_continuation.sh", calls)
+        self.assertIn("ops/backup_state.sh", calls)
+        self.assertIn("unknown_start_grasp_continuation finalize", calls)
+
+    def test_unknown_start_grasp_continuation_terminalizes_recovery_failure(self):
+        result, calls = self.run_command(
+            "jepa-wm-unknown-start-grasp-continuation",
+            extra_env={
+                "FAKE_SSH_FAIL_MATCH": "unknown_start_grasp_continuation finalize"
+            },
+        )
+
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertIn("recovery_finalization:exit_7", calls)
+        self.assertGreaterEqual(calls.count("ops/backup_state.sh"), 2)
+
     def test_sync_does_not_deploy_local_log_artifacts(self):
         result, calls = self.run_command("sync")
 
