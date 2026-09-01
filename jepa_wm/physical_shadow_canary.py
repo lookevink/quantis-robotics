@@ -26,6 +26,9 @@ from jepa_wm.physical_shadow_canary_v3_contract import (
 from jepa_wm.physical_shadow_canary_v4_contract import (
     FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V4_CONFIG_FINGERPRINT,
 )
+from jepa_wm.physical_shadow_canary_v5_contract import (
+    FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V5_CONFIG_FINGERPRINT,
+)
 from jepa_wm.planner import CEMConfig
 from jepa_wm.shadow_planning import CandidateAuthority
 from jepa_wm.training_artifact import ArtifactIdentity, artifact_fingerprint
@@ -39,6 +42,7 @@ EXPERIMENT_SCHEMA = "quantis.jepa_wm_physical_shadow_canary_experiment.v1"
 EXPERIMENT_SCHEMA_V2 = "quantis.jepa_wm_physical_shadow_canary_experiment.v2"
 EXPERIMENT_SCHEMA_V3 = "quantis.jepa_wm_physical_shadow_canary_experiment.v3"
 EXPERIMENT_SCHEMA_V4 = "quantis.jepa_wm_physical_shadow_canary_experiment.v4"
+EXPERIMENT_SCHEMA_V5 = "quantis.jepa_wm_physical_shadow_canary_experiment.v5"
 
 
 def _serialized_action_scale(scale: Any) -> dict[str, Any] | None:
@@ -54,6 +58,7 @@ def load_experiment_config(path: Path) -> dict[str, Any]:
         EXPERIMENT_SCHEMA_V2: V2_CONFIG_FINGERPRINT,
         EXPERIMENT_SCHEMA_V3: V3_CONFIG_FINGERPRINT,
         EXPERIMENT_SCHEMA_V4: V4_CONFIG_FINGERPRINT,
+        EXPERIMENT_SCHEMA_V5: V5_CONFIG_FINGERPRINT,
     }.get(payload.get("schema"))
     if expected_fingerprint is None or (
         expected_fingerprint != "PENDING_CHECKPOINT"
@@ -69,6 +74,7 @@ def load_experiment_config(path: Path) -> dict[str, Any]:
             EXPERIMENT_SCHEMA_V2,
             EXPERIMENT_SCHEMA_V3,
             EXPERIMENT_SCHEMA_V4,
+            EXPERIMENT_SCHEMA_V5,
         )
         or not isinstance(payload.get("session_id"), str)
         or not payload["session_id"]
@@ -90,7 +96,11 @@ def load_experiment_config(path: Path) -> dict[str, Any]:
         }
     ):
         raise ValueError("physical shadow canary contract is invalid")
-    if payload.get("schema") in (EXPERIMENT_SCHEMA_V3, EXPERIMENT_SCHEMA_V4):
+    if payload.get("schema") in (
+        EXPERIMENT_SCHEMA_V3,
+        EXPERIMENT_SCHEMA_V4,
+        EXPERIMENT_SCHEMA_V5,
+    ):
         unknown_start = payload.get("unknown_start")
         if (
             not isinstance(unknown_start, Mapping)

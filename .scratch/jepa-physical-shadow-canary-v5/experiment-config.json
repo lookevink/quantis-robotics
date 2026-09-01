@@ -1,0 +1,85 @@
+{
+  "schema": "quantis.jepa_wm_physical_shadow_canary_experiment.v5",
+  "experiment_id": "contact-insertion-v10-unknown-start-shadow-canary-v3",
+  "session_id": "unknown-start-shadow-canary-v3-62605",
+  "evaluator": {
+    "path": "jepa_wm/physical_shadow_canary.py",
+    "fingerprint": "769f3b0e89b8e2103a9bdcaa6f5d2b8b43ece52ffe6603abe32f7aef2f21e4dd",
+    "implementation_revision": "04d3435622721e746c0415a302885ace4daa4802"
+  },
+  "runtime_sources": {
+    "jepa_wm/action.py": "1061836b0bc14da8713b135bc8f9f957bc0e52c3079a485553eeb6b6baecd18a",
+    "jepa_wm/action_model_artifact.py": "74304b1f7ec709ad69ee348b9f47f85d780ec2795bde1571808c9cbbd5626dce",
+    "jepa_wm/contact_grasp_target.py": "4a72396a9808285b9fdd45f8bc775b1135f86008a7f03899a166cdce48cf9ab7",
+    "jepa_wm/control_protocol.py": "61dcf6f0978a8414d39945e4f1acfbb0962bf0ff7627fae9f97f387252799385",
+    "jepa_wm/control_safety.py": "b81579ec20072235fa6b2cb98392b14735ef4490310b073c4807877b4abc4d06",
+    "jepa_wm/control_worker.py": "55f06eb221487cbabb63f0881cba2634888179718b5f7e3ebd8344718442006b",
+    "jepa_wm/identifiers.py": "5266f8d645fa47f1cb9d1ff943aa616fe4364b13ec1e0c8a52da8942a478496c",
+    "jepa_wm/model.py": "4c8fef65f477f6bd41d4542f8691f8f0b75d70efc4909b6413bb2ea2569c343f",
+    "jepa_wm/physical_observation.py": "11722bff80b106a083a707e00aed94df08b35815d15f2daff179f030ee6905ad",
+    "jepa_wm/physical_shadow_canary.py": "769f3b0e89b8e2103a9bdcaa6f5d2b8b43ece52ffe6603abe32f7aef2f21e4dd",
+    "jepa_wm/planning_scoring.py": "e4e720825dca3156f18378f89fee790751f7f5ce6ee08c24ea6708f33809a643",
+    "jepa_wm/shadow_planning.py": "c0dd2ae4669e508120ea31e2fb9191dbc6330c134b76f885d2151e6c3392b651",
+    "jepa_wm/shadow_safety.py": "c8ff4fdb4190bb9fdb54f9341f4c338b989918e118d181907ff34170a9163071",
+    "ops/aws.sh": "01fb0627aaf3d851e4162bff78406442c758696b8740a080ffb1c9948f864aa6",
+    "ops/run_physical_shadow_canary.sh": "6a1bfc950121f4b08a528132c7400c7d2eea70b0b7b1b727d3945d145544cb93",
+    "ops/shell_helpers.sh": "21d32d921f8665600be9673fbf46f3f6b460387d9228cbb903e8c86cbd22d6eb",
+    "sim/control_identity.py": "c30f30604ae571b7378053efe124aa86eed877f6958724c5b9d1911c487e51a0",
+    "sim/control_session.py": "cd9520e692e2d0b14f116b32120dbc44418c41f8bf7352d2fc2ad57925e74077",
+    "sim/isaac_control_capture.py": "fcc704b83d71b3787fa679796ae319955db07c3187d8384a1722eb66dc250c6c",
+    "sim/isaac_control_execution.py": "0ed0d4d7b51f0f5fdae818015e302170d7424b0923abb5ee4e0936ce05f3c162",
+    "sim/isaac_control_runtime.py": "f6acf66753e057b9b5aa5a11ea557a59fb50819a15d5c6b89aafe39be60cb602",
+    "sim/isaac_demo.py": "408767ffd9d5ecb54f1d2bbd3ae8ab9fde0f89dc7d4ecebb04764cd247db574c",
+    "sim/isaac_demo_camera.py": "1acdf7ffa06b1fc723960ed505ce1516c7fe05eb9d77e298202a86d333fbeb9b",
+    "sim/isaac_demo_runtime.py": "5ad3654ffaeeb58c361760f1abb6ade716ea8d991d3946212c3d32bfd70cde9c",
+    "sim/isaac_demo_scene.py": "2a1a0e161b02eb32a976b6369c26f17a30b1b85859a57cce7cc5cd0cc11604e1",
+    "sim/isaac_shadow_safety.py": "5c24cbb20529380aadea055362180662dcc744f807f00cb73fc083de748ff40f",
+    "sim/isaac_unknown_start_shadow.py": "760069596a2125fa1156b6ec46f68e55070be636a25ae8578e9de2bbe0b87250",
+    "sim/unknown_start_reset.py": "ca08cff18d90757f48ea5394616c27286cd4e1b8a2499b0e98dcee1c870da83e",
+    "sim/unknown_start_shadow.py": "bd20b3bbdbd7f5e5a5e4a139b5e1be7ea33578387dd95c1e33c4de442e5cb0ea",
+    "sim/runtime_loader.py": "d9266586b327be49666b04e4f3b045c86e9f0be04f39cb9393b65b3d2c133820"
+  },
+  "proposal": {
+    "path": "/home/ubuntu/docker/jepa-wm/checkpoints/contact-grasp-v10-drive-slow-2600_task12_h256_s3000.pth",
+    "fingerprint": "fa17063e36b687a9f2696133e85850bae19e552fc4266ea660f2e0e3274f87aa",
+    "training_report_fingerprint": "2129cd4411de79777a4616e80bbd3afef8ac8e6a2bf2efda6fbd4f2794f2cc0c",
+    "readiness": {
+      "path": "/home/ubuntu/docker/jepa-wm/checkpoints/experiments/contact-grasp-v10-drive-slow-2600_task12_h256_s3000_contact_grasp_readiness.json",
+      "fingerprint": "449380fde1b0009733a077e3be188f0fcd796de7c299d2b370d33d57d087c815"
+    }
+  },
+  "action_model": {
+    "path": "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/physical_state_residual.pth",
+    "fingerprint": "7f3cb2a99e749dd56e4f4a988b3b1c332ab13c4661c3413118ffb270f237db51",
+    "held_out_gate": {
+      "path": "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/canonical-held-out-v2.json",
+      "fingerprint": "ca100086efaf394a65d893627142252db7107a87c76352aac6993841431cc2f4"
+    }
+  },
+  "worker": {
+    "name": "contact-insertion-v10-unknown-start-shadow-canary-v3",
+    "planner": {"horizon": 3, "iterations": 4, "samples": 64, "elites": 8, "seed": 237, "minimum_standard_deviation": 0.0001}
+  },
+  "known_start": {
+    "reference": "contact-insertion-v10-drive-slow-2600-held-00",
+    "seed": 12600,
+    "context_index": 110,
+    "context_purpose": "contact_grasp",
+    "manifest_fingerprint": "dd504100969f706e22795f6c7dc85578f11b0fc53dd5050560a8976c725a5879"
+  },
+  "unknown_start": {
+    "recording_id": "unknown-start-reset-v6-62605",
+    "seed": 62605,
+    "result_fingerprint": "70a8fba8022e687c2fc9ecd78f8d63924a8a5840497af9249c60bb781a0a6d58",
+    "evidence_fingerprint": "3cea7cc3b89496323c36f9ac7e68d0935e6bb1c3e70f5a7a4087e1fbadc61e38",
+    "contract_fingerprint": "3e216b58ad9543e876a3ac3ee2624add614c02c1860fcc2af7d03d436461489b"
+  },
+  "gate": {
+    "require_shadow_gate": true,
+    "require_counterfactual_safety": true,
+    "require_physical_router_input": true,
+    "require_zero_actuation": true
+  },
+  "output": "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/unknown-start-shadow-canary-v3.json",
+  "execution": {"evaluations": 1, "apply_action": false, "train": false, "film": false, "hardware": false, "production": false}
+}

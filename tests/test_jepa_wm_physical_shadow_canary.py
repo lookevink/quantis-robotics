@@ -24,6 +24,9 @@ from jepa_wm.physical_shadow_canary_v3_contract import (
 from jepa_wm.physical_shadow_canary_v4_contract import (
     FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V4_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
 )
+from jepa_wm.physical_shadow_canary_v5_contract import (
+    FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V5_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+)
 
 
 class PhysicalShadowCanaryTest(unittest.TestCase):
@@ -118,6 +121,27 @@ class PhysicalShadowCanaryTest(unittest.TestCase):
         self.assertEqual(
             V4_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
             "1f4bf1b56ccbbb3a346e1574c6801bb6d4d86899afe4303f896c2b4e4a63b4e5",
+        )
+        self.assertLess(
+            runner.index("demo.preflight_unknown_start_shadow"),
+            runner.index("physical_shadow_canary claim"),
+        )
+
+    def test_v5_binds_continuity_safe_reset_before_claim(self) -> None:
+        config = load_experiment_config(
+            Path(".scratch/jepa-physical-shadow-canary-v5/experiment-config.json")
+        )
+        runner = Path("ops/run_physical_shadow_canary.sh").read_text()
+
+        self.assertEqual(config["unknown_start"]["seed"], 62605)
+        self.assertEqual(
+            config["unknown_start"]["recording_id"],
+            "unknown-start-reset-v6-62605",
+        )
+        self.assertTrue(config["output"].endswith("unknown-start-shadow-canary-v3.json"))
+        self.assertEqual(
+            V5_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+            "PENDING_CHECKPOINT",
         )
         self.assertLess(
             runner.index("demo.preflight_unknown_start_shadow"),
