@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from math import isfinite
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -35,6 +36,9 @@ HORIZON_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
 CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v4"
 )
+TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+    "quantis.jepa_wm_contact_grasp_target_policy.v5"
+)
 
 
 class _TransportComposition(str, Enum):
@@ -63,6 +67,10 @@ _POLICY_CAPABILITIES = {
         _TransportComposition.FULL_HORIZON,
     ),
     CONTACT_GRASP_TARGET_POLICY_SCHEMA: _PolicyCapabilities(
+        True,
+        _TransportComposition.TRANSLATION_HORIZON,
+    ),
+    TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA: _PolicyCapabilities(
         True,
         _TransportComposition.TRANSLATION_HORIZON,
     ),
@@ -100,10 +108,37 @@ class ContactGraspTargetPolicy:
     """Hold acquisition, then advance by measured reference-state progress."""
 
     schema: str = CONTACT_GRASP_TARGET_POLICY_SCHEMA
+    scene_translation_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     def __post_init__(self) -> None:
-        if self.schema not in _POLICY_CAPABILITIES:
+        if (
+            self.schema not in _POLICY_CAPABILITIES
+            or len(self.scene_translation_m) != 3
+            or not all(isfinite(value) for value in self.scene_translation_m)
+            or (
+                self.schema != TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+                and self.scene_translation_m != (0.0, 0.0, 0.0)
+            )
+        ):
             raise ValueError("contact-grasp target policy is invalid")
+
+    @classmethod
+    def for_scene_translation(
+        cls,
+        translation_m: tuple[float, float, float],
+    ) -> ContactGraspTargetPolicy:
+        return cls(TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA, translation_m)
+
+    def _translated_pose(self, pose: DroidPose) -> DroidPose:
+        values = pose.values
+        return DroidPose(
+            tuple(
+                values[index] + self.scene_translation_m[index]
+                if index < 3
+                else values[index]
+                for index in range(len(values))
+            )
+        )
 
     @property
     def requires_directional_transport_progress(self) -> bool:
@@ -245,7 +280,7 @@ class ContactGraspTargetPolicy:
             plug_attached=plug_attached,
             previous_target=previous_target,
             reference_context_poses={
-                index: required[index].context_pose
+                index: self._translated_pose(required[index].context_pose)
                 for index in self.transport_context_indices
             },
         )
@@ -397,8 +432,8 @@ class ContactGraspTargetPolicy:
             ) from error
         return required
 
-    @staticmethod
     def _target(
+        self,
         required: Mapping[int, RecordedRollout],
         target_index: int,
         frame_root: Path,
@@ -407,21 +442,32 @@ class ContactGraspTargetPolicy:
         rollout = required[target_context]
         return ControlTarget(
             rollout.target.path.relative_to(frame_root.resolve()),
-            rollout.target_pose,
+            self._translated_pose(rollout.target_pose),
         )
 
-    def to_dict(self) -> dict[str, str]:
-        return {"schema": self.schema}
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"schema": self.schema}
+        if self.schema == TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA:
+            payload["scene_translation_m"] = list(self.scene_translation_m)
+        return payload
 
     @classmethod
     def from_dict(cls, payload: Any) -> ContactGraspTargetPolicy:
-        if (
-            not isinstance(payload, dict)
-            or set(payload) != {"schema"}
-            or payload["schema"] not in _POLICY_CAPABILITIES
-        ):
+        if not isinstance(payload, dict) or payload.get("schema") not in _POLICY_CAPABILITIES:
             raise ValueError("contact-grasp target policy is invalid")
-        return cls(str(payload["schema"]))
+        schema = str(payload["schema"])
+        expected_fields = (
+            {"schema", "scene_translation_m"}
+            if schema == TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+            else {"schema"}
+        )
+        if set(payload) != expected_fields:
+            raise ValueError("contact-grasp target policy is invalid")
+        try:
+            translation = tuple(payload.get("scene_translation_m", (0.0, 0.0, 0.0)))
+            return cls(schema, translation)
+        except (TypeError, ValueError) as error:
+            raise ValueError("contact-grasp target policy is invalid") from error
 
 
 CONTACT_GRASP_TARGET_POLICY = ContactGraspTargetPolicy()

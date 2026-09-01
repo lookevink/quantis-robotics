@@ -511,6 +511,72 @@ def prepare_fixed_joint_plug(stage: Any) -> FixedJointPlugPreparation:
     return FixedJointPlugPreparation(plug, hand, fixed_joint, collisions)
 
 
+def bind_existing_fixed_joint_plug(stage: Any) -> FixedJointPlugPreparation:
+    """Bind the reset-authenticated plug without authoring or repairing USD state."""
+
+    from pxr import UsdPhysics
+
+    plug = stage.GetPrimAtPath(PLUG_PATH)
+    hand = stage.GetPrimAtPath(f"{ROBOT_PATH}/panda_hand")
+    if not plug.IsValid() or not hand.IsValid():
+        raise RuntimeError("existing fixed-joint plug prims are missing")
+    kinematic = UsdPhysics.RigidBodyAPI(plug).GetKinematicEnabledAttr()
+    fixed_joint = UsdPhysics.FixedJoint.Get(
+        stage,
+        f"{PLUG_PATH}/QuantisGraspJoint",
+    )
+    if (
+        not kinematic.IsValid()
+        or kinematic.Get() is not True
+        or not fixed_joint
+        or fixed_joint.GetBody0Rel().GetTargets() != [hand.GetPath()]
+        or fixed_joint.GetBody1Rel().GetTargets() != [plug.GetPath()]
+        or fixed_joint.GetCollisionEnabledAttr().Get() is not False
+        or fixed_joint.GetJointEnabledAttr().Get() is not False
+    ):
+        raise RuntimeError("existing fixed-joint plug state is inauthentic")
+    collision_prims = [
+        prim
+        for prim in stage.Traverse()
+        if prim.GetPath().HasPrefix(plug.GetPath())
+        and prim.HasAPI(UsdPhysics.CollisionAPI)
+    ]
+    excluded_collision_paths = frozenset(
+        str(prim.GetPath())
+        for prim in collision_prims
+        if prim.GetName() in COMPLIANT_COLLISION_PARTS
+    )
+    found_parts = frozenset(
+        prim.GetName()
+        for prim in collision_prims
+        if str(prim.GetPath()) in excluded_collision_paths
+    )
+    attributes = [
+        UsdPhysics.CollisionAPI(prim).GetCollisionEnabledAttr()
+        for prim in collision_prims
+    ]
+    if (
+        found_parts != frozenset(COMPLIANT_COLLISION_PARTS)
+        or not attributes
+        or any(not attribute.IsValid() for attribute in attributes)
+        or any(
+            bool(attribute.Get())
+            != (
+                str(attribute.GetPath().GetPrimPath())
+                not in excluded_collision_paths
+            )
+            for attribute in attributes
+        )
+    ):
+        raise RuntimeError("existing plug collision state is inauthentic")
+    return FixedJointPlugPreparation(
+        plug,
+        hand,
+        fixed_joint,
+        PlugCollisionPolicy(attributes, excluded_collision_paths),
+    )
+
+
 def recording_snapshot(
     phase: RecordingLabel,
     stage: ObservationStage,

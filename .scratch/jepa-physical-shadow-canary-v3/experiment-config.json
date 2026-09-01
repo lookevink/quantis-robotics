@@ -1,0 +1,54 @@
+{
+  "schema": "quantis.jepa_wm_physical_shadow_canary_experiment.v3",
+  "experiment_id": "contact-insertion-v10-unknown-start-shadow-canary-v1",
+  "session_id": "unknown-start-shadow-canary-v1-62604",
+  "evaluator": {
+    "path": "jepa_wm/physical_shadow_canary.py",
+    "fingerprint": "0000000000000000000000000000000000000000000000000000000000000000",
+    "implementation_revision": "0000000000000000000000000000000000000000"
+  },
+  "runtime_sources": {},
+  "proposal": {
+    "path": "/home/ubuntu/docker/jepa-wm/checkpoints/contact-grasp-v10-drive-slow-2600_task12_h256_s3000.pth",
+    "fingerprint": "fa17063e36b687a9f2696133e85850bae19e552fc4266ea660f2e0e3274f87aa",
+    "training_report_fingerprint": "2129cd4411de79777a4616e80bbd3afef8ac8e6a2bf2efda6fbd4f2794f2cc0c",
+    "readiness": {
+      "path": "/home/ubuntu/docker/jepa-wm/checkpoints/experiments/contact-grasp-v10-drive-slow-2600_task12_h256_s3000_contact_grasp_readiness.json",
+      "fingerprint": "449380fde1b0009733a077e3be188f0fcd796de7c299d2b370d33d57d087c815"
+    }
+  },
+  "action_model": {
+    "path": "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/physical_state_residual.pth",
+    "fingerprint": "7f3cb2a99e749dd56e4f4a988b3b1c332ab13c4661c3413118ffb270f237db51",
+    "held_out_gate": {
+      "path": "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/canonical-held-out-v2.json",
+      "fingerprint": "ca100086efaf394a65d893627142252db7107a87c76352aac6993841431cc2f4"
+    }
+  },
+  "worker": {
+    "name": "contact-insertion-v10-unknown-start-shadow-canary-v1",
+    "planner": {"horizon": 3, "iterations": 4, "samples": 64, "elites": 8, "seed": 235, "minimum_standard_deviation": 0.0001}
+  },
+  "known_start": {
+    "reference": "contact-insertion-v10-drive-slow-2600-held-00",
+    "seed": 12600,
+    "context_index": 110,
+    "context_purpose": "contact_grasp",
+    "manifest_fingerprint": "dd504100969f706e22795f6c7dc85578f11b0fc53dd5050560a8976c725a5879"
+  },
+  "unknown_start": {
+    "recording_id": "unknown-start-reset-v5-62604",
+    "seed": 62604,
+    "result_fingerprint": "0192049ce6067564f25a04dd2cdef08286baaaad95c04caf0610e5a60a13bc2d",
+    "evidence_fingerprint": "43c1ac4c81515d4921e1070dc866313256183eb54a85a1de3896674810903ccf",
+    "contract_fingerprint": "3e216b58ad9543e876a3ac3ee2624add614c02c1860fcc2af7d03d436461489b"
+  },
+  "gate": {
+    "require_shadow_gate": true,
+    "require_counterfactual_safety": true,
+    "require_physical_router_input": true,
+    "require_zero_actuation": true
+  },
+  "output": "/home/ubuntu/docker/jepa-wm/checkpoints/quantis_physical_state_residual_v1/unknown-start-shadow-canary-v1.json",
+  "execution": {"evaluations": 1, "apply_action": false, "train": false, "film": false, "hardware": false, "production": false}
+}

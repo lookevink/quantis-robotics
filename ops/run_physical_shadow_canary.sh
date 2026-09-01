@@ -16,26 +16,32 @@ import sys
 
 config = json.load(open(sys.argv[1]))
 for value in (
+    config["schema"],
     config["session_id"],
     config["known_start"]["reference"],
     config["known_start"]["seed"],
     config["worker"]["name"],
     config["known_start"]["context_index"],
     config["output"],
+    config.get("unknown_start", {}).get("recording_id", ""),
+    config.get("unknown_start", {}).get("result_fingerprint", ""),
 ):
     print(value)
 PY
 )
-(( ${#frozen_contract[@]} == 6 )) || {
+(( ${#frozen_contract[@]} == 9 )) || {
   printf 'error: incomplete physical shadow canary contract\n' >&2
   exit 1
 }
-session_id="${frozen_contract[0]}"
-reference_name="${frozen_contract[1]}"
-exploration_seed="${frozen_contract[2]}"
-control_identity="${frozen_contract[3]}"
-context_index="${frozen_contract[4]}"
-output="${frozen_contract[5]}"
+experiment_schema="${frozen_contract[0]}"
+session_id="${frozen_contract[1]}"
+reference_name="${frozen_contract[2]}"
+exploration_seed="${frozen_contract[3]}"
+control_identity="${frozen_contract[4]}"
+context_index="${frozen_contract[5]}"
+output="${frozen_contract[6]}"
+reset_recording_id="${frozen_contract[7]}"
+reset_result_fingerprint="${frozen_contract[8]}"
 [[ "${deployed_revision}" =~ ^[0-9a-f]{40}$ ]] || {
   printf 'error: invalid physical shadow canary deployment revision\n' >&2
   exit 1
@@ -75,10 +81,27 @@ trap terminalize_failure ERR
   --config "${config}" --session "${session_id}"
 
 phase="capture"
-capture_and_respond_control_session \
-  "${repo_dir}" "${session_id}" "${reference_name}" "${exploration_seed}" \
-  "${control_identity}" direct "${context_index}" \
-  "${checkpoint_dir}" "${venv_python}" "" "" contact_grasp
+if [[ "${experiment_schema}" == "quantis.jepa_wm_physical_shadow_canary_experiment.v3" ]]; then
+  is_safe_identifier "${reset_recording_id}" || {
+    printf 'error: invalid unknown-start reset recording ID\n' >&2
+    exit 1
+  }
+  [[ "${reset_result_fingerprint}" =~ ^[0-9a-f]{64}$ ]] || {
+    printf 'error: invalid unknown-start reset result fingerprint\n' >&2
+    exit 1
+  }
+  proposal_name="$(control_proposal_from_identity \
+    direct "${control_identity}" "${checkpoint_dir}" "${venv_python}")"
+  isaac_server_call \
+    "await demo.capture_unknown_start_shadow_observation('${session_id}','${reference_name}',${exploration_seed},'${proposal_name}','${reset_recording_id}','${reset_result_fingerprint}')" \
+    180 true
+  respond_to_control_session "${repo_dir}" "${session_id}" direct
+else
+  capture_and_respond_control_session \
+    "${repo_dir}" "${session_id}" "${reference_name}" "${exploration_seed}" \
+    "${control_identity}" direct "${context_index}" \
+    "${checkpoint_dir}" "${venv_python}" "" "" contact_grasp
+fi
 
 phase="shadow_planning"
 bash "${repo_dir}/ops/jepa_wm.sh" \

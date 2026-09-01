@@ -3,9 +3,12 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from jepa_wm.physical_shadow_canary import (
+    _serialized_action_scale,
     claim_canary,
+    finalize_recovery,
     load_experiment_config,
     prepare_worker,
 )
@@ -14,6 +17,9 @@ from jepa_wm.physical_shadow_canary_contract import (
 )
 from jepa_wm.physical_shadow_canary_v2_contract import (
     FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V2_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+)
+from jepa_wm.physical_shadow_canary_v3_contract import (
+    FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V3_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
 )
 
 
@@ -75,6 +81,78 @@ class PhysicalShadowCanaryTest(unittest.TestCase):
         self.assertNotIn('exploration_seed="12601"', runner)
         self.assertNotIn("apply_control_response", runner)
         self.assertNotIn("run_control_step.sh", runner)
+
+    def test_v3_binds_authenticated_reset_and_uses_zero_actuation_capture(self) -> None:
+        config = load_experiment_config(
+            Path(".scratch/jepa-physical-shadow-canary-v3/experiment-config.json")
+        )
+        runner = Path("ops/run_physical_shadow_canary.sh").read_text()
+
+        self.assertEqual(config["unknown_start"]["seed"], 62604)
+        self.assertEqual(
+            config["unknown_start"]["recording_id"],
+            "unknown-start-reset-v5-62604",
+        )
+        self.assertFalse(config["execution"]["apply_action"])
+        self.assertTrue(config["gate"]["require_zero_actuation"])
+        self.assertEqual(
+            V3_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+            "PENDING_CHECKPOINT",
+        )
+        self.assertIn("capture_unknown_start_shadow_observation", runner)
+
+    def test_negative_safety_evidence_has_no_selected_scale(self) -> None:
+        self.assertIsNone(_serialized_action_scale(None))
+
+    def test_recovery_preserves_authenticated_model_rejection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkpoint_root = root / "checkpoints"
+            output = checkpoint_root / "model" / "unknown-start-shadow-canary-v9.json"
+            evaluation = output.with_name(
+                "unknown-start-shadow-canary-v9-evaluation.json"
+            )
+            evaluation.parent.mkdir(parents=True)
+            evaluation.write_text(
+                json.dumps(
+                    {
+                        "schema": "quantis.jepa_wm_physical_shadow_canary_evaluation.v1",
+                        "status": "evaluated_pending_recovery",
+                        "passed": False,
+                        "evaluation_passed": False,
+                        "recovery_verified": False,
+                        "apply_action": False,
+                    }
+                )
+            )
+            recovery_root = root / "recovery"
+            recovery_evaluation = recovery_root / evaluation.relative_to(
+                checkpoint_root
+            )
+            recovery_evaluation.parent.mkdir(parents=True)
+            recovery_evaluation.write_bytes(evaluation.read_bytes())
+            experiment = {
+                "output": str(output),
+                "action_model": {
+                    "path": str(checkpoint_root / "model" / "model.pth")
+                },
+            }
+            with patch(
+                "jepa_wm.physical_shadow_canary.load_experiment_config",
+                return_value=experiment,
+            ), patch(
+                "jepa_wm.physical_shadow_canary.authenticated_deployment_revision",
+                return_value="a" * 40,
+            ):
+                terminal = finalize_recovery(
+                    root / "config.json",
+                    recovery_root,
+                    "a" * 40,
+                )
+
+            self.assertFalse(terminal["passed"])
+            self.assertEqual(terminal["status"], "failed_model_gate")
+            self.assertTrue(terminal["model_gate_adjudicated"])
 
     def test_worker_manifest_is_derived_from_frozen_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

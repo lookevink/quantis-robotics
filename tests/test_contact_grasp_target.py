@@ -14,6 +14,7 @@ from jepa_wm.contact_grasp_target import (
     DIRECTIONAL_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     HORIZON_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+    TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     ContactGraspTargetPolicy,
 )
 
@@ -183,6 +184,19 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
             CONTACT_GRASP_TARGET_POLICY.requires_directional_transport_progress
         )
         self.assertTrue(CONTACT_GRASP_TARGET_POLICY.uses_horizon_transport_action)
+
+    def test_task_relative_policy_translates_pose_but_not_reference_frame(self) -> None:
+        policy = ContactGraspTargetPolicy.for_scene_translation((0.01, -0.02, 0.03))
+        pose = DroidPose((0.2, 0.3, 0.4, 0.0, 0.0, 0.0, 0.5))
+
+        translated = policy._translated_pose(pose)
+        for actual, expected in zip(
+            translated.values,
+            (0.21, 0.28, 0.43, 0.0, 0.0, 0.0, 0.5),
+        ):
+            self.assertAlmostEqual(actual, expected)
+        self.assertEqual(policy.schema, TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA)
+        self.assertEqual(ContactGraspTargetPolicy.from_dict(policy.to_dict()), policy)
 
     def test_current_attached_transport_composes_the_native_horizon(self) -> None:
         actions = (

@@ -53,6 +53,9 @@ from sim.isaac_insertion_demo import record_insertion_demo as _record_insertion_
 from sim.isaac_unknown_start_reset import (
     authenticate_unknown_start_reset as _authenticate_unknown_start_reset,
 )
+from sim.isaac_unknown_start_shadow import (
+    capture_unknown_start_shadow_observation as _capture_unknown_start_shadow_observation,
+)
 from sim.isaac_demo_runtime import (
     Actuators,
     JointCommand,
@@ -102,6 +105,29 @@ async def authenticate_unknown_start_reset(
             seed,
             source_revision,
             runtime_source_fingerprint,
+        ),
+    )
+
+
+async def capture_unknown_start_shadow_observation(
+    session_id: str,
+    reference_recording: str,
+    reference_seed: int,
+    proposal_name: str,
+    reset_recording_id: str,
+    reset_result_fingerprint: str,
+) -> dict[str, Any]:
+    """Capture one exclusive zero-actuation model request from a passed reset."""
+
+    return await _RECORDING_JOBS.run_exclusive(
+        f"unknown-start-shadow-{session_id}",
+        lambda: _capture_unknown_start_shadow_observation(
+            session_id,
+            reference_recording,
+            reference_seed,
+            proposal_name,
+            reset_recording_id,
+            reset_result_fingerprint,
         ),
     )
 

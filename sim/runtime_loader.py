@@ -256,6 +256,8 @@ def reload_demo_runtime() -> ModuleType:
         "sim.isaac_exploration",
         "sim.unknown_start_reset",
         "sim.isaac_unknown_start_reset",
+        "sim.unknown_start_shadow",
+        "sim.isaac_unknown_start_shadow",
         "sim.control_session",
         "sim.trial_source_cache",
         "jepa_wm.control_rollout",

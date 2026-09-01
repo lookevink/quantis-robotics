@@ -21,6 +21,11 @@ async def evaluate_shadow_candidate(session_id: str) -> dict[str, Any]:
     import omni.usd
     from isaacsim.core.simulation_manager import SimulationManager
 
+    from sim.isaac_unknown_start_shadow import (
+        reauthenticate_unknown_start_shadow_session,
+    )
+
+    reauthenticate_unknown_start_shadow_session(session_id)
     session = ControlSession.at(CONTROL_ROOT, session_id)
     observation, persisted_state = session.load_capture()
     direct = session.load_response()

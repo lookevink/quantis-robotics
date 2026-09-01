@@ -2314,14 +2314,20 @@ known-start zero-actuation integration gate; milestone 20 motion and filming
 remain subject to a separately frozen reset/execution contract. Exact evidence
 is in [`RESULT.md`](.scratch/jepa-physical-shadow-canary-v2/RESULT.md).
 
-The reset-only prerequisite for milestone 20 is now separately frozen. Its
-versioned contract binds an exact sampler source, unused held-out seed namespace
-`62600..62699`, perturbation and absolute workspace/geometry bounds, exact
+The reset-only prerequisite for milestone 20 has now passed once on the
+predeclared held-out seed `62604`. Contract v3 binds the exact sampler source,
+reserved namespace `62600..62699`, perturbation and absolute
+workspace/geometry bounds, explicit `right_gripper_control_frame`, exact
 realized arm/camera/scene/scale/light checks, one reset-time state set, zero
-prefix replay, and zero actions. Both review axes and all `831` tests pass. No
-seed was claimed and Isaac remained stopped, so this is not live-reset, motion,
-or filming authority. Exact evidence is in
-[`RESULT.md`](.scratch/jepa-unknown-start-reset-v1/RESULT.md).
+prefix replay, and zero actions. The primary result and all five canonical
+artifacts match the verified 16 GiB recovery copy. The run was unattached,
+collision-free, and at exactly `0 N`; all `844` tests passed before capture.
+Seeds `62600..62603` remain immutable terminal negatives from deployment,
+evidence, frame, and float-readback defects. None reached model inference or
+action. The next separate milestone is to freeze the execution contract and
+zero-actuation handoff from this authenticated reset; no live JEPA action or
+filming authority is implied. Exact evidence is in
+[`RESULT.md`](.scratch/jepa-unknown-start-reset-v5/RESULT.md).
 
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a

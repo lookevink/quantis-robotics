@@ -12,21 +12,33 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from jepa_wm.persistence import write_json_atomic
+from jepa_wm.action import DroidAction
+from jepa_wm.physical_observation import PhysicalRoutingObservation
 from jepa_wm.physical_shadow_canary_contract import (
     FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V1_CONFIG_FINGERPRINT,
 )
 from jepa_wm.physical_shadow_canary_v2_contract import (
     FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V2_CONFIG_FINGERPRINT,
 )
+from jepa_wm.physical_shadow_canary_v3_contract import (
+    FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V3_CONFIG_FINGERPRINT,
+)
 from jepa_wm.planner import CEMConfig
 from jepa_wm.shadow_planning import CandidateAuthority
 from jepa_wm.training_artifact import ArtifactIdentity, artifact_fingerprint
 from jepa_wm.worker_artifacts import ControlWorkerArtifacts
 from sim.control_session import ControlSession
+from sim.unknown_start_shadow import UnknownStartControlHandoff
+from sim.unknown_start_reset import UnknownStartResetEvidence
 
 
 EXPERIMENT_SCHEMA = "quantis.jepa_wm_physical_shadow_canary_experiment.v1"
 EXPERIMENT_SCHEMA_V2 = "quantis.jepa_wm_physical_shadow_canary_experiment.v2"
+EXPERIMENT_SCHEMA_V3 = "quantis.jepa_wm_physical_shadow_canary_experiment.v3"
+
+
+def _serialized_action_scale(scale: Any) -> dict[str, Any] | None:
+    return scale.to_dict() if scale is not None else None
 
 
 def load_experiment_config(path: Path) -> dict[str, Any]:
@@ -36,6 +48,7 @@ def load_experiment_config(path: Path) -> dict[str, Any]:
     expected_fingerprint = {
         EXPERIMENT_SCHEMA: V1_CONFIG_FINGERPRINT,
         EXPERIMENT_SCHEMA_V2: V2_CONFIG_FINGERPRINT,
+        EXPERIMENT_SCHEMA_V3: V3_CONFIG_FINGERPRINT,
     }.get(payload.get("schema"))
     if expected_fingerprint is None or (
         expected_fingerprint != "PENDING_CHECKPOINT"
@@ -45,7 +58,8 @@ def load_experiment_config(path: Path) -> dict[str, Any]:
     execution = payload.get("execution", {})
     gate = payload.get("gate", {})
     if (
-        payload.get("schema") not in (EXPERIMENT_SCHEMA, EXPERIMENT_SCHEMA_V2)
+        payload.get("schema")
+        not in (EXPERIMENT_SCHEMA, EXPERIMENT_SCHEMA_V2, EXPERIMENT_SCHEMA_V3)
         or not isinstance(payload.get("session_id"), str)
         or not payload["session_id"]
         or gate
@@ -66,6 +80,33 @@ def load_experiment_config(path: Path) -> dict[str, Any]:
         }
     ):
         raise ValueError("physical shadow canary contract is invalid")
+    if payload.get("schema") == EXPERIMENT_SCHEMA_V3:
+        unknown_start = payload.get("unknown_start")
+        if (
+            not isinstance(unknown_start, Mapping)
+            or set(unknown_start)
+            != {
+                "recording_id",
+                "seed",
+                "result_fingerprint",
+                "evidence_fingerprint",
+                "contract_fingerprint",
+            }
+            or not isinstance(unknown_start["recording_id"], str)
+            or not unknown_start["recording_id"]
+            or not isinstance(unknown_start["seed"], int)
+            or unknown_start["seed"] < 0
+            or any(
+                not isinstance(unknown_start[field], str)
+                or len(unknown_start[field]) != 64
+                for field in (
+                    "result_fingerprint",
+                    "evidence_fingerprint",
+                    "contract_fingerprint",
+                )
+            )
+        ):
+            raise ValueError("unknown-start shadow canary reset binding is invalid")
     terminal_paths(payload)
     return payload
 
@@ -74,7 +115,12 @@ def terminal_paths(experiment: Mapping[str, Any]) -> tuple[Path, Path, Path, Pat
     output = Path(str(experiment.get("output", "")))
     if (
         not output.is_absolute()
-        or not output.stem.startswith("known-start-shadow-canary-v")
+        or not output.stem.startswith(
+            (
+                "known-start-shadow-canary-v",
+                "unknown-start-shadow-canary-v",
+            )
+        )
     ):
         raise ValueError("physical shadow canary output is invalid")
     stem = output.stem
@@ -264,6 +310,8 @@ def evaluate_canary(
     shadow = session.load_shadow()
     safety = session.load_shadow_safety()
     start = experiment["known_start"]
+    unknown_start = experiment.get("unknown_start")
+    handoff_path = session.path / "unknown_start_handoff.json"
     reference_manifest = (
         session.data_root / "recordings" / start["reference"] / "manifest.json"
     )
@@ -290,20 +338,125 @@ def evaluate_canary(
         or shadow.adapter.resolve() != action_model.path
         or shadow.authority is not CandidateAuthority.SHADOW_ONLY
         or safety.authority is not CandidateAuthority.SHADOW_ONLY
-        or not shadow.passes_shadow_gate
-        or not safety.passed
         or any(path.exists() for path in forbidden)
     ):
         raise ValueError("physical shadow canary gate failed")
+    handoff = None
+    if experiment["schema"] == EXPERIMENT_SCHEMA_V3:
+        if not handoff_path.is_file() or not isinstance(unknown_start, Mapping):
+            raise ValueError("unknown-start shadow canary handoff is missing")
+        handoff = UnknownStartControlHandoff.from_dict(
+            json.loads(handoff_path.read_text())
+        )
+        reset_recording = session.data_root / "recordings" / unknown_start["recording_id"]
+        reset_result_path = reset_recording / "RESULT.json"
+        reset_evidence_path = reset_recording / "unknown_start_reset_evidence.json"
+        routing_target_path = session.path / "unknown_start_routing_target.json"
+        routing_step_path = session.path / "unknown_start_routing_step.json"
+        reset_evidence = UnknownStartResetEvidence.from_dict(
+            json.loads(reset_evidence_path.read_text())
+        )
+        reference_target = json.loads(reference_manifest.read_text()).get(
+            "metadata", {}
+        ).get("insertion_target")
+        if not isinstance(reference_target, dict):
+            raise ValueError("unknown-start shadow reference target is invalid")
+        expected_routing_target = {
+            **reference_target,
+            "socket_position": list(reset_evidence.workspace.socket_position_m),
+            "socket_orientation_wxyz": reference_target[
+                "socket_orientation_wxyz"
+            ],
+            "geometry_source": "authenticated_unknown_start_live_state",
+            "reset_recording_id": unknown_start["recording_id"],
+        }
+        reference_scene_offset = json.loads(reference_manifest.read_text()).get(
+            "metadata", {}
+        ).get("scene_offset_m")
+        if (
+            not isinstance(reference_scene_offset, list)
+            or len(reference_scene_offset) != 3
+        ):
+            raise ValueError("unknown-start shadow reference offset is invalid")
+        expected_scene_translation = tuple(
+            reset_value - float(reference_value)
+            for reset_value, reference_value in zip(
+                reset_evidence.sample.scene_offset_m,
+                reference_scene_offset,
+            )
+        )
+        routing_target = json.loads(routing_target_path.read_text())
+        routing_step = json.loads(routing_step_path.read_text())
+        reset_lines = (reset_recording / "steps.jsonl").read_text().splitlines()
+        if len(reset_lines) != 1:
+            raise ValueError("unknown-start reset step is invalid")
+        reset_step = json.loads(reset_lines[0])
+        expected_routing_step = {
+            field: reset_step[field]
+            for field in (
+                "plug_position",
+                "plug_orientation_wxyz",
+                "end_effector_world_position",
+                "gripper_frame_world_position",
+                "gripper_width_m",
+                "arm_tracking_error_rad",
+                "gripper_tracking_error_m",
+                "contact_force_newtons",
+                "plug_attached",
+            )
+        }
+        expected_handoff = UnknownStartControlHandoff(
+            session_id=session.session_id,
+            reset_recording_id=unknown_start["recording_id"],
+            reset_seed=unknown_start["seed"],
+            reset_result_fingerprint=unknown_start["result_fingerprint"],
+            reset_evidence_fingerprint=unknown_start["evidence_fingerprint"],
+            reset_contract_fingerprint=unknown_start["contract_fingerprint"],
+            reference_recording=start["reference"],
+            reference_seed=start["seed"],
+            context_fingerprint=artifact_fingerprint(
+                session.data_root / observation.context_frame
+            ),
+            routing_target_fingerprint=artifact_fingerprint(routing_target_path),
+            routing_step_fingerprint=artifact_fingerprint(routing_step_path),
+            request_fingerprint=artifact_fingerprint(session.request_path),
+            state_fingerprint=artifact_fingerprint(session.state_path),
+        )
+        if (
+            handoff != expected_handoff
+            or artifact_fingerprint(reset_result_path)
+            != unknown_start["result_fingerprint"]
+            or artifact_fingerprint(reset_evidence_path)
+            != unknown_start["evidence_fingerprint"]
+            or reset_evidence.sample.seed != unknown_start["seed"]
+            or expected_scene_translation
+            != state.contact_grasp_target_policy.scene_translation_m
+            or routing_target != expected_routing_target
+            or routing_step != expected_routing_step
+            or observation.physical_routing
+            != PhysicalRoutingObservation.from_recorded_step(
+                expected_routing_step,
+                expected_routing_target,
+                DroidAction((0.0,) * 7),
+            )
+        ):
+            raise ValueError("unknown-start shadow canary handoff is inauthentic")
+    elif handoff_path.exists():
+        raise ValueError("known-start shadow canary has an unexpected reset handoff")
 
+    evaluation_passed = shadow.passes_shadow_gate and safety.passed
     report = {
         "schema": "quantis.jepa_wm_physical_shadow_canary_evaluation.v1",
         "status": "evaluated_pending_recovery",
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
         "passed": False,
-        "evaluation_passed": True,
+        "evaluation_passed": evaluation_passed,
         "recovery_verified": False,
-        "outcome": "physical_residual_live_shadow_candidate",
+        "outcome": (
+            "physical_residual_live_shadow_candidate"
+            if evaluation_passed
+            else "authenticated_model_shadow_rejection"
+        ),
         "experiment_config": ArtifactIdentity.from_artifact(experiment_config).to_dict(),
         "evaluator": {
             "path": str(evaluator_path),
@@ -319,13 +472,21 @@ def evaluate_canary(
         "held_out_gate": held_out.to_dict(),
         "session_id": session.session_id,
         "known_start": start,
+        "unknown_start": unknown_start,
+        "unknown_start_handoff": (
+            ArtifactIdentity.from_artifact(handoff_path).to_dict()
+            if handoff is not None
+            else None
+        ),
         "physical_routing": observation.physical_routing.to_dict(),
         "direct_response": ArtifactIdentity.from_artifact(session.response_path).to_dict(),
         "shadow": ArtifactIdentity.from_artifact(session.shadow_path).to_dict(),
         "shadow_safety": ArtifactIdentity.from_artifact(session.shadow_safety_path).to_dict(),
         "shadow_gate_passed": shadow.passes_shadow_gate,
         "counterfactual_safety_passed": safety.passed,
-        "selected_action_scale": safety.selected_action_scale.to_dict(),
+        "selected_action_scale": _serialized_action_scale(
+            safety.selected_action_scale
+        ),
         "apply_action": False,
         "execution_started": False,
         "trained": False,
@@ -361,10 +522,23 @@ def finalize_recovery(
         != artifact_fingerprint(recovery_evaluation)
     ):
         raise ValueError("physical shadow canary recovery is invalid")
+    evaluation = json.loads(evaluation_path.read_text())
+    if (
+        evaluation.get("schema")
+        != "quantis.jepa_wm_physical_shadow_canary_evaluation.v1"
+        or evaluation.get("status") != "evaluated_pending_recovery"
+        or evaluation.get("passed") is not False
+        or evaluation.get("recovery_verified") is not False
+        or evaluation.get("apply_action") is not False
+        or not isinstance(evaluation.get("evaluation_passed"), bool)
+    ):
+        raise ValueError("physical shadow canary evaluation is invalid")
+    evaluation_passed = evaluation["evaluation_passed"]
     payload = {
         "schema": "quantis.jepa_wm_physical_shadow_canary_terminal.v1",
-        "status": "passed",
-        "passed": True,
+        "status": "passed" if evaluation_passed else "failed_model_gate",
+        "passed": evaluation_passed,
+        "model_gate_adjudicated": True,
         "evaluation": ArtifactIdentity.from_artifact(evaluation_path).to_dict(),
         "recovery_evaluation": ArtifactIdentity.from_artifact(
             recovery_evaluation

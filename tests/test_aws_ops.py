@@ -1509,6 +1509,15 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertIn("run_physical_shadow_canary.sh", calls)
         self.assertNotIn("run_control_step.sh", calls)
 
+    def test_physical_shadow_canary_v3_selects_unknown_start_config(self):
+        result, calls = self.run_command("jepa-wm-physical-shadow-canary-v3")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("jepa-physical-shadow-canary-v3", calls)
+        self.assertIn("run_physical_shadow_canary.sh", calls)
+        self.assertNotIn("run_control_step.sh", calls)
+        self.assertNotIn("control-apply", calls)
+
     def test_unknown_start_reset_is_zero_actuation_and_recovery_gated(self):
         source_revision = "a" * 40
         result, calls = self.run_command(
