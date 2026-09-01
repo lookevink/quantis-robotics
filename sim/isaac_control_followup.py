@@ -664,7 +664,7 @@ def diagnose_contact_grasp_tracking_rollback_ik(
 def _contact_grasp_rollback_handoff_state(
     source_result: Any,
     *,
-    horizon_tracking_rollback: bool,
+    horizon_tracking_rollback_reasons: tuple[str, ...] | None,
 ) -> tuple[DroidPose, ControlSafetySnapshot]:
     """Select the restored state, never the rejected post-action state."""
 
@@ -677,7 +677,7 @@ def _contact_grasp_rollback_handoff_state(
         > SimulatorSafetyLimits().maximum_contact_force_newtons
     ):
         raise ValueError("contact-grasp resolution source is not a safe endpoint")
-    if not horizon_tracking_rollback:
+    if horizon_tracking_rollback_reasons is None:
         if source_result.status is not ControlResultStatus.APPLIED:
             raise ValueError(
                 "contact-grasp resolution source is not an applied endpoint"
@@ -685,9 +685,10 @@ def _contact_grasp_rollback_handoff_state(
         return post.pose, post.require_safety_snapshot()
     refresh = source_result.insertion_trial_refresh
     if (
-        post.tracking.passed
+        source_result.status is not ControlResultStatus.ROLLED_BACK_TRACKING
+        or post.tracking.passed
         or tuple(reason.value for reason in post.tracking.reasons)
-        != ("translation_error",)
+        != horizon_tracking_rollback_reasons
         or refresh is None
         or refresh.live_state.plug_attached
         or refresh.live_state.collision_detected
@@ -814,15 +815,18 @@ async def capture_contact_grasp_acquisition_handoff(
     source_observation, source_state = source.load_capture()
     source_result = source.load_result()
     refresh = source_result.insertion_trial_refresh
-    horizon_tracking_rollback = (
-        horizon_completion_continuation
-        and source_result.status is ControlResultStatus.ROLLED_BACK_TRACKING
+    horizon_tracking_rollback_reasons = (
+        ("translation_direction",)
+        if horizon_completion_continuation
+        else None
     )
     if rollback_continuation:
         expected_source_pose, expected_source_safety = (
             _contact_grasp_rollback_handoff_state(
                 source_result,
-                horizon_tracking_rollback=horizon_tracking_rollback,
+                horizon_tracking_rollback_reasons=(
+                    horizon_tracking_rollback_reasons
+                ),
             )
         )
     else:

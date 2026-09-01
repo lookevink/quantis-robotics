@@ -1,4 +1,4 @@
-"""Authenticated V26 continuation after the V25 sub-resolution rollback."""
+"""Authenticated V27 continuation after the V26 pre-capture reject."""
 
 from __future__ import annotations
 
@@ -16,10 +16,10 @@ from jepa_wm.persistence import write_json_atomic
 from jepa_wm.training_artifact import artifact_fingerprint
 
 
-HANDOFF_SCHEMA = "quantis.contact_grasp_horizon_completion.v7"
-FAILURE_SCHEMA = "quantis.contact_grasp_horizon_completion_failure.v7"
-EXPERIMENT_DIRECTORY = "unknown_start_horizon_completion_v26"
-ROLLOUT_ID = "unknown-start-e2e-v26-62605-grasp"
+HANDOFF_SCHEMA = "quantis.contact_grasp_horizon_completion.v8"
+FAILURE_SCHEMA = "quantis.contact_grasp_horizon_completion_failure.v8"
+EXPERIMENT_DIRECTORY = "unknown_start_horizon_completion_v27"
+ROLLOUT_ID = "unknown-start-e2e-v27-62605-grasp"
 SOURCE_ROLLOUT_ID = "unknown-start-e2e-v25-62605-grasp"
 SOURCE_SESSION_ID = f"{SOURCE_ROLLOUT_ID}-066"
 RUNTIME_OWNER_SESSION_ID = SOURCE_SESSION_ID
@@ -46,6 +46,16 @@ SOURCE_CLAIM_FINGERPRINT = (
 SOURCE_FAILURE_FINGERPRINT = (
     "06b6da47a95b0fc381c6e574e93336df2ee7424ee0777f18cd2a3df775d87d84"
 )
+PREVIOUS_ATTEMPT_CLAIM_FINGERPRINT = (
+    "21544cb3064110f559688c413932d44890135703f3c5c3d15ad599ad3a291420"
+)
+PREVIOUS_ATTEMPT_FAILURE_FINGERPRINT = (
+    "29355b2450c5b155c5949a822c791ae60c4f09db3c51604921226ca96c2704fb"
+)
+PREVIOUS_ATTEMPT_RUNTIME_FINGERPRINT = (
+    "db58dc929d4e74818149dba313b2c0c08508cb4f1289fb8b77d361c3fc7d9852"
+)
+PREVIOUS_ATTEMPT_REVISION = "9ccddb93deec6fd09f4cce57c1939202cd9ddd42"
 SOURCE_REPORT_FINGERPRINT = (
     "33633a5a3a78403c2b995f572e3863bcc6d94858de11a07babf070164221e65a"
 )
@@ -203,6 +213,12 @@ class ContactGraspHorizonCompletion:
             "worker_fingerprint": WORKER_FINGERPRINT,
             "source_claim_fingerprint": SOURCE_CLAIM_FINGERPRINT,
             "source_failure_fingerprint": SOURCE_FAILURE_FINGERPRINT,
+            "previous_attempt_claim_fingerprint": (
+                PREVIOUS_ATTEMPT_CLAIM_FINGERPRINT
+            ),
+            "previous_attempt_failure_fingerprint": (
+                PREVIOUS_ATTEMPT_FAILURE_FINGERPRINT
+            ),
             "source_report_fingerprint": SOURCE_REPORT_FINGERPRINT,
             "source_roster_fingerprint": SOURCE_ROSTER_FINGERPRINT,
             "source_attempted_actions": SOURCE_SESSION_COUNT,
@@ -288,18 +304,31 @@ def validate_source(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
     from sim.control_session import ControlResultStatus
 
     source_root = checkpoint_root / "unknown_start_horizon_completion_v25"
+    previous_attempt_root = (
+        checkpoint_root / "unknown_start_horizon_completion_v26"
+    )
     report_path = data_root / "control_rollouts" / SOURCE_ROLLOUT_ID / "report.json"
     if (
         artifact_fingerprint(source_root / "CLAIM.json")
         != SOURCE_CLAIM_FINGERPRINT
         or artifact_fingerprint(source_root / "FAILURE.json")
         != SOURCE_FAILURE_FINGERPRINT
+        or artifact_fingerprint(previous_attempt_root / "CLAIM.json")
+        != PREVIOUS_ATTEMPT_CLAIM_FINGERPRINT
+        or artifact_fingerprint(previous_attempt_root / "FAILURE.json")
+        != PREVIOUS_ATTEMPT_FAILURE_FINGERPRINT
         or artifact_fingerprint(report_path) != SOURCE_REPORT_FINGERPRINT
         or source_roster_fingerprint(data_root) != SOURCE_ROSTER_FINGERPRINT
     ):
-        raise ValueError("terminal V25 tracking evidence changed")
+        raise ValueError("V25 source or V26 terminal evidence changed")
     claim = json.loads((source_root / "CLAIM.json").read_text())
     failure = json.loads((source_root / "FAILURE.json").read_text())
+    previous_attempt_claim = json.loads(
+        (previous_attempt_root / "CLAIM.json").read_text()
+    )
+    previous_attempt_failure = json.loads(
+        (previous_attempt_root / "FAILURE.json").read_text()
+    )
     report = json.loads(report_path.read_text())
     sessions = tuple(step["session"] for step in report.get("steps", ()))
     reconstructed = ControlRolloutReport.from_sessions(
@@ -379,8 +408,27 @@ def validate_source(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
         or failure.get("error") != "report:exit_1"
         or failure.get("claim_fingerprint") != SOURCE_CLAIM_FINGERPRINT
         or failure.get("retry_authorized") is not False
+        or previous_attempt_claim.get("schema")
+        != "quantis.contact_grasp_horizon_completion.v7"
+        or previous_attempt_claim.get("source_session_id") != SOURCE_SESSION_ID
+        or previous_attempt_claim.get("followup_session_id")
+        != "unknown-start-e2e-v26-62605-grasp-001"
+        or previous_attempt_claim.get("runtime_fingerprint")
+        != PREVIOUS_ATTEMPT_RUNTIME_FINGERPRINT
+        or previous_attempt_claim.get("source_revision")
+        != PREVIOUS_ATTEMPT_REVISION
+        or previous_attempt_claim.get("maximum_actions") != MAXIMUM_ACTIONS
+        or previous_attempt_failure.get("error") != "capture_001:exit_1"
+        or previous_attempt_failure.get("claim_fingerprint")
+        != PREVIOUS_ATTEMPT_CLAIM_FINGERPRINT
+        or previous_attempt_failure.get("retry_authorized") is not False
+        or (
+            data_root
+            / "control_sessions"
+            / "unknown-start-e2e-v26-62605-grasp-001"
+        ).exists()
     ):
-        raise ValueError("V25 was not the exact sub-resolution tracking rollback")
+        raise ValueError("V26 was not the exact pre-capture handoff reject")
     validate_model(checkpoint_root)
     return {
         "source_session_id": SOURCE_SESSION_ID,
@@ -473,7 +521,7 @@ def evaluate(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
         and 1 <= report.get("applied_steps", 0) <= MAXIMUM_ACTIONS
     )
     payload = {
-        "schema": "quantis.contact_grasp_horizon_completion_evaluation.v7",
+        "schema": "quantis.contact_grasp_horizon_completion_evaluation.v8",
         "status": "evaluated_pending_recovery",
         "evaluation_passed": passed,
         "recovery_verified": False,
@@ -538,7 +586,7 @@ def finalize(
     if evaluation.get("evaluation_passed") is not True:
         raise ValueError("contact-grasp horizon evaluation failed")
     payload = {
-        "schema": "quantis.contact_grasp_horizon_completion_terminal.v7",
+        "schema": "quantis.contact_grasp_horizon_completion_terminal.v8",
         "status": "passed",
         "passed": True,
         "recovery_verified": True,
