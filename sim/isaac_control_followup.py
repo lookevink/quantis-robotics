@@ -376,19 +376,27 @@ def diagnose_contact_grasp_acquisition_resolution(
     return result
 
 
-def diagnose_contact_grasp_rollback_drive_target() -> dict[str, Any]:
-    """Compare the retained V12 drive attributes with its rollback command."""
+def diagnose_contact_grasp_rollback_drive_target(
+    rotation_resolution: bool = False,
+) -> dict[str, Any]:
+    """Compare a retained rollback runtime with its canonical drive command."""
 
     import omni.usd
 
     stage = omni.usd.get_context().get_stage()
-    runtime = live_runtime_for(
-        ACQUISITION_RESOLUTION_RUNTIME_SESSION_ID,
-        stage,
+    runtime_owner_session_id = (
+        ROTATION_RESOLUTION_RUNTIME_SESSION_ID
+        if rotation_resolution
+        else ACQUISITION_RESOLUTION_RUNTIME_SESSION_ID
     )
+    runtime = live_runtime_for(runtime_owner_session_id, stage)
     if runtime is None:
         raise RuntimeError("contact-grasp rollback runtime was lost")
-    expected = acquisition_resolution_drive_target(QUANTIS_DATA_ROOT)
+    expected = (
+        rotation_resolution_drive_target(QUANTIS_DATA_ROOT)
+        if rotation_resolution
+        else acquisition_resolution_drive_target(QUANTIS_DATA_ROOT)
+    )
     actual = current_drive_target(runtime)
     joint_deltas = tuple(
         actual_value - expected_value
@@ -399,7 +407,7 @@ def diagnose_contact_grasp_rollback_drive_target() -> dict[str, Any]:
     )
     return {
         "status": "diagnosed_no_actuation",
-        "runtime_owner_session_id": ACQUISITION_RESOLUTION_RUNTIME_SESSION_ID,
+        "runtime_owner_session_id": runtime_owner_session_id,
         "expected_rollback_target": expected.to_dict(),
         "actual_drive_target": actual.to_dict(),
         "joint_deltas_rad": list(joint_deltas),

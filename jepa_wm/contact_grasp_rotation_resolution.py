@@ -1,4 +1,4 @@
-"""Authenticated V17 handoff after the V15 rotation-resolution rollback."""
+"""Authenticated V18 handoff after the V15 rotation-resolution rollback."""
 
 from __future__ import annotations
 
@@ -21,9 +21,9 @@ from jepa_wm.persistence import write_json_atomic
 from jepa_wm.training_artifact import artifact_fingerprint
 
 
-HANDOFF_SCHEMA = "quantis.contact_grasp_rotation_resolution.v2"
-EXPERIMENT_DIRECTORY = "unknown_start_rotation_resolution_v17"
-ROLLOUT_ID = "unknown-start-e2e-v17-62605-grasp"
+HANDOFF_SCHEMA = "quantis.contact_grasp_rotation_resolution.v3"
+EXPERIMENT_DIRECTORY = "unknown_start_rotation_resolution_v18"
+ROLLOUT_ID = "unknown-start-e2e-v18-62605-grasp"
 SOURCE_ROLLOUT_ID = "unknown-start-e2e-v15-62605-grasp"
 SOURCE_SESSION_ID = f"{SOURCE_ROLLOUT_ID}-36"
 ROLLED_BACK_SESSION_ID = f"{SOURCE_ROLLOUT_ID}-37"
@@ -48,6 +48,14 @@ V16_CLAIM_FINGERPRINT = (
 )
 V16_FAILURE_FINGERPRINT = (
     "3aaca80b884739a3f028a0482934c3500c34a8ccbc77bcf0fda261b99a9ca54c"
+)
+V17_EXPERIMENT_DIRECTORY = "unknown_start_rotation_resolution_v17"
+V17_ROLLOUT_ID = "unknown-start-e2e-v17-62605-grasp"
+V17_CLAIM_FINGERPRINT = (
+    "ae02bbe88eebe60909600676894815f88be8d102be39aa2e622bb93c36451ad2"
+)
+V17_FAILURE_FINGERPRINT = (
+    "6e2babc73c6ac1ec8b63d644f9e12e45f8c80b855f3e1a50fdfec6868e13f90c"
 )
 SESSION_FILES = (
     "request.json",
@@ -113,18 +121,22 @@ def handoff_path(data_root: Path, followup_session_id: str) -> Path:
 
 
 def rollback_drive_target(data_root: Path):
-    """Canonicalize the exact measured target written by the V15 rollback."""
+    """Canonicalize the exact pre-action command retained by the V15 rollback."""
 
     from jepa_wm.joint_drive import JointDriveTarget
     from sim.control_session import ControlSession
 
-    _, state = ControlSession.at(
+    session = ControlSession.at(
         data_root / "control_sessions",
         ROLLED_BACK_SESSION_ID,
-    ).load_capture()
+    )
+    result = session.load_result()
+    refresh = result.insertion_trial_refresh
+    if refresh is None:
+        raise ValueError("V15 rollback pre-action refresh is missing")
     return JointDriveTarget.for_command(
-        tuple(state.current_joint_positions),
-        state.current_gripper_width_m,
+        tuple(refresh.live_state.joint_positions),
+        refresh.live_state.gripper_width_m,
     )
 
 
@@ -162,6 +174,9 @@ class ContactGraspRotationResolution:
             "v16_claim_fingerprint": V16_CLAIM_FINGERPRINT,
             "v16_failure_fingerprint": V16_FAILURE_FINGERPRINT,
             "v16_simulator_action_applied": False,
+            "v17_claim_fingerprint": V17_CLAIM_FINGERPRINT,
+            "v17_failure_fingerprint": V17_FAILURE_FINGERPRINT,
+            "v17_simulator_action_applied": False,
             "runtime_fingerprint": self.runtime_fingerprint,
             "source_revision": self.source_revision,
             "simulator_action_authorized": True,
@@ -279,6 +294,28 @@ def validate_v16_no_action(checkpoint_root: Path, data_root: Path) -> None:
         raise ValueError("V16 was not the exact no-action ownership failure")
 
 
+def validate_v17_no_action(checkpoint_root: Path, data_root: Path) -> None:
+    root = checkpoint_root / V17_EXPERIMENT_DIRECTORY
+    claim_path = root / "CLAIM.json"
+    failure_path = root / "FAILURE.json"
+    if (
+        artifact_fingerprint(claim_path) != V17_CLAIM_FINGERPRINT
+        or artifact_fingerprint(failure_path) != V17_FAILURE_FINGERPRINT
+    ):
+        raise ValueError("terminal no-action V17 evidence changed")
+    failure_payload = json.loads(failure_path.read_text())
+    if (
+        failure_payload.get("error") != "capture_01:exit_1"
+        or failure_payload.get("retry_authorized") is not False
+        or (data_root / "control_rollouts" / V17_ROLLOUT_ID).exists()
+        or any(
+            (data_root / "control_sessions" / f"{V17_ROLLOUT_ID}-{index:02d}").exists()
+            for index in range(1, MAXIMUM_ACTIONS + 1)
+        )
+    ):
+        raise ValueError("V17 was not the exact no-action handoff failure")
+
+
 def claim(
     checkpoint_root: Path,
     recovery_checkpoint_root: Path,
@@ -295,6 +332,8 @@ def claim(
     validate_source(recovery_checkpoint_root, recovery_data_root)
     validate_v16_no_action(checkpoint_root, data_root)
     validate_v16_no_action(recovery_checkpoint_root, recovery_data_root)
+    validate_v17_no_action(checkpoint_root, data_root)
+    validate_v17_no_action(recovery_checkpoint_root, recovery_data_root)
     handoff = ContactGraspRotationResolution(
         followup_session_id,
         runtime_fingerprint(),

@@ -586,6 +586,8 @@ Commands:
                                         Continue V10 with decoupled far-approach resolution
   jepa-wm-contact-grasp-rotation-resolution
                                         Continue V15 with direction-observable rotation
+  jepa-wm-contact-grasp-rollback-diagnostic [v12|v15]
+                                        Read a retained rollback drive target without motion
   jepa-wm-unknown-start-recovery-diagnostic SESSION
                                         Read paused rollback drift without motion
   jepa-wm-physical-shadow-canary-v5    Run continuity-safe unknown-start zero-actuation canary
@@ -1443,6 +1445,17 @@ case "${command}" in
     fi
     printf 'Contact-grasp rotation-resolution workflow complete.\n'
     exit "${command_status}"
+    ;;
+  jepa-wm-contact-grasp-rollback-diagnostic)
+    rollback_source="${2:-v12}"
+    case "${rollback_source}" in
+      v12) rotation_resolution=False ;;
+      v15) rotation_resolution=True ;;
+      *) die "rollback diagnostic source must be v12 or v15" ;;
+    esac
+    demo_python \
+      "demo.diagnose_contact_grasp_rollback_drive_target(${rotation_resolution})" \
+      120
     ;;
   jepa-wm-unknown-start-recovery-diagnostic)
     session_id="${2:-}"
