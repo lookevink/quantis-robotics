@@ -97,7 +97,7 @@ class PhysicalShadowCanaryTest(unittest.TestCase):
         self.assertTrue(config["gate"]["require_zero_actuation"])
         self.assertEqual(
             V3_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
-            "PENDING_CHECKPOINT",
+            "c691b5efeadcd773df82050f24e388e0134b941ed5f100cb12fff498064e0a53",
         )
         self.assertIn("capture_unknown_start_shadow_observation", runner)
 
