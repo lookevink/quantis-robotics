@@ -145,7 +145,6 @@ async def recover_unknown_start_candidate_rollback(
     import omni.timeline
     import omni.usd
     import numpy as np
-    from isaacsim.core.rendering_manager import RenderingManager
 
     from jepa_wm.control_policy import ControlExecutionPolicy
     from jepa_wm.joint_drive import JointDriveTarget
@@ -163,7 +162,7 @@ async def recover_unknown_start_candidate_rollback(
     from sim.isaac_demo_runtime import (
         ContactReading,
         JointCommand,
-        advance_physics_updates,
+        advance_simulation_period,
         resume_live_simulation,
     )
     from sim.isaac_exploration import (
@@ -299,22 +298,24 @@ async def recover_unknown_start_candidate_rollback(
         raise RuntimeError("unknown-start drive recovery did not reach reset floor")
     # Replay the authenticated reset initializer exactly: it starts at the
     # authored drive command with zero velocity, then records the observed
-    # gravity-loaded state after sixteen updates.  Starting from that observed
-    # state would settle the transient twice and cannot reproduce the evidence.
-    original_rendering_dt = RenderingManager.get_dt()
-    RenderingManager.set_dt(reset_plan.sample_period_seconds)
+    # gravity-loaded state after sixteen sample periods. Starting from that
+    # observed state would settle the transient twice and cannot reproduce it.
+    # RenderingManager cadence changes invalidate retained physics tensor
+    # handles. Replay the identical authenticated physics duration at the
+    # current cadence instead; the live interlock is polled on every update.
+    reset_settlement_seconds = 16 * reset_plan.sample_period_seconds
+    resume_live_simulation(timeline)
     try:
-        resume_live_simulation(timeline)
-        try:
-            runtime.actuators.set_reset_state(reset_drive_target)
-            await advance_physics_updates(16, observe_safety)
-        finally:
-            await pause_control_timeline(
-                timeline,
-                omni.kit.app.get_app().next_update_async,
-            )
+        runtime.actuators.set_reset_state(reset_drive_target)
+        await advance_simulation_period(
+            reset_settlement_seconds,
+            observe_safety,
+        )
     finally:
-        RenderingManager.set_dt(original_rendering_dt)
+        await pause_control_timeline(
+            timeline,
+            omni.kit.app.get_app().next_update_async,
+        )
     if timeline.is_playing():
         raise RuntimeError("unknown-start reset initialization could not pause timeline")
     reauthenticate_unknown_start_shadow_session(session_id)

@@ -61,21 +61,20 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
             recovery_source,
         )
         self.assertIn(
-            "RenderingManager.set_dt(reset_plan.sample_period_seconds)",
+            "reset_settlement_seconds = 16 * reset_plan.sample_period_seconds",
             recovery_source,
         )
-        self.assertIn("RenderingManager.set_dt(original_rendering_dt)", recovery_source)
         self.assertLess(
             recovery_source.index(
                 "runtime.actuators.set_reset_state(", recovery
             ),
             recovery_source.index(
-                "await advance_physics_updates(16, observe_safety)", recovery
+                "await advance_simulation_period(", recovery
             ),
         )
         self.assertLess(
             recovery_source.index(
-                "await advance_physics_updates(16, observe_safety)", recovery
+                "await advance_simulation_period(", recovery
             ),
             recovery_source.index(
                 "reauthenticate_unknown_start_shadow_session(session_id)",
