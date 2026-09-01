@@ -33,4 +33,9 @@ class UnknownStartLiveActionTest(unittest.TestCase):
         self.assertEqual(runner.count("apply_control_response"), 1)
         self.assertIn("prepare_experimental_candidate_source", runner)
         self.assertIn("persist_experimental_candidate_response", runner)
+        self.assertIn(
+            'proposal_name="contact-grasp-v10-drive-slow-2600_task12_h256_s3000"',
+            runner,
+        )
+        self.assertNotIn("experimental_shadow_candidate", runner)
         self.assertNotIn("record_candidate_demo", runner)

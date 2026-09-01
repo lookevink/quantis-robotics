@@ -8,8 +8,9 @@ checkpoint_root="${HOME}/docker/jepa-wm/checkpoints"
 data_root="${HOME}/docker/isaac-sim/data/quantis"
 source_revision="${1:-}"
 runtime_fingerprint="${2:-}"
-session_id="unknown-start-live-action-v1-62605"
+session_id="unknown-start-live-action-v2-62605"
 source_session_id="unknown-start-shadow-canary-v5-62605"
+proposal_name="contact-grasp-v10-drive-slow-2600_task12_h256_s3000"
 reset_recording_id="unknown-start-reset-v6-62605"
 reset_result_fingerprint="70a8fba8022e687c2fc9ecd78f8d63924a8a5840497af9249c60bb781a0a6d58"
 source_shadow_fingerprint="75b77d011c314db3118993723755ea1524ec2eab22bd141d98543d1162475ce2"
@@ -41,7 +42,7 @@ terminalize_failure() {
 trap terminalize_failure ERR
 
 isaac_server_call \
-  "await demo.capture_unknown_start_candidate_observation('${session_id}','contact-insertion-v10-drive-slow-2600-held-00',12600,'experimental_shadow_candidate','${reset_recording_id}','${reset_result_fingerprint}')" \
+  "await demo.capture_unknown_start_candidate_observation('${session_id}','contact-insertion-v10-drive-slow-2600-held-00',12600,'${proposal_name}','${reset_recording_id}','${reset_result_fingerprint}')" \
   180
 phase="binding"
 isaac_server_call \
