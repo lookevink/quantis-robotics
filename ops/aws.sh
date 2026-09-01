@@ -584,6 +584,8 @@ Commands:
                                         Continue with orientation hold after terminal V6
   jepa-wm-unknown-start-acquisition-resolution
                                         Continue V10 with decoupled far-approach resolution
+  jepa-wm-contact-grasp-rotation-resolution
+                                        Continue V15 with direction-observable rotation
   jepa-wm-unknown-start-recovery-diagnostic SESSION
                                         Read paused rollback drift without motion
   jepa-wm-physical-shadow-canary-v5    Run continuity-safe unknown-start zero-actuation canary
@@ -1415,6 +1417,31 @@ case "${command}" in
       remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.contact_grasp_acquisition_resolution failure --checkpoint-root ~/docker/jepa-wm/checkpoints --error 'recovery_backup:exit_${backup_status}'" || true
     fi
     printf 'Unknown-start acquisition resolution workflow complete.\n'
+    exit "${command_status}"
+    ;;
+  jepa-wm-contact-grasp-rotation-resolution)
+    source_revision="$(deployment_source_revision)"
+    runtime_fingerprint="$(python3 -m jepa_wm.contact_grasp_rotation_resolution fingerprint)"
+    command_status=0
+    sync_repo || command_status=$?
+    if (( command_status == 0 )); then
+      remote "bash ~/quantis-robotics/ops/run_unknown_start_rotation_resolution.sh '${source_revision}' '${runtime_fingerprint}'" \
+        || command_status=$?
+    fi
+    backup_status=0
+    remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' || backup_status=$?
+    if (( command_status == 0 && backup_status == 0 )); then
+      remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.contact_grasp_rotation_resolution finalize --checkpoint-root ~/docker/jepa-wm/checkpoints --recovery-checkpoint-root /mnt/quantis-assets/quantis-state/jepa-wm/checkpoints --data-root ~/docker/isaac-sim/data/quantis --recovery-data-root /mnt/quantis-assets/quantis-state/isaac" \
+        || command_status=$?
+      if (( command_status != 0 )); then
+        remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.contact_grasp_rotation_resolution failure --checkpoint-root ~/docker/jepa-wm/checkpoints --error 'recovery_finalization:exit_${command_status}'" || true
+        remote_with_config 'bash ~/quantis-robotics/ops/backup_state.sh' || true
+      fi
+    elif (( command_status == 0 )); then
+      command_status=${backup_status}
+      remote "cd ~/quantis-robotics && ~/.venvs/quantis-jepa-wm/bin/python -m jepa_wm.contact_grasp_rotation_resolution failure --checkpoint-root ~/docker/jepa-wm/checkpoints --error 'recovery_backup:exit_${backup_status}'" || true
+    fi
+    printf 'Contact-grasp rotation-resolution workflow complete.\n'
     exit "${command_status}"
     ;;
   jepa-wm-unknown-start-recovery-diagnostic)

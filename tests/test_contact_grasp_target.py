@@ -16,6 +16,7 @@ from jepa_wm.contact_grasp_target import (
     HORIZON_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+    ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     ContactGraspTargetPolicy,
@@ -200,9 +201,10 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
             self.assertAlmostEqual(actual, expected)
         self.assertEqual(
             policy.schema,
-            TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         )
         self.assertTrue(policy.uses_measured_acquisition_progress)
+        self.assertTrue(policy.requires_resolvable_rotation)
         self.assertEqual(ContactGraspTargetPolicy.from_dict(policy.to_dict()), policy)
 
         historical = ContactGraspTargetPolicy(
@@ -231,7 +233,7 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
 
         self.assertEqual(
             policy.schema,
-            TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         )
         self.assertEqual(
             policy.coarse_acquisition_maximum_translation_meters,
@@ -262,6 +264,11 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
             ContactGraspTargetPolicy.from_dict(historical.to_dict()),
             historical,
         )
+        tracking_bounded = ContactGraspTargetPolicy(
+            TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            (0.0, 0.0, 0.0),
+        )
+        self.assertFalse(tracking_bounded.requires_resolvable_rotation)
         self.assertFalse(
             policy.uses_coarse_acquisition_action(
                 self._target_path(96),

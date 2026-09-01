@@ -36,6 +36,7 @@ from sim.isaac_control_bridge import (
     restore_insertion_retry as _restore_insertion_retry,
     restore_insertion_rollback_retry as _restore_insertion_rollback_retry,
     restore_grasp_transition_retry as _restore_grasp_transition_retry,
+    restore_contact_grasp_tracking_retry as _restore_contact_grasp_tracking_retry,
     verify_grasp_to_insertion_result,
     verify_grasp_to_insertion_source,
     verify_insertion_demo_rollout_result,
@@ -392,6 +393,23 @@ def restore_grasp_transition_retry(
         lambda: _restore_grasp_transition_retry(
             grasp_session_id,
             rolled_back_session_id,
+        ),
+    )
+
+
+def restore_contact_grasp_tracking_retry(
+    previous_session_id: str,
+    rolled_back_session_id: str,
+    followup_session_id: str,
+) -> dict[str, Any]:
+    """Restore an unattached grasp rollback under the simulator interlock."""
+
+    return _RECORDING_JOBS.run_exclusive_sync(
+        f"restore-contact-grasp-{rolled_back_session_id}",
+        lambda: _restore_contact_grasp_tracking_retry(
+            previous_session_id,
+            rolled_back_session_id,
+            followup_session_id,
         ),
     )
 

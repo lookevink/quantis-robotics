@@ -51,6 +51,9 @@ RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
 TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v8"
 )
+ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+    "quantis.jepa_wm_contact_grasp_target_policy.v9"
+)
 
 
 class _TransportComposition(str, Enum):
@@ -66,6 +69,7 @@ class _PolicyCapabilities:
     acquisition_progress: bool = False
     coarse_acquisition: bool = False
     coarse_acquisition_maximum_translation_meters: float | None = None
+    resolvable_rotation: bool = False
 
 
 _POLICY_CAPABILITIES = {
@@ -107,6 +111,14 @@ _POLICY_CAPABILITIES = {
         True,
         True,
         0.002,
+    ),
+    ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA: _PolicyCapabilities(
+        True,
+        _TransportComposition.TRANSLATION_HORIZON,
+        True,
+        True,
+        0.002,
+        True,
     ),
 }
 
@@ -156,6 +168,7 @@ class ContactGraspTargetPolicy:
                     ACQUISITION_PROGRESS_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                    ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 )
                 and self.scene_translation_m != (0.0, 0.0, 0.0)
             )
@@ -168,7 +181,7 @@ class ContactGraspTargetPolicy:
         translation_m: tuple[float, float, float],
     ) -> ContactGraspTargetPolicy:
         return cls(
-            TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             translation_m,
         )
 
@@ -258,6 +271,12 @@ class ContactGraspTargetPolicy:
         return _POLICY_CAPABILITIES[
             self.schema
         ].coarse_acquisition_maximum_translation_meters
+
+    @property
+    def requires_resolvable_rotation(self) -> bool:
+        """Require commanded turns to clear the measured tracking noise band."""
+
+        return _POLICY_CAPABILITIES[self.schema].resolvable_rotation
 
     @property
     def acquisition_context_indices(self) -> tuple[int, ...]:
@@ -624,6 +643,7 @@ class ContactGraspTargetPolicy:
             ACQUISITION_PROGRESS_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         ):
             payload["scene_translation_m"] = list(self.scene_translation_m)
         return payload
@@ -641,6 +661,7 @@ class ContactGraspTargetPolicy:
                 ACQUISITION_PROGRESS_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             )
             else {"schema"}
         )

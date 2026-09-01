@@ -16,6 +16,7 @@ from jepa_wm.control_safety import (
     DIRECTIONAL_CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES,
     LEGACY_ACTION_SCALES,
     LEGACY_TRACKING_BOUNDED_ACTION_SCALES,
+    MINIMUM_DIRECTION_OBSERVABLE_ROTATION_RADIANS,
     ORIENTATION_HOLD_ACTION_SCALES,
     TRACKING_BOUNDED_ACTION_SCALES,
     ControlGateDecision,
@@ -28,6 +29,48 @@ from jepa_wm.shadow_safety import ShadowSafetyEvidence
 
 
 class ShadowSafetyEvidenceTest(unittest.TestCase):
+    def test_current_grasp_policy_promotes_v15_turn_above_resolution(self) -> None:
+        action = DroidAction(
+            (
+                0.004746975377202034,
+                0.0003092704282607883,
+                -0.0037363399751484394,
+                -0.0037258435040712357,
+                -0.00878340657800436,
+                -0.010692881420254707,
+                0.002727515995502472,
+            )
+        )
+
+        scales = contact_grasp_action_scales(
+            action,
+            coarse_acquisition=True,
+            require_resolvable_rotation=True,
+        )
+        commanded = scales[0].apply(action)
+
+        self.assertEqual(scales[0].rotation, 0.25)
+        self.assertGreaterEqual(
+            sum(value * value for value in commanded.values[3:6]) ** 0.5,
+            MINIMUM_DIRECTION_OBSERVABLE_ROTATION_RADIANS,
+        )
+
+    def test_current_grasp_policy_holds_unresolvable_turn(self) -> None:
+        action = DroidAction((0.004, 0.0, 0.0, 0.001, 0.001, 0.001, 0.0))
+
+        current = contact_grasp_action_scales(
+            action,
+            coarse_acquisition=True,
+            require_resolvable_rotation=True,
+        )
+        historical = contact_grasp_action_scales(
+            action,
+            coarse_acquisition=True,
+        )
+
+        self.assertTrue(all(scale.rotation == 0.0 for scale in current))
+        self.assertEqual(historical[0].rotation, 0.125)
+
     def test_coarse_acquisition_decouples_opening_from_arm_scale(self) -> None:
         action = DroidAction(
             (0.0015, 0.0002, -0.0005, 0.0, 0.0, 0.0, -0.02)

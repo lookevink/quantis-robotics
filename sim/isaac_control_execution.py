@@ -714,6 +714,9 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             maximum_coarse_translation_command_meters=(
                 contact_grasp_policy.coarse_acquisition_maximum_translation_meters
             ),
+            require_resolvable_rotation=(
+                contact_grasp_policy.requires_resolvable_rotation
+            ),
         )
     from sim.isaac_unknown_start_shadow import (
         reauthenticate_unknown_start_shadow_session,

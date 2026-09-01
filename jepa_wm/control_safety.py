@@ -113,6 +113,45 @@ CONTACT_GRASP_COARSE_ACTION_SCALE_POLICIES = tuple(
     for index in range(len(CONTACT_GRASP_COARSE_ACTION_SCALES) - 1)
 )
 
+# A direction cosine is not observable when the permitted Cartesian tracking
+# error is comparable to the commanded turn.  The unchanged 3 mrad rotation
+# error and 0.5 cosine gates require a command of at least 3.464 mrad for the
+# direction cone to remain meaningful.  Round upward rather than asking Isaac
+# to distinguish a boundary-sized turn from drive/IK residuals.
+MINIMUM_DIRECTION_OBSERVABLE_ROTATION_RADIANS = 3.5e-3
+CONTACT_GRASP_ROTATION_SCALE_LEVELS = (0.125, 0.25, 0.5, 1.0)
+
+
+def _rotation_resolved_policy(
+    policy: Sequence[DroidActionScale],
+    action: DroidAction,
+    *,
+    required: bool,
+) -> tuple[DroidActionScale, ...]:
+    """Use one observable learned turn, or explicitly hold orientation."""
+
+    result = tuple(policy)
+    if not required:
+        return result
+    rotation_norm = sqrt(sum(value * value for value in action.values[3:6]))
+    rotation_scale = next(
+        (
+            scale
+            for scale in CONTACT_GRASP_ROTATION_SCALE_LEVELS
+            if rotation_norm * scale
+            >= MINIMUM_DIRECTION_OBSERVABLE_ROTATION_RADIANS
+        ),
+        0.0,
+    )
+    return tuple(
+        DroidActionScale(
+            scale.translation,
+            rotation_scale if scale.rotation > 0.0 else 0.0,
+            scale.gripper,
+        )
+        for scale in result
+    )
+
 # Once the fixed-joint attachment is live, gripper intent no longer controls
 # the approach scale. Preserve the authenticated active gripper target and let
 # the learned Cartesian transport use up to a 0.75-millimetre command; every
@@ -255,10 +294,13 @@ def contact_grasp_action_scales(
     require_resolvable_transport: bool = False,
     coarse_acquisition: bool = False,
     maximum_coarse_translation_command_meters: float | None = None,
+    require_resolvable_rotation: bool = False,
 ) -> tuple[DroidActionScale, ...]:
     """Bound approach motion and calibrate gripper closure independently."""
 
-    if not isinstance(coarse_acquisition, bool):
+    if not isinstance(coarse_acquisition, bool) or not isinstance(
+        require_resolvable_rotation, bool
+    ):
         raise ValueError("contact-grasp acquisition scale phase is invalid")
     if maximum_coarse_translation_command_meters is not None and (
         isinstance(maximum_coarse_translation_command_meters, bool)
@@ -273,8 +315,12 @@ def contact_grasp_action_scales(
                 raise ValueError(
                     "resolvable contact-grasp transport must be directional"
                 )
-            return resolvable_contact_grasp_transport_action_scales(
-                translation_norm
+            return _rotation_resolved_policy(
+                resolvable_contact_grasp_transport_action_scales(
+                    translation_norm
+                ),
+                action,
+                required=require_resolvable_rotation,
             )
         if (
             require_directional_transport_progress
@@ -294,8 +340,16 @@ def contact_grasp_action_scales(
                 translation_norm * scales[0].translation
                 <= MAXIMUM_CONTACT_GRASP_TRANSPORT_COMMAND_METERS
             ):
-                return scales
-        return policies[-1]
+                return _rotation_resolved_policy(
+                    scales,
+                    action,
+                    required=require_resolvable_rotation,
+                )
+        return _rotation_resolved_policy(
+            policies[-1],
+            action,
+            required=require_resolvable_rotation,
+        )
 
     if coarse_acquisition:
         coarse_limit = (
@@ -308,12 +362,21 @@ def contact_grasp_action_scales(
                 translation_norm * policy[0].translation
                 <= coarse_limit
             ):
-                return (
+                selected = (
                     _bounded_closing_policy(policy, action.values[6])
                     if action.values[6] > 0.0
                     else policy
                 )
-        return CONTACT_GRASP_COARSE_ACTION_SCALE_POLICIES[-1]
+                return _rotation_resolved_policy(
+                    selected,
+                    action,
+                    required=require_resolvable_rotation,
+                )
+        return _rotation_resolved_policy(
+            CONTACT_GRASP_COARSE_ACTION_SCALE_POLICIES[-1],
+            action,
+            required=require_resolvable_rotation,
+        )
 
     # Negative DROID gripper action decreases closedness and therefore opens the
     # fingers. A live post-contact opening request jumped from 0.509 mm back to
@@ -321,7 +384,11 @@ def contact_grasp_action_scales(
     # remained 0.298 mm and the unchanged tracking gate correctly rolled it
     # back. Reopening must not re-enlarge the approach step.
     if action.values[6] < 0.0:
-        return CONTACT_GRASP_MICRO_ACTION_SCALES
+        return _rotation_resolved_policy(
+            CONTACT_GRASP_MICRO_ACTION_SCALES,
+            action,
+            required=require_resolvable_rotation,
+        )
 
     for index, scales in enumerate(CONTACT_GRASP_ACTION_SCALE_LEVELS):
         if (
@@ -329,7 +396,11 @@ def contact_grasp_action_scales(
             <= MAXIMUM_CONTACT_GRASP_TRANSLATION_COMMAND_METERS
         ):
             if action.values[6] <= 0.0:
-                return scales
+                return _rotation_resolved_policy(
+                    scales,
+                    action,
+                    required=require_resolvable_rotation,
+                )
             closing_policies = (
                 CONTACT_GRASP_CLOSING_ACTION_SCALE_POLICIES[index],
                 *CONTACT_GRASP_REDUCED_CLOSING_ACTION_SCALE_POLICIES[index],
@@ -341,9 +412,21 @@ def contact_grasp_action_scales(
                     * MAX_GRIPPER_WIDTH_M
                     <= MAXIMUM_CONTACT_GRASP_FINE_CLOSURE_COMMAND_METERS
                 ):
-                    return closing_policy
-            return closing_policies[-1]
-    return CONTACT_GRASP_MICRO_ACTION_SCALES
+                    return _rotation_resolved_policy(
+                        closing_policy,
+                        action,
+                        required=require_resolvable_rotation,
+                    )
+            return _rotation_resolved_policy(
+                closing_policies[-1],
+                action,
+                required=require_resolvable_rotation,
+            )
+    return _rotation_resolved_policy(
+        CONTACT_GRASP_MICRO_ACTION_SCALES,
+        action,
+        required=require_resolvable_rotation,
+    )
 
 
 ORIENTATION_HOLD_ACTION_SCALES = tuple(

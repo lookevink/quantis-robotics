@@ -622,6 +622,9 @@ class ControlStepSummary:
                 maximum_coarse_translation_command_meters=(
                     contact_grasp_policy.coarse_acquisition_maximum_translation_meters
                 ),
+                require_resolvable_rotation=(
+                    contact_grasp_policy.requires_resolvable_rotation
+                ),
             )
             attempted_projection_policy = tuple(
                 attempt.scale for attempt in result.projection_attempts
