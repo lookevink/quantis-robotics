@@ -47,17 +47,21 @@ class UnknownStartShadowHandoffTest(unittest.TestCase):
                 "runtime.actuators.set_reset_state(target)", recovery
             ),
             recovery_source.index(
-                "await advance_physics_updates(16, observe_safety)", recovery
+                "await omni.kit.app.get_app().next_update_async()", recovery
             ),
         )
         self.assertLess(
             recovery_source.index(
-                "await advance_physics_updates(16, observe_safety)", recovery
+                "await omni.kit.app.get_app().next_update_async()", recovery
             ),
             recovery_source.index(
                 "reauthenticate_unknown_start_shadow_session(session_id)",
                 recovery,
             ),
+        )
+        self.assertIn(
+            "physics_simulation_time_seconds() != initialization_time",
+            recovery_source,
         )
 
     def test_handoff_wire_contract_rejects_added_authority(self) -> None:

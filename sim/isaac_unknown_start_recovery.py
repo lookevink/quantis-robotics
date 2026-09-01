@@ -34,7 +34,7 @@ async def recover_unknown_start_candidate_rollback(
     from sim.isaac_demo_runtime import (
         ContactReading,
         JointCommand,
-        advance_physics_updates,
+        physics_simulation_time_seconds,
         resume_live_simulation,
     )
     from sim.isaac_unknown_start_shadow import (
@@ -150,23 +150,17 @@ async def recover_unknown_start_candidate_rollback(
         or timeline.is_playing()
     ):
         raise RuntimeError("unknown-start drive recovery did not reach reset floor")
-    # Match the authenticated reset initializer: state-setting updates the DOFs,
-    # but Isaac does not refresh articulation-linked world transforms until a
-    # physics update.  Keep this inside the explicit initialization boundary,
-    # observe every update, and pause again before authenticating the result.
-    resume_live_simulation(timeline)
-    try:
-        runtime.actuators.set_reset_state(target)
-        await advance_physics_updates(16, observe_safety)
-    finally:
-        await pause_control_timeline(
-            timeline,
-            omni.kit.app.get_app().next_update_async,
-        )
+    # State-setting updates the DOFs immediately, while articulation-linked
+    # world transforms refresh on the next app update.  Do that update while
+    # paused so the physics clock cannot advance and move the exact reset.
+    initialization_time = physics_simulation_time_seconds()
+    runtime.actuators.set_reset_state(target)
+    await omni.kit.app.get_app().next_update_async()
+    observe_safety()
     if timeline.is_playing():
-        raise RuntimeError(
-            "unknown-start reset initialization could not pause timeline"
-        )
+        raise RuntimeError("unknown-start reset initialization resumed timeline")
+    if physics_simulation_time_seconds() != initialization_time:
+        raise RuntimeError("unknown-start reset initialization advanced physics")
     reauthenticate_unknown_start_shadow_session(session_id)
     actual = runtime.actuators.actual_command()
     collision, force = read_control_contact(runtime.sensor)
