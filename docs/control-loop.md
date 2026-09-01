@@ -913,6 +913,13 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     approach or post-attachment prefix, use manually staged task phases, or
     provide seed-specific waypoints. Ordinary synchronized camera observations
     and robot proprioception remain valid controller inputs.
+    The reset-only prerequisite is now frozen with exact sampler-source,
+    reserved seed namespace `62600..62699`, sampled and absolute workspace
+    bounds, full realized arm/camera/scene/scale/light authentication, one
+    reset-time state set, and zero prefix/action authority. Both review axes and
+    all `831` tests pass. No seed has been claimed and no live reset has run;
+    the next separate experiment is one exclusive zero-actuation reset and
+    observation authentication, not end-to-end motion.
     From that reset, JEPA-controlled, safety-gated actions must approach and
     acquire the connector, retain it through transport, align it with the
     socket, complete contact-aware insertion, and hold the validated seated

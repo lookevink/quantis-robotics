@@ -2314,6 +2314,15 @@ known-start zero-actuation integration gate; milestone 20 motion and filming
 remain subject to a separately frozen reset/execution contract. Exact evidence
 is in [`RESULT.md`](.scratch/jepa-physical-shadow-canary-v2/RESULT.md).
 
+The reset-only prerequisite for milestone 20 is now separately frozen. Its
+versioned contract binds an exact sampler source, unused held-out seed namespace
+`62600..62699`, perturbation and absolute workspace/geometry bounds, exact
+realized arm/camera/scene/scale/light checks, one reset-time state set, zero
+prefix replay, and zero actions. Both review axes and all `831` tests pass. No
+seed was claimed and Isaac remained stopped, so this is not live-reset, motion,
+or filming authority. Exact evidence is in
+[`RESULT.md`](.scratch/jepa-unknown-start-reset-v1/RESULT.md).
+
 After insertion control clears its offline and live safety gates, the requested
 lab stopping point is one reconstructible end-to-end Isaac run from a
 predeclared, bounded held-out unknown start. That run must not replay a recorded
