@@ -1459,7 +1459,7 @@ case "${command}" in
     sync_repo || command_status=$?
     if (( command_status == 0 )); then
       demo_python \
-        "demo.diagnose_contact_grasp_tracking_rollback('unknown-start-e2e-v25-62605-grasp-066')" \
+        "demo.diagnose_contact_grasp_followup_drive_target('unknown-start-e2e-v27-62605-grasp-020')" \
         120 || command_status=$?
     fi
     if (( command_status == 0 )); then

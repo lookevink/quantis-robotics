@@ -5,14 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import json
-from math import fsum, isfinite
+from math import fsum, isclose, isfinite
 from pathlib import Path
 from typing import Any, Sequence, Union
 
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from jepa_wm.action import MAX_GRIPPER_WIDTH_M, DroidPose, action_between
+from jepa_wm.action import (
+    MAX_GRIPPER_WIDTH_M,
+    DroidActionScale,
+    DroidPose,
+    action_between,
+)
 from jepa_wm.control_tracking import (
     evaluate_action_tracking,
     tracking_limits_for_policy,
@@ -62,6 +67,36 @@ from sim.recording import validate_recording_id
 ROLLOUT_SCHEMA = "quantis.jepa_wm_control_rollout.v1"
 STANDARD_MAX_CONTROL_ROLLOUT_STEPS = 8
 MAX_CONTROL_ROLLOUT_STEPS = MAXIMUM_CONTACT_GRASP_ACTIONS
+PROJECTION_SCALE_RECONSTRUCTION_ABSOLUTE_TOLERANCE = 1e-15
+
+
+def _projection_scale_policy_matches(
+    attempted: Sequence[DroidActionScale],
+    expected: Sequence[DroidActionScale],
+) -> bool:
+    """Compare regenerated scales across runtimes without accepting drift."""
+
+    return len(attempted) == len(expected) and all(
+        isclose(
+            actual.translation,
+            regenerated.translation,
+            rel_tol=0.0,
+            abs_tol=PROJECTION_SCALE_RECONSTRUCTION_ABSOLUTE_TOLERANCE,
+        )
+        and isclose(
+            actual.rotation,
+            regenerated.rotation,
+            rel_tol=0.0,
+            abs_tol=PROJECTION_SCALE_RECONSTRUCTION_ABSOLUTE_TOLERANCE,
+        )
+        and isclose(
+            actual.gripper,
+            regenerated.gripper,
+            rel_tol=0.0,
+            abs_tol=PROJECTION_SCALE_RECONSTRUCTION_ABSOLUTE_TOLERANCE,
+        )
+        for actual, regenerated in zip(attempted, expected)
+    )
 
 
 class IncompleteStepStatus(str, Enum):
@@ -640,8 +675,10 @@ class ControlStepSummary:
             )
             if (
                 not attempted_projection_policy
-                or attempted_projection_policy
-                != expected_projection_policy[: len(attempted_projection_policy)]
+                or not _projection_scale_policy_matches(
+                    attempted_projection_policy,
+                    expected_projection_policy[: len(attempted_projection_policy)],
+                )
             ):
                 raise ValueError(
                     f"contact grasp projection phase is invalid: {session.session_id}"

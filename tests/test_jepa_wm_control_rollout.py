@@ -27,6 +27,7 @@ from jepa_wm.control_rollout import (
     OrchestrationFailure,
     OrchestrationOperation,
     _contact_grasp_retained_direction,
+    _projection_scale_policy_matches,
 )
 from jepa_wm.contact_grasp_target import (
     CONTACT_GRASP_TARGET_POLICY,
@@ -89,6 +90,23 @@ from sim.control_session import (
 
 
 class ControlRolloutTest(unittest.TestCase):
+    def test_projection_scale_reconstruction_accepts_only_roundoff(self) -> None:
+        expected = (DroidActionScale(0.3492566783773001, 1.0, 0.125),)
+
+        self.assertTrue(
+            _projection_scale_policy_matches(
+                (DroidActionScale(0.3492566783773002, 1.0, 0.125),),
+                expected,
+            )
+        )
+        self.assertFalse(
+            _projection_scale_policy_matches(
+                (DroidActionScale(0.3492566783783001, 1.0, 0.125),),
+                expected,
+            )
+        )
+        self.assertFalse(_projection_scale_policy_matches((), expected))
+
     def test_reconstructs_reset_candidate_refresh_as_candidate_evidence(self) -> None:
         session_id = "unknown-start-candidate"
         joints = (0.0, -0.5, 0.0, -1.5, 0.0, 1.0, 0.0)

@@ -137,10 +137,30 @@ class UnknownStartE2EHandoffTest(unittest.TestCase):
                 result,
                 horizon_tracking_rollback_reasons=("translation_direction",),
             )
-        result.post_action.tracking.reasons = (
-            SimpleNamespace(value="translation_direction"),
-        )
         result.status = ControlResultStatus.APPLIED
+        result.post_action = SimpleNamespace(
+            pose=restored_pose,
+            plug_attached=False,
+            collision_detected=False,
+            contact_force_newtons=0.0,
+            require_safety_snapshot=lambda: restored_safety,
+        )
+        self.assertEqual(
+            _contact_grasp_rollback_handoff_state(
+                result,
+                horizon_tracking_rollback_reasons=None,
+            ),
+            (restored_pose, restored_safety),
+        )
+        result.post_action = SimpleNamespace(
+            plug_attached=False,
+            collision_detected=False,
+            contact_force_newtons=0.0,
+            tracking=SimpleNamespace(
+                passed=False,
+                reasons=(SimpleNamespace(value="translation_direction"),),
+            ),
+        )
         with self.assertRaisesRegex(ValueError, "tracking rollback"):
             _contact_grasp_rollback_handoff_state(
                 result,

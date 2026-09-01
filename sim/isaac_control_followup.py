@@ -460,8 +460,21 @@ def diagnose_contact_grasp_followup_drive_target(
             expected.joint_positions,
         )
     )
+    maximum_joint_error = max(abs(value) for value in joint_errors)
+    gripper_error = actual.gripper_width_m - expected.gripper_width_m
+    limits = SimulatorSafetyLimits()
+    if (
+        active != expected
+        or maximum_joint_error > limits.maximum_observation_joint_drift_radians
+        or abs(gripper_error) > MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+        or contact_force > limits.maximum_contact_force_newtons
+        or collision_detected
+        or runtime.attachment.attached != post.plug_attached
+    ):
+        raise RuntimeError("contact-grasp follow-up continuity is unsafe")
     return {
         "status": "diagnosed_no_actuation",
+        "diagnostic_passed": True,
         "session_id": session_id,
         "expected_drive_target": expected.to_dict(),
         "active_drive_target": active.to_dict(),
@@ -471,10 +484,8 @@ def diagnose_contact_grasp_followup_drive_target(
         ],
         "actual_gripper_width_m": actual.gripper_width_m,
         "joint_errors_rad": list(joint_errors),
-        "maximum_joint_error_rad": max(abs(value) for value in joint_errors),
-        "gripper_error_m": (
-            actual.gripper_width_m - expected.gripper_width_m
-        ),
+        "maximum_joint_error_rad": maximum_joint_error,
+        "gripper_error_m": gripper_error,
         "maximum_contact_force_newtons": contact_force,
         "collision_detected": collision_detected,
         "plug_attached": runtime.attachment.attached,
@@ -792,6 +803,16 @@ async def capture_contact_grasp_acquisition_handoff(
         or handoff.runtime_fingerprint != expected_runtime_fingerprint
     ):
         raise ValueError("contact-grasp acquisition handoff authority changed")
+    horizon_source_endpoint_status = (
+        handoff.to_dict().get("source_endpoint_status")
+        if horizon_completion_continuation
+        else None
+    )
+    if horizon_completion_continuation and horizon_source_endpoint_status not in (
+        ControlResultStatus.APPLIED.value,
+        ControlResultStatus.ROLLED_BACK_TRACKING.value,
+    ):
+        raise ValueError("contact-grasp horizon source endpoint is invalid")
     if resolution_continuation:
         diagnostic = json.loads(
             acquisition_resolution_diagnostic_path(
@@ -817,7 +838,8 @@ async def capture_contact_grasp_acquisition_handoff(
     refresh = source_result.insertion_trial_refresh
     horizon_tracking_rollback_reasons = (
         ("translation_direction",)
-        if horizon_completion_continuation
+        if horizon_source_endpoint_status
+        == ControlResultStatus.ROLLED_BACK_TRACKING.value
         else None
     )
     if rollback_continuation:
