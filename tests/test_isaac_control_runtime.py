@@ -1132,6 +1132,85 @@ class ContactReadingTest(unittest.TestCase):
         self.assertEqual(update_count, 18)
         self.assertEqual(synchronized.safety, settled)
 
+    def test_insertion_frame_capture_waits_for_active_arm_target(self) -> None:
+        timeline = _Timeline(playing=False)
+        update_count = 0
+        active_target = JointDriveTarget((0.0,) * 7, 0.02)
+        captured = ControlSafetySnapshot(
+            (0.004,) + (0.0,) * 6,
+            0.02,
+            (0.0, 0.0, 0.0),
+            0.0,
+            False,
+            True,
+        )
+        unsettled = captured
+        settled = ControlSafetySnapshot(
+            (0.001,) + (0.0,) * 6,
+            0.02,
+            captured.plug_position,
+            0.0,
+            False,
+            True,
+        )
+        actuators = Mock()
+        actuators.current_command.return_value = SimpleNamespace(
+            arm_positions=np.asarray(active_target.joint_positions),
+            gripper_width_m=active_target.gripper_width_m,
+        )
+        actuators.actual_command.side_effect = lambda: SimpleNamespace(
+            arm_positions=np.asarray(
+                unsettled.joint_positions
+                if update_count < 5
+                else settled.joint_positions
+            ),
+            gripper_width_m=active_target.gripper_width_m,
+        )
+        old_runtime = LiveControlRuntime(
+            "session", object(), actuators, Mock(attached=True), Mock()
+        )
+
+        async def advance() -> None:
+            nonlocal update_count
+            update_count += 1
+
+        async def capture(_observe_safety) -> None:
+            return None
+
+        def read(_runtime: LiveControlRuntime):
+            snapshot = unsettled if update_count < 5 else settled
+            return snapshot, Mock(), active_target
+
+        with (
+            _retain_test_runtime(),
+            patch(
+                "sim.isaac_control_runtime._control_safety_pose_and_drive_target",
+                side_effect=read,
+            ),
+            patch(
+                "sim.isaac_control_runtime.LiveContactInterlock.observe",
+                return_value=SimpleNamespace(
+                    collision_detected=False,
+                    force_newtons=0.0,
+                ),
+            ),
+        ):
+            synchronized = asyncio.run(
+                synchronized_insertion_frame_capture(
+                    old_runtime,
+                    timeline,
+                    advance,
+                    captured,
+                    SimulatorSafetyLimits(),
+                    capture,
+                    expected_active_drive_target=active_target,
+                    operation="test insertion follow-up arm settling",
+                )
+            )
+
+        self.assertEqual(update_count, 5)
+        self.assertEqual(synchronized.safety, settled)
+
     def test_insertion_frame_capture_bounds_gripper_settling_before_camera(self) -> None:
         timeline = _Timeline(playing=False)
         update_count = 0

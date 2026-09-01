@@ -215,35 +215,53 @@ def current_drive_target(runtime: LiveControlRuntime) -> JointDriveTarget:
     return _active_drive_target(runtime)
 
 
-async def _settle_insertion_frame_capture_gripper(
+async def _settle_insertion_frame_capture_drive_target(
     runtime: LiveControlRuntime,
     advance: Any,
     observe_safety: Any,
     expected_active_drive_target: JointDriveTarget,
     operation: str,
+    maximum_arm_error_radians: float,
     maximum_gripper_error_meters: float,
 ) -> None:
-    """Wait bounded observed updates for the unchanged gripper drive target."""
+    """Wait bounded observed updates for the unchanged arm and gripper target."""
 
+    arm_error = float("inf")
+    gripper_error = float("inf")
     for update_index in range(
         MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES + 1
     ):
         if _active_drive_target(runtime) != expected_active_drive_target:
             raise RuntimeError(f"{operation} active drive target changed")
         actual = runtime.actuators.actual_command()
-        if (
-            abs(
-                actual.gripper_width_m
-                - expected_active_drive_target.gripper_width_m
+        arm_error = max(
+            abs(actual_value - expected_value)
+            for actual_value, expected_value in zip(
+                actual.arm_positions,
+                expected_active_drive_target.joint_positions,
             )
-            <= maximum_gripper_error_meters
+        )
+        gripper_error = abs(
+            actual.gripper_width_m
+            - expected_active_drive_target.gripper_width_m
+        )
+        if (
+            arm_error <= maximum_arm_error_radians
+            and gripper_error <= maximum_gripper_error_meters
         ):
             return
         if update_index == MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES:
             break
         await advance()
         observe_safety()
-    raise RuntimeError(f"{operation} gripper did not settle to its active target")
+    if gripper_error > maximum_gripper_error_meters:
+        raise RuntimeError(
+            f"{operation} gripper did not settle to its active target"
+        )
+    raise RuntimeError(
+        f"{operation} arm did not settle to its active target: "
+        f"error={arm_error:.6f} rad"
+    )
 
 
 async def _synchronized_live_read(
@@ -644,12 +662,13 @@ async def synchronized_insertion_frame_capture(
     ) -> None:
         if observe is None:
             raise RuntimeError("insertion frame capture has no live interlock")
-        await _settle_insertion_frame_capture_gripper(
+        await _settle_insertion_frame_capture_drive_target(
             live_runtime,
             advance,
             observe,
             expected_active_drive_target,
             operation,
+            limits.maximum_observation_joint_drift_radians,
             maximum_gripper_error_meters,
         )
         await capture(observe)

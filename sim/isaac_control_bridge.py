@@ -4,6 +4,7 @@ from sim.isaac_control_capture import capture_control_observation
 from sim.isaac_control_execution import apply_control_response
 from sim.isaac_control_resolution import measure_insertion_control_resolution
 from sim.isaac_control_followup import (
+    diagnose_contact_grasp_followup_drive_target,
     diagnose_contact_grasp_rollback_drive_target,
     capture_contact_grasp_acquisition_handoff,
     capture_followup_observation,
@@ -44,6 +45,8 @@ __all__ = (
     "capture_insertion_transition_observation",
     "diagnose_control_ik_scales",
     "diagnose_contact_grasp_acquisition_resolution",
+    "diagnose_contact_grasp_followup_drive_target",
+    "diagnose_contact_grasp_rollback_drive_target",
     "persist_insertion_proposal_handoff",
     "restore_insertion_no_actuation_retry",
     "restore_insertion_retry",

@@ -588,6 +588,8 @@ Commands:
                                         Continue V15 with direction-observable rotation
   jepa-wm-contact-grasp-rollback-diagnostic [v12|v15]
                                         Read a retained rollback drive target without motion
+  jepa-wm-contact-grasp-followup-diagnostic SESSION
+                                        Read retained applied grasp settling without motion
   jepa-wm-unknown-start-recovery-diagnostic SESSION
                                         Read paused rollback drift without motion
   jepa-wm-physical-shadow-canary-v5    Run continuity-safe unknown-start zero-actuation canary
@@ -1455,6 +1457,13 @@ case "${command}" in
     esac
     demo_python \
       "demo.diagnose_contact_grasp_rollback_drive_target(${rotation_resolution})" \
+      120
+    ;;
+  jepa-wm-contact-grasp-followup-diagnostic)
+    session_id="${2:-}"
+    is_safe_identifier "${session_id}" || die "invalid control session name"
+    demo_python \
+      "demo.diagnose_contact_grasp_followup_drive_target('${session_id}')" \
       120
     ;;
   jepa-wm-unknown-start-recovery-diagnostic)

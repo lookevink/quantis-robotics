@@ -1,4 +1,4 @@
-"""Authenticated V18 handoff after the V15 rotation-resolution rollback."""
+"""Authenticated V19 continuation after the V18 settlement false reject."""
 
 from __future__ import annotations
 
@@ -21,41 +21,23 @@ from jepa_wm.persistence import write_json_atomic
 from jepa_wm.training_artifact import artifact_fingerprint
 
 
-HANDOFF_SCHEMA = "quantis.contact_grasp_rotation_resolution.v3"
-EXPERIMENT_DIRECTORY = "unknown_start_rotation_resolution_v18"
-ROLLOUT_ID = "unknown-start-e2e-v18-62605-grasp"
-SOURCE_ROLLOUT_ID = "unknown-start-e2e-v15-62605-grasp"
-SOURCE_SESSION_ID = f"{SOURCE_ROLLOUT_ID}-36"
-ROLLED_BACK_SESSION_ID = f"{SOURCE_ROLLOUT_ID}-37"
-SOURCE_PREDECESSOR_SESSION_ID = "unknown-start-e2e-v10-62605-grasp-52"
-MAXIMUM_ACTIONS = 52
-SOURCE_REPORT_FINGERPRINT = (
-    "7ab01b20c3b4ded1b045a43392611d9a113966c3943781efbbd373b5b354afa3"
-)
+HANDOFF_SCHEMA = "quantis.contact_grasp_rotation_resolution.v4"
+EXPERIMENT_DIRECTORY = "unknown_start_rotation_resolution_v19"
+ROLLOUT_ID = "unknown-start-e2e-v19-62605-grasp"
+SOURCE_ROLLOUT_ID = "unknown-start-e2e-v18-62605-grasp"
+SOURCE_SESSION_ID = f"{SOURCE_ROLLOUT_ID}-02"
+RUNTIME_OWNER_SESSION_ID = SOURCE_SESSION_ID
+SOURCE_PREDECESSOR_SESSION_ID = f"{SOURCE_ROLLOUT_ID}-01"
+MAXIMUM_ACTIONS = 50
+V15_ROLLED_BACK_SESSION_ID = "unknown-start-e2e-v15-62605-grasp-37"
 SOURCE_CLAIM_FINGERPRINT = (
-    "0586509485913386506aa7804aaeb66af744343e8e081b6577ab5e21a99da7ff"
+    "c507ea7bcf5b174055fdb20ae81cd3eb25299fe97e2c6ba044b45131b51541ee"
 )
 SOURCE_FAILURE_FINGERPRINT = (
-    "4e2ce2af3e80d2af876e3c475bd31ba59373f8e94eb60e7e00392f3d918ee370"
+    "4842b7260e3bbd11c9c80e868fd865237f8d38939094c13348be6c8198f84e9e"
 )
 SOURCE_ROSTER_FINGERPRINT = (
-    "f6d3d15ae888732238568112c4b482ee1a7fde35ea03eb9469ff778ad6a44a0a"
-)
-V16_EXPERIMENT_DIRECTORY = "unknown_start_rotation_resolution_v16"
-V16_ROLLOUT_ID = "unknown-start-e2e-v16-62605-grasp"
-V16_CLAIM_FINGERPRINT = (
-    "5786115a58256886d630001ac3bc5f24ae605b41532172e31ae2c64e42768b33"
-)
-V16_FAILURE_FINGERPRINT = (
-    "3aaca80b884739a3f028a0482934c3500c34a8ccbc77bcf0fda261b99a9ca54c"
-)
-V17_EXPERIMENT_DIRECTORY = "unknown_start_rotation_resolution_v17"
-V17_ROLLOUT_ID = "unknown-start-e2e-v17-62605-grasp"
-V17_CLAIM_FINGERPRINT = (
-    "ae02bbe88eebe60909600676894815f88be8d102be39aa2e622bb93c36451ad2"
-)
-V17_FAILURE_FINGERPRINT = (
-    "6e2babc73c6ac1ec8b63d644f9e12e45f8c80b855f3e1a50fdfec6868e13f90c"
+    "d08ae0b1f5aa4e80a47435761595d8c67f18d948d3da736be139e6ede8e326a4"
 )
 SESSION_FILES = (
     "request.json",
@@ -104,10 +86,17 @@ def runtime_fingerprint(repository: Path | None = None) -> str:
 
 def source_roster_fingerprint(data_root: Path) -> str:
     digest = sha256()
-    for index in range(1, 38):
+    for index in (1, 2):
         session = data_root / "control_sessions" / f"{SOURCE_ROLLOUT_ID}-{index:02d}"
         for filename in SESSION_FILES:
             digest.update((artifact_fingerprint(session / filename) + "\n").encode())
+    partial_context = (
+        data_root
+        / "control_sessions"
+        / f"{SOURCE_ROLLOUT_ID}-03"
+        / "context.png"
+    )
+    digest.update((artifact_fingerprint(partial_context) + "\n").encode())
     return digest.hexdigest()
 
 
@@ -120,17 +109,31 @@ def handoff_path(data_root: Path, followup_session_id: str) -> Path:
     )
 
 
-def rollback_drive_target(data_root: Path):
-    """Canonicalize the exact pre-action command retained by the V15 rollback."""
+def retained_drive_target(data_root: Path):
+    """Reconstruct the exact active drive command retained after V18-02."""
+
+    from jepa_wm.control_rollout import ControlStepSummary
+    from sim.control_session import ControlSession
+
+    step = ControlStepSummary.from_session(
+        ControlSession.at(
+            data_root / "control_sessions",
+            RUNTIME_OWNER_SESSION_ID,
+        )
+    )
+    return step.contact_grasp_drive_target()
+
+
+def v15_rollback_drive_target(data_root: Path):
+    """Reconstruct the immutable command retained by the V15 rollback."""
 
     from jepa_wm.joint_drive import JointDriveTarget
     from sim.control_session import ControlSession
 
-    session = ControlSession.at(
+    result = ControlSession.at(
         data_root / "control_sessions",
-        ROLLED_BACK_SESSION_ID,
-    )
-    result = session.load_result()
+        V15_ROLLED_BACK_SESSION_ID,
+    ).load_result()
     refresh = result.insertion_trial_refresh
     if refresh is None:
         raise ValueError("V15 rollback pre-action refresh is missing")
@@ -161,22 +164,18 @@ class ContactGraspRotationResolution:
             "schema": self.schema,
             "source_rollout_id": SOURCE_ROLLOUT_ID,
             "source_session_id": SOURCE_SESSION_ID,
-            "rolled_back_session_id": ROLLED_BACK_SESSION_ID,
+            "runtime_owner_session_id": RUNTIME_OWNER_SESSION_ID,
             "followup_session_id": self.followup_session_id,
             "reference_recording": REFERENCE_RECORDING,
             "reference_seed": REFERENCE_SEED,
             "proposal_name": PROPOSAL_NAME,
             "proposal_fingerprint": PROPOSAL_FINGERPRINT,
-            "source_report_fingerprint": SOURCE_REPORT_FINGERPRINT,
             "source_claim_fingerprint": SOURCE_CLAIM_FINGERPRINT,
             "source_failure_fingerprint": SOURCE_FAILURE_FINGERPRINT,
             "source_roster_fingerprint": SOURCE_ROSTER_FINGERPRINT,
-            "v16_claim_fingerprint": V16_CLAIM_FINGERPRINT,
-            "v16_failure_fingerprint": V16_FAILURE_FINGERPRINT,
-            "v16_simulator_action_applied": False,
-            "v17_claim_fingerprint": V17_CLAIM_FINGERPRINT,
-            "v17_failure_fingerprint": V17_FAILURE_FINGERPRINT,
-            "v17_simulator_action_applied": False,
+            "source_applied_actions": 2,
+            "source_partial_session_id": f"{SOURCE_ROLLOUT_ID}-03",
+            "source_partial_session_action_applied": False,
             "runtime_fingerprint": self.runtime_fingerprint,
             "source_revision": self.source_revision,
             "simulator_action_authorized": True,
@@ -219,101 +218,63 @@ def _write_exclusive(path: Path, payload: dict[str, Any]) -> None:
 
 
 def validate_source(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
-    from jepa_wm.control_rollout import ControlRolloutReport, ControlStepSummary
+    from jepa_wm.control_rollout import ControlStepSummary
+    from jepa_wm.control_safety import DroidActionScale
     from sim.control_session import ControlResultStatus, ControlSession
 
-    source_root = checkpoint_root / "unknown_start_acquisition_resolution_v15"
-    report_path = data_root / "control_rollouts" / SOURCE_ROLLOUT_ID / "report.json"
+    source_root = checkpoint_root / "unknown_start_rotation_resolution_v18"
+    partial = data_root / "control_sessions" / f"{SOURCE_ROLLOUT_ID}-03"
     if (
         artifact_fingerprint(source_root / "CLAIM.json") != SOURCE_CLAIM_FINGERPRINT
         or artifact_fingerprint(source_root / "FAILURE.json") != SOURCE_FAILURE_FINGERPRINT
-        or artifact_fingerprint(report_path) != SOURCE_REPORT_FINGERPRINT
         or source_roster_fingerprint(data_root) != SOURCE_ROSTER_FINGERPRINT
+        or not partial.is_dir()
+        or {path.name for path in partial.iterdir()} != {"context.png"}
+        or (data_root / "control_rollouts" / SOURCE_ROLLOUT_ID).exists()
     ):
-        raise ValueError("terminal V15 rotation evidence changed")
-    payload = json.loads(report_path.read_text())
-    session_ids = tuple(step["session"] for step in payload.get("steps", ()))
-    reconstructed = ControlRolloutReport.from_sessions(
-        data_root,
-        SOURCE_ROLLOUT_ID,
-        session_ids,
-        reference_recording=REFERENCE_RECORDING,
-        seed=REFERENCE_SEED,
-        proposal=Path(payload["proposal"]),
-        requested_steps=MAXIMUM_ACTIONS,
-        predecessor_session_id=SOURCE_PREDECESSOR_SESSION_ID,
+        raise ValueError("terminal V18 settlement evidence changed")
+    first = ControlStepSummary.from_session(
+        ControlSession.at(
+            data_root / "control_sessions",
+            SOURCE_PREDECESSOR_SESSION_ID,
+        )
     )
-    source = ControlStepSummary.from_session(
+    second = ControlStepSummary.from_session(
         ControlSession.at(data_root / "control_sessions", SOURCE_SESSION_ID)
     )
-    failed = ControlStepSummary.from_session(
-        ControlSession.at(data_root / "control_sessions", ROLLED_BACK_SESSION_ID)
-    )
     failure = json.loads((source_root / "FAILURE.json").read_text())
-    post = failed.result.post_action
+    first_post = first.result.post_action
+    second_post = second.result.post_action
     if (
-        reconstructed.to_dict() != payload
-        or payload.get("applied_steps") != 36
-        or payload.get("complete_steps") != 37
-        or payload.get("translation_progress_meters", 0.0) <= 0.04
-        or source.result.status is not ControlResultStatus.APPLIED
-        or failed.result.status is not ControlResultStatus.ROLLED_BACK_TRACKING
-        or failed.state.previous_session_id != SOURCE_SESSION_ID
-        or post is None
-        or tuple(reason.value for reason in post.tracking.reasons)
-        != ("rotation_direction",)
-        or post.contact_force_newtons != 0.0
-        or post.collision_detected
-        or post.plug_attached
-        or failure.get("error") != "report:exit_1"
+        first.result.status is not ControlResultStatus.APPLIED
+        or second.result.status is not ControlResultStatus.APPLIED
+        or first.state.previous_session_id
+        != "unknown-start-e2e-v15-62605-grasp-36"
+        or second.state.previous_session_id != first.result.session_id
+        or first.result.selected_action_scale
+        != DroidActionScale(0.25, 0.25, 0.25)
+        or second.result.selected_action_scale
+        != DroidActionScale(0.25, 0.5, 0.25)
+        or first_post is None
+        or second_post is None
+        or not first_post.tracking.passed
+        or not second_post.tracking.passed
+        or any(
+            post.contact_force_newtons != 0.0
+            or post.collision_detected
+            or post.plug_attached
+            for post in (first_post, second_post)
+        )
+        or failure.get("error") != "capture_03:exit_1"
         or failure.get("retry_authorized") is not False
     ):
-        raise ValueError("V15 was not the exact safe rotation rollback")
-    return payload
-
-
-def validate_v16_no_action(checkpoint_root: Path, data_root: Path) -> None:
-    root = checkpoint_root / V16_EXPERIMENT_DIRECTORY
-    claim_path = root / "CLAIM.json"
-    failure_path = root / "FAILURE.json"
-    if (
-        artifact_fingerprint(claim_path) != V16_CLAIM_FINGERPRINT
-        or artifact_fingerprint(failure_path) != V16_FAILURE_FINGERPRINT
-    ):
-        raise ValueError("terminal no-action V16 evidence changed")
-    failure_payload = json.loads(failure_path.read_text())
-    if (
-        failure_payload.get("error") != "restore:exit_1"
-        or failure_payload.get("retry_authorized") is not False
-        or (data_root / "control_rollouts" / V16_ROLLOUT_ID).exists()
-        or any(
-            (data_root / "control_sessions" / f"{V16_ROLLOUT_ID}-{index:02d}").exists()
-            for index in range(1, MAXIMUM_ACTIONS + 1)
-        )
-    ):
-        raise ValueError("V16 was not the exact no-action ownership failure")
-
-
-def validate_v17_no_action(checkpoint_root: Path, data_root: Path) -> None:
-    root = checkpoint_root / V17_EXPERIMENT_DIRECTORY
-    claim_path = root / "CLAIM.json"
-    failure_path = root / "FAILURE.json"
-    if (
-        artifact_fingerprint(claim_path) != V17_CLAIM_FINGERPRINT
-        or artifact_fingerprint(failure_path) != V17_FAILURE_FINGERPRINT
-    ):
-        raise ValueError("terminal no-action V17 evidence changed")
-    failure_payload = json.loads(failure_path.read_text())
-    if (
-        failure_payload.get("error") != "capture_01:exit_1"
-        or failure_payload.get("retry_authorized") is not False
-        or (data_root / "control_rollouts" / V17_ROLLOUT_ID).exists()
-        or any(
-            (data_root / "control_sessions" / f"{V17_ROLLOUT_ID}-{index:02d}").exists()
-            for index in range(1, MAXIMUM_ACTIONS + 1)
-        )
-    ):
-        raise ValueError("V17 was not the exact no-action handoff failure")
+        raise ValueError("V18 was not the exact safe settlement false reject")
+    return {
+        "source_session_id": SOURCE_SESSION_ID,
+        "source_roster_fingerprint": SOURCE_ROSTER_FINGERPRINT,
+        "source_applied_actions": 2,
+        "source_partial_session_action_applied": False,
+    }
 
 
 def claim(
@@ -330,10 +291,6 @@ def claim(
         raise ValueError("contact-grasp rotation resolution is already terminal")
     validate_source(checkpoint_root, data_root)
     validate_source(recovery_checkpoint_root, recovery_data_root)
-    validate_v16_no_action(checkpoint_root, data_root)
-    validate_v16_no_action(recovery_checkpoint_root, recovery_data_root)
-    validate_v17_no_action(checkpoint_root, data_root)
-    validate_v17_no_action(recovery_checkpoint_root, recovery_data_root)
     handoff = ContactGraspRotationResolution(
         followup_session_id,
         runtime_fingerprint(),
@@ -499,7 +456,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "command",
-        choices=("fingerprint", "claim", "encode", "validate-handoff", "evaluate", "finalize", "failure"),
+        choices=(
+            "fingerprint",
+            "validate-source",
+            "claim",
+            "encode",
+            "validate-handoff",
+            "evaluate",
+            "finalize",
+            "failure",
+        ),
     )
     parser.add_argument("--checkpoint-root", type=Path)
     parser.add_argument("--recovery-checkpoint-root", type=Path)
@@ -512,6 +478,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "fingerprint":
         payload: Any = runtime_fingerprint()
+    elif args.command == "validate-source":
+        payload = validate_source(args.checkpoint_root, args.data_root)
     elif args.command == "claim":
         payload = claim(
             args.checkpoint_root,

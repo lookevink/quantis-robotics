@@ -53,11 +53,13 @@ from jepa_wm.contact_grasp_acquisition_resolution import (
 )
 from jepa_wm.contact_grasp_rotation_resolution import (
     HANDOFF_SCHEMA as ROTATION_RESOLUTION_SCHEMA,
-    ROLLED_BACK_SESSION_ID as ROTATION_RESOLUTION_RUNTIME_SESSION_ID,
+    RUNTIME_OWNER_SESSION_ID as ROTATION_RESOLUTION_RUNTIME_SESSION_ID,
     SOURCE_SESSION_ID as ROTATION_RESOLUTION_SOURCE_SESSION_ID,
+    V15_ROLLED_BACK_SESSION_ID,
     ContactGraspRotationResolution,
-    rollback_drive_target as rotation_resolution_drive_target,
+    retained_drive_target as rotation_resolution_drive_target,
     runtime_fingerprint as rotation_resolution_runtime_fingerprint,
+    v15_rollback_drive_target,
 )
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.control_policy import (
@@ -385,7 +387,7 @@ def diagnose_contact_grasp_rollback_drive_target(
 
     stage = omni.usd.get_context().get_stage()
     runtime_owner_session_id = (
-        ROTATION_RESOLUTION_RUNTIME_SESSION_ID
+        V15_ROLLED_BACK_SESSION_ID
         if rotation_resolution
         else ACQUISITION_RESOLUTION_RUNTIME_SESSION_ID
     )
@@ -393,7 +395,7 @@ def diagnose_contact_grasp_rollback_drive_target(
     if runtime is None:
         raise RuntimeError("contact-grasp rollback runtime was lost")
     expected = (
-        rotation_resolution_drive_target(QUANTIS_DATA_ROOT)
+        v15_rollback_drive_target(QUANTIS_DATA_ROOT)
         if rotation_resolution
         else acquisition_resolution_drive_target(QUANTIS_DATA_ROOT)
     )
@@ -415,6 +417,58 @@ def diagnose_contact_grasp_rollback_drive_target(
         "gripper_delta_m": (
             actual.gripper_width_m - expected.gripper_width_m
         ),
+        "simulator_action_applied": False,
+    }
+
+
+def diagnose_contact_grasp_followup_drive_target(
+    session_id: str,
+) -> dict[str, Any]:
+    """Read one retained applied grasp target and its paused articulation state."""
+
+    import omni.usd
+    from jepa_wm.control_rollout import ControlStepSummary
+
+    validate_recording_id(session_id)
+    step = ControlStepSummary.from_session(
+        ControlSession.at(CONTROL_ROOT, session_id)
+    )
+    post = step.result.post_action
+    if step.result.status is not ControlResultStatus.APPLIED or post is None:
+        raise ValueError("contact-grasp follow-up diagnostic requires an applied step")
+    stage = omni.usd.get_context().get_stage()
+    runtime = live_runtime_for(session_id, stage)
+    if runtime is None:
+        raise RuntimeError("contact-grasp follow-up runtime was lost")
+    expected = step.contact_grasp_drive_target()
+    active = current_drive_target(runtime)
+    actual = runtime.actuators.actual_command()
+    collision_detected, contact_force = read_control_contact(runtime.sensor)
+    joint_errors = tuple(
+        float(actual_value) - expected_value
+        for actual_value, expected_value in zip(
+            actual.arm_positions,
+            expected.joint_positions,
+        )
+    )
+    return {
+        "status": "diagnosed_no_actuation",
+        "session_id": session_id,
+        "expected_drive_target": expected.to_dict(),
+        "active_drive_target": active.to_dict(),
+        "active_target_matches": active == expected,
+        "actual_joint_positions": [
+            float(value) for value in actual.arm_positions
+        ],
+        "actual_gripper_width_m": actual.gripper_width_m,
+        "joint_errors_rad": list(joint_errors),
+        "maximum_joint_error_rad": max(abs(value) for value in joint_errors),
+        "gripper_error_m": (
+            actual.gripper_width_m - expected.gripper_width_m
+        ),
+        "maximum_contact_force_newtons": contact_force,
+        "collision_detected": collision_detected,
+        "plug_attached": runtime.attachment.attached,
         "simulator_action_applied": False,
     }
 
