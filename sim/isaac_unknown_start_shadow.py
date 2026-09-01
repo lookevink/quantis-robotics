@@ -574,6 +574,7 @@ async def _capture_unknown_start_observation(
     initial_target = target_policy.initial_target(
         reference.path,
         frame_root=QUANTIS_DATA_ROOT,
+        live_pose=snapshot.end_effector_pose,
     )
     observation = ControlObservation(
         observation_id=observation_id_for_session(session_id),

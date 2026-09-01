@@ -1158,6 +1158,39 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertEqual(summarized.returncode, 0, summarized.stderr)
         self.assertIn("contact-grasp-proposal-summarize", summary_calls)
 
+    def test_jepa_wm_contact_grasp_acquisition_commands_bind_the_full_window(self):
+        trained, training_calls = self.run_command(
+            "jepa-wm-contact-grasp-acquisition-proposal-train",
+            arguments=(
+                "contact-train-00,contact-train-01",
+                "3000",
+                "contact-grasp-acquisition-proposal",
+            ),
+        )
+        evaluated, evaluation_calls = self.run_command(
+            "jepa-wm-contact-grasp-acquisition-proposal-eval",
+            arguments=("contact-held-00", "contact-grasp-acquisition-proposal"),
+        )
+        summarized, summary_calls = self.run_command(
+            "jepa-wm-contact-grasp-acquisition-proposal-summarize",
+            arguments=(
+                "contact-held-00,contact-held-01",
+                "contact-grasp-acquisition-proposal",
+            ),
+        )
+
+        self.assertEqual(trained.returncode, 0, trained.stderr)
+        self.assertIn("contact-grasp-acquisition-proposal-train", training_calls)
+        self.assertIn("--seed '2600'", training_calls)
+        self.assertEqual(evaluated.returncode, 0, evaluated.stderr)
+        self.assertIn(
+            "contact-grasp-acquisition-proposal-eval", evaluation_calls
+        )
+        self.assertEqual(summarized.returncode, 0, summarized.stderr)
+        self.assertIn(
+            "contact-grasp-acquisition-proposal-summarize", summary_calls
+        )
+
     def test_jepa_wm_insertion_proposal_commands_bind_the_post_attachment_window(self):
         trained, training_calls = self.run_command(
             "jepa-wm-insertion-proposal-train",

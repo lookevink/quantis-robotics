@@ -18,6 +18,12 @@ _CONTACT_GRASP_START = (
     - DROID_ROLLOUT_PROTOCOL.action_horizon
 )
 CONTACT_GRASP_PROPOSAL_WINDOW = RolloutWindow(_CONTACT_GRASP_START, 8, 1)
+CONTACT_GRASP_ACQUISITION_PROPOSAL_WINDOW = RolloutWindow(
+    0,
+    CONTACT_INSERTION_LAYOUT.start_index(ContactInsertionSegment.GRASP_ATTACH)
+    + 5,
+    1,
+)
 _INSERTION_START = CONTACT_INSERTION_LAYOUT.start_index(
     ContactInsertionSegment.GRASP_ATTACH
 )
@@ -37,6 +43,9 @@ def proposal_window(task: str) -> RolloutWindow:
         return {
             "grasp": GRASP_PROPOSAL_WINDOW,
             "contact-grasp": CONTACT_GRASP_PROPOSAL_WINDOW,
+            "contact-grasp-acquisition": (
+                CONTACT_GRASP_ACQUISITION_PROPOSAL_WINDOW
+            ),
             "insertion": INSERTION_PROPOSAL_WINDOW,
         }[task]
     except KeyError as error:
@@ -45,7 +54,15 @@ def proposal_window(task: str) -> RolloutWindow:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("task", choices=("grasp", "contact-grasp", "insertion"))
+    parser.add_argument(
+        "task",
+        choices=(
+            "grasp",
+            "contact-grasp",
+            "contact-grasp-acquisition",
+            "insertion",
+        ),
+    )
     parser.add_argument(
         "field",
         nargs="?",

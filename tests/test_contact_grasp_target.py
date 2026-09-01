@@ -10,6 +10,7 @@ import numpy as np
 
 from jepa_wm.action import ACTION_RECORDING_CONTRACT, DroidAction, DroidPose
 from jepa_wm.contact_grasp_target import (
+    ACQUISITION_PROGRESS_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     CONTACT_GRASP_TARGET_POLICY,
     DIRECTIONAL_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     HORIZON_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
@@ -195,8 +196,60 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
             (0.21, 0.28, 0.43, 0.0, 0.0, 0.0, 0.5),
         ):
             self.assertAlmostEqual(actual, expected)
-        self.assertEqual(policy.schema, TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA)
+        self.assertEqual(
+            policy.schema,
+            ACQUISITION_PROGRESS_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+        )
+        self.assertTrue(policy.uses_measured_acquisition_progress)
         self.assertEqual(ContactGraspTargetPolicy.from_dict(policy.to_dict()), policy)
+
+        historical = ContactGraspTargetPolicy(
+            TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            (0.01, -0.02, 0.03),
+        )
+        self.assertFalse(historical.uses_measured_acquisition_progress)
+        self.assertEqual(
+            ContactGraspTargetPolicy.from_dict(historical.to_dict()),
+            historical,
+        )
+
+    def test_current_policy_binds_initial_target_to_measured_acquisition_pose(self) -> None:
+        policy = ContactGraspTargetPolicy.for_scene_translation((0.0, 0.0, 0.0))
+        contexts = policy.acquisition_context_indices
+        reference = {index: _pose(index / 1000.0) for index in contexts}
+
+        target = policy.initial_target_index(
+            live_pose=_pose(0.0132),
+            reference_context_poses=reference,
+        )
+        advanced = policy.next_target_index(
+            live_pose=_pose(0.0162),
+            plug_attached=False,
+            previous_target=self._target_path(target),
+            reference_context_poses={
+                **reference,
+                **{
+                    index: _pose(index / 1000.0)
+                    for index in policy.transport_context_indices
+                },
+            },
+        )
+        held = policy.next_target_index(
+            live_pose=_pose(0.0100),
+            plug_attached=False,
+            previous_target=self._target_path(advanced),
+            reference_context_poses={
+                **reference,
+                **{
+                    index: _pose(index / 1000.0)
+                    for index in policy.transport_context_indices
+                },
+            },
+        )
+
+        self.assertEqual(target, 16)
+        self.assertEqual(advanced, 19)
+        self.assertEqual(held, advanced)
 
     def test_current_attached_transport_composes_the_native_horizon(self) -> None:
         actions = (

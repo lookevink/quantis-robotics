@@ -76,18 +76,23 @@ task_proposal_setting() {
   case "${task_name}:${setting}" in
     grasp:seed) printf '234\n' ;;
     contact-grasp:seed) printf '2600\n' ;;
+    contact-grasp-acquisition:seed) printf '2600\n' ;;
     insertion:seed) printf '2600\n' ;;
     grasp:inactive_gripper) printf '0\n' ;;
     contact-grasp:inactive_gripper) printf '0\n' ;;
+    contact-grasp-acquisition:inactive_gripper) printf '1.0\n' ;;
     insertion:inactive_gripper) printf '0.01\n' ;;
     grasp:goal_direction) printf '0\n' ;;
     contact-grasp:goal_direction) printf '0\n' ;;
+    contact-grasp-acquisition:goal_direction) printf '1.0\n' ;;
     insertion:goal_direction) printf '1.0\n' ;;
     grasp:readiness_module) printf 'jepa_wm.grasp_proposal_readiness\n' ;;
     contact-grasp:readiness_module) printf 'jepa_wm.contact_grasp_proposal_readiness\n' ;;
+    contact-grasp-acquisition:readiness_module) printf 'jepa_wm.contact_grasp_acquisition_readiness\n' ;;
     insertion:readiness_module) printf 'jepa_wm.insertion_proposal_readiness\n' ;;
     grasp:readiness_suffix) printf 'grasp_readiness\n' ;;
     contact-grasp:readiness_suffix) printf 'contact_grasp_readiness\n' ;;
+    contact-grasp-acquisition:readiness_suffix) printf 'contact_grasp_acquisition_readiness\n' ;;
     insertion:readiness_suffix) printf 'insertion_readiness\n' ;;
     *) die "unsupported task proposal setting: ${task_name}:${setting}" ;;
   esac
@@ -759,6 +764,10 @@ train_contact_grasp_action_proposal() {
   train_task_action_proposal contact-grasp "$@"
 }
 
+train_contact_grasp_acquisition_action_proposal() {
+  train_task_action_proposal contact-grasp-acquisition "$@"
+}
+
 train_insertion_action_proposal() {
   train_task_action_proposal insertion "$@"
 }
@@ -883,6 +892,10 @@ evaluate_contact_grasp_action_proposal() {
   evaluate_task_action_proposal contact-grasp "$@"
 }
 
+evaluate_contact_grasp_acquisition_action_proposal() {
+  evaluate_task_action_proposal contact-grasp-acquisition "$@"
+}
+
 evaluate_insertion_action_proposal() {
   evaluate_task_action_proposal insertion "$@"
 }
@@ -992,6 +1005,10 @@ summarize_grasp_action_proposal() {
 
 summarize_contact_grasp_action_proposal() {
   summarize_task_action_proposal contact-grasp "$@"
+}
+
+summarize_contact_grasp_acquisition_action_proposal() {
+  summarize_task_action_proposal contact-grasp-acquisition "$@"
 }
 
 summarize_insertion_action_proposal() {
@@ -1677,6 +1694,9 @@ case "${1:-}" in
   contact-grasp-proposal-train)
     train_contact_grasp_action_proposal "${@:2}"
     ;;
+  contact-grasp-acquisition-proposal-train)
+    train_contact_grasp_acquisition_action_proposal "${@:2}"
+    ;;
   insertion-proposal-train)
     train_insertion_action_proposal "${@:2}"
     ;;
@@ -1712,6 +1732,9 @@ case "${1:-}" in
   contact-grasp-proposal-eval)
     evaluate_contact_grasp_action_proposal "${@:2}"
     ;;
+  contact-grasp-acquisition-proposal-eval)
+    evaluate_contact_grasp_acquisition_action_proposal "${@:2}"
+    ;;
   insertion-proposal-eval)
     evaluate_insertion_action_proposal "${@:2}"
     ;;
@@ -1723,6 +1746,9 @@ case "${1:-}" in
     ;;
   contact-grasp-proposal-summarize)
     summarize_contact_grasp_action_proposal "${@:2}"
+    ;;
+  contact-grasp-acquisition-proposal-summarize)
+    summarize_contact_grasp_acquisition_action_proposal "${@:2}"
     ;;
   insertion-proposal-summarize)
     summarize_insertion_action_proposal "${@:2}"

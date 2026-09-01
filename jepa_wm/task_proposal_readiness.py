@@ -61,6 +61,7 @@ class TaskProposalReadinessPolicy:
     stationary_description: str
     validate_recording: RecordingValidator
     require_training_selection_fingerprint: bool = False
+    minimum_warmup_frames: int = 4
 
     def training_report(self, proposal: Path) -> dict[str, object]:
         payload = json.loads(training_report_path(proposal.resolve()).read_text())
@@ -322,6 +323,7 @@ class TaskProposalReadinessPolicy:
             evaluation_reports,
             ProposalReadinessThresholds(
                 minimum_rollouts_per_seed=self.window.count,
+                minimum_warmup_frames=self.minimum_warmup_frames,
             ),
         )
         summary["schema"] = self.schema

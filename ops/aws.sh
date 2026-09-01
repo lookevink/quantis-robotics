@@ -537,12 +537,15 @@ Commands:
   jepa-wm-proposal-train RECORDING[,RECORDING...] [camera] [steps] [proposal]
   jepa-wm-grasp-proposal-train RECORDING[,RECORDING...] [steps] PROPOSAL [hidden-dimension learning-rate weight-decay seed]
   jepa-wm-contact-grasp-proposal-train RECORDING[,RECORDING...] [steps] PROPOSAL [hidden-dimension learning-rate weight-decay seed]
+  jepa-wm-contact-grasp-acquisition-proposal-train RECORDING[,RECORDING...] [steps] PROPOSAL [hidden-dimension learning-rate weight-decay seed]
   jepa-wm-proposal-eval RECORDING [camera] [start] [count] [stride] [proposal]
   jepa-wm-proposal-summarize RECORDING[,RECORDING...] [camera] [start] [count] [stride] [proposal]
   jepa-wm-grasp-proposal-eval RECORDING PROPOSAL
   jepa-wm-grasp-proposal-summarize RECORDING[,RECORDING...] PROPOSAL
   jepa-wm-contact-grasp-proposal-eval RECORDING PROPOSAL
   jepa-wm-contact-grasp-proposal-summarize RECORDING[,RECORDING...] PROPOSAL
+  jepa-wm-contact-grasp-acquisition-proposal-eval RECORDING PROPOSAL
+  jepa-wm-contact-grasp-acquisition-proposal-summarize RECORDING[,RECORDING...] PROPOSAL
   jepa-wm-insertion-proposal-train RECORDING[,RECORDING...] [steps] PROPOSAL [hidden-dimension learning-rate weight-decay seed]
   jepa-wm-insertion-transition-finetune SOURCE_SESSION PARENT_PROPOSAL OUTPUT_PROPOSAL [steps=500] [learning-rate=0.0001]
   jepa-wm-insertion-transition-eval SOURCE_SESSION PROPOSAL OUTPUT
@@ -1003,6 +1006,15 @@ case "${command}" in
     ;;
   jepa-wm-contact-grasp-proposal-summarize)
     run_task_proposal_summary contact-grasp "${2:-}" "${3:-}"
+    ;;
+  jepa-wm-contact-grasp-acquisition-proposal-train)
+    run_task_proposal_training contact-grasp-acquisition 2600 "${@:2}"
+    ;;
+  jepa-wm-contact-grasp-acquisition-proposal-eval)
+    run_task_proposal_evaluation contact-grasp-acquisition "${2:-}" "${3:-}"
+    ;;
+  jepa-wm-contact-grasp-acquisition-proposal-summarize)
+    run_task_proposal_summary contact-grasp-acquisition "${2:-}" "${3:-}"
     ;;
   jepa-wm-insertion-proposal-train)
     run_task_proposal_training insertion 2600 "${@:2}"
