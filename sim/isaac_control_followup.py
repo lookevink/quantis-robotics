@@ -61,6 +61,15 @@ from jepa_wm.contact_grasp_rotation_resolution import (
     runtime_fingerprint as rotation_resolution_runtime_fingerprint,
     v15_rollback_drive_target,
 )
+from jepa_wm.contact_grasp_horizon_completion import (
+    HANDOFF_SCHEMA as HORIZON_COMPLETION_SCHEMA,
+    PROPOSAL_NAME as HORIZON_COMPLETION_PROPOSAL_NAME,
+    RUNTIME_OWNER_SESSION_ID as HORIZON_COMPLETION_RUNTIME_SESSION_ID,
+    SOURCE_SESSION_ID as HORIZON_COMPLETION_SOURCE_SESSION_ID,
+    ContactGraspHorizonCompletion,
+    retained_drive_target as horizon_completion_drive_target,
+    runtime_fingerprint as horizon_completion_runtime_fingerprint,
+)
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.control_policy import (
     ControlExecutionPolicy,
@@ -496,15 +505,27 @@ async def capture_contact_grasp_acquisition_handoff(
         rotation_resolution_continuation = (
             payload.get("schema") == ROTATION_RESOLUTION_SCHEMA
         )
+        horizon_completion_continuation = (
+            payload.get("schema") == HORIZON_COMPLETION_SCHEMA
+        )
         rollback_continuation = (
-            resolution_continuation or rotation_resolution_continuation
+            resolution_continuation
+            or rotation_resolution_continuation
+            or horizon_completion_continuation
         )
         hold_continuation = payload.get("schema") == ACQUISITION_HOLD_SCHEMA
         continuation = (
             payload.get("schema") == ACQUISITION_CONTINUATION_SCHEMA
             or hold_continuation
         )
-        if rotation_resolution_continuation:
+        if horizon_completion_continuation:
+            handoff = ContactGraspHorizonCompletion.from_dict(payload)
+            expected_source_session = HORIZON_COMPLETION_SOURCE_SESSION_ID
+            expected_proposal = HORIZON_COMPLETION_PROPOSAL_NAME
+            expected_fingerprints = None
+            expected_runtime_fingerprint = horizon_completion_runtime_fingerprint()
+            expected_gate_reason = None
+        elif rotation_resolution_continuation:
             handoff = ContactGraspRotationResolution.from_dict(payload)
             expected_source_session = ROTATION_RESOLUTION_SOURCE_SESSION_ID
             expected_proposal = handoff.to_dict()["proposal_name"]
@@ -631,6 +652,11 @@ async def capture_contact_grasp_acquisition_handoff(
         raise ValueError("contact-grasp acquisition handoff already exists")
     stage = omni.usd.get_context().get_stage()
     runtime = live_runtime_for(source_session_id, stage)
+    if runtime is None and horizon_completion_continuation:
+        runtime = live_runtime_for(
+            HORIZON_COMPLETION_RUNTIME_SESSION_ID,
+            stage,
+        )
     if runtime is None and rotation_resolution_continuation:
         runtime = live_runtime_for(
             ROTATION_RESOLUTION_RUNTIME_SESSION_ID,
@@ -647,9 +673,13 @@ async def capture_contact_grasp_acquisition_handoff(
         raise RuntimeError("live contact-grasp acquisition runtime was lost")
     if rollback_continuation:
         expected_active_drive_target = (
-            rotation_resolution_drive_target(QUANTIS_DATA_ROOT)
-            if rotation_resolution_continuation
-            else acquisition_resolution_drive_target(QUANTIS_DATA_ROOT)
+            horizon_completion_drive_target(QUANTIS_DATA_ROOT)
+            if horizon_completion_continuation
+            else (
+                rotation_resolution_drive_target(QUANTIS_DATA_ROOT)
+                if rotation_resolution_continuation
+                else acquisition_resolution_drive_target(QUANTIS_DATA_ROOT)
+            )
         )
         if current_drive_target(runtime) != expected_active_drive_target:
             raise RuntimeError(
