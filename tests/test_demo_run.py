@@ -171,9 +171,9 @@ class DemoRunSpecTest(unittest.TestCase):
                 spec.fingerprint, DemoRunSpec.from_dict(spec.to_dict()).fingerprint
             )
             self.assertEqual(spec.to_dict()["schema"], "quantis.demo_run_spec.v1")
-            self.assertEqual(spec.terminal_contract.grasp_actions, 52)
+            self.assertEqual(spec.terminal_contract.grasp_actions, 192)
             self.assertEqual(spec.terminal_contract.insertion_actions, 4)
-            self.assertEqual(spec.action_cap, 56)
+            self.assertEqual(spec.action_cap, 196)
             self.assertFalse(spec.terminal_contract.require_seated_hold)
             spec_path = Path(temp_dir) / "demo-runs" / "frozen.json"
             spec.persist(spec_path)
@@ -269,7 +269,7 @@ class DemoRunSpecTest(unittest.TestCase):
                     required_workers=required_workers,
                     reference_recording=spec.selection.reference_recording,
                     exploration_seed=spec.selection.exploration_seed,
-                    grasp_actions=52,
+                    grasp_actions=192,
                     insertion_actions=4,
                 ),
                 spec,
@@ -285,7 +285,7 @@ class DemoRunSpecTest(unittest.TestCase):
                     required_workers=required_workers,
                     reference_recording=spec.selection.reference_recording,
                     exploration_seed=spec.selection.exploration_seed,
-                    grasp_actions=52,
+                    grasp_actions=192,
                     insertion_actions=4,
                 )
 
@@ -318,7 +318,7 @@ class DemoRunSpecTest(unittest.TestCase):
                     required_workers=required_workers,
                     reference_recording=stale.selection.reference_recording,
                     exploration_seed=stale.selection.exploration_seed,
-                    grasp_actions=52,
+                    grasp_actions=192,
                     insertion_actions=4,
                 )
 
@@ -349,7 +349,7 @@ class DemoRunSpecTest(unittest.TestCase):
                     required_workers=required_workers,
                     reference_recording=spec.corpus[-1].recording,
                     exploration_seed=spec.corpus[-1].seed,
-                    grasp_actions=52,
+                    grasp_actions=192,
                     insertion_actions=4,
                 )
 

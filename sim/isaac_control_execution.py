@@ -102,7 +102,10 @@ from sim.isaac_demo_scene import ROBOT_PATH, world_pose
 from sim.recording import RecordingLabel, RecordingMoment, RecordingSnapshot
 
 
-CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS = 5e-3
+# Match the follow-up capture continuity tolerance before evaluating Cartesian
+# tracking.  A looser 5 mrad early exit made larger safe commands look
+# under-realized even though the unchanged drive target continued settling.
+CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS = 2e-3
 EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS = 1e-3
 EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_GRIPPER_ERROR_METERS = 5e-4
 
@@ -716,6 +719,9 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             ),
             require_resolvable_rotation=(
                 contact_grasp_policy.requires_resolvable_rotation
+            ),
+            exact_coarse_translation_projection=(
+                contact_grasp_policy.uses_exact_coarse_translation_projection
             ),
         )
     from sim.isaac_unknown_start_shadow import (

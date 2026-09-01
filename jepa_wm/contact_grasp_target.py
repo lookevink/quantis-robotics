@@ -23,6 +23,7 @@ from jepa_wm.insertion_contract import (
 from jepa_wm.task_windows import (
     CONTACT_GRASP_ACQUISITION_PROPOSAL_WINDOW,
     CONTACT_GRASP_PROPOSAL_WINDOW,
+    LEGACY_CONTACT_GRASP_PROPOSAL_WINDOW,
 )
 from jepa_wm.trajectory import DROID_ROLLOUT_PROTOCOL, RecordedRollout, load_rollouts
 
@@ -54,6 +55,9 @@ TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
 ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v9"
 )
+EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+    "quantis.jepa_wm_contact_grasp_target_policy.v10"
+)
 
 
 class _TransportComposition(str, Enum):
@@ -70,6 +74,8 @@ class _PolicyCapabilities:
     coarse_acquisition: bool = False
     coarse_acquisition_maximum_translation_meters: float | None = None
     resolvable_rotation: bool = False
+    exact_coarse_translation_projection: bool = False
+    extended_retained_window: bool = False
 
 
 _POLICY_CAPABILITIES = {
@@ -118,6 +124,16 @@ _POLICY_CAPABILITIES = {
         True,
         True,
         0.002,
+        True,
+    ),
+    EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA: _PolicyCapabilities(
+        True,
+        _TransportComposition.TRANSLATION_HORIZON,
+        True,
+        True,
+        0.002,
+        True,
+        True,
         True,
     ),
 }
@@ -169,6 +185,7 @@ class ContactGraspTargetPolicy:
                     RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                    EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 )
                 and self.scene_translation_m != (0.0, 0.0, 0.0)
             )
@@ -181,7 +198,7 @@ class ContactGraspTargetPolicy:
         translation_m: tuple[float, float, float],
     ) -> ContactGraspTargetPolicy:
         return cls(
-            ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             translation_m,
         )
 
@@ -279,6 +296,14 @@ class ContactGraspTargetPolicy:
         return _POLICY_CAPABILITIES[self.schema].resolvable_rotation
 
     @property
+    def uses_exact_coarse_translation_projection(self) -> bool:
+        """Fill the versioned coarse command bound without exceeding it."""
+
+        return _POLICY_CAPABILITIES[
+            self.schema
+        ].exact_coarse_translation_projection
+
+    @property
     def acquisition_context_indices(self) -> tuple[int, ...]:
         if not self.uses_measured_acquisition_progress:
             return (
@@ -300,9 +325,14 @@ class ContactGraspTargetPolicy:
 
     @property
     def transport_context_indices(self) -> tuple[int, ...]:
+        window = (
+            CONTACT_GRASP_PROPOSAL_WINDOW
+            if _POLICY_CAPABILITIES[self.schema].extended_retained_window
+            else LEGACY_CONTACT_GRASP_PROPOSAL_WINDOW
+        )
         return tuple(
             index
-            for index in CONTACT_GRASP_PROPOSAL_WINDOW.context_indices
+            for index in window.context_indices
             if index >= self.acquisition_target_index
         )
 
@@ -644,6 +674,7 @@ class ContactGraspTargetPolicy:
             RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         ):
             payload["scene_translation_m"] = list(self.scene_translation_m)
         return payload
@@ -662,6 +693,7 @@ class ContactGraspTargetPolicy:
                 RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             )
             else {"schema"}
         )

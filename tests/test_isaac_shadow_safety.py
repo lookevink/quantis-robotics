@@ -102,6 +102,26 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
         )
         self.assertLessEqual(commanded.values[6] * 0.08, 0.0015)
 
+    def test_exact_coarse_acquisition_fills_but_never_exceeds_bound(self) -> None:
+        action = DroidAction(
+            (0.0045, 0.0008, -0.0022, 0.0, 0.0, 0.0, -0.01)
+        )
+
+        scales = contact_grasp_action_scales(
+            action,
+            coarse_acquisition=True,
+            exact_coarse_translation_projection=True,
+        )
+        norms = [
+            sum(value * value for value in scale.apply(action).values[:3]) ** 0.5
+            for scale in scales
+        ]
+
+        self.assertAlmostEqual(norms[0], 0.002)
+        self.assertTrue(all(norm <= 0.002 for norm in norms))
+        self.assertGreater(scales[0].translation, 0.25)
+        self.assertEqual(scales[-1].rotation, 0.0)
+
     def test_reads_the_historical_positional_tracking_roster(self) -> None:
         self.assertEqual(
             insertion_projection_policy_for_attempts(

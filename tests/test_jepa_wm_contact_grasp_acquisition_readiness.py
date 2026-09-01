@@ -49,7 +49,7 @@ class ContactGraspAcquisitionReadinessTest(unittest.TestCase):
         window = CONTACT_GRASP_ACQUISITION_PROPOSAL_WINDOW
 
         self.assertEqual(window.start_index, 0)
-        self.assertEqual(window.context_indices[-1], 117)
+        self.assertEqual(window.context_indices[-1], 125)
         self.assertEqual(proposal_window("contact-grasp-acquisition"), window)
 
     def test_gripper_phase_gate_requires_hold_close_and_retention(self) -> None:

@@ -56,7 +56,7 @@ class ContactGraspProposalReadinessTest(unittest.TestCase):
                     ContactInsertionSegment.GRASP_ATTACH
                 )
                 - DROID_ROLLOUT_PROTOCOL.action_horizon,
-                "count": 8,
+                "count": 16,
                 "stride": 1,
             },
         )

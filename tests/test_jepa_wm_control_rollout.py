@@ -233,7 +233,7 @@ class ControlRolloutTest(unittest.TestCase):
             wrist = reference / "wrist"
             wrist.mkdir()
             steps = []
-            for index in range(121):
+            for index in range(129):
                 frame = wrist / f"frame_{index:06d}.png"
                 frame.write_bytes(b"frame")
                 steps.append(

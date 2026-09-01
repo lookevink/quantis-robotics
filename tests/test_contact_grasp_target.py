@@ -13,6 +13,7 @@ from jepa_wm.contact_grasp_target import (
     ACQUISITION_PROGRESS_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     CONTACT_GRASP_TARGET_POLICY,
     DIRECTIONAL_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+    EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     HORIZON_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
@@ -85,7 +86,20 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
         self.reference_poses = dict(
             zip(
                 self.transport_contexts,
-                map(_pose, (0.3356, 0.3322, 0.3225, 0.3076, 0.2899)),
+                map(
+                    _pose,
+                    (
+                        0.3356,
+                        0.3322,
+                        0.3225,
+                        0.3076,
+                        0.2899,
+                        *(
+                            0.2899
+                            for _ in range(len(self.transport_contexts) - 5)
+                        ),
+                    ),
+                ),
             )
         )
 
@@ -201,10 +215,11 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
             self.assertAlmostEqual(actual, expected)
         self.assertEqual(
             policy.schema,
-            ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         )
         self.assertTrue(policy.uses_measured_acquisition_progress)
         self.assertTrue(policy.requires_resolvable_rotation)
+        self.assertTrue(policy.uses_exact_coarse_translation_projection)
         self.assertEqual(ContactGraspTargetPolicy.from_dict(policy.to_dict()), policy)
 
         historical = ContactGraspTargetPolicy(
@@ -233,7 +248,7 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
 
         self.assertEqual(
             policy.schema,
-            ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         )
         self.assertEqual(
             policy.coarse_acquisition_maximum_translation_meters,
@@ -269,6 +284,15 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
             (0.0, 0.0, 0.0),
         )
         self.assertFalse(tracking_bounded.requires_resolvable_rotation)
+        historical_rotation = ContactGraspTargetPolicy(
+            ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            (0.0, 0.0, 0.0),
+        )
+        self.assertEqual(historical_rotation.transport_target_indices[-1], 120)
+        self.assertFalse(
+            historical_rotation.uses_exact_coarse_translation_projection
+        )
+        self.assertEqual(policy.transport_target_indices[-1], 128)
         self.assertFalse(
             policy.uses_coarse_acquisition_action(
                 self._target_path(96),
@@ -445,12 +469,10 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
             frame_count = self.transport_targets[-1] + 1
             positions = {index: 0.3356 for index in range(frame_count)}
             positions.update(
-                dict(
-                    zip(
-                        self.transport_contexts,
-                        (0.3356, 0.3322, 0.3225, 0.3076, 0.2899),
-                    )
-                )
+                {
+                    index: pose.values[0]
+                    for index, pose in self.reference_poses.items()
+                }
             )
             steps = []
             for index in range(frame_count):

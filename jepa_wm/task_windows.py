@@ -17,11 +17,29 @@ _CONTACT_GRASP_START = (
     CONTACT_INSERTION_LAYOUT.start_index(ContactInsertionSegment.GRASP_ATTACH)
     - DROID_ROLLOUT_PROTOCOL.action_horizon
 )
-CONTACT_GRASP_PROPOSAL_WINDOW = RolloutWindow(_CONTACT_GRASP_START, 8, 1)
-CONTACT_GRASP_ACQUISITION_PROPOSAL_WINDOW = RolloutWindow(
+LEGACY_CONTACT_GRASP_PROPOSAL_WINDOW = RolloutWindow(_CONTACT_GRASP_START, 8, 1)
+LEGACY_CONTACT_GRASP_ACQUISITION_PROPOSAL_WINDOW = RolloutWindow(
     0,
     CONTACT_INSERTION_LAYOUT.start_index(ContactInsertionSegment.GRASP_ATTACH)
     + 5,
+    1,
+)
+# Frame 128 is at least 23.9 mm beyond attachment in every authenticated
+# TRAIN and HELD_OUT recording.  Keep the target window beyond the unchanged
+# 20 mm retained-displacement gate instead of ending at frame 120 (5.8 mm),
+# which made faithful task completion geometrically impossible.
+_CONTACT_GRASP_RETAINED_TARGET_INDEX = 128
+_CONTACT_GRASP_RETAINED_CONTEXT_INDEX = (
+    _CONTACT_GRASP_RETAINED_TARGET_INDEX - DROID_ROLLOUT_PROTOCOL.action_horizon
+)
+CONTACT_GRASP_PROPOSAL_WINDOW = RolloutWindow(
+    _CONTACT_GRASP_START,
+    _CONTACT_GRASP_RETAINED_CONTEXT_INDEX - _CONTACT_GRASP_START + 1,
+    1,
+)
+CONTACT_GRASP_ACQUISITION_PROPOSAL_WINDOW = RolloutWindow(
+    0,
+    _CONTACT_GRASP_RETAINED_CONTEXT_INDEX + 1,
     1,
 )
 _INSERTION_START = CONTACT_INSERTION_LAYOUT.start_index(

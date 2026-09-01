@@ -254,6 +254,35 @@ def _bounded_closing_policy(
             return candidate
     return _with_gripper_scale(policy, 0.015625)
 
+
+def _exact_coarse_translation_policy(
+    translation_norm: float,
+    coarse_limit: float,
+) -> tuple[DroidActionScale, ...]:
+    """Fill the safe coarse bound, retaining ordered IK fallbacks."""
+
+    maximum_scale = min(1.0, coarse_limit / max(translation_norm, 1e-12))
+    minimum_scale = min(maximum_scale, 0.03125)
+    translations = tuple(
+        dict.fromkeys(
+            (
+                maximum_scale,
+                maximum_scale / 2.0,
+                maximum_scale / 4.0,
+                maximum_scale / 8.0,
+                maximum_scale / 16.0,
+                minimum_scale,
+            )
+        )
+    )
+    scales = tuple(
+        DroidActionScale(translation, 0.125, 0.125)
+        for translation in translations
+        if translation >= minimum_scale
+    )
+    return (*scales, DroidActionScale(minimum_scale, 0.0, 0.125))
+
+
 # These policies were exercised by earlier guarded contact-grasp checkpoints.
 # They remain reconstruction-only so their persisted negative evidence stays
 # readable after the magnitude-aware policy was introduced.
@@ -295,11 +324,14 @@ def contact_grasp_action_scales(
     coarse_acquisition: bool = False,
     maximum_coarse_translation_command_meters: float | None = None,
     require_resolvable_rotation: bool = False,
+    exact_coarse_translation_projection: bool = False,
 ) -> tuple[DroidActionScale, ...]:
     """Bound approach motion and calibrate gripper closure independently."""
 
-    if not isinstance(coarse_acquisition, bool) or not isinstance(
-        require_resolvable_rotation, bool
+    if (
+        not isinstance(coarse_acquisition, bool)
+        or not isinstance(require_resolvable_rotation, bool)
+        or not isinstance(exact_coarse_translation_projection, bool)
     ):
         raise ValueError("contact-grasp acquisition scale phase is invalid")
     if maximum_coarse_translation_command_meters is not None and (
@@ -357,7 +389,15 @@ def contact_grasp_action_scales(
             if maximum_coarse_translation_command_meters is not None
             else MAXIMUM_CONTACT_GRASP_COARSE_TRANSLATION_COMMAND_METERS
         )
-        for policy in CONTACT_GRASP_COARSE_ACTION_SCALE_POLICIES:
+        policies = CONTACT_GRASP_COARSE_ACTION_SCALE_POLICIES
+        if exact_coarse_translation_projection:
+            policies = (
+                _exact_coarse_translation_policy(
+                    translation_norm,
+                    coarse_limit,
+                ),
+            )
+        for policy in policies:
             if (
                 translation_norm * policy[0].translation
                 <= coarse_limit
@@ -373,7 +413,7 @@ def contact_grasp_action_scales(
                     required=require_resolvable_rotation,
                 )
         return _rotation_resolved_policy(
-            CONTACT_GRASP_COARSE_ACTION_SCALE_POLICIES[-1],
+            policies[-1],
             action,
             required=require_resolvable_rotation,
         )

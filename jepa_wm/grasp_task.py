@@ -10,7 +10,12 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 
-MAXIMUM_CONTACT_GRASP_ACTIONS = 52
+# V19 measured 124 mm remaining to acquisition.  At the unchanged 2 mm
+# command bound, 1.5 mm retained-progress floor, bounded gripper closure, and
+# 0.75 mm attached-transport bound, 52 actions cannot complete the task.  This
+# remains a hard terminal cap, but now covers one full unknown-start chain and
+# stops early as soon as the existing grasp predicate passes.
+MAXIMUM_CONTACT_GRASP_ACTIONS = 192
 
 
 class ReachAndGraspFailure(str, Enum):
