@@ -31,7 +31,7 @@ from jepa_wm.persistence import write_json_atomic
 from jepa_wm.training_artifact import artifact_fingerprint
 
 
-HANDOFF_SCHEMA = "quantis.contact_grasp_acquisition_hold.v2"
+HANDOFF_SCHEMA = "quantis.contact_grasp_acquisition_hold.v3"
 V6_ROLLOUT_ID = "unknown-start-e2e-v6-62605-grasp"
 V6_REPORT_FINGERPRINT = (
     "2b1952ebf834a28465f1a3d5f4b5d3fe0df365ddfded63e8f3a762113cc3c9b9"
@@ -58,8 +58,14 @@ V7_CLAIM_FINGERPRINT = (
 V7_FAILURE_FINGERPRINT = (
     "f1772f8004bd5a65c963dd581bfccf6d8c7409bfc4e8cd1446cf6d23e9ff6bd8"
 )
-EXPERIMENT_DIRECTORY = "unknown_start_acquisition_hold_v8"
-ROLLOUT_ID = "unknown-start-e2e-v8-62605-grasp"
+V8_CLAIM_FINGERPRINT = (
+    "aca940403e3755d979f5a5977fcb6f0b22e0f86272629f502412ec06acc67cd2"
+)
+V8_FAILURE_FINGERPRINT = (
+    "ebfba0979be2533a9fd5a4b11c926b90bce1b427aa896de84471e42b1ac2d1d4"
+)
+EXPERIMENT_DIRECTORY = "unknown_start_acquisition_hold_v9"
+ROLLOUT_ID = "unknown-start-e2e-v9-62605-grasp"
 MAXIMUM_ACTIONS = 52
 
 
@@ -140,6 +146,8 @@ class ContactGraspAcquisitionHold:
             "v6_session_fingerprints": V6_SESSION_FINGERPRINTS,
             "v7_claim_fingerprint": V7_CLAIM_FINGERPRINT,
             "v7_failure_fingerprint": V7_FAILURE_FINGERPRINT,
+            "v8_claim_fingerprint": V8_CLAIM_FINGERPRINT,
+            "v8_failure_fingerprint": V8_FAILURE_FINGERPRINT,
             "runtime_fingerprint": self.runtime_fingerprint,
             "source_revision": self.source_revision,
             "simulator_action_authorized": True,
@@ -219,6 +227,29 @@ def _validate_v6(checkpoint_root: Path, data_root: Path) -> None:
         or (data_root / "control_rollouts" / "unknown-start-e2e-v7-62605-grasp").exists()
     ):
         raise ValueError("V7 was not the exact no-capture runtime-owner failure")
+    v8_root = checkpoint_root / "unknown_start_acquisition_hold_v8"
+    v8_claim = v8_root / "CLAIM.json"
+    v8_failure = v8_root / "FAILURE.json"
+    if (
+        artifact_fingerprint(v8_claim) != V8_CLAIM_FINGERPRINT
+        or artifact_fingerprint(v8_failure) != V8_FAILURE_FINGERPRINT
+    ):
+        raise ValueError("terminal V8 evidence changed")
+    v8_claim_payload = json.loads(v8_claim.read_text())
+    v8_failure_payload = json.loads(v8_failure.read_text())
+    if (
+        v8_claim_payload.get("followup_session_id")
+        != "unknown-start-e2e-v8-62605-grasp-01"
+        or v8_failure_payload.get("error") != "capture_01:exit_1"
+        or v8_failure_payload.get("retry_authorized") is not False
+        or (
+            data_root
+            / "control_sessions"
+            / "unknown-start-e2e-v8-62605-grasp-01"
+        ).exists()
+        or (data_root / "control_rollouts" / "unknown-start-e2e-v8-62605-grasp").exists()
+    ):
+        raise ValueError("V8 was not the exact no-capture reload failure")
 
 
 def paths(checkpoint_root: Path) -> tuple[Path, Path, Path, Path]:
@@ -295,7 +326,7 @@ def evaluate(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
         and 1 <= report.get("applied_steps", 0) <= MAXIMUM_ACTIONS
     )
     payload = {
-        "schema": "quantis.contact_grasp_acquisition_hold_evaluation.v2",
+        "schema": "quantis.contact_grasp_acquisition_hold_evaluation.v3",
         "status": "evaluated_pending_recovery",
         "evaluation_passed": passed,
         "recovery_verified": False,
@@ -352,7 +383,7 @@ def finalize(
     if artifact_fingerprint(handoff) != artifact_fingerprint(recovery_handoff):
         raise ValueError("contact-grasp acquisition hold handoff backup changed")
     payload = {
-        "schema": "quantis.contact_grasp_acquisition_hold_terminal.v2",
+        "schema": "quantis.contact_grasp_acquisition_hold_terminal.v3",
         "status": "passed",
         "passed": True,
         "recovery_verified": True,
@@ -377,7 +408,7 @@ def failure(checkpoint_root: Path, error: str) -> dict[str, Any]:
     if result_path.exists() or failure_path.exists() or not claim_path.is_file():
         raise ValueError("contact-grasp acquisition hold failure is invalid")
     payload = {
-        "schema": "quantis.contact_grasp_acquisition_hold_failure.v2",
+        "schema": "quantis.contact_grasp_acquisition_hold_failure.v3",
         "status": "failed",
         "failed_at": datetime.now(timezone.utc).isoformat(),
         "error": error,

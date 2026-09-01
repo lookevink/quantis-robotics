@@ -89,7 +89,7 @@ import runpy
 reload_demo_runtime = runpy.run_path(
     "sim/runtime_loader.py"
 )["reload_demo_runtime"]
-from jepa_wm import control_resolution_baseline, control_resolution_profile, insertion_transition
+from jepa_wm import contact_grasp_acquisition_hold, control_resolution_baseline, control_resolution_profile, insertion_transition
 from sim import isaac_control_runtime as old_control_runtime
 from sim import isaac_demo_runtime as old_demo_runtime
 from sim import isaac_insertion_demo as old_insertion_demo
@@ -125,10 +125,12 @@ old_control_runtime.bind_live_runtime(
 del control_resolution_baseline.ControlResolutionBaselineAttempt
 del control_resolution_profile.ControlResolutionLoad
 del insertion_transition.resolve_insertion_followup_proposal
+del contact_grasp_acquisition_hold.ContactGraspAcquisitionHold
 del old_insertion_demo.record_insertion_demo
 reload_demo_runtime()
-from jepa_wm import action, control_resolution, control_resolution_baseline, control_resolution_profile, control_safety, direct_safety, experimental_candidate, insertion_contract, insertion_recording, insertion_refresh, insertion_transition, insertion_trial, joint_drive, objective_calibration, shadow_planning, shadow_safety, training_artifact
-from sim import control_identity, control_session, demo_sequence, isaac_control_runtime, isaac_demo, isaac_demo_kinematics, isaac_demo_runtime, isaac_exploration, isaac_insertion_demo, isaac_insertion_trial, recording, trial_source_cache
+from jepa_wm import action, contact_grasp_acquisition_hold, control_resolution, control_resolution_baseline, control_resolution_profile, control_safety, direct_safety, experimental_candidate, insertion_contract, insertion_recording, insertion_refresh, insertion_transition, insertion_trial, joint_drive, objective_calibration, shadow_planning, shadow_safety, training_artifact
+from sim import control_identity, control_session, demo_sequence, isaac_control_followup, isaac_control_runtime, isaac_demo, isaac_demo_kinematics, isaac_demo_runtime, isaac_exploration, isaac_insertion_demo, isaac_insertion_trial, recording, trial_source_cache
+assert isaac_control_followup.ContactGraspAcquisitionHold is contact_grasp_acquisition_hold.ContactGraspAcquisitionHold
 assert control_resolution_baseline.ControlResolutionLoad is control_resolution_profile.ControlResolutionLoad
 assert control_resolution.ControlResolutionLoad is control_resolution_profile.ControlResolutionLoad
 assert control_resolution.ControlResolutionBaselineAttempt is control_resolution_baseline.ControlResolutionBaselineAttempt
