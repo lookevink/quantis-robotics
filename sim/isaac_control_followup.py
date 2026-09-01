@@ -25,6 +25,14 @@ from jepa_wm.contact_grasp_acquisition_handoff import (
     ContactGraspAcquisitionHandoff,
     runtime_fingerprint as acquisition_runtime_fingerprint,
 )
+from jepa_wm.contact_grasp_acquisition_continuation import (
+    HANDOFF_SCHEMA as ACQUISITION_CONTINUATION_SCHEMA,
+    PROPOSAL_NAME as ACQUISITION_CONTINUATION_PROPOSAL_NAME,
+    SOURCE_FINGERPRINTS as ACQUISITION_CONTINUATION_SOURCE_FINGERPRINTS,
+    SOURCE_SESSION_ID as ACQUISITION_CONTINUATION_SOURCE_SESSION_ID,
+    ContactGraspAcquisitionContinuation,
+    runtime_fingerprint as acquisition_continuation_runtime_fingerprint,
+)
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.control_policy import (
     ControlExecutionPolicy,
@@ -197,7 +205,7 @@ async def capture_contact_grasp_acquisition_handoff(
     proposal_name: str,
     encoded_evidence: str,
 ) -> dict[str, Any]:
-    """Start one V6 acquisition chain from the exact no-motion V4 failure."""
+    """Start one frozen acquisition chain from an authenticated no-motion block."""
 
     import omni.kit.app
     import omni.timeline
@@ -208,21 +216,37 @@ async def capture_contact_grasp_acquisition_handoff(
     validate_recording_id(proposal_name)
     try:
         payload = json.loads(b64decode(encoded_evidence, validate=True).decode())
-        handoff = ContactGraspAcquisitionHandoff.from_dict(payload)
+        continuation = payload.get("schema") == ACQUISITION_CONTINUATION_SCHEMA
+        if continuation:
+            handoff = ContactGraspAcquisitionContinuation.from_dict(payload)
+            expected_source_session = ACQUISITION_CONTINUATION_SOURCE_SESSION_ID
+            expected_proposal = ACQUISITION_CONTINUATION_PROPOSAL_NAME
+            expected_fingerprints = ACQUISITION_CONTINUATION_SOURCE_FINGERPRINTS
+            expected_runtime_fingerprint = (
+                acquisition_continuation_runtime_fingerprint()
+            )
+            expected_gate_reason = ControlGateReason.JOINT_VELOCITY_VIOLATION
+        else:
+            handoff = ContactGraspAcquisitionHandoff.from_dict(payload)
+            expected_source_session = ACQUISITION_SOURCE_SESSION_ID
+            expected_proposal = ACQUISITION_PROPOSAL_NAME
+            expected_fingerprints = ACQUISITION_SOURCE_FINGERPRINTS
+            expected_runtime_fingerprint = acquisition_runtime_fingerprint()
+            expected_gate_reason = ControlGateReason.GRIPPER_VIOLATION
     except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("contact-grasp acquisition handoff is invalid") from error
     if (
-        source_session_id != ACQUISITION_SOURCE_SESSION_ID
-        or proposal_name != ACQUISITION_PROPOSAL_NAME
+        source_session_id != expected_source_session
+        or proposal_name != expected_proposal
         or handoff.followup_session_id != session_id
-        or handoff.runtime_fingerprint != acquisition_runtime_fingerprint()
+        or handoff.runtime_fingerprint != expected_runtime_fingerprint
     ):
         raise ValueError("contact-grasp acquisition handoff authority changed")
 
     source = ControlSession.at(CONTROL_ROOT, source_session_id)
     if any(
         artifact_fingerprint(source.path / name) != expected
-        for name, expected in ACQUISITION_SOURCE_FINGERPRINTS.items()
+        for name, expected in expected_fingerprints.items()
     ):
         raise ValueError("contact-grasp acquisition source changed")
     source_observation, source_state = source.load_capture()
@@ -230,12 +254,10 @@ async def capture_contact_grasp_acquisition_handoff(
     refresh = source_result.insertion_trial_refresh
     if (
         source_result.status is not ControlResultStatus.BLOCKED
-        or source_result.gate.reasons != (ControlGateReason.GRIPPER_VIOLATION,)
+        or source_result.gate.reasons != (expected_gate_reason,)
         or source_result.selected_action_scale is not None
         or source_result.post_action is not None
         or refresh is None
-        or refresh.live_pose != source_observation.pose
-        or refresh.live_state != source_state.require_safety_snapshot()
         or source_state.plug_attached
         or source_state.collision_detected
         or source_state.contact_force_newtons
@@ -243,6 +265,24 @@ async def capture_contact_grasp_acquisition_handoff(
         or source_state.active_drive_target is None
     ):
         raise ValueError("contact-grasp acquisition source is not a no-motion block")
+    if continuation:
+        expected_source_pose = refresh.live_pose
+        expected_source_safety = refresh.live_state
+        if (
+            expected_source_safety.plug_attached
+            or expected_source_safety.collision_detected
+            or expected_source_safety.contact_force_newtons
+            > SimulatorSafetyLimits().maximum_contact_force_newtons
+        ):
+            raise ValueError("contact-grasp continuation refresh is unsafe")
+    else:
+        if (
+            refresh.live_pose != source_observation.pose
+            or refresh.live_state != source_state.require_safety_snapshot()
+        ):
+            raise ValueError("contact-grasp acquisition source refresh changed")
+        expected_source_pose = source_observation.pose
+        expected_source_safety = source_state.require_safety_snapshot()
 
     session = ControlSession.at(CONTROL_ROOT, session_id)
     if session.path.exists():
@@ -267,7 +307,7 @@ async def capture_contact_grasp_acquisition_handoff(
         runtime,
         omni.timeline.get_timeline_interface(),
         omni.kit.app.get_app().next_update_async,
-        source_state.require_safety_snapshot(),
+        expected_source_safety,
         SimulatorSafetyLimits(),
         capture_frame,
         expected_active_drive_target=source_state.active_drive_target,
@@ -300,7 +340,7 @@ async def capture_contact_grasp_acquisition_handoff(
         target=target,
         expected_proposal=control_proposal_path(proposal_name),
         pose=synchronized.pose,
-        previous_action=action_between(source_observation.pose, synchronized.pose),
+        previous_action=action_between(expected_source_pose, synchronized.pose),
         warmup_frames=context_index,
     )
     state = ControlSessionState(

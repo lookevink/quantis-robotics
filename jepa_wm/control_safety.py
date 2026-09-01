@@ -76,7 +76,17 @@ CONTACT_GRASP_ULTRAFINE_ACTION_SCALES = (
     DroidActionScale(0.0625, 0.125, 0.125),
     DroidActionScale(0.03125, 0.125, 0.125),
 )
-CONTACT_GRASP_MICRO_ACTION_SCALES = (DroidActionScale(0.03125, 0.125, 0.125),)
+# At the controller's minimum translation scale, independently reduce rotation.
+# Lula can occasionally return a remote arm branch for a tiny Cartesian command
+# near the wrist's pitch singularity.  The ordinary velocity gate rejects that
+# branch; these ordered fallbacks then ask for a strictly smaller rotation while
+# preserving the same already-bounded translation and gripper intent.
+CONTACT_GRASP_MICRO_ACTION_SCALES = (
+    DroidActionScale(0.03125, 0.125, 0.125),
+    DroidActionScale(0.03125, 0.0625, 0.125),
+    DroidActionScale(0.03125, 0.03125, 0.125),
+    DroidActionScale(0.03125, 0.0, 0.125),
+)
 CONTACT_GRASP_ACTION_SCALE_LEVELS = (
     CONTACT_GRASP_ACTION_SCALES,
     CONTACT_GRASP_FINE_ACTION_SCALES,

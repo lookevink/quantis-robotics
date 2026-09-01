@@ -9,6 +9,7 @@ from jepa_wm.control_safety import (
     CONTACT_GRASP_CLOSING_ACTION_SCALE_POLICIES,
     CONTACT_GRASP_REDUCED_CLOSING_ACTION_SCALE_POLICIES,
     CONTACT_GRASP_FINE_ACTION_SCALES,
+    CONTACT_GRASP_MICRO_ACTION_SCALES,
     CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES,
     CONTACT_GRASP_ULTRAFINE_ACTION_SCALES,
     DIRECTIONAL_CONTACT_GRASP_TRANSPORT_ACTION_SCALE_POLICIES,
@@ -96,6 +97,27 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
             value * value for value in action.values[:3]
         ) ** 0.5
         self.assertLess(translation_norm * scales[0].translation, 0.0005)
+
+    def test_contact_grasp_micro_policy_reduces_rotation_independently(self) -> None:
+        action = DroidAction(
+            (0.001072, 0.001511, -0.000810, 0.003429, -0.017439, -0.003272, -0.000746)
+        )
+
+        scales = contact_grasp_action_scales(action)
+
+        self.assertEqual(scales, CONTACT_GRASP_MICRO_ACTION_SCALES)
+        self.assertTrue(
+            all(scale.translation == 0.03125 for scale in scales)
+        )
+        self.assertTrue(all(scale.gripper == 0.125 for scale in scales))
+        self.assertEqual(
+            tuple(scale.rotation for scale in scales),
+            (0.125, 0.0625, 0.03125, 0.0),
+        )
+        self.assertEqual(
+            insertion_projection_policy_for_attempts(scales[:2]),
+            CONTACT_GRASP_MICRO_ACTION_SCALES,
+        )
 
     def test_attached_contact_grasp_holds_gripper_and_uses_transport_scale(
         self,
