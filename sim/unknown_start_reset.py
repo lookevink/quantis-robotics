@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from enum import Enum
 from hashlib import sha256
 import json
 from math import isfinite
@@ -148,6 +149,7 @@ class UnknownStartWorkspaceState:
     connector_position_m: tuple[float, ...]
     socket_position_m: tuple[float, ...]
     end_effector_position_m: tuple[float, ...]
+    socket_scale: float
 
     def __post_init__(self) -> None:
         if any(
@@ -157,7 +159,7 @@ class UnknownStartWorkspaceState:
                 self.socket_position_m,
                 self.end_effector_position_m,
             )
-        ):
+        ) or not isfinite(self.socket_scale):
             raise ValueError("unknown-start workspace state is invalid")
 
 
@@ -178,6 +180,10 @@ class UnknownStartWorkspaceBounds:
         (-0.30, -0.20),
         (1.43, 1.53),
     )
+    connector_baseline_m: tuple[float, float, float] = (-0.0256, -0.25025, 1.32)
+    socket_baseline_m: tuple[float, float, float] = (-0.071, -0.25, 1.32)
+    realization_position_tolerance_m: float = 1e-5
+    realization_scale_tolerance: float = 1e-9
 
     def __post_init__(self) -> None:
         groups = (self.connector, self.socket, self.initial_end_effector)
@@ -190,6 +196,13 @@ class UnknownStartWorkspaceBounds:
                 for interval in group
             )
             for group in groups
+        ) or (
+            not all(isfinite(value) for value in self.connector_baseline_m)
+            or not all(isfinite(value) for value in self.socket_baseline_m)
+            or not isfinite(self.realization_position_tolerance_m)
+            or self.realization_position_tolerance_m < 0.0
+            or not isfinite(self.realization_scale_tolerance)
+            or self.realization_scale_tolerance < 0.0
         ):
             raise ValueError("unknown-start workspace bounds are invalid")
 
@@ -213,6 +226,44 @@ class UnknownStartWorkspaceBounds:
             )
         )
 
+    def matches_sample(
+        self,
+        sample: UnknownStartResetSample,
+        state: UnknownStartWorkspaceState,
+    ) -> bool:
+        expected_connector = tuple(
+            baseline + offset
+            for baseline, offset in zip(
+                self.connector_baseline_m,
+                sample.scene_offset_m,
+            )
+        )
+        expected_socket = tuple(
+            baseline + offset
+            for baseline, offset in zip(
+                self.socket_baseline_m,
+                sample.scene_offset_m,
+            )
+        )
+        return (
+            all(
+                abs(actual - expected) <= self.realization_position_tolerance_m
+                for actual, expected in zip(
+                    state.connector_position_m,
+                    expected_connector,
+                )
+            )
+            and all(
+                abs(actual - expected) <= self.realization_position_tolerance_m
+                for actual, expected in zip(
+                    state.socket_position_m,
+                    expected_socket,
+                )
+            )
+            and abs(state.socket_scale - sample.socket_scale)
+            <= self.realization_scale_tolerance
+        )
+
     def to_dict(self) -> dict[str, Any]:
         def axes(bounds: tuple[tuple[float, float], ...]) -> dict[str, list[float]]:
             return {
@@ -221,9 +272,17 @@ class UnknownStartWorkspaceBounds:
             }
 
         return {
+            "baseline_m": {
+                "connector": list(self.connector_baseline_m),
+                "socket": list(self.socket_baseline_m),
+            },
             "connector": axes(self.connector),
             "socket": axes(self.socket),
             "initial_end_effector": axes(self.initial_end_effector),
+            "realization_tolerances": {
+                "position_m": self.realization_position_tolerance_m,
+                "socket_scale": self.realization_scale_tolerance,
+            },
         }
 
 
@@ -233,6 +292,9 @@ class UnknownStartResetContract:
     maximum_seed: int = 62699
     bounds: UnknownStartResetBounds = UnknownStartResetBounds()
     workspace: UnknownStartWorkspaceBounds = UnknownStartWorkspaceBounds()
+    sampler_source_fingerprint: str = (
+        "0ec746dbf12fbed61c66b3c64dee6717fa15f015be4aad23e0f40e5b47a5228d"
+    )
 
     def __post_init__(self) -> None:
         if (
@@ -244,6 +306,7 @@ class UnknownStartResetContract:
             or self.maximum_seed < self.minimum_seed
             or not isinstance(self.bounds, UnknownStartResetBounds)
             or not isinstance(self.workspace, UnknownStartWorkspaceBounds)
+            or not _valid_fingerprint(self.sampler_source_fingerprint)
         ):
             raise ValueError("unknown-start reset contract is invalid")
 
@@ -261,6 +324,11 @@ class UnknownStartResetContract:
             raise ValueError("unknown-start reset requires a reserved seed")
         if seed in forbidden_seeds:
             raise ValueError("unknown-start reset seed was already used")
+        current_sampler_fingerprint = sha256(
+            Path(__file__).with_name("exploration.py").read_bytes()
+        ).hexdigest()
+        if current_sampler_fingerprint != self.sampler_source_fingerprint:
+            raise ValueError("unknown-start reset sampler source changed")
         plan = replace(
             build_exploration_plan(seed, DatasetSplit.HELD_OUT),
             socket_scale=self.bounds.socket_scale[0],
@@ -295,9 +363,7 @@ class UnknownStartResetContract:
             },
             "split": DatasetSplit.HELD_OUT.value,
             "sampler": "build_exploration_plan.v1",
-            "sampler_source_fingerprint": sha256(
-                Path(__file__).with_name("exploration.py").read_bytes()
-            ).hexdigest(),
+            "sampler_source_fingerprint": self.sampler_source_fingerprint,
             "bounds": self.bounds.to_dict(),
             "workspace_bounds_m": self.workspace.to_dict(),
             "initialization": "direct_state_setting_once",
@@ -320,6 +386,10 @@ class UnknownStartResetContract:
         return _fingerprint(self.to_dict())
 
 
+class UnknownStartResetPhase(str, Enum):
+    RESET_AUTHENTICATION = "reset_authentication"
+
+
 @dataclass(frozen=True)
 class UnknownStartResetEvidence:
     sample: UnknownStartResetSample
@@ -331,7 +401,7 @@ class UnknownStartResetEvidence:
     direct_state_setting_count: int
     prefix_replay_frames: int
     applied_actions: int
-    phase: str
+    phase: UnknownStartResetPhase
 
     def validate(self, contract: UnknownStartResetContract) -> None:
         contract.validate_sample(self.sample)
@@ -339,6 +409,7 @@ class UnknownStartResetEvidence:
         if (
             self.sample != expected
             or not contract.workspace.contains(self.workspace)
+            or not contract.workspace.matches_sample(self.sample, self.workspace)
             or not _valid_fingerprint(self.realized_sample_fingerprint)
             or self.realized_sample_fingerprint != self.sample.fingerprint
             or self.plug_attached
@@ -348,7 +419,7 @@ class UnknownStartResetEvidence:
             or self.direct_state_setting_count != 1
             or self.prefix_replay_frames != 0
             or self.applied_actions != 0
-            or self.phase != "reset_authentication"
+            or self.phase is not UnknownStartResetPhase.RESET_AUTHENTICATION
         ):
             raise ValueError("unknown-start reset evidence is unsafe or inauthentic")
 

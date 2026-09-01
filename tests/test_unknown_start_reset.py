@@ -4,6 +4,7 @@ import unittest
 from sim.unknown_start_reset import (
     UNKNOWN_START_RESET_CONTRACT,
     UnknownStartResetEvidence,
+    UnknownStartResetPhase,
     UnknownStartWorkspaceState,
 )
 from sim.exploration import DatasetSplit
@@ -38,6 +39,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
                 connector_position_m=(-0.0256, -0.247813, 1.323126),
                 socket_position_m=(-0.071, -0.247563, 1.323126),
                 end_effector_position_m=(0.25, -0.247813, 1.48),
+                socket_scale=1.05,
             ),
             realized_sample_fingerprint=sample.fingerprint,
             plug_attached=False,
@@ -46,7 +48,7 @@ class UnknownStartResetContractTest(unittest.TestCase):
             direct_state_setting_count=1,
             prefix_replay_frames=0,
             applied_actions=0,
-            phase="reset_authentication",
+            phase=UnknownStartResetPhase.RESET_AUTHENTICATION,
         )
 
         evidence.validate(UNKNOWN_START_RESET_CONTRACT)
@@ -73,8 +75,13 @@ class UnknownStartResetContractTest(unittest.TestCase):
                 evidence,
                 workspace=replace(
                     evidence.workspace,
-                    connector_position_m=(0.0, 0.0, 0.0),
+                    connector_position_m=(-0.0256, -0.247, 1.323126),
                 ),
+            ).validate(UNKNOWN_START_RESET_CONTRACT)
+        with self.assertRaisesRegex(ValueError, "unsafe or inauthentic"):
+            replace(
+                evidence,
+                workspace=replace(evidence.workspace, socket_scale=1.0),
             ).validate(UNKNOWN_START_RESET_CONTRACT)
 
     def test_contract_freezes_distribution_and_authority_boundary(self) -> None:
@@ -100,6 +107,10 @@ class UnknownStartResetContractTest(unittest.TestCase):
                     "light_exposure_delta": [-0.4, 0.4],
                 },
                 "workspace_bounds_m": {
+                    "baseline_m": {
+                        "connector": [-0.0256, -0.25025, 1.32],
+                        "socket": [-0.071, -0.25, 1.32],
+                    },
                     "connector": {
                         "x": [-0.0256, -0.0256],
                         "y": [-0.27525, -0.22525],
@@ -114,6 +125,10 @@ class UnknownStartResetContractTest(unittest.TestCase):
                         "x": [0.22, 0.28],
                         "y": [-0.3, -0.2],
                         "z": [1.43, 1.53],
+                    },
+                    "realization_tolerances": {
+                        "position_m": 1e-5,
+                        "socket_scale": 1e-9,
                     },
                 },
                 "initialization": "direct_state_setting_once",
