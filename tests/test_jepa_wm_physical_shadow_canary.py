@@ -12,6 +12,9 @@ from jepa_wm.physical_shadow_canary import (
 from jepa_wm.physical_shadow_canary_contract import (
     FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
 )
+from jepa_wm.physical_shadow_canary_v2_contract import (
+    FROZEN_EXPERIMENT_CONFIG_FINGERPRINT as V2_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+)
 
 
 class PhysicalShadowCanaryTest(unittest.TestCase):
@@ -55,6 +58,10 @@ class PhysicalShadowCanaryTest(unittest.TestCase):
             "contact-insertion-v10-drive-slow-2600-held-00",
         )
         self.assertTrue(config["output"].endswith("shadow-canary-v2.json"))
+        self.assertEqual(
+            V2_FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
+            "329b771fb1cf700371230cfda6e94240e31f250015834ebc4257e04bff8aa7b3",
+        )
 
     def test_runner_has_no_actuation_seam(self) -> None:
         runner = Path("ops/run_physical_shadow_canary.sh").read_text()
