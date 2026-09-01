@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from jepa_wm.physical_shadow_replay import claim, load_experiment
+from jepa_wm.physical_shadow_replay import claim, load_experiment_contract
 from jepa_wm.physical_shadow_replay_contract import (
     FROZEN_EXPERIMENT_CONFIG_FINGERPRINT,
 )
@@ -11,7 +11,7 @@ from jepa_wm.physical_shadow_replay_contract import (
 
 class PhysicalShadowReplayTest(unittest.TestCase):
     def test_frozen_contract_is_one_offline_non_actuating_replay(self) -> None:
-        experiment = load_experiment(
+        experiment = load_experiment_contract(
             Path(".scratch/jepa-physical-shadow-replay-v1/experiment-config.json")
         )
 

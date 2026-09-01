@@ -33,7 +33,9 @@ NON_AUTHORITY = {
 }
 
 
-def load_experiment(path: Path) -> dict[str, Any]:
+def load_experiment_contract(path: Path) -> dict[str, Any]:
+    """Load an immutable experiment record without claiming its runtime is active."""
+
     encoded = path.resolve().read_bytes()
     fingerprint = sha256(encoded).hexdigest()
     if (
@@ -51,7 +53,6 @@ def load_experiment(path: Path) -> dict[str, Any]:
         or not Path(str(payload.get("output", ""))).is_absolute()
     ):
         raise ValueError("physical shadow replay contract is invalid")
-    repository = Path(__file__).resolve().parents[1]
     evaluator = payload.get("evaluator", {})
     sources = payload.get("runtime_sources", {})
     if (
@@ -60,6 +61,18 @@ def load_experiment(path: Path) -> dict[str, Any]:
         or not sources
     ):
         raise ValueError("physical shadow replay runtime identity is invalid")
+    return payload
+
+
+def authenticate_experiment_runtime(
+    experiment: Mapping[str, Any], repository: Path | None = None
+) -> None:
+    """Require the active checkout to match the runtime frozen for execution."""
+
+    if repository is None:
+        repository = Path(__file__).resolve().parents[1]
+    evaluator = experiment["evaluator"]
+    sources = experiment["runtime_sources"]
     for relative, expected in sources.items():
         if expected != "PENDING_CHECKPOINT" and artifact_fingerprint(
             repository / relative
@@ -71,7 +84,12 @@ def load_experiment(path: Path) -> dict[str, Any]:
         != evaluator["fingerprint"]
     ):
         raise ValueError("physical shadow replay evaluator changed")
-    return payload
+
+
+def load_experiment(path: Path) -> dict[str, Any]:
+    experiment = load_experiment_contract(path)
+    authenticate_experiment_runtime(experiment)
+    return experiment
 
 
 def paths(experiment: Mapping[str, Any]) -> tuple[Path, Path, Path, Path]:
