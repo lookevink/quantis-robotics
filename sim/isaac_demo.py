@@ -157,6 +157,39 @@ async def capture_unknown_start_candidate_observation(
     )
 
 
+async def execute_unknown_start_candidate_action(
+    session_id: str,
+    source_session_id: str,
+    reference_recording: str,
+    reference_seed: int,
+    proposal_name: str,
+    reset_recording_id: str,
+    reset_result_fingerprint: str,
+) -> dict[str, Any]:
+    """Capture, bind, and apply one fresh candidate without remote-call latency."""
+
+    async def operation() -> dict[str, Any]:
+        capture = await _capture_unknown_start_candidate_observation(
+            session_id,
+            reference_recording,
+            reference_seed,
+            proposal_name,
+            reset_recording_id,
+            reset_result_fingerprint,
+        )
+        binding = persist_experimental_candidate_response(
+            session_id,
+            source_session_id,
+        )
+        result = await _apply_control_response(session_id)
+        return {"capture": capture, "binding": binding, "result": result}
+
+    return await _RECORDING_JOBS.run_exclusive(
+        f"unknown-start-candidate-action-{session_id}",
+        operation,
+    )
+
+
 async def preflight_unknown_start_shadow(
     reset_recording_id: str,
     reset_result_fingerprint: str,

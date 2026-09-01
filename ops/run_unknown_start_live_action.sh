@@ -8,7 +8,7 @@ checkpoint_root="${HOME}/docker/jepa-wm/checkpoints"
 data_root="${HOME}/docker/isaac-sim/data/quantis"
 source_revision="${1:-}"
 runtime_fingerprint="${2:-}"
-session_id="unknown-start-live-action-v2-62605"
+session_id="unknown-start-live-action-v3-62605"
 source_session_id="unknown-start-shadow-canary-v5-62605"
 proposal_name="contact-grasp-v10-drive-slow-2600_task12_h256_s3000"
 reset_recording_id="unknown-start-reset-v6-62605"
@@ -30,7 +30,7 @@ isaac_server_call \
   --source-revision "${source_revision}" \
   --runtime-fingerprint "${runtime_fingerprint}"
 
-phase="capture"
+phase="execute"
 terminalize_failure() {
   local exit_status=$?
   trap - ERR
@@ -42,14 +42,8 @@ terminalize_failure() {
 trap terminalize_failure ERR
 
 isaac_server_call \
-  "await demo.capture_unknown_start_candidate_observation('${session_id}','contact-insertion-v10-drive-slow-2600-held-00',12600,'${proposal_name}','${reset_recording_id}','${reset_result_fingerprint}')" \
+  "await demo.execute_unknown_start_candidate_action('${session_id}','${source_session_id}','contact-insertion-v10-drive-slow-2600-held-00',12600,'${proposal_name}','${reset_recording_id}','${reset_result_fingerprint}')" \
   180
-phase="binding"
-isaac_server_call \
-  "demo.persist_experimental_candidate_response('${session_id}','${source_session_id}')" \
-  180
-phase="apply"
-isaac_server_call "await demo.apply_control_response('${session_id}')" 180
 phase="evaluation"
 "${python_bin}" -m jepa_wm.unknown_start_live_action evaluate \
   --checkpoint-root "${checkpoint_root}" --data-root "${data_root}"
