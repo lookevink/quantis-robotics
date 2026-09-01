@@ -145,9 +145,11 @@ async def recover_unknown_start_candidate_rollback(
     import omni.timeline
     import omni.usd
     import numpy as np
+    from isaacsim.core.rendering_manager import RenderingManager
 
     from jepa_wm.control_policy import ControlExecutionPolicy
     from jepa_wm.joint_drive import JointDriveTarget
+    from sim.exploration import build_exploration_plan
     from sim.control_session import CONTROL_ROOT, ControlResultStatus, ControlSession
     from sim.isaac_control_execution import (
         UNKNOWN_START_ROLLBACK_SETTLEMENT,
@@ -163,6 +165,10 @@ async def recover_unknown_start_candidate_rollback(
         JointCommand,
         advance_physics_updates,
         resume_live_simulation,
+    )
+    from sim.isaac_exploration import (
+        ExplorationRecordingMode,
+        ExplorationRecordingProfile,
     )
     from sim.isaac_unknown_start_shadow import (
         _load_authenticated_reset,
@@ -201,9 +207,17 @@ async def recover_unknown_start_candidate_rollback(
         or artifact_fingerprint(session.state_path) != handoff.state_fingerprint
     ):
         raise ValueError("unknown-start rollback recovery source is invalid")
-    _load_authenticated_reset(
+    _, _, reset_evidence, _ = _load_authenticated_reset(
         handoff.reset_recording_id,
         handoff.reset_result_fingerprint,
+    )
+    reset_plan = ExplorationRecordingProfile.for_mode(
+        ExplorationRecordingMode.CONTACT_INSERTION
+    ).apply_to_plan(
+        build_exploration_plan(
+            reset_evidence.sample.seed,
+            reset_evidence.sample.split,
+        )
     )
     timeline = omni.timeline.get_timeline_interface()
     await pause_control_timeline(timeline, omni.kit.app.get_app().next_update_async)
@@ -287,15 +301,20 @@ async def recover_unknown_start_candidate_rollback(
     # authored drive command with zero velocity, then records the observed
     # gravity-loaded state after sixteen updates.  Starting from that observed
     # state would settle the transient twice and cannot reproduce the evidence.
-    resume_live_simulation(timeline)
+    original_rendering_dt = RenderingManager.get_dt()
+    RenderingManager.set_dt(reset_plan.sample_period_seconds)
     try:
-        runtime.actuators.set_reset_state(reset_drive_target)
-        await advance_physics_updates(16, observe_safety)
+        resume_live_simulation(timeline)
+        try:
+            runtime.actuators.set_reset_state(reset_drive_target)
+            await advance_physics_updates(16, observe_safety)
+        finally:
+            await pause_control_timeline(
+                timeline,
+                omni.kit.app.get_app().next_update_async,
+            )
     finally:
-        await pause_control_timeline(
-            timeline,
-            omni.kit.app.get_app().next_update_async,
-        )
+        RenderingManager.set_dt(original_rendering_dt)
     if timeline.is_playing():
         raise RuntimeError("unknown-start reset initialization could not pause timeline")
     reauthenticate_unknown_start_shadow_session(session_id)
