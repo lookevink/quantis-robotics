@@ -251,6 +251,44 @@ class UnknownStartE2EHandoffTest(unittest.TestCase):
                 horizon_source_execution_error="different failure",
             )
 
+    def test_blocked_handoff_uses_synchronized_no_motion_state(self) -> None:
+        restored_pose = object()
+        restored_safety = SimpleNamespace(
+            plug_attached=False,
+            collision_detected=False,
+            contact_force_newtons=0.0,
+        )
+        result = SimpleNamespace(
+            status=ControlResultStatus.BLOCKED,
+            gate=SimpleNamespace(
+                reasons=(SimpleNamespace(value="joint_velocity_violation"),)
+            ),
+            selected_action_scale=None,
+            execution_error=None,
+            post_action=None,
+            insertion_trial_refresh=SimpleNamespace(
+                live_pose=restored_pose,
+                live_state=restored_safety,
+            ),
+        )
+
+        self.assertEqual(
+            _contact_grasp_rollback_handoff_state(
+                result,
+                horizon_source_endpoint_status=ControlResultStatus.BLOCKED.value,
+                horizon_tracking_rollback_reasons=(
+                    "joint_velocity_violation",
+                ),
+            ),
+            (restored_pose, restored_safety),
+        )
+        with self.assertRaisesRegex(ValueError, "blocked source"):
+            _contact_grasp_rollback_handoff_state(
+                result,
+                horizon_source_endpoint_status=ControlResultStatus.BLOCKED.value,
+                horizon_tracking_rollback_reasons=("different",),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

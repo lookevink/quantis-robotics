@@ -975,6 +975,22 @@ def _contact_grasp_rollback_handoff_state(
         )
     post = source_result.post_action
     refresh = source_result.insertion_trial_refresh
+    if horizon_source_endpoint_status == ControlResultStatus.BLOCKED.value:
+        if (
+            source_result.status is not ControlResultStatus.BLOCKED
+            or tuple(reason.value for reason in source_result.gate.reasons)
+            != horizon_tracking_rollback_reasons
+            or source_result.selected_action_scale is not None
+            or source_result.execution_error is not None
+            or post is not None
+            or refresh is None
+            or refresh.live_state.plug_attached
+            or refresh.live_state.collision_detected
+            or refresh.live_state.contact_force_newtons
+            > SimulatorSafetyLimits().maximum_contact_force_newtons
+        ):
+            raise ValueError("contact-grasp blocked source is invalid")
+        return refresh.live_pose, refresh.live_state
     if horizon_source_endpoint_status == ControlResultStatus.ROLLBACK_FAILED.value:
         if (
             source_result.status is not ControlResultStatus.ROLLBACK_FAILED
@@ -1158,6 +1174,7 @@ async def capture_contact_grasp_acquisition_handoff(
     )
     if horizon_completion_continuation and horizon_source_endpoint_status not in (
         ControlResultStatus.APPLIED.value,
+        ControlResultStatus.BLOCKED.value,
         ControlResultStatus.ROLLED_BACK_TRACKING.value,
         ControlResultStatus.ROLLBACK_FAILED.value,
         ControlResultStatus.ROLLED_BACK_EXECUTION.value,
@@ -1167,6 +1184,14 @@ async def capture_contact_grasp_acquisition_handoff(
         (
             horizon_source_endpoint_status == ControlResultStatus.APPLIED.value
             and horizon_source_tracking_reasons
+        )
+        or (
+            horizon_source_endpoint_status == ControlResultStatus.BLOCKED.value
+            and (
+                horizon_source_tracking_reasons
+                != (ControlGateReason.JOINT_VELOCITY_VIOLATION.value,)
+                or horizon_source_execution_error is not None
+            )
         )
         or (
             horizon_source_endpoint_status
@@ -1211,8 +1236,10 @@ async def capture_contact_grasp_acquisition_handoff(
     refresh = source_result.insertion_trial_refresh
     horizon_tracking_rollback_reasons = (
         horizon_source_tracking_reasons
-        if horizon_source_endpoint_status
-        == ControlResultStatus.ROLLED_BACK_TRACKING.value
+        if horizon_source_endpoint_status in (
+            ControlResultStatus.BLOCKED.value,
+            ControlResultStatus.ROLLED_BACK_TRACKING.value,
+        )
         else None
     )
     if rollback_continuation:
