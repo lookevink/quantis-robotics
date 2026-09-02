@@ -70,6 +70,9 @@ FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
 TRACKING_ROBUST_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v14"
 )
+TRACKING_OVERLAP_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+    "quantis.jepa_wm_contact_grasp_target_policy.v15"
+)
 
 
 class _TransportComposition(str, Enum):
@@ -201,6 +204,20 @@ _POLICY_CAPABILITIES = {
         True,
         0.0005,
     ),
+    TRACKING_OVERLAP_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA: _PolicyCapabilities(
+        True,
+        _TransportComposition.TRANSLATION_HORIZON,
+        True,
+        True,
+        0.001,
+        True,
+        True,
+        True,
+        True,
+        0.0005,
+        True,
+        0.00075,
+    ),
 }
 
 
@@ -255,6 +272,7 @@ class ContactGraspTargetPolicy:
                     RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     TRACKING_ROBUST_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                    TRACKING_OVERLAP_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 )
                 and self.scene_translation_m != (0.0, 0.0, 0.0)
             )
@@ -267,7 +285,7 @@ class ContactGraspTargetPolicy:
         translation_m: tuple[float, float, float],
     ) -> ContactGraspTargetPolicy:
         return cls(
-            TRACKING_ROBUST_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            TRACKING_OVERLAP_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             translation_m,
         )
 
@@ -784,6 +802,7 @@ class ContactGraspTargetPolicy:
             RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             TRACKING_ROBUST_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            TRACKING_OVERLAP_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         ):
             payload["scene_translation_m"] = list(self.scene_translation_m)
         return payload
@@ -807,6 +826,7 @@ class ContactGraspTargetPolicy:
                 RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 TRACKING_ROBUST_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                TRACKING_OVERLAP_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             )
             else {"schema"}
         )

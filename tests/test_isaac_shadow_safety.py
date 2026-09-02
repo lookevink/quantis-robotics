@@ -191,7 +191,7 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
         self.assertAlmostEqual(projected_norms[0], 0.001)
         self.assertTrue(all(norm >= 0.0005 for norm in projected_norms))
 
-    def test_tracking_robust_close_selects_the_demonstrated_floor(self) -> None:
+    def test_tracking_overlap_close_selects_the_interior_command(self) -> None:
         action = DroidAction(
             (0.0013759080, 0.0005052318, 0.0021299466, 0.0, 0.0, 0.0, 0.18)
         )
@@ -200,7 +200,7 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
             action,
             resolution_floored_acquisition=True,
             maximum_coarse_translation_command_meters=0.001,
-            maximum_resolution_floored_translation_command_meters=0.0005,
+            maximum_resolution_floored_translation_command_meters=0.00075,
             exact_coarse_translation_projection=True,
             minimum_coarse_translation_command_meters=0.0005,
         )
@@ -209,7 +209,8 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
             for scale in scales
         )
 
-        self.assertTrue(all(abs(norm - 0.0005) < 1e-15 for norm in projected_norms))
+        self.assertAlmostEqual(projected_norms[0], 0.00075)
+        self.assertAlmostEqual(projected_norms[-1], 0.0005)
 
     def test_resolution_floor_does_not_reenlarge_reopening_drift(self) -> None:
         action = DroidAction(
