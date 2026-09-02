@@ -67,6 +67,9 @@ RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
 FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v13"
 )
+TRACKING_ROBUST_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+    "quantis.jepa_wm_contact_grasp_target_policy.v14"
+)
 
 
 class _TransportComposition(str, Enum):
@@ -88,6 +91,7 @@ class _PolicyCapabilities:
     coarse_orientation_hold_fallback: bool = False
     minimum_coarse_translation_command_meters: float | None = None
     full_acquisition_resolution_floor: bool = False
+    fine_acquisition_maximum_translation_meters: float | None = None
 
 
 _POLICY_CAPABILITIES = {
@@ -183,6 +187,20 @@ _POLICY_CAPABILITIES = {
         0.0005,
         True,
     ),
+    TRACKING_ROBUST_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA: _PolicyCapabilities(
+        True,
+        _TransportComposition.TRANSLATION_HORIZON,
+        True,
+        True,
+        0.001,
+        True,
+        True,
+        True,
+        True,
+        0.0005,
+        True,
+        0.0005,
+    ),
 }
 
 
@@ -236,6 +254,7 @@ class ContactGraspTargetPolicy:
                     TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                    TRACKING_ROBUST_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 )
                 and self.scene_translation_m != (0.0, 0.0, 0.0)
             )
@@ -248,7 +267,7 @@ class ContactGraspTargetPolicy:
         translation_m: tuple[float, float, float],
     ) -> ContactGraspTargetPolicy:
         return cls(
-            FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            TRACKING_ROBUST_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             translation_m,
         )
 
@@ -382,6 +401,12 @@ class ContactGraspTargetPolicy:
         return _POLICY_CAPABILITIES[
             self.schema
         ].minimum_coarse_translation_command_meters
+
+    @property
+    def fine_acquisition_maximum_translation_meters(self) -> float | None:
+        return _POLICY_CAPABILITIES[
+            self.schema
+        ].fine_acquisition_maximum_translation_meters
 
     @property
     def acquisition_context_indices(self) -> tuple[int, ...]:
@@ -758,6 +783,7 @@ class ContactGraspTargetPolicy:
             TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            TRACKING_ROBUST_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         ):
             payload["scene_translation_m"] = list(self.scene_translation_m)
         return payload
@@ -780,6 +806,7 @@ class ContactGraspTargetPolicy:
                 TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                TRACKING_ROBUST_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             )
             else {"schema"}
         )

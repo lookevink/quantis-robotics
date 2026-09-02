@@ -191,6 +191,26 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
         self.assertAlmostEqual(projected_norms[0], 0.001)
         self.assertTrue(all(norm >= 0.0005 for norm in projected_norms))
 
+    def test_tracking_robust_close_selects_the_demonstrated_floor(self) -> None:
+        action = DroidAction(
+            (0.0013759080, 0.0005052318, 0.0021299466, 0.0, 0.0, 0.0, 0.18)
+        )
+
+        scales = contact_grasp_action_scales(
+            action,
+            resolution_floored_acquisition=True,
+            maximum_coarse_translation_command_meters=0.001,
+            maximum_resolution_floored_translation_command_meters=0.0005,
+            exact_coarse_translation_projection=True,
+            minimum_coarse_translation_command_meters=0.0005,
+        )
+        projected_norms = tuple(
+            sum(value * value for value in scale.apply(action).values[:3]) ** 0.5
+            for scale in scales
+        )
+
+        self.assertTrue(all(abs(norm - 0.0005) < 1e-15 for norm in projected_norms))
+
     def test_resolution_floor_does_not_reenlarge_reopening_drift(self) -> None:
         action = DroidAction(
             (0.0147, 0.0032, -0.0017, 0.0, 0.0, 0.0, -0.01)

@@ -340,6 +340,7 @@ def contact_grasp_action_scales(
     coarse_orientation_hold_fallback: bool = False,
     minimum_coarse_translation_command_meters: float | None = None,
     resolution_floored_acquisition: bool = False,
+    maximum_resolution_floored_translation_command_meters: float | None = None,
 ) -> tuple[DroidActionScale, ...]:
     """Bound approach motion and calibrate gripper closure independently."""
 
@@ -363,11 +364,24 @@ def contact_grasp_action_scales(
         or maximum_coarse_translation_command_meters <= 0.0
     ):
         raise ValueError("contact-grasp acquisition translation limit is invalid")
+    if maximum_resolution_floored_translation_command_meters is not None and (
+        isinstance(maximum_resolution_floored_translation_command_meters, bool)
+        or not isfinite(maximum_resolution_floored_translation_command_meters)
+        or maximum_resolution_floored_translation_command_meters <= 0.0
+    ):
+        raise ValueError("contact-grasp acquisition translation limit is invalid")
     if (
         minimum_coarse_translation_command_meters is not None
         and maximum_coarse_translation_command_meters is not None
         and minimum_coarse_translation_command_meters
         > maximum_coarse_translation_command_meters
+    ):
+        raise ValueError("contact-grasp acquisition resolution floor is invalid")
+    if (
+        minimum_coarse_translation_command_meters is not None
+        and maximum_resolution_floored_translation_command_meters is not None
+        and minimum_coarse_translation_command_meters
+        > maximum_resolution_floored_translation_command_meters
     ):
         raise ValueError("contact-grasp acquisition resolution floor is invalid")
     translation_norm = sqrt(sum(value * value for value in action.values[:3]))
@@ -426,7 +440,14 @@ def contact_grasp_action_scales(
 
     if coarse_acquisition or resolution_floored_acquisition:
         coarse_limit = (
-            maximum_coarse_translation_command_meters
+            maximum_resolution_floored_translation_command_meters
+            if (
+                resolution_floored_acquisition
+                and not coarse_acquisition
+                and maximum_resolution_floored_translation_command_meters
+                is not None
+            )
+            else maximum_coarse_translation_command_meters
             if maximum_coarse_translation_command_meters is not None
             else MAXIMUM_CONTACT_GRASP_COARSE_TRANSLATION_COMMAND_METERS
         )

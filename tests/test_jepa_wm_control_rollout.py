@@ -360,6 +360,9 @@ class ControlRolloutTest(unittest.TestCase):
                 coarse_orientation_hold_fallback=True,
                 minimum_coarse_translation_command_meters=0.0005,
                 resolution_floored_acquisition=True,
+                maximum_resolution_floored_translation_command_meters=(
+                    policy.fine_acquisition_maximum_translation_meters
+                ),
             )[0]
             commanded = scale.apply(raw)
             post_pose = pose.applied(commanded)
@@ -422,6 +425,12 @@ class ControlRolloutTest(unittest.TestCase):
         )
         self.assertTrue(
             scale_policy.call_args.kwargs["resolution_floored_acquisition"]
+        )
+        self.assertEqual(
+            scale_policy.call_args.kwargs[
+                "maximum_resolution_floored_translation_command_meters"
+            ],
+            policy.fine_acquisition_maximum_translation_meters,
         )
 
     def test_parses_reset_trial_preflight_failure(self) -> None:

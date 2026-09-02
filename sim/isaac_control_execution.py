@@ -822,6 +822,9 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     plug_attached=persisted_state.plug_attached,
                 )
             ),
+            maximum_resolution_floored_translation_command_meters=(
+                contact_grasp_policy.fine_acquisition_maximum_translation_meters
+            ),
         )
     from sim.isaac_unknown_start_shadow import (
         reauthenticate_unknown_start_shadow_session,

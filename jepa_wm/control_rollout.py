@@ -675,6 +675,9 @@ class ControlStepSummary:
                         plug_attached=state.plug_attached,
                     )
                 ),
+                maximum_resolution_floored_translation_command_meters=(
+                    contact_grasp_policy.fine_acquisition_maximum_translation_meters
+                ),
             )
             attempted_projection_policy = tuple(
                 attempt.scale for attempt in result.projection_attempts

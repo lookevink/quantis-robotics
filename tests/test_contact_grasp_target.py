@@ -17,6 +17,7 @@ from jepa_wm.contact_grasp_target import (
     TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+    TRACKING_ROBUST_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     HORIZON_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
@@ -218,7 +219,7 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
             self.assertAlmostEqual(actual, expected)
         self.assertEqual(
             policy.schema,
-            FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            TRACKING_ROBUST_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         )
         self.assertTrue(policy.uses_measured_acquisition_progress)
         self.assertTrue(policy.requires_resolvable_rotation)
@@ -251,7 +252,7 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
 
         self.assertEqual(
             policy.schema,
-            FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            TRACKING_ROBUST_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         )
         self.assertEqual(
             policy.coarse_acquisition_maximum_translation_meters,
@@ -260,6 +261,10 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
         self.assertTrue(policy.uses_coarse_orientation_hold_fallback)
         self.assertEqual(
             policy.minimum_coarse_translation_command_meters,
+            0.0005,
+        )
+        self.assertEqual(
+            policy.fine_acquisition_maximum_translation_meters,
             0.0005,
         )
         self.assertTrue(
