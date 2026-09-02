@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from math import isfinite
 from pathlib import Path
@@ -84,6 +84,9 @@ AXIS_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
 )
 LOADED_DRIVE_COMPENSATED_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v19"
+)
+OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+    "quantis.jepa_wm_contact_grasp_target_policy.v20"
 )
 
 
@@ -272,6 +275,14 @@ _POLICY_CAPABILITIES = {
         attached_drive_bias_compensation=True,
     ),
 }
+_POLICY_CAPABILITIES[
+    OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+] = replace(
+    _POLICY_CAPABILITIES[
+        LOADED_DRIVE_COMPENSATED_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+    ],
+    resolvable_rotation=True,
+)
 
 
 def _frame_index(path: Path) -> int:
@@ -304,7 +315,7 @@ class ContactGraspTargetStep:
 class ContactGraspTargetPolicy:
     """Hold acquisition, then advance by measured reference-state progress."""
 
-    schema: str = LOADED_DRIVE_COMPENSATED_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+    schema: str = OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA
     scene_translation_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     def __post_init__(self) -> None:

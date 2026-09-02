@@ -21,6 +21,7 @@ from jepa_wm.contact_grasp_target import (
     TRACKING_SETTLEMENT_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     AXIS_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     LOADED_DRIVE_COMPENSATED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+    OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     HORIZON_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
@@ -212,7 +213,7 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
         self.assertTrue(CONTACT_GRASP_TARGET_POLICY.uses_horizon_transport_action)
         self.assertEqual(
             CONTACT_GRASP_TARGET_POLICY.schema,
-            LOADED_DRIVE_COMPENSATED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         )
         self.assertTrue(
             CONTACT_GRASP_TARGET_POLICY.requires_axis_resolvable_transport
@@ -223,7 +224,22 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
         self.assertFalse(
             CONTACT_GRASP_TARGET_POLICY.uses_measured_acquisition_progress
         )
-        self.assertFalse(CONTACT_GRASP_TARGET_POLICY.requires_resolvable_rotation)
+        self.assertTrue(CONTACT_GRASP_TARGET_POLICY.requires_resolvable_rotation)
+        loaded_drive_v19 = ContactGraspTargetPolicy(
+            LOADED_DRIVE_COMPENSATED_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+        )
+        self.assertFalse(loaded_drive_v19.requires_resolvable_rotation)
+        self.assertTrue(loaded_drive_v19.requires_axis_resolvable_transport)
+        self.assertTrue(loaded_drive_v19.uses_attached_drive_bias_compensation)
+        reconstructed_v19 = ContactGraspTargetPolicy.from_dict(
+            loaded_drive_v19.to_dict()
+        )
+        self.assertEqual(reconstructed_v19, loaded_drive_v19)
+        self.assertEqual(
+            reconstructed_v19.schema,
+            LOADED_DRIVE_COMPENSATED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+        )
+        self.assertFalse(reconstructed_v19.requires_resolvable_rotation)
         self.assertFalse(
             ContactGraspTargetPolicy(
                 HORIZON_CONTACT_GRASP_TARGET_POLICY_SCHEMA

@@ -30,6 +30,37 @@ from jepa_wm.shadow_safety import ShadowSafetyEvidence
 
 
 class ShadowSafetyEvidenceTest(unittest.TestCase):
+    def test_current_grasp_policy_resolves_failed_v19_attached_turn(self) -> None:
+        # Exact direct proposal that terminalized the frozen v19 canary because
+        # its 12.93 mrad turn was scaled to an unobservable 1.62 mrad command.
+        action = DroidAction(
+            (
+                -0.0009391895728185773,
+                0.0006117846933193505,
+                -0.001291528227739036,
+                -0.003788558766245842,
+                0.0007719331188127398,
+                0.012341589666903019,
+                -0.0009279325604438782,
+            )
+        )
+
+        scales = contact_grasp_action_scales(
+            action,
+            attachment_acquired=True,
+            require_directional_transport_progress=True,
+            require_resolvable_transport=True,
+            require_axis_resolvable_transport=True,
+            require_resolvable_rotation=True,
+        )
+        commanded = scales[0].apply(action)
+
+        self.assertEqual(scales[0].rotation, 0.5)
+        self.assertGreaterEqual(
+            sum(value * value for value in commanded.values[3:6]) ** 0.5,
+            MINIMUM_DIRECTION_OBSERVABLE_ROTATION_RADIANS,
+        )
+
     def test_current_grasp_policy_promotes_v15_turn_above_resolution(self) -> None:
         action = DroidAction(
             (
