@@ -25,6 +25,7 @@ from jepa_wm.control_safety import (
     contact_grasp_action_scales,
     insertion_projection_policy_for_attempts,
 )
+from jepa_wm.control_tracking import evaluate_command_realization
 from jepa_wm.shadow_safety import ShadowSafetyEvidence
 
 
@@ -420,6 +421,60 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
             )
         )
         self.assertEqual(scales[0].apply(action).values[-1], 0.0)
+
+    def test_axis_resolvable_transport_keeps_one_component_above_the_floor(
+        self,
+    ) -> None:
+        action = DroidAction(
+            (-0.000752, -0.000459, 0.000449, 0.0, 0.0, 0.0, 0.03)
+        )
+
+        scales = contact_grasp_action_scales(
+            action,
+            attachment_acquired=True,
+            require_directional_transport_progress=True,
+            require_resolvable_transport=True,
+            require_axis_resolvable_transport=True,
+        )
+
+        self.assertTrue(
+            all(
+                max(abs(value) for value in scale.apply(action).values[:3])
+                >= 0.0005 - 1e-12
+                for scale in scales
+            )
+        )
+        minimum_command = scales[-1].apply(action)
+        self.assertTrue(
+            evaluate_command_realization(
+                minimum_command,
+                minimum_command,
+            ).passed
+        )
+
+    def test_axis_resolvable_transport_rejects_a_diagonal_below_the_axis_floor(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(ValueError, "below controller axis resolution"):
+            contact_grasp_action_scales(
+                DroidAction(
+                    (0.0004, 0.0004, 0.0004, 0.0, 0.0, 0.0, 0.0)
+                ),
+                attachment_acquired=True,
+                require_directional_transport_progress=True,
+                require_resolvable_transport=True,
+                require_axis_resolvable_transport=True,
+            )
+
+    def test_axis_resolvable_transport_requires_the_versioned_resolvable_policy(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(ValueError, "requires a resolvable policy"):
+            contact_grasp_action_scales(
+                DroidAction((0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+                attachment_acquired=True,
+                require_axis_resolvable_transport=True,
+            )
 
     def test_current_transport_derives_a_valid_scale_across_old_roster_gap(self) -> None:
         action = DroidAction((0.0061, 0.0, 0.0, 0.0, 0.0, 0.0, 0.02))

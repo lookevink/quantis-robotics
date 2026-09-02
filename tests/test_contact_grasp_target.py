@@ -19,6 +19,7 @@ from jepa_wm.contact_grasp_target import (
     FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     TRACKING_ROBUST_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     TRACKING_SETTLEMENT_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+    AXIS_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     HORIZON_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
@@ -208,6 +209,22 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
             CONTACT_GRASP_TARGET_POLICY.requires_directional_transport_progress
         )
         self.assertTrue(CONTACT_GRASP_TARGET_POLICY.uses_horizon_transport_action)
+        self.assertEqual(
+            CONTACT_GRASP_TARGET_POLICY.schema,
+            AXIS_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+        )
+        self.assertTrue(
+            CONTACT_GRASP_TARGET_POLICY.requires_axis_resolvable_transport
+        )
+        self.assertFalse(
+            CONTACT_GRASP_TARGET_POLICY.uses_measured_acquisition_progress
+        )
+        self.assertFalse(CONTACT_GRASP_TARGET_POLICY.requires_resolvable_rotation)
+        self.assertFalse(
+            ContactGraspTargetPolicy(
+                HORIZON_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+            ).requires_axis_resolvable_transport
+        )
 
     def test_task_relative_policy_translates_pose_but_not_reference_frame(self) -> None:
         policy = ContactGraspTargetPolicy.for_scene_translation((0.01, -0.02, 0.03))
@@ -223,6 +240,7 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
             policy.schema,
             TRACKING_SETTLEMENT_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         )
+        self.assertFalse(policy.requires_axis_resolvable_transport)
         self.assertTrue(policy.uses_measured_acquisition_progress)
         self.assertTrue(policy.requires_resolvable_rotation)
         self.assertTrue(policy.uses_exact_coarse_translation_projection)

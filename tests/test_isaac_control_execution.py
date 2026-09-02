@@ -777,7 +777,9 @@ class IsaacControlExecutionTest(unittest.TestCase):
                     (0.00012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
                 ),
             ),
-            self.assertRaisesRegex(RuntimeError, "stopped making realizable progress"),
+            self.assertRaisesRegex(
+                RuntimeError, "stopped making realizable progress"
+            ) as raised,
         ):
             asyncio.run(
                 settle_contact_grasp_command(
@@ -790,6 +792,10 @@ class IsaacControlExecutionTest(unittest.TestCase):
                     maximum_updates=40,
                 )
             )
+
+        self.assertIn("commanded_translation=(0.0006, 0.0, 0.0)", str(raised.exception))
+        self.assertIn("realized_translation=(0.00012, 0.0, 0.0)", str(raised.exception))
+        self.assertIn("joint_error_radians=0.000000000", str(raised.exception))
 
     def test_contact_grasp_settlement_polls_safety_and_fails_at_bound(self) -> None:
         actuators = FakeActuators(valid=True)
@@ -931,7 +937,9 @@ class IsaacControlExecutionTest(unittest.TestCase):
             nonlocal updates
             updates += 1
 
-        with self.assertRaisesRegex(RuntimeError, "stopped making realizable progress"):
+        with self.assertRaisesRegex(
+            RuntimeError, "stopped making realizable progress"
+        ) as raised:
             asyncio.run(
                 settle_tracked_joint_command(
                     actuators,
@@ -944,6 +952,10 @@ class IsaacControlExecutionTest(unittest.TestCase):
             )
 
         self.assertLess(updates, 40)
+        self.assertIn("commanded_translation=(0.0006, 0.0, 0.0)", str(raised.exception))
+        self.assertIn("realized_translation=(0.00012, 0.0, 0.0)", str(raised.exception))
+        self.assertIn("tracking_reasons=", str(raised.exception))
+        self.assertIn("translation_error_meters=", str(raised.exception))
 
     def test_insertion_settlement_requires_two_task_space_completion_samples(
         self,

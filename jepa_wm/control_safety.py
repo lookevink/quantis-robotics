@@ -15,7 +15,10 @@ from jepa_wm.action import (
     DroidPose,
 )
 from jepa_wm.control_protocol import ControlObservation, ProposedControl
-from jepa_wm.control_tracking import ActionTrackingLimits
+from jepa_wm.control_tracking import (
+    MINIMUM_REALIZABLE_TRANSLATION_AXIS_METERS,
+    ActionTrackingLimits,
+)
 from jepa_wm.planner import PlannerActionBounds
 
 
@@ -61,7 +64,9 @@ MAXIMUM_CONTACT_GRASP_TRANSLATION_COMMAND_METERS = 0.001
 LEGACY_MAXIMUM_CONTACT_GRASP_COARSE_TRANSLATION_COMMAND_METERS = 0.005
 MAXIMUM_CONTACT_GRASP_COARSE_TRANSLATION_COMMAND_METERS = 0.002
 MAXIMUM_CONTACT_GRASP_FINE_CLOSURE_COMMAND_METERS = 0.0015
-MINIMUM_CONTACT_GRASP_TRANSPORT_COMMAND_METERS = 0.0005
+MINIMUM_CONTACT_GRASP_TRANSPORT_COMMAND_METERS = (
+    MINIMUM_REALIZABLE_TRANSLATION_AXIS_METERS
+)
 MAXIMUM_CONTACT_GRASP_TRANSPORT_COMMAND_METERS = 0.00075
 CONTACT_GRASP_ACTION_SCALES = (
     DroidActionScale(0.25, 0.125, 0.125),
@@ -202,6 +207,34 @@ def resolvable_contact_grasp_transport_action_scales(
     )
     return tuple(DroidActionScale(scale, 0.125, 0.0) for scale in scales)
 
+
+def axis_resolvable_contact_grasp_transport_action_scales(
+    action: DroidAction,
+) -> tuple[DroidActionScale, ...]:
+    """Keep the transport norm bounded and one axis inside its measured band."""
+
+    translation = tuple(abs(value) for value in action.values[:3])
+    translation_norm = sqrt(sum(value * value for value in translation))
+    dominant = max(translation)
+    maximum_scale = min(
+        1.0,
+        MAXIMUM_CONTACT_GRASP_TRANSPORT_COMMAND_METERS
+        / max(translation_norm, 1e-12),
+    )
+    minimum_scale = (
+        MINIMUM_REALIZABLE_TRANSLATION_AXIS_METERS / max(dominant, 1e-12)
+    )
+    if minimum_scale > maximum_scale or minimum_scale > 1.0:
+        raise ValueError(
+            "contact-grasp transport proposal is below controller axis resolution"
+        )
+    scales = tuple(
+        dict.fromkeys(
+            (maximum_scale, (maximum_scale + minimum_scale) / 2.0, minimum_scale)
+        )
+    )
+    return tuple(DroidActionScale(scale, 0.125, 0.0) for scale in scales)
+
 # The demonstration closes from 44 mm to 18 mm across the contact window. The
 # live controller preserves that learned direction but must keep Cartesian and
 # gripper motion independently bounded. These rosters use the 0.25 gripper
@@ -333,6 +366,7 @@ def contact_grasp_action_scales(
     attachment_acquired: bool = False,
     require_directional_transport_progress: bool = False,
     require_resolvable_transport: bool = False,
+    require_axis_resolvable_transport: bool = False,
     coarse_acquisition: bool = False,
     maximum_coarse_translation_command_meters: float | None = None,
     require_resolvable_rotation: bool = False,
@@ -347,11 +381,16 @@ def contact_grasp_action_scales(
     if (
         not isinstance(coarse_acquisition, bool)
         or not isinstance(require_resolvable_rotation, bool)
+        or not isinstance(require_axis_resolvable_transport, bool)
         or not isinstance(exact_coarse_translation_projection, bool)
         or not isinstance(coarse_orientation_hold_fallback, bool)
         or not isinstance(resolution_floored_acquisition, bool)
     ):
         raise ValueError("contact-grasp acquisition scale phase is invalid")
+    if require_axis_resolvable_transport and not require_resolvable_transport:
+        raise ValueError(
+            "axis-resolvable contact-grasp transport requires a resolvable policy"
+        )
     if minimum_coarse_translation_command_meters is not None and (
         isinstance(minimum_coarse_translation_command_meters, bool)
         or not isfinite(minimum_coarse_translation_command_meters)
@@ -391,10 +430,15 @@ def contact_grasp_action_scales(
                 raise ValueError(
                     "resolvable contact-grasp transport must be directional"
                 )
-            return _rotation_resolved_policy(
-                resolvable_contact_grasp_transport_action_scales(
+            transport_policy = (
+                axis_resolvable_contact_grasp_transport_action_scales(action)
+                if require_axis_resolvable_transport
+                else resolvable_contact_grasp_transport_action_scales(
                     translation_norm
-                ),
+                )
+            )
+            return _rotation_resolved_policy(
+                transport_policy,
                 action,
                 required=require_resolvable_rotation,
             )

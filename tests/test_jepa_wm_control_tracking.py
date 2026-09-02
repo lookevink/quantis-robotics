@@ -94,6 +94,21 @@ class RealizedTargetProgressPolicyTest(unittest.TestCase):
         self.assertTrue(realization.passed)
         self.assertAlmostEqual(realization.translation_fraction, 0.9)
 
+    def test_sub_resolution_cross_axis_motion_does_not_block_a_resolved_axis(
+        self,
+    ) -> None:
+        commanded = DroidAction(
+            (0.0006, 0.0003, -0.0003, 0.0, 0.0, 0.0, 0.0)
+        )
+        actual = DroidAction(
+            (0.00045, -0.0003, 0.0003, 0.0, 0.0, 0.0, 0.0)
+        )
+
+        realization = evaluate_command_realization(commanded, actual)
+
+        self.assertTrue(realization.passed)
+        self.assertAlmostEqual(realization.translation_fraction, 0.75)
+
     def test_orientation_regression_still_fails_inside_translation_deadband(self) -> None:
         decision = RealizedTargetProgressPolicy().evaluate(
             _pose(0.0),

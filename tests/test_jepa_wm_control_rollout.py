@@ -71,6 +71,7 @@ from jepa_wm.insertion_trial import (
 from jepa_wm.insertion_refresh import ControlSafetySnapshot, InsertionEvaluationRefresh
 from jepa_wm.insertion_contract import InsertionControlTargetPolicy
 from jepa_wm.insertion_rollout import InsertionRolloutPosition
+from jepa_wm.insertion_task import InsertionTarget, InsertionTaskStep
 from jepa_wm.planner import CEMConfig
 from jepa_wm.planner_readiness import FirstActionThresholds
 from jepa_wm.objective_calibration import (
@@ -457,9 +458,9 @@ class ControlRolloutTest(unittest.TestCase):
         joints = (0.0, -0.5, 0.0, -1.5, 0.0, 1.0, 0.0)
         captured = DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04))
         start = DroidPose((0.4001, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04))
-        target = DroidPose((0.4007, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04))
-        realized = DroidPose((0.4004, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04))
-        action = DroidAction((0.0003, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+        target = DroidPose((0.401, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04))
+        realized = DroidPose((0.4007, 0.0, 0.5, 0.0, 0.0, 0.0, 0.04))
+        action = DroidAction((0.0006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
         observation = ControlObservation(
             10,
             100.0,
@@ -1003,6 +1004,105 @@ class ControlRolloutTest(unittest.TestCase):
             self.assertEqual(
                 summary["execution_error"], "RuntimeError: transient force"
             )
+
+    def test_terminal_rollback_does_not_claim_the_live_insertion_target_changed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reference = root / "recordings" / "reference"
+            reference.mkdir(parents=True)
+            insertion_target = InsertionTarget((0.05, 0.0, 0.5), (1.0, 0.0, 0.0))
+            (reference / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "metadata": {
+                            "task": "reach_and_insert",
+                            "insertion_target": insertion_target.to_dict(),
+                        }
+                    }
+                )
+            )
+            (reference / "steps.jsonl").write_text(
+                json.dumps(
+                    {
+                        "index": 7,
+                        "end_effector_pose": [
+                            0.43,
+                            0.0,
+                            0.5,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.5,
+                        ],
+                    }
+                )
+                + "\n"
+            )
+            self._write_step(
+                root,
+                "session-0",
+                previous_session_id=None,
+                pose_x=0.40,
+                post_x=0.41,
+            )
+            first = ControlSession.at(root / "control_sessions", "session-0")
+            first_result = first.load_result()
+            first_post_action = replace(
+                first_result.post_action,
+                plug_position=(0.0, 0.0, 0.5),
+                plug_attached=True,
+                insertion_task_step=InsertionTaskStep(
+                    (0.0, 0.0, 0.5),
+                    (0.04, 0.0, 0.5),
+                    True,
+                    0.0,
+                    True,
+                    False,
+                    0.0,
+                ),
+                insertion_target=insertion_target,
+                plug_orientation_wxyz=(1.0, 0.0, 0.0, 0.0),
+                socket_orientation_wxyz=(1.0, 0.0, 0.0, 0.0),
+                gripper_frame_world_position=(0.04, 0.0, 0.5),
+            )
+            first.result_path.write_text(
+                json.dumps(replace(first_result, post_action=first_post_action).to_dict())
+            )
+            self._write_step(
+                root,
+                "session-1",
+                previous_session_id="session-0",
+                pose_x=0.41,
+                post_x=0.42,
+                warmup_frames=5,
+                captured_at=101.0,
+                previous_action_x=0.01,
+            )
+            second = ControlSession.at(root / "control_sessions", "session-1")
+            second_result = second.load_result()
+            second.result_path.write_text(
+                json.dumps(
+                    replace(
+                        second_result,
+                        status=ControlResultStatus.ROLLED_BACK_EXECUTION,
+                        post_action=None,
+                        execution_error="RuntimeError: progress plateau",
+                        execution_interlock=ControlInterlockEvidence(0.0, False),
+                    ).to_dict()
+                )
+            )
+
+            report = self._report(
+                root,
+                ("session-0", "session-1"),
+                requested_steps=2,
+            )
+
+        self.assertEqual(report["applied_steps"], 1)
+        self.assertFalse(report["all_steps_applied"])
+        self.assertEqual(report["insertion_target"], insertion_target.to_dict())
 
     def test_rejects_tampered_command_realization_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

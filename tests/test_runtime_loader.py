@@ -89,7 +89,7 @@ import runpy
 reload_demo_runtime = runpy.run_path(
     "sim/runtime_loader.py"
 )["reload_demo_runtime"]
-from jepa_wm import contact_grasp_acquisition_hold, contact_grasp_acquisition_resolution, contact_grasp_horizon_completion, control_resolution_baseline, control_resolution_profile, insertion_transition
+from jepa_wm import contact_grasp_acquisition_hold, contact_grasp_acquisition_resolution, contact_grasp_horizon_completion, control_resolution_baseline, control_resolution_profile, control_tracking, insertion_transition
 from sim import grasp_task as old_grasp_task
 from sim import isaac_control_runtime as old_control_runtime
 from sim import isaac_demo_runtime as old_demo_runtime
@@ -129,6 +129,7 @@ del insertion_transition.resolve_insertion_followup_proposal
 del contact_grasp_acquisition_hold.ContactGraspAcquisitionHold
 del contact_grasp_acquisition_resolution.ContactGraspAcquisitionResolution
 del contact_grasp_horizon_completion.ContactGraspHorizonCompletion
+del control_tracking.MINIMUM_REALIZABLE_TRANSLATION_AXIS_METERS
 del old_grasp_task.AttachmentMechanism
 del old_insertion_demo.record_insertion_demo
 reload_demo_runtime()

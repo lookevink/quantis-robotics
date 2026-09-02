@@ -392,7 +392,21 @@ async def settle_contact_grasp_command(
                 "contact-grasp command stopped making realizable progress: "
                 f"progress_fraction="
                 f"{final_realization.active_progress_fraction:.6f}, "
-                f"plateau_samples={plateau_samples}"
+                f"plateau_samples={plateau_samples}, "
+                f"commanded_translation={commanded_action.values[:3]}, "
+                f"realized_translation={realized_action.values[:3]}, "
+                f"tracking_reasons="
+                f"{[reason.value for reason in final_tracking.reasons]}, "
+                f"completion_reasons="
+                f"{[reason.value for reason in final_realization.reasons]}, "
+                f"translation_fraction={final_realization.translation_fraction:.6f}, "
+                f"rotation_fraction={final_realization.rotation_fraction:.6f}, "
+                f"translation_error_meters="
+                f"{final_tracking.translation_error_meters:.9f}, "
+                f"rotation_error_radians="
+                f"{final_tracking.rotation_error_radians:.9f}, "
+                f"joint_error_radians={joint_error:.9f}, "
+                f"gripper_error_meters={gripper_error:.9f}"
             )
         if update_index == maximum_updates:
             break
@@ -502,7 +516,22 @@ async def _settle_tracked_joint_command(
                 raise RuntimeError(
                     "insertion command stopped making realizable progress: "
                     f"progress_fraction={realization.active_progress_fraction:.6f}, "
-                    f"plateau_samples={plateau_samples}"
+                    f"plateau_samples={plateau_samples}, "
+                    f"commanded_translation="
+                    f"{final_completion.commanded.values[:3]}, "
+                    f"realized_translation={final_completion.actual.values[:3]}, "
+                    f"tracking_reasons="
+                    f"{[reason.value for reason in final_completion.tracking.reasons]}, "
+                    f"completion_reasons="
+                    f"{[reason.value for reason in realization.reasons]}, "
+                    f"translation_fraction={realization.translation_fraction:.6f}, "
+                    f"rotation_fraction={realization.rotation_fraction:.6f}, "
+                    f"translation_error_meters="
+                    f"{final_completion.tracking.translation_error_meters:.9f}, "
+                    f"rotation_error_radians="
+                    f"{final_completion.tracking.rotation_error_radians:.9f}, "
+                    f"joint_error_radians={tracking_error:.9f}, "
+                    f"gripper_error_meters={gripper_error}"
                 )
         if tracking_error <= required_error and (
             gripper_error is None or gripper_error <= gripper.maximum_error_meters
@@ -928,6 +957,9 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             ),
             require_resolvable_transport=(
                 contact_grasp_policy.uses_horizon_transport_action
+            ),
+            require_axis_resolvable_transport=(
+                contact_grasp_policy.requires_axis_resolvable_transport
             ),
             coarse_acquisition=contact_grasp_policy.uses_coarse_acquisition_action(
                 observation.target_frame,

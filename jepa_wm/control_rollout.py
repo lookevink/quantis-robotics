@@ -654,6 +654,9 @@ class ControlStepSummary:
                 require_resolvable_transport=(
                     contact_grasp_policy.uses_horizon_transport_action
                 ),
+                require_axis_resolvable_transport=(
+                    contact_grasp_policy.requires_axis_resolvable_transport
+                ),
                 coarse_acquisition=contact_grasp_policy.uses_coarse_acquisition_action(
                     observation.target_frame,
                     plug_attached=state.plug_attached,
@@ -1546,15 +1549,23 @@ class ControlRolloutReport:
                     tuple(float(value) for value in target_payload["socket_position"]),
                     tuple(float(value) for value in target_payload["insertion_axis"]),
                 )
-            live_targets = tuple(
-                step.result.post_action.insertion_target
+            applied_post_actions = tuple(
+                step.result.post_action
                 for step in complete
                 if step.result is not None
+                and step.result.status is ControlResultStatus.APPLIED
                 and step.result.post_action is not None
-                and step.result.post_action.insertion_target is not None
+            )
+            live_targets = tuple(
+                post_action.insertion_target
+                for post_action in applied_post_actions
+                if post_action.insertion_target is not None
             )
             if live_targets:
-                if len(live_targets) != len(complete) or len(set(live_targets)) != 1:
+                if (
+                    len(live_targets) != len(applied_post_actions)
+                    or len(set(live_targets)) != 1
+                ):
                     raise ValueError("live insertion target changed during rollout")
                 if insertion_target is None or target_observation is None:
                     raise ValueError("live insertion target has no reference target")

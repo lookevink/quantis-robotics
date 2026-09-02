@@ -29,6 +29,10 @@ class CommandRealizationReason(str, Enum):
     ROTATION_UNDERREALIZED = "rotation_underrealized"
 
 
+MINIMUM_REALIZABLE_TRANSLATION_AXIS_METERS = 5e-4
+COMMAND_REALIZATION_AXIS_COMPARISON_TOLERANCE = 1e-12
+
+
 @dataclass(frozen=True)
 class ActionTrackingLimits:
     translation_activity_meters: float = 1e-4
@@ -62,6 +66,9 @@ class CommandRealizationLimits:
     """Completion thresholds, deliberately separate from safety tracking."""
 
     translation_activity_meters: float = 1e-4
+    translation_axis_activity_meters: float = (
+        MINIMUM_REALIZABLE_TRANSLATION_AXIS_METERS
+    )
     rotation_activity_radians: float = 1e-3
     minimum_translation_fraction: float = 0.75
     minimum_rotation_fraction: float = 0.75
@@ -74,6 +81,7 @@ class CommandRealizationLimits:
             isfinite(value) and value > 0.0
             for value in (
                 self.translation_activity_meters,
+                self.translation_axis_activity_meters,
                 self.rotation_activity_radians,
                 self.minimum_progress_increment,
             )
@@ -86,7 +94,9 @@ class CommandRealizationLimits:
         ):
             raise ValueError("command realization limits are invalid")
         if (
-            isinstance(self.required_consecutive_samples, bool)
+            self.translation_axis_activity_meters
+            < self.translation_activity_meters
+            or isinstance(self.required_consecutive_samples, bool)
             or not isinstance(self.required_consecutive_samples, int)
             or self.required_consecutive_samples < 1
             or isinstance(self.maximum_plateau_samples, bool)
@@ -221,20 +231,21 @@ def _cosine(left: np.ndarray, right: np.ndarray) -> float:
 def _minimum_realized_axis_fraction(
     commanded: np.ndarray,
     actual: np.ndarray,
-    activity_magnitude: float,
+    axis_activity: float,
 ) -> float:
     """Return the least realization across physically meaningful axes.
 
-    A component smaller than the modality activity threshold divided across
-    all axes cannot make that modality active by itself. Treating smaller
-    components as mandatory motion would turn floating-point/model residue
-    into a sub-resolution drive request.
+    Treating a component below the measured axis-resolution floor as mandatory
+    motion would reject a resolvable command because of unobservable coupled
+    motion on another axis.
     """
 
-    axis_activity = activity_magnitude / sqrt(float(commanded.size))
-    active = np.abs(commanded) >= axis_activity
+    active = (
+        np.abs(commanded)
+        >= axis_activity - COMMAND_REALIZATION_AXIS_COMPARISON_TOLERANCE
+    )
     if not np.any(active):
-        return 1.0
+        return 0.0
     fractions = actual[active] / commanded[active]
     return max(0.0, float(np.min(fractions)))
 
@@ -259,12 +270,12 @@ def evaluate_command_realization(
     translation_fraction = _minimum_realized_axis_fraction(
         commanded_translation,
         actual_translation,
-        limits.translation_activity_meters,
+        limits.translation_axis_activity_meters,
     )
     rotation_fraction = _minimum_realized_axis_fraction(
         commanded_rotation,
         actual_rotation,
-        limits.rotation_activity_radians,
+        limits.rotation_activity_radians / sqrt(float(commanded_rotation.size)),
     )
     active_fractions = []
     reasons = []
@@ -340,6 +351,8 @@ def evaluate_action_tracking(
 class CommandCompletionDecision:
     """Joint safety tracking and independent task-space completion."""
 
+    commanded: DroidAction
+    actual: DroidAction
     tracking: ActionTrackingDecision
     realization: CommandRealizationDecision
 
@@ -354,6 +367,8 @@ def evaluate_command_completion(
     execution_policy: ControlExecutionPolicy,
 ) -> CommandCompletionDecision:
     return CommandCompletionDecision(
+        commanded,
+        actual,
         evaluate_action_tracking(
             commanded,
             actual,
