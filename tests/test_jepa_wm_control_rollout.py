@@ -1101,6 +1101,127 @@ class ControlRolloutTest(unittest.TestCase):
                     predecessor_session_id="wrong-grasp",
                 )
 
+    def test_contact_grasp_report_authenticates_predecessor_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reference = root / "recordings" / "reference"
+            reference.mkdir(parents=True)
+            (reference / "manifest.json").write_text(
+                json.dumps({"metadata": {"task": "reach_and_insert"}})
+            )
+            proposal = Path("/tmp/proposal.pth")
+            pose = DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+
+            def observation(session: str, frame: int, artifact: Path) -> ControlObservation:
+                return ControlObservation(
+                    frame,
+                    100.0,
+                    Path(f"control_sessions/{session}/context.png"),
+                    ControlTarget(
+                        Path(
+                            "recordings/reference/wrist/"
+                            f"frame_{frame:06d}.png"
+                        )
+                    ),
+                    artifact,
+                    pose,
+                    DroidAction((0.0,) * 7),
+                    frame - 16,
+                )
+
+            current_observation = observation("current", 113, proposal)
+            predecessor_observation = observation("predecessor", 113, proposal)
+
+            def summary(observed, state):
+                value = object.__new__(ControlStepSummary)
+                object.__setattr__(value, "observation", observed)
+                object.__setattr__(value, "state", state)
+                object.__setattr__(value, "response", None)
+                object.__setattr__(value, "result", None)
+                object.__setattr__(value, "shadow", None)
+                object.__setattr__(value, "shadow_safety", None)
+                return value
+
+            current = summary(
+                current_observation,
+                SimpleNamespace(
+                    reference_recording="reference",
+                    seed=11400,
+                    plug_attached=False,
+                ),
+            )
+
+            def predecessor(
+                *,
+                target_frame: int = 113,
+                seed: int = 11400,
+                artifact: Path = proposal,
+            ) -> ControlStepSummary:
+                return summary(
+                    observation("predecessor", target_frame, artifact),
+                    SimpleNamespace(
+                        reference_recording="reference",
+                        seed=seed,
+                        plug_attached=False,
+                    ),
+                )
+
+            def reconstruct(source: ControlStepSummary):
+                policy = Mock()
+
+                def validate(*args, previous_step, **kwargs):
+                    del args, kwargs
+                    if previous_step.observation.target_frame != Path(
+                        "recordings/reference/wrist/frame_000113.png"
+                    ):
+                        raise ValueError("contact-grasp target schedule is invalid")
+
+                policy.validate_reference_schedule.side_effect = validate
+                with (
+                    patch(
+                        "jepa_wm.control_rollout.ControlStepSummary.from_session",
+                        side_effect=(current, source),
+                    ),
+                    patch(
+                        "jepa_wm.control_rollout._contact_grasp_target_policy",
+                        return_value=policy,
+                    ),
+                    patch(
+                        "jepa_wm.control_rollout._contact_grasp_target_steps",
+                        return_value=(object(),),
+                    ),
+                    patch(
+                        "jepa_wm.control_rollout._target_pose",
+                        return_value=pose,
+                    ),
+                    patch.object(ControlRolloutReport, "__post_init__"),
+                ):
+                    report = ControlRolloutReport.from_sessions(
+                        root,
+                        "rollout-1",
+                        ("current",),
+                        reference_recording="reference",
+                        seed=11400,
+                        proposal=proposal,
+                        requested_steps=1,
+                        predecessor_session_id="predecessor",
+                    )
+                return report, policy
+
+            report, policy = reconstruct(predecessor())
+
+            self.assertEqual(report.predecessor_session_id, "predecessor")
+            previous_step = policy.validate_reference_schedule.call_args.kwargs[
+                "previous_step"
+            ]
+            self.assertEqual(previous_step.observation, predecessor_observation)
+            with self.assertRaisesRegex(ValueError, "target schedule"):
+                reconstruct(predecessor(target_frame=129))
+            with self.assertRaisesRegex(ValueError, "predecessor provenance"):
+                reconstruct(predecessor(seed=11401))
+            with self.assertRaisesRegex(ValueError, "predecessor provenance"):
+                reconstruct(predecessor(artifact=Path("/tmp/other.pth")))
+
     def test_insertion_followup_accepts_policy_selected_target_and_bounded_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

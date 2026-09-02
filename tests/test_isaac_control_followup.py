@@ -9,12 +9,13 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from jepa_wm.action import DroidAction, DroidPose
+from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_policy import ControlExecutionPolicy
-from jepa_wm.control_protocol import ControlObservation, ControlTarget
+from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
 from jepa_wm.control_safety import (
     ACTION_SCALES,
     ControlGateDecision,
+    ControlGateReason,
     ControlInterlockEvidence,
     SafetyProjectionAttempt,
 )
@@ -41,7 +42,9 @@ from sim.control_session import (
     PostActionEvidence,
 )
 from sim.isaac_control_followup import (
+    BLOCKED_IK_DIAGNOSTIC_FINGERPRINTS,
     build_insertion_followup_capture,
+    diagnose_contact_grasp_blocked_ik,
     diagnose_contact_grasp_settlement_rollback,
     restore_grasp_transition_retry,
     restore_insertion_rollback_retry,
@@ -53,6 +56,149 @@ from sim.isaac_demo_runtime import JointCommand
 
 
 class FollowupContinuityTest(unittest.TestCase):
+    def test_blocked_ik_diagnostic_finds_a_local_branch_without_motion(self) -> None:
+        pose = DroidPose((0.3, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+        raw = DroidAction((0.002, 0.0, 0.0, 0.0, 0.0, 0.0, 0.1))
+        joints = (0.0,) * 7
+        expected = JointDriveTarget(joints, 0.04)
+        scales = (
+            DroidActionScale(0.375, 0.0, 0.0625),
+            DroidActionScale(0.25, 0.0, 0.0625),
+        )
+        attempts = tuple(
+            SafetyProjectionAttempt(
+                scale,
+                ControlGateDecision(
+                    7,
+                    pose.applied(scale.apply(raw)),
+                    (ControlGateReason.JOINT_VELOCITY_VIOLATION,),
+                ),
+                1.0,
+                (1.0,) * 7,
+            )
+            for scale in (*scales, *scales)
+        )
+        refresh = InsertionEvaluationRefresh(
+            100.0,
+            ControlSafetySnapshot(joints, 0.04, (0.0, 0.0, 1.0), 0.0, False, False),
+            pose,
+        )
+        policy = Mock()
+        policy.action_for_execution.return_value = raw
+        observation = ControlObservation(
+            7,
+            99.0,
+            Path("control_sessions/source/context.png"),
+            ControlTarget(Path("recordings/reference/wrist/frame_000113.png")),
+            Path("/tmp/proposal.pth"),
+            pose,
+            DroidAction((0.0,) * 7),
+            97,
+        )
+        response = ProposedControl(
+            7,
+            99.5,
+            (raw,) * 3,
+            Path("/tmp/proposal.pth"),
+        )
+        step = SimpleNamespace(
+            observation=observation,
+            response=response,
+            state=SimpleNamespace(
+                plug_attached=False,
+                active_drive_target=expected,
+                current_joint_positions=joints,
+                require_safety_snapshot=Mock(return_value=refresh.live_state),
+                require_current_contact_grasp_policy=Mock(return_value=policy),
+            ),
+            result=SimpleNamespace(
+                status=ControlResultStatus.BLOCKED,
+                gate=SimpleNamespace(
+                    reasons=(ControlGateReason.JOINT_VELOCITY_VIOLATION,)
+                ),
+                selected_action_scale=None,
+                post_action=None,
+                insertion_trial_refresh=refresh,
+                projection_attempts=attempts,
+            ),
+        )
+        actual = JointCommand(np.full(7, 1e-4), 0.04001)
+        runtime = SimpleNamespace(
+            actuators=SimpleNamespace(actual_command=Mock(return_value=actual)),
+            attachment=SimpleNamespace(attached=False),
+            sensor=object(),
+        )
+        solved = SimpleNamespace(
+            arm_positions=np.full(7, 2e-3),
+            position_error_m=1e-5,
+            orientation_error_rad=1e-4,
+        )
+        stage = object()
+        usd = ModuleType("omni.usd")
+        usd.get_context = lambda: SimpleNamespace(get_stage=lambda: stage)
+        omni = ModuleType("omni")
+        omni.usd = usd
+        session = SimpleNamespace(
+            path=Path("/tmp/v34-session"),
+            execution_path=Path("/tmp/v34-execution-does-not-exist"),
+        )
+        projected = SimpleNamespace(solved_pose=solved)
+        projected_attempts = iter(
+            SafetyProjectionAttempt(
+                scale,
+                ControlGateDecision(7, pose.applied(scale.apply(raw)), ()),
+                0.002,
+                tuple(solved.arm_positions),
+            )
+            for scale in scales
+        )
+
+        def project(*args, **kwargs):
+            del args, kwargs
+            return next(projected_attempts), projected
+
+        with (
+            patch.dict(sys.modules, {"omni": omni, "omni.usd": usd}),
+            patch(
+                "sim.isaac_control_followup.ControlSession.at",
+                return_value=session,
+            ),
+            patch(
+                "sim.isaac_control_followup.artifact_fingerprint",
+                side_effect=lambda path: BLOCKED_IK_DIAGNOSTIC_FINGERPRINTS[
+                    path.name
+                ],
+            ),
+            patch(
+                "jepa_wm.control_rollout.ControlStepSummary.from_session",
+                return_value=step,
+            ),
+            patch(
+                "sim.isaac_control_execution.project_control_candidate",
+                side_effect=project,
+            ) as project_candidate,
+            patch(
+                "sim.isaac_control_followup.live_runtime_for",
+                return_value=runtime,
+            ),
+            patch(
+                "sim.isaac_control_followup.current_drive_target",
+                return_value=expected,
+            ),
+            patch(
+                "sim.isaac_control_followup.read_control_contact",
+                return_value=(False, 0.0),
+            ),
+        ):
+            evidence = diagnose_contact_grasp_blocked_ik(
+                "unknown-start-e2e-v34-62605-grasp-001"
+            )
+
+        self.assertTrue(evidence["diagnostic_passed"])
+        self.assertFalse(evidence["simulator_action_applied"])
+        self.assertEqual(len(evidence["attempts"]), 2)
+        self.assertEqual(project_candidate.call_count, 2)
+
     def test_settlement_rollback_diagnostic_is_read_only_and_exact(self) -> None:
         captured = JointDriveTarget((0.0,) * 7, 0.04)
         expected = JointDriveTarget.for_command(

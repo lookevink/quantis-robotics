@@ -1150,6 +1150,7 @@ class ControlRolloutReport:
             current_contact_grasp = True
             contact_grasp_policy.validate_schedule(
                 _contact_grasp_target_steps(complete),
+                require_initial=self.predecessor_session_id is None,
             )
         else:
             current_contact_grasp = False
@@ -1430,10 +1431,32 @@ class ControlRolloutReport:
                 policy = _contact_grasp_target_policy(complete)
                 if policy is not None:
                     recording = data_root / "recordings" / reference_recording
+                    previous_target_step = None
+                    if predecessor_session_id is not None:
+                        predecessor = ControlStepSummary.from_session(
+                            ControlSession.at(
+                                data_root / "control_sessions",
+                                predecessor_session_id,
+                            )
+                        )
+                        if (
+                            predecessor.state.reference_recording
+                            != reference_recording
+                            or predecessor.state.seed != seed
+                            or predecessor.observation.expected_proposal != proposal
+                        ):
+                            raise ValueError(
+                                "control rollout predecessor provenance is invalid"
+                            )
+                        previous_target_step = ContactGraspTargetStep(
+                            predecessor.observation,
+                            predecessor.state.plug_attached,
+                        )
                     policy.validate_reference_schedule(
                         _contact_grasp_target_steps(complete),
                         recording,
                         frame_root=data_root,
+                        previous_step=previous_target_step,
                     )
         target_observation = (
             None

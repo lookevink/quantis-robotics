@@ -25,6 +25,7 @@ from jepa_wm.contact_grasp_target import (
     ROTATION_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     TASK_RELATIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     TRACKING_BOUNDED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+    ContactGraspTargetStep,
     ContactGraspTargetPolicy,
 )
 
@@ -586,6 +587,25 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
                     recording,
                     frame_root=root,
                     require_initial=True,
+                )
+            CONTACT_GRASP_TARGET_POLICY.validate_reference_schedule(
+                (ContactGraspTargetStep(followup, True),),
+                recording,
+                frame_root=root,
+                previous_step=ContactGraspTargetStep(initial, False),
+            )
+            with self.assertRaisesRegex(ValueError, "target schedule"):
+                CONTACT_GRASP_TARGET_POLICY.validate_reference_schedule(
+                    (),
+                    recording,
+                    frame_root=root,
+                    previous_step=ContactGraspTargetStep(initial, False),
+                )
+            with self.assertRaisesRegex(ValueError, "target schedule"):
+                CONTACT_GRASP_TARGET_POLICY.validate_reference_schedule(
+                    (ContactGraspTargetStep(followup, True),),
+                    recording,
+                    frame_root=root,
                 )
 
         self.assertEqual(

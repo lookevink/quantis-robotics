@@ -20,17 +20,31 @@ class _BranchingSolver:
             return np.full(7, 0.002), True
         return np.full(7, 0.01), True
 
+    def compute_forward_kinematics(self, *args, **kwargs):
+        del args, kwargs
+        return np.zeros(3), np.eye(3)
 
-class _LateLocalBranchSolver:
+
+class _IndependentJointBranchSolver:
     def __init__(self) -> None:
         self.calls = 0
 
     def compute_inverse_kinematics(self, *args, **kwargs):
-        del args, kwargs
+        del args
         self.calls += 1
-        if self.calls < 9:
-            return np.full(7, 1.6), True
-        return np.full(7, 0.0065), True
+        warm_start = kwargs["warm_start"]
+        if np.allclose(
+            warm_start,
+            np.asarray((0.0, 0.0, 0.0, 0.0, 0.0, -0.02, 0.0)),
+            rtol=0.0,
+            atol=1e-12,
+        ):
+            return np.full(7, 0.0065), True
+        return np.full(7, 1.6), True
+
+    def compute_forward_kinematics(self, *args, **kwargs):
+        del args, kwargs
+        return np.zeros(3), np.eye(3)
 
 
 class _ToleranceCapturingSolver:
@@ -41,6 +55,29 @@ class _ToleranceCapturingSolver:
         del args
         self.calls.append(kwargs)
         return np.zeros(7), True
+
+    def compute_forward_kinematics(self, *args, **kwargs):
+        del args, kwargs
+        return np.zeros(3), np.eye(3)
+
+
+class _InaccurateSolver(_ToleranceCapturingSolver):
+    def compute_forward_kinematics(self, *args, **kwargs):
+        del args, kwargs
+        return np.asarray((0.0002, 0.0, 0.0)), np.eye(3)
+
+
+class _OrientationInaccurateSolver(_ToleranceCapturingSolver):
+    def compute_forward_kinematics(self, *args, **kwargs):
+        del args, kwargs
+        rotation = np.asarray(
+            (
+                (1.0, 0.0, 0.0),
+                (0.0, np.cos(0.002), -np.sin(0.002)),
+                (0.0, np.sin(0.002), np.cos(0.002)),
+            )
+        )
+        return np.zeros(3), rotation
 
 
 class ClosestInverseKinematicsTest(unittest.TestCase):
@@ -71,8 +108,8 @@ class ClosestInverseKinematicsTest(unittest.TestCase):
         self.assertFalse(success)
         np.testing.assert_allclose(solved, np.zeros(7))
 
-    def test_searches_bounded_milliradian_seeds_for_a_local_branch(self) -> None:
-        solver = _LateLocalBranchSolver()
+    def test_searches_independent_bounded_joint_seeds_for_a_local_branch(self) -> None:
+        solver = _IndependentJointBranchSolver()
 
         solved, success = _closest_inverse_kinematics(
             solver,
@@ -83,7 +120,7 @@ class ClosestInverseKinematicsTest(unittest.TestCase):
         )
 
         self.assertTrue(success)
-        self.assertEqual(solver.calls, 9)
+        self.assertEqual(solver.calls, 45)
         np.testing.assert_allclose(solved, np.full(7, 0.0065))
 
     def test_requires_submillimeter_waypoint_accuracy(self) -> None:
@@ -97,7 +134,7 @@ class ClosestInverseKinematicsTest(unittest.TestCase):
             np.zeros(7),
         )
 
-        self.assertEqual(len(solver.calls), 9)
+        self.assertEqual(len(solver.calls), 45)
         self.assertTrue(
             all(
                 call["position_tolerance"] == 0.0001
@@ -105,6 +142,30 @@ class ClosestInverseKinematicsTest(unittest.TestCase):
                 for call in solver.calls
             )
         )
+
+    def test_rejects_success_claim_when_forward_error_exceeds_tolerance(self) -> None:
+        solved, success = _closest_inverse_kinematics(
+            _InaccurateSolver(),
+            "right_gripper",
+            np.zeros(3),
+            np.asarray((1.0, 0.0, 0.0, 0.0)),
+            np.zeros(7),
+        )
+
+        self.assertFalse(success)
+        np.testing.assert_allclose(solved, np.zeros(7))
+
+    def test_rejects_success_claim_when_orientation_error_exceeds_tolerance(self) -> None:
+        solved, success = _closest_inverse_kinematics(
+            _OrientationInaccurateSolver(),
+            "right_gripper",
+            np.zeros(3),
+            np.asarray((1.0, 0.0, 0.0, 0.0)),
+            np.zeros(7),
+        )
+
+        self.assertFalse(success)
+        np.testing.assert_allclose(solved, np.zeros(7))
 
 
 if __name__ == "__main__":

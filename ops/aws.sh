@@ -596,6 +596,8 @@ Commands:
                                         Read a failed settlement rollback without motion
   jepa-wm-contact-grasp-tracking-rollback-ik-diagnostic SESSION
                                         Compare rollback IK branches without motion
+  jepa-wm-contact-grasp-blocked-ik-diagnostic SESSION
+                                        Prove a local branch for a no-motion block
   jepa-wm-unknown-start-recovery-diagnostic SESSION
                                         Read paused rollback drift without motion
   jepa-wm-physical-shadow-canary-v5    Run continuity-safe unknown-start zero-actuation canary
@@ -1521,6 +1523,13 @@ case "${command}" in
     is_safe_identifier "${session_id}" || die "invalid control session name"
     demo_python \
       "demo.diagnose_contact_grasp_tracking_rollback_ik('${session_id}')" \
+      120
+    ;;
+  jepa-wm-contact-grasp-blocked-ik-diagnostic)
+    session_id="${2:-}"
+    is_safe_identifier "${session_id}" || die "invalid control session name"
+    demo_python \
+      "demo.diagnose_contact_grasp_blocked_ik('${session_id}')" \
       120
     ;;
   jepa-wm-unknown-start-recovery-diagnostic)

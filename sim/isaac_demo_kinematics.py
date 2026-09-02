@@ -20,6 +20,10 @@ from sim.isaac_demo_scene import (
 )
 
 
+IK_POSITION_TOLERANCE_METERS = 0.0001
+IK_ORIENTATION_TOLERANCE_RADIANS = 0.001
+
+
 @dataclass(frozen=True)
 class SolvedWaypoint:
     waypoint: Waypoint
@@ -53,21 +57,35 @@ def _closest_inverse_kinematics(
     target_orientation: np.ndarray,
     warm_start: np.ndarray,
 ) -> tuple[np.ndarray, bool]:
-    """Select the successful Lula branch closest to the captured articulation."""
+    """Select the successful Lula branch closest to the captured articulation.
+
+    Lula can converge to a remote branch even when initialized at the current
+    articulation, especially near a joint limit.  Search a small, symmetric
+    neighbourhood in every joint instead of repeatedly perturbing the same
+    one-dimensional diagonal.  These offsets seed the numerical solver only;
+    the returned command is still subject to the unchanged IK tolerances and
+    live joint-velocity gate.
+    """
 
     joints = np.asarray(warm_start, dtype=np.float64)
+    from scipy.spatial.transform import Rotation
+
+    target_quaternion = np.asarray(target_orientation, dtype=np.float64)
+    target_rotation = Rotation.from_quat(
+        (
+            target_quaternion[1],
+            target_quaternion[2],
+            target_quaternion[3],
+            target_quaternion[0],
+        )
+    ).as_matrix()
     alternating = np.asarray((1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0))
-    offsets = (
-        np.zeros(7),
-        alternating * 1e-4,
-        alternating * -1e-4,
-        alternating * 5e-4,
-        alternating * -5e-4,
-        alternating * 1e-3,
-        alternating * -1e-3,
-        alternating * 5e-3,
-        alternating * -5e-3,
-    )
+    basis = np.eye(7, dtype=np.float64)
+    offsets = [np.zeros(7)]
+    for magnitude in (1e-3, 5e-3, 2e-2):
+        offsets.extend(direction * magnitude for direction in basis)
+        offsets.extend(direction * -magnitude for direction in basis)
+    offsets.extend((alternating * 5e-3, alternating * -5e-3))
     solutions = []
     for offset in offsets:
         solution, success = solver.compute_inverse_kinematics(
@@ -75,11 +93,21 @@ def _closest_inverse_kinematics(
             target_position,
             target_orientation,
             warm_start=joints + offset,
-            position_tolerance=0.0001,
-            orientation_tolerance=0.001,
+            position_tolerance=IK_POSITION_TOLERANCE_METERS,
+            orientation_tolerance=IK_ORIENTATION_TOLERANCE_RADIANS,
         )
         if success:
-            solutions.append(np.asarray(solution, dtype=np.float64))
+            candidate = np.asarray(solution, dtype=np.float64)
+            achieved_position, achieved_rotation = (
+                solver.compute_forward_kinematics(frame_name, candidate)
+            )
+            if (
+                float(np.linalg.norm(achieved_position - target_position))
+                <= IK_POSITION_TOLERANCE_METERS
+                and _rotation_error(achieved_rotation, target_rotation)
+                <= IK_ORIENTATION_TOLERANCE_RADIANS
+            ):
+                solutions.append(candidate)
     if not solutions:
         return joints, False
     return min(

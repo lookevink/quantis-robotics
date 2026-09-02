@@ -686,6 +686,8 @@ class ContactGraspTargetPolicy:
     def validate_schedule(
         self,
         steps: Sequence[ContactGraspTargetStep],
+        *,
+        require_initial: bool = True,
     ) -> None:
         """Validate the phase-locked monotonic schedule without filesystem IO."""
 
@@ -699,7 +701,10 @@ class ContactGraspTargetPolicy:
         )
         allowed = self.target_indices
         if (
-            target_indices[0] not in self.acquisition_target_indices
+            (
+                require_initial
+                and target_indices[0] not in self.acquisition_target_indices
+            )
             or any(index not in allowed for index in target_indices)
             or any(
                 current < previous
@@ -727,22 +732,35 @@ class ContactGraspTargetPolicy:
         recording: Path,
         *,
         frame_root: Path,
+        previous_step: ContactGraspTargetStep | None = None,
         camera: str = "wrist",
     ) -> None:
         """Replay a schedule against the exact authenticated reference bytes."""
 
-        self.validate_schedule(steps)
-        if steps[0].observation.target != self.initial_target(
-            recording,
-            frame_root=frame_root,
-            live_pose=steps[0].observation.pose,
-            camera=camera,
-        ):
-            raise ValueError("contact-grasp initial target is invalid")
+        if not steps:
+            raise ValueError("contact-grasp target schedule is invalid")
+        chain = ((previous_step,) if previous_step is not None else ()) + tuple(steps)
+        self.validate_schedule(chain, require_initial=previous_step is None)
+        if previous_step is None:
+            if steps[0].observation.target != self.initial_target(
+                recording,
+                frame_root=frame_root,
+                live_pose=steps[0].observation.pose,
+                camera=camera,
+            ):
+                raise ValueError("contact-grasp initial target is invalid")
+        else:
+            self.validate_observation_target(
+                previous_step.observation,
+                recording,
+                frame_root=frame_root,
+                require_initial=False,
+                camera=camera,
+            )
         for previous, current, attached in zip(
-            (step.observation for step in steps),
-            (step.observation for step in steps[1:]),
-            (step.plug_attached for step in steps[1:]),
+            (step.observation for step in chain),
+            (step.observation for step in chain[1:]),
+            (step.plug_attached for step in chain[1:]),
         ):
             expected = self.select(
                 recording,

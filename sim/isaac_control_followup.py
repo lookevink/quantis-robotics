@@ -145,6 +145,19 @@ from sim.isaac_demo_scene import ROBOT_PATH
 from sim.isaac_demo_kinematics import solve_droid_pose
 from sim.recording import RecordingLabel, RecordingMoment, validate_recording_id
 
+
+BLOCKED_IK_DIAGNOSTIC_SESSION_ID = (
+    "unknown-start-e2e-v34-62605-grasp-001"
+)
+BLOCKED_IK_DIAGNOSTIC_FINGERPRINTS = {
+    "request.json": "ca74e98bf6490b2cc60b9aa6edf2e06ef5a65f5b61567aabf8179c3ac3156d2d",
+    "state.json": "6565702a6283a26bdf3618d1884bb7aa74ddd3544da99bb66b8ea23706b3ff05",
+    "response.json": "70c3897d1336e7de065577009bb0e709a80eef134a1858c94030cb0c8004f3a2",
+    "execution_started.json": "3c2c4c9bfb6b7611ec9239a3c52ccc654ee25b93db8f62b7a91fe235212fafe1",
+    "result.json": "b8c05d2b6884c878e3eeb82e1c4a2b5bd04d047bf00bdfad1672c6ee1f14fc84",
+    "context.png": "079dd5e5a5b06e63ac95da45a17cd75cf7d3455c48a67a17bca22c7736f0446c",
+}
+
 if TYPE_CHECKING:
     from jepa_wm.control_rollout import ControlRolloutReport, ControlStepSummary
 
@@ -797,6 +810,149 @@ def diagnose_contact_grasp_tracking_rollback_ik(
         "session_id": session_id,
         "attempts": attempts,
         "maximum_joint_delta_rad": maximum_joint_delta,
+        "simulator_action_applied": False,
+    }
+
+
+def diagnose_contact_grasp_blocked_ik(session_id: str) -> dict[str, Any]:
+    """Prove a local IK branch for an exact no-motion safety block."""
+
+    import omni.usd
+    from jepa_wm.control_rollout import ControlStepSummary
+    from sim.isaac_control_execution import (
+        ExecutionSafetyContext,
+        project_control_candidate,
+    )
+
+    validate_recording_id(session_id)
+    session = ControlSession.at(CONTROL_ROOT, session_id)
+    if (
+        session_id != BLOCKED_IK_DIAGNOSTIC_SESSION_ID
+        or any(
+            artifact_fingerprint(session.path / filename) != expected
+            for filename, expected in BLOCKED_IK_DIAGNOSTIC_FINGERPRINTS.items()
+        )
+        or (session.path / "post_action.png").exists()
+    ):
+        raise ValueError("blocked IK diagnostic source changed")
+    step = ControlStepSummary.from_session(session)
+    refresh = step.result.insertion_trial_refresh
+    attempts = step.result.projection_attempts
+    if (
+        step.result.status is not ControlResultStatus.BLOCKED
+        or step.result.gate.reasons
+        != (ControlGateReason.JOINT_VELOCITY_VIOLATION,)
+        or step.result.selected_action_scale is not None
+        or step.result.post_action is not None
+        or refresh is None
+        or not attempts
+        or any(
+            attempt.gate.reasons
+            != (ControlGateReason.JOINT_VELOCITY_VIOLATION,)
+            for attempt in attempts
+        )
+    ):
+        raise ValueError("blocked IK diagnostic source is invalid")
+    target_policy = step.state.require_current_contact_grasp_policy()
+    raw = target_policy.action_for_execution(
+        step.response.actions,
+        plug_attached=step.state.plug_attached,
+    )
+    proposal = step.response.with_actions((raw, *step.response.actions[1:]))
+    if step.state.active_drive_target is None:
+        raise ValueError("blocked IK source drive target is missing")
+    observation, proposal = refresh.authorize_target_relative(
+        step.observation,
+        proposal,
+        step.state.require_safety_snapshot(),
+        step.state.active_drive_target,
+        MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
+    )
+    unique_scales = tuple(
+        dict.fromkeys(attempt.scale for attempt in attempts)
+    )
+    warm_start = np.asarray(refresh.live_state.joint_positions)
+    limits = SimulatorSafetyLimits()
+    maximum_joint_delta = (
+        limits.maximum_joint_velocity_radians_per_second / DROID_FPS
+    )
+    safety = ExecutionSafetyContext(
+        observation,
+        JointCommand(warm_start, refresh.live_state.gripper_width_m),
+        tuple(step.state.current_joint_positions),
+        refresh.live_state.contact_force_newtons,
+        refresh.live_state.collision_detected,
+        limits,
+    )
+    solved_attempts = []
+    for scale in unique_scales:
+        attempt, selected = project_control_candidate(
+            safety,
+            proposal,
+            scale,
+            now_unix_seconds=refresh.refreshed_at_unix_seconds,
+        )
+        solved_attempts.append(
+            {
+                "scale": scale.to_dict(),
+                "maximum_joint_delta_rad": attempt.maximum_joint_delta_rad,
+                "gate_passed": attempt.gate.passed,
+                "gate_reasons": [
+                    reason.value for reason in attempt.gate.reasons
+                ],
+                "ik_position_error_m": (
+                    selected.solved_pose.position_error_m
+                    if selected is not None
+                    else None
+                ),
+                "ik_orientation_error_rad": (
+                    selected.solved_pose.orientation_error_rad
+                    if selected is not None
+                    else None
+                ),
+            }
+        )
+
+    stage = omni.usd.get_context().get_stage()
+    runtime = live_runtime_for(session_id, stage)
+    if runtime is None:
+        raise RuntimeError("blocked IK runtime was lost")
+    expected = step.state.active_drive_target
+    active = current_drive_target(runtime)
+    actual = runtime.actuators.actual_command()
+    collision_detected, contact_force = read_control_contact(runtime.sensor)
+    maximum_joint_error = float(
+        np.max(
+            np.abs(
+                np.asarray(actual.arm_positions)
+                - np.asarray(expected.joint_positions)
+            )
+        )
+    )
+    gripper_error = actual.gripper_width_m - expected.gripper_width_m
+    if (
+        not any(attempt["gate_passed"] for attempt in solved_attempts)
+        or active != expected
+        or maximum_joint_error > limits.maximum_observation_joint_drift_radians
+        or abs(gripper_error) > MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+        or contact_force > limits.maximum_contact_force_newtons
+        or collision_detected
+        or runtime.attachment.attached != refresh.live_state.plug_attached
+        or refresh.live_state.plug_attached
+    ):
+        raise RuntimeError("blocked IK counterfactual did not pass")
+    return {
+        "status": "diagnosed_no_actuation",
+        "diagnostic_passed": True,
+        "session_id": session_id,
+        "attempts": solved_attempts,
+        "maximum_allowed_joint_delta_rad": maximum_joint_delta,
+        "active_target_matches": active == expected,
+        "maximum_joint_error_rad": maximum_joint_error,
+        "gripper_error_m": gripper_error,
+        "maximum_contact_force_newtons": contact_force,
+        "collision_detected": collision_detected,
+        "plug_attached": runtime.attachment.attached,
         "simulator_action_applied": False,
     }
 
