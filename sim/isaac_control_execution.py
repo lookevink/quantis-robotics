@@ -99,6 +99,7 @@ from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, capture_camera_frame
 from sim.grasp_task import observe_grasp_acquisition
 from sim.isaac_demo_kinematics import (
     SolvedPose,
+    active_rotation_candidate_rank,
     orientation_tolerances_for_action,
     solve_droid_pose,
     solve_waypoints,
@@ -836,6 +837,9 @@ def project_control_candidate(
     best_safety_failure = None
     best_realization_failure = None
     best_realization_progress = -1.0
+    best_passing_attempt = None
+    best_passing_projection = None
+    best_passing_rank = None
     for orientation_tolerance in orientation_tolerances_for_action(
         candidate_action
     ):
@@ -876,7 +880,19 @@ def project_control_candidate(
             action_between(context.observation.pose, solved.achieved_pose),
         )
         if ik_realization.passed:
-            return attempt, SafeProjection(candidate, solved, decision)
+            rank = active_rotation_candidate_rank(
+                ik_realization.active_progress_fraction,
+                orientation_tolerance,
+            )
+            if best_passing_rank is None or rank < best_passing_rank:
+                best_passing_attempt = attempt
+                best_passing_projection = SafeProjection(
+                    candidate,
+                    solved,
+                    decision,
+                )
+                best_passing_rank = rank
+            continue
         decision = ControlGateDecision(
             context.observation.observation_id,
             candidate_pose,
@@ -893,6 +909,8 @@ def project_control_candidate(
         if ik_realization.active_progress_fraction > best_realization_progress:
             best_realization_failure = failed_attempt
             best_realization_progress = ik_realization.active_progress_fraction
+    if best_passing_attempt is not None and best_passing_projection is not None:
+        return best_passing_attempt, best_passing_projection
     if best_realization_failure is not None:
         return best_realization_failure, None
     if best_safety_failure is not None:

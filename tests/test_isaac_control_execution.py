@@ -580,12 +580,86 @@ class ControlProjectionTest(unittest.TestCase):
         )
 
         self.assertIsNotNone(selected)
-        self.assertEqual(tolerances, [0.00025, 0.0005, 0.00075])
+        self.assertEqual(tolerances, [0.00025, 0.0005, 0.00075, 0.001])
         self.assertEqual(
             attempts[0].ik_orientation_tolerance_radians,
             0.00075,
         )
         self.assertAlmostEqual(attempts[0].maximum_joint_delta_rad, 0.003987)
+
+    def test_active_rotation_prefers_the_passing_branch_closest_to_complete(self) -> None:
+        current_joints = np.asarray((0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5))
+        start = DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+        observation = ControlObservation(
+            123,
+            100.0,
+            Path("context.png"),
+            ControlTarget(Path("target.png")),
+            Path("/tmp/proposal.pth"),
+            start,
+            DroidAction((0.0,) * 7),
+            4,
+        )
+        action = DroidAction((0.0, 0.0, 0.0, 0.004, 0.0, 0.0, 0.0))
+        proposal = ProposedControl(
+            123,
+            100.1,
+            (action, DroidAction((0.0,) * 7), DroidAction((0.0,) * 7)),
+            Path("/tmp/proposal.pth"),
+        )
+        context = ExecutionSafetyContext(
+            observation,
+            JointCommand(current_joints, 0.04),
+            tuple(current_joints),
+            0.0,
+            False,
+            SimulatorSafetyLimits(),
+        )
+
+        def solve(
+            pose: DroidPose,
+            warm_start: np.ndarray,
+            orientation_tolerance_radians: float,
+        ) -> SolvedPose:
+            realized_rotation = {
+                0.00025: 0.0026,
+                0.0005: 0.00318,
+                0.00075: 0.0034,
+                0.001: 0.0026,
+            }[orientation_tolerance_radians]
+            joints = warm_start.copy()
+            joints[0] += orientation_tolerance_radians * 5.0
+            return SolvedPose(
+                pose,
+                joints,
+                np.zeros(3),
+                0.04,
+                0.0,
+                orientation_tolerance_radians,
+                start.applied(
+                    DroidAction(
+                        (0.0, 0.0, 0.0, realized_rotation, 0.0, 0.0, 0.0)
+                    )
+                ),
+            )
+
+        attempts, selected = select_safe_projection(
+            context,
+            proposal,
+            solve=solve,
+            now_unix_seconds=100.2,
+            action_scales=(DroidActionScale.uniform(1.0),),
+        )
+
+        self.assertIsNotNone(selected)
+        self.assertEqual(
+            attempts[0].ik_orientation_tolerance_radians,
+            0.00075,
+        )
+        self.assertAlmostEqual(
+            selected.solved_pose.orientation_error_rad,
+            0.00075,
+        )
 
 
 class FakeTimeline:

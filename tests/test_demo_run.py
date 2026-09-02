@@ -238,6 +238,17 @@ class DemoRunSpecTest(unittest.TestCase):
             changed_roster.safety_limits_fingerprint,
         )
 
+        with patch(
+            "sim.demo_behavior.IK_ACTIVE_ROTATION_SELECTION_POLICY",
+            "first_passing",
+        ):
+            changed_selection = current_demo_behavioral_contract()
+
+        self.assertNotEqual(
+            original.safety_limits_fingerprint,
+            changed_selection.safety_limits_fingerprint,
+        )
+
     def test_rejects_an_incomplete_or_overlapping_corpus_roster(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             spec = self._spec(Path(temp_dir))

@@ -11,6 +11,7 @@ from sim.isaac_demo_kinematics import (
     IK_ORIENTATION_HOLD_TOLERANCE_RADIANS,
     _closest_inverse_kinematics,
     _orientation_tolerance_for_delta,
+    active_rotation_candidate_rank,
     orientation_tolerance_for_action,
     orientation_tolerances_for_action,
 )
@@ -90,6 +91,18 @@ class _OrientationInaccurateSolver(_ToleranceCapturingSolver):
 
 
 class ClosestInverseKinematicsTest(unittest.TestCase):
+    def test_active_rotation_candidate_rank_prefers_complete_realization(self) -> None:
+        self.assertLess(
+            active_rotation_candidate_rank(0.85, 0.00075),
+            active_rotation_candidate_rank(0.795, 0.0005),
+        )
+        self.assertLess(
+            active_rotation_candidate_rank(1.01, 0.00075),
+            active_rotation_candidate_rank(0.85, 0.0005),
+        )
+        with self.assertRaisesRegex(ValueError, "candidate rank"):
+            active_rotation_candidate_rank(float("nan"), 0.0005)
+
     def test_selects_successful_solution_closest_to_captured_joints(self) -> None:
         solved, success = _closest_inverse_kinematics(
             _BranchingSolver(),

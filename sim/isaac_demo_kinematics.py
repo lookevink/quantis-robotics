@@ -24,6 +24,7 @@ from sim.isaac_demo_scene import (
 IK_POSITION_TOLERANCE_METERS = 0.0001
 IK_ORIENTATION_HOLD_TOLERANCE_RADIANS = 0.001
 IK_ACTIVE_ROTATION_TOLERANCES_RADIANS = (0.00025, 0.0005, 0.00075, 0.001)
+IK_ACTIVE_ROTATION_SELECTION_POLICY = "closest_to_complete_active_progress"
 if (
     tuple(sorted(set(IK_ACTIVE_ROTATION_TOLERANCES_RADIANS)))
     != IK_ACTIVE_ROTATION_TOLERANCES_RADIANS
@@ -36,6 +37,25 @@ IK_ACTIVE_ROTATION_TOLERANCE_RADIANS = (
 )
 # Backward-compatible name for deterministic absolute waypoint solves.
 IK_ORIENTATION_TOLERANCE_RADIANS = IK_ORIENTATION_HOLD_TOLERANCE_RADIANS
+
+
+def active_rotation_candidate_rank(
+    active_progress_fraction: float,
+    orientation_tolerance_radians: float,
+) -> tuple[float, float]:
+    """Rank passing branches by task completion, then stricter tolerance."""
+
+    if (
+        not isfinite(active_progress_fraction)
+        or active_progress_fraction < 0.0
+        or not isfinite(orientation_tolerance_radians)
+        or orientation_tolerance_radians <= 0.0
+    ):
+        raise ValueError("active-rotation candidate rank is invalid")
+    return (
+        abs(1.0 - active_progress_fraction),
+        orientation_tolerance_radians,
+    )
 
 
 def _orientation_tolerance_for_delta(rotation_delta_radians: float) -> float:
