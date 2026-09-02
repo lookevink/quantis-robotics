@@ -965,9 +965,14 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     now persists its raw acquisition inputs and typed simulator attachment
     mechanism; insertion evidence persists live socket/connector geometry and
     is reconstructed against the reference scene translation. End-to-end
-    success requires the final four insertion observations to be seated with
-    attachment retained, safe tracking, no collision, and force within the
-    unchanged 2 N limit. Runtime authentication now discovers every repository
+    success uses a dedicated bounded 168-action grasp-to-insertion profile and
+    requires its final four observations to be seated with attachment retained,
+    safe tracking, no collision, and force within the unchanged 2 N limit. Its
+    fail-fast schedule proves contiguous authenticated contexts `113..280`,
+    proves the final four can target the authenticated seated hold, and permits
+    a stationary target only at the final reference frame. The existing
+    96-action contact-insertion profile remains unchanged. Runtime
+    authentication now discovers every repository
     Python and shell source outside generated/data/test trees. This checkpoint
     changes no model, threshold, corpus, or live authority and authorizes no
     training, simulator action, filming, hardware, or production use.

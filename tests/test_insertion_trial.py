@@ -4,6 +4,7 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -32,7 +33,9 @@ from jepa_wm.insertion_trial import (
     InsertionTrialAuthority,
     InsertionTrialBinding,
     InsertionTrialExecutionEvidence,
+    InsertionTrialOutcomeObservation,
     InsertionTrialPolicy,
+    InsertionTrialRollbackReason,
     InsertionTrialRollbackFailure,
     InsertionTrialRollbackFailureReason,
     InsertionTrialSourceEvidence,
@@ -134,6 +137,27 @@ def _source() -> InsertionTrialSourceEvidence:
 
 
 class InsertionTrialBindingTest(unittest.TestCase):
+    def test_underrealized_command_requires_tracking_rollback(self) -> None:
+        evidence = SimpleNamespace(
+            final_joint_tracking_passed=lambda error: True,
+            realized_target_progress=SimpleNamespace(passed=True),
+        )
+        observation = InsertionTrialOutcomeObservation(
+            final_joint_tracking_error_radians=0.0,
+            action_tracking_passed=True,
+            command_realization_passed=False,
+            maximum_contact_force_newtons=0.0,
+            collision_detected=False,
+            plug_attached=True,
+            contact_force_limit_newtons=2.0,
+            expected_attachment=True,
+        )
+
+        self.assertEqual(
+            InsertionTrialPolicy().rollback_reason(evidence, observation),
+            InsertionTrialRollbackReason.TRACKING,
+        )
+
     def test_policy_compensates_one_bounded_loaded_drive_bias(self) -> None:
         policy = InsertionTrialPolicy()
         desired = tuple(value + 0.01 for value in _JOINTS)

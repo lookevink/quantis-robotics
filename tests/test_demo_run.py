@@ -172,8 +172,8 @@ class DemoRunSpecTest(unittest.TestCase):
             )
             self.assertEqual(spec.to_dict()["schema"], "quantis.demo_run_spec.v1")
             self.assertEqual(spec.terminal_contract.grasp_actions, 192)
-            self.assertEqual(spec.terminal_contract.insertion_actions, 4)
-            self.assertEqual(spec.action_cap, 196)
+            self.assertEqual(spec.terminal_contract.insertion_actions, 168)
+            self.assertEqual(spec.action_cap, 360)
             self.assertTrue(spec.terminal_contract.require_seated_hold)
             spec_path = Path(temp_dir) / "demo-runs" / "frozen.json"
             spec.persist(spec_path)
@@ -270,7 +270,7 @@ class DemoRunSpecTest(unittest.TestCase):
                     reference_recording=spec.selection.reference_recording,
                     exploration_seed=spec.selection.exploration_seed,
                     grasp_actions=192,
-                    insertion_actions=4,
+                    insertion_actions=168,
                 ),
                 spec,
             )
@@ -286,7 +286,7 @@ class DemoRunSpecTest(unittest.TestCase):
                     reference_recording=spec.selection.reference_recording,
                     exploration_seed=spec.selection.exploration_seed,
                     grasp_actions=192,
-                    insertion_actions=4,
+                    insertion_actions=168,
                 )
 
     def test_live_preflight_rejects_stale_behavior_or_action_allocation(self) -> None:
@@ -319,7 +319,7 @@ class DemoRunSpecTest(unittest.TestCase):
                     reference_recording=stale.selection.reference_recording,
                     exploration_seed=stale.selection.exploration_seed,
                     grasp_actions=192,
-                    insertion_actions=4,
+                    insertion_actions=168,
                 )
 
             spec_path.write_text(json.dumps(spec.to_dict()))
@@ -335,7 +335,7 @@ class DemoRunSpecTest(unittest.TestCase):
                     reference_recording=spec.selection.reference_recording,
                     exploration_seed=spec.selection.exploration_seed,
                     grasp_actions=8,
-                    insertion_actions=4,
+                    insertion_actions=168,
                 )
 
             with self.assertRaisesRegex(ValueError, "selection"):
@@ -350,7 +350,7 @@ class DemoRunSpecTest(unittest.TestCase):
                     reference_recording=spec.corpus[-1].recording,
                     exploration_seed=spec.corpus[-1].seed,
                     grasp_actions=192,
-                    insertion_actions=4,
+                    insertion_actions=168,
                 )
 
 

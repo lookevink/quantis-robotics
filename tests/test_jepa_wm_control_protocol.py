@@ -191,9 +191,18 @@ class SimulatorControlGateTest(unittest.TestCase):
         self.assertEqual(ProposedControl.from_dict(proposal.to_dict()), proposal)
         legacy_observation = observation.to_dict()
         legacy_observation["schema"] = LEGACY_CONTROL_SCHEMA
+        reconstructed_legacy = ControlObservation.from_dict(legacy_observation)
+        self.assertEqual(reconstructed_legacy.target, observation.target)
         self.assertEqual(
-            ControlObservation.from_dict(legacy_observation),
-            observation,
+            reconstructed_legacy.to_dict()["schema"],
+            LEGACY_CONTROL_SCHEMA,
+        )
+        legacy_proposal = proposal.to_dict()
+        legacy_proposal["schema"] = LEGACY_CONTROL_SCHEMA
+        reconstructed_legacy_proposal = ProposedControl.from_dict(legacy_proposal)
+        self.assertEqual(
+            reconstructed_legacy_proposal.to_dict()["schema"],
+            LEGACY_CONTROL_SCHEMA,
         )
         replacement_actions = (
             DroidAction((0.001,) * 7),

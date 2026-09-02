@@ -40,7 +40,7 @@ grasp_context_index="$(contact_grasp_initial_context \
 grasp_steps="$(contact_grasp_maximum_actions \
   "${repo_dir}" "${venv_python}")"
 insertion_steps="$(insertion_rollout_profile_field \
-  "${repo_dir}" "${venv_python}" demo maximum-steps)"
+  "${repo_dir}" "${venv_python}" grasp-to-insertion maximum-steps)"
 cd "${repo_dir}"
 grasp_proposal="$(control_proposal_from_identity \
   direct "${grasp_identity}" "${checkpoint_dir}" "${venv_python}")"
@@ -112,7 +112,7 @@ for ((step=1; step<=insertion_steps; step++)); do
     "${repo_dir}" "${safety_sessions[step-1]}" "${action_sessions[step-1]}" \
     "${previous_session}" "${reference_name}" "${exploration_seed}" \
     "${insertion_proposal}" "${prefix_roster}" "${insertion_steps}" \
-    "${grasp_final_session}"
+    "${grasp_final_session}" false "" "${insertion_steps}"
   previous_session="${action_sessions[step-1]}"
 done
 

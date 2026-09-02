@@ -82,6 +82,7 @@ class ControlObservation:
     previous_action: DroidAction
     warmup_frames: int
     physical_routing: PhysicalRoutingObservation | None = None
+    schema: str = CONTROL_SCHEMA
 
     @property
     def target_frame(self) -> Path:
@@ -104,6 +105,8 @@ class ControlObservation:
         return TaskContextIndex(self.warmup_frames)
 
     def __post_init__(self) -> None:
+        if self.schema not in SUPPORTED_CONTROL_SCHEMAS:
+            raise ValueError("control observation schema is unsupported")
         if isinstance(self.observation_id, bool) or self.observation_id <= 0:
             raise ValueError("control observation ID must be positive")
         if not isfinite(self.captured_at_unix_seconds):
@@ -146,13 +149,14 @@ class ControlObservation:
                     if payload.get("physical_routing") is not None
                     else None
                 ),
+                schema=str(payload["schema"]),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("control observation is incomplete") from error
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
-            "schema": CONTROL_SCHEMA,
+            "schema": self.schema,
             "observation_id": self.observation_id,
             "captured_at_unix_seconds": self.captured_at_unix_seconds,
             "context_frame": str(self.context_frame),
@@ -174,10 +178,12 @@ class ProposedControl:
     actions: tuple[DroidAction, ...]
     proposal: Path
     proposal_fingerprint: str | None = None
+    schema: str = CONTROL_SCHEMA
 
     def __post_init__(self) -> None:
         if (
-            isinstance(self.observation_id, bool)
+            self.schema not in SUPPORTED_CONTROL_SCHEMAS
+            or isinstance(self.observation_id, bool)
             or self.observation_id <= 0
             or not isfinite(self.created_at_unix_seconds)
         ):
@@ -215,13 +221,14 @@ class ProposedControl:
                     if payload.get("proposal_fingerprint") is not None
                     else None
                 ),
+                schema=str(payload["schema"]),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("proposed control is incomplete") from error
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
-            "schema": CONTROL_SCHEMA,
+            "schema": self.schema,
             "observation_id": self.observation_id,
             "created_at_unix_seconds": self.created_at_unix_seconds,
             "actions": [list(action.values) for action in self.actions],

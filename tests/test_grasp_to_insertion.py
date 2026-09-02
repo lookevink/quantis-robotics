@@ -16,6 +16,7 @@ from jepa_wm.insertion_contract import (
     INSERTION_CONTROL_TARGET_POLICY,
 )
 from jepa_wm.insertion_rollout import InsertionRolloutPosition
+from jepa_wm.integrated_insertion import INTEGRATED_INSERTION_SCHEDULE
 from jepa_wm.insertion_task import InsertionTarget, InsertionTaskStep
 from jepa_wm.joint_drive import JointDriveTarget
 from sim.control_session import (
@@ -131,6 +132,27 @@ class GraspToInsertionLineageTest(unittest.TestCase):
             self.result.applied_drive_target(held_gripper_width_m=0.0179),
         )
         self.assertEqual(lineage.active_drive_target.gripper_width_m, 0.0179)
+
+    def test_binds_the_integrated_transition_to_its_reachable_context(self) -> None:
+        lineage = GraspToInsertionLineage(
+            self.observation,
+            self.state,
+            self.result,
+        )
+        observation, state = self.transition()
+        observation = replace(
+            observation,
+            warmup_frames=INTEGRATED_INSERTION_SCHEDULE.initial_context_index,
+        )
+        state = replace(
+            state,
+            insertion_rollout_position=InsertionRolloutPosition(
+                1,
+                INTEGRATED_INSERTION_SCHEDULE.action_count,
+            ),
+        )
+
+        lineage.validate_source(observation, state)
 
     def test_rejects_drive_target_substitution_at_phase_boundary(self) -> None:
         lineage = GraspToInsertionLineage(

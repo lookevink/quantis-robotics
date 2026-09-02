@@ -13,6 +13,7 @@ import numpy as np
 from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
 from jepa_wm.control_policy import ControlExecutionPolicy
+from jepa_wm.control_tracking import evaluate_command_completion
 from jepa_wm.control_safety import (
     ControlInterlockEvidence,
     ControlGateReason,
@@ -915,6 +916,67 @@ class IsaacControlExecutionTest(unittest.TestCase):
                 expected_requested_motion_radians=1.0,
                 expected_target_joint_positions=(0.0,) * 7,
             )
+
+    def test_insertion_settlement_aborts_an_underrealized_plateau(self) -> None:
+        actuators = FakeActuators(valid=True)
+        actuators.command = JointCommand(np.zeros(7), 0.04)
+        updates = 0
+        completion = evaluate_command_completion(
+            DroidAction((0.0006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+            DroidAction((0.00012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+            ControlExecutionPolicy.INSERTION_FOLLOWUP_TRIAL,
+        )
+
+        async def advance() -> None:
+            nonlocal updates
+            updates += 1
+
+        with self.assertRaisesRegex(RuntimeError, "stopped making realizable progress"):
+            asyncio.run(
+                settle_tracked_joint_command(
+                    actuators,
+                    np.ones(7),
+                    np.zeros(7),
+                    advance,
+                    TrackedJointSettlementPolicy(maximum_updates=40),
+                    observe_completion=lambda: completion,
+                )
+            )
+
+        self.assertLess(updates, 40)
+
+    def test_insertion_settlement_requires_two_task_space_completion_samples(
+        self,
+    ) -> None:
+        actuators = FakeActuators(valid=True)
+        actuators.command = JointCommand(np.zeros(7), 0.04)
+        updates = 0
+        completion = evaluate_command_completion(
+            DroidAction((0.0006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+            DroidAction((0.0006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+            ControlExecutionPolicy.INSERTION_FOLLOWUP_TRIAL,
+        )
+
+        async def advance() -> None:
+            nonlocal updates
+            updates += 1
+
+        evidence = asyncio.run(
+            settle_tracked_joint_command(
+                actuators,
+                np.ones(7),
+                np.zeros(7),
+                advance,
+                TrackedJointSettlementPolicy(
+                    required_consecutive_updates=1,
+                    maximum_updates=3,
+                ),
+                observe_completion=lambda: completion,
+            )
+        )
+
+        self.assertEqual(updates, 2)
+        self.assertEqual(evidence.updates_used, 2)
 
     def test_rollback_is_observed_and_verified_after_its_physics_update(self) -> None:
         target = JointCommand(np.zeros(7), 0.04)

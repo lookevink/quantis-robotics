@@ -9,13 +9,17 @@ from jepa_wm.action import ACTION_RECORDING_CONTRACT
 from jepa_wm.contact_grasp_target import CONTACT_GRASP_TARGET_POLICY
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_safety import SimulatorSafetyLimits
-from jepa_wm.control_tracking import tracking_limits_for_policy
+from jepa_wm.control_tracking import (
+    CommandRealizationLimits,
+    tracking_limits_for_policy,
+)
 from jepa_wm.grasp_task import GraspTaskLimits, MAXIMUM_CONTACT_GRASP_ACTIONS
 from jepa_wm.grasp_to_insertion import GRASP_TO_INSERTION_SCHEMA
 from jepa_wm.insertion_contract import insertion_control_target_policy
-from jepa_wm.insertion_rollout import DEMO_INSERTION_ROLLOUT
+from jepa_wm.insertion_rollout import GRASP_TO_INSERTION_ROLLOUT
 from jepa_wm.insertion_task import InsertionTaskLimits
 from jepa_wm.insertion_trial import InsertionTrialPolicy
+from jepa_wm.integrated_insertion import INTEGRATED_INSERTION_SCHEDULE
 from jepa_wm.replay_verification import ReplayLimits
 from jepa_wm.task_windows import CONTACT_GRASP_PROPOSAL_WINDOW
 from jepa_wm.training_artifact import validate_artifact_fingerprint
@@ -196,6 +200,7 @@ def current_demo_behavioral_contract() -> DemoBehavioralContract:
                 "insertion_tracking": asdict(
                     tracking_limits_for_policy(insertion_policy)
                 ),
+                "command_realization": asdict(CommandRealizationLimits()),
                 "replay": ReplayLimits().to_dict(),
             }
         ),
@@ -212,7 +217,12 @@ def current_demo_behavioral_contract() -> DemoBehavioralContract:
                 "runtime_motion": "drive_only",
             }
         ),
-        schedule_fingerprint=schedule.fingerprint,
+        schedule_fingerprint=canonical_control_fingerprint(
+            {
+                "grasp_capture": schedule.fingerprint,
+                "integrated_insertion": INTEGRATED_INSERTION_SCHEDULE.to_dict(),
+            }
+        ),
         evidence_schema=GRASP_TO_INSERTION_SCHEMA,
         camera_configuration_fingerprint=canonical_control_fingerprint(
             {
@@ -234,7 +244,7 @@ def current_demo_behavioral_contract() -> DemoBehavioralContract:
         ),
         terminal=DemoTerminalContract(
             MAXIMUM_CONTACT_GRASP_ACTIONS,
-            DEMO_INSERTION_ROLLOUT.maximum_steps,
+            GRASP_TO_INSERTION_ROLLOUT.maximum_steps,
             True,
         ),
     )

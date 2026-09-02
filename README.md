@@ -2847,7 +2847,14 @@ Control schema v2 persists the exact active target, raw grasp-acquisition
 inputs, a typed simulator attachment mechanism, command realization, and live
 connector/socket geometry. Reports reconstruct those derived claims rather
 than trusting booleans. A grasp-to-insertion report passes only when attachment
-is retained and the final four insertion observations are safely seated.
+is retained and the final four insertion observations are safely seated. The
+integrated runner uses a dedicated bounded 168-action `grasp-to-insertion`
+profile, preserving every authenticated context from grasp attachment through
+retreat, alignment, insertion, and the four terminal observations. A synthetic
+schedule invariant proves contexts `113..280` are contiguous and all four
+terminal targets can reach the authenticated seated hold; terminal stationary
+selection is limited to the final reference frame. The existing 96-action
+`contact-insertion` profile remains unchanged.
 Historical v1 control payloads remain readable but cannot be promoted without
 the exact v2 evidence. Runtime fingerprints discover all repository-owned
 Python and shell sources, including new runtime directories. This is an

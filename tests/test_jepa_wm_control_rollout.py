@@ -19,7 +19,12 @@ from jepa_wm.action import (
     action_between,
 )
 from jepa_wm.action_prior import ActionPriorConfig
-from jepa_wm.control_protocol import ControlObservation, ControlTarget, ProposedControl
+from jepa_wm.control_protocol import (
+    LEGACY_CONTROL_SCHEMA,
+    ControlObservation,
+    ControlTarget,
+    ProposedControl,
+)
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_rollout import (
     ControlRolloutReport,
@@ -65,6 +70,7 @@ from jepa_wm.insertion_trial import (
 )
 from jepa_wm.insertion_refresh import ControlSafetySnapshot, InsertionEvaluationRefresh
 from jepa_wm.insertion_contract import InsertionControlTargetPolicy
+from jepa_wm.insertion_rollout import InsertionRolloutPosition
 from jepa_wm.planner import CEMConfig
 from jepa_wm.planner_readiness import FirstActionThresholds
 from jepa_wm.objective_calibration import (
@@ -520,6 +526,10 @@ class ControlRolloutTest(unittest.TestCase):
                 settlement,
                 progress,
             ),
+            command_realization=evaluate_command_realization(
+                action,
+                actual_action,
+            ),
         )
         result = ControlResult(
             ControlResultStatus.APPLIED,
@@ -750,10 +760,14 @@ class ControlRolloutTest(unittest.TestCase):
                 settlement,
                 insufficient_progress,
             ),
+            command_realization=evaluate_command_realization(
+                action,
+                insufficient_action,
+            ),
         )
         rolled_back_result = replace(
             result,
-            status=ControlResultStatus.ROLLED_BACK_PROGRESS,
+            status=ControlResultStatus.ROLLED_BACK_TRACKING,
             post_action=rolled_back_post,
             insertion_trial_rollback=InsertionTrialRollbackEvidence(
                 proposed_joints,
@@ -833,6 +847,8 @@ class ControlRolloutTest(unittest.TestCase):
         previous_action_x: float = 0.0,
         target_pose: DroidPose | None = None,
         insertion_target_policy: InsertionControlTargetPolicy | None = None,
+        execution_policy: ControlExecutionPolicy = ControlExecutionPolicy.DIRECT,
+        insertion_rollout_position: InsertionRolloutPosition | None = None,
     ) -> None:
         session = root / "control_sessions" / session_id
         session.mkdir(parents=True)
@@ -863,7 +879,9 @@ class ControlRolloutTest(unittest.TestCase):
             False,
             0.0,
             previous_session_id,
+            execution_policy=execution_policy,
             insertion_target_policy=insertion_target_policy,
+            insertion_rollout_position=insertion_rollout_position,
         )
         raw_action = DroidAction(
             (post_x - pose_x, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
@@ -1014,6 +1032,102 @@ class ControlRolloutTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "realization is inconsistent"):
                 ControlStepSummary.from_session(session)
+
+    def test_legacy_wire_evidence_cannot_promote_a_grasp(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._write_reference(root)
+            self._write_step(
+                root,
+                "session-0",
+                previous_session_id=None,
+                pose_x=0.4,
+                post_x=0.401,
+            )
+            self._write_step(
+                root,
+                "session-1",
+                previous_session_id="session-0",
+                pose_x=0.401,
+                post_x=0.431,
+                target_frame="recordings/reference/wrist/frame_000007.png",
+                warmup_frames=5,
+                captured_at=101.0,
+                previous_action_x=0.001,
+            )
+            for index, plug_position in enumerate((0.0, 0.03)):
+                session = root / "control_sessions" / f"session-{index}"
+                state = json.loads((session / "state.json").read_text())
+                state["plug_position"] = [0.0, 0.0, 0.0]
+                state["plug_attached"] = index > 0
+                (session / "state.json").write_text(json.dumps(state))
+                result = json.loads((session / "result.json").read_text())
+                result["post_action_plug_position"] = [plug_position, 0.0, 0.0]
+                result["post_action_plug_attached"] = True
+                (session / "result.json").write_text(json.dumps(result))
+
+            current = self._report(
+                root,
+                ("session-0", "session-1"),
+                requested_steps=2,
+            )
+            self.assertTrue(current["reach_and_grasp"]["passed"])
+
+            for index in range(2):
+                session = root / "control_sessions" / f"session-{index}"
+                for filename in ("request.json", "response.json"):
+                    path = session / filename
+                    payload = json.loads(path.read_text())
+                    payload["schema"] = LEGACY_CONTROL_SCHEMA
+                    path.write_text(json.dumps(payload))
+
+            legacy = self._report(
+                root,
+                ("session-0", "session-1"),
+                requested_steps=2,
+            )
+
+            self.assertIsNone(legacy["reach_and_grasp"])
+
+    def test_legacy_wire_evidence_is_not_currently_authenticated(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._write_reference(root)
+            self._write_step(
+                root,
+                "session-0",
+                previous_session_id=None,
+                pose_x=0.4,
+                post_x=0.401,
+            )
+            current = ControlRolloutReport.from_sessions(
+                root,
+                "rollout-1",
+                ("session-0",),
+                reference_recording="reference",
+                seed=11400,
+                proposal=Path("/tmp/proposal.pth"),
+                requested_steps=1,
+            )
+            self.assertTrue(current.current_wire_authenticated)
+
+            response_path = (
+                root / "control_sessions" / "session-0" / "response.json"
+            )
+            response = json.loads(response_path.read_text())
+            response["schema"] = LEGACY_CONTROL_SCHEMA
+            response_path.write_text(json.dumps(response))
+            legacy = ControlRolloutReport.from_sessions(
+                root,
+                "rollout-1",
+                ("session-0",),
+                reference_recording="reference",
+                seed=11400,
+                proposal=Path("/tmp/proposal.pth"),
+                requested_steps=1,
+            )
+
+            self.assertFalse(legacy.current_wire_authenticated)
 
     def test_summarizes_a_provenance_bound_rollout_and_goal_progress(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1320,6 +1434,91 @@ class ControlRolloutTest(unittest.TestCase):
                 state_path.write_text(json.dumps(payload))
             with self.assertRaisesRegex(ValueError, "target contract"):
                 self._report(root, ("session-0", "session-1"), requested_steps=2)
+
+    def test_integrated_insertion_report_uses_its_authenticated_168_action_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reference = root / "recordings" / "reference"
+            reference.mkdir(parents=True)
+            (reference / "manifest.json").write_text(
+                json.dumps({"metadata": {"task": "reach_and_insert"}})
+            )
+            (reference / "steps.jsonl").write_text(
+                json.dumps(
+                    {
+                        "index": 7,
+                        "end_effector_pose": [
+                            0.43,
+                            0.0,
+                            0.5,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.5,
+                        ],
+                    }
+                )
+                + "\n"
+            )
+            self._write_step(
+                root,
+                "session-0",
+                previous_session_id=None,
+                pose_x=0.40,
+                post_x=0.41,
+                insertion_target_policy=InsertionControlTargetPolicy(),
+                execution_policy=(
+                    ControlExecutionPolicy.INSERTION_SAFETY_EVALUATION
+                ),
+                insertion_rollout_position=InsertionRolloutPosition(1, 168),
+            )
+
+            session = root / "control_sessions" / "session-0"
+            step = ControlStepSummary(
+                ControlSessionState.from_dict(
+                    json.loads((session / "state.json").read_text())
+                ),
+                ControlObservation.from_dict(
+                    json.loads((session / "request.json").read_text())
+                ),
+                ProposedControl.from_dict(
+                    json.loads((session / "response.json").read_text())
+                ),
+                ControlResult.from_dict(
+                    json.loads((session / "result.json").read_text())
+                ),
+            )
+            report = ControlRolloutReport(
+                "rollout-1",
+                "reference",
+                11400,
+                Path("/tmp/proposal.pth"),
+                168,
+                (step,),
+                step.observation.target_pose,
+                reference_task="reach_and_insert",
+            ).to_dict()
+
+            self.assertEqual(report["requested_steps"], 168)
+            self.assertFalse(report["all_steps_applied"])
+            wrong_position = replace(
+                step,
+                state=replace(
+                    step.state,
+                    insertion_rollout_position=InsertionRolloutPosition(2, 168),
+                ),
+            )
+            with self.assertRaisesRegex(ValueError, "positions"):
+                ControlRolloutReport(
+                    "rollout-1",
+                    "reference",
+                    11400,
+                    Path("/tmp/proposal.pth"),
+                    168,
+                    (wrong_position,),
+                    wrong_position.observation.target_pose,
+                    reference_task="reach_and_insert",
+                )
 
     def test_terminal_gate_rejects_blocked_or_rolled_back_second_action(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

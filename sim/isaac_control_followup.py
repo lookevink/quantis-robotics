@@ -89,6 +89,7 @@ from jepa_wm.insertion_rollout import (
     InsertionRolloutPosition,
     InsertionRolloutRoster,
 )
+from jepa_wm.integrated_insertion import INTEGRATED_INSERTION_SCHEDULE
 from jepa_wm.insertion_trial import InsertionTrialRollbackEvidence
 from jepa_wm.insertion_transition import (
     insertion_proposal_continuation_from_dict,
@@ -1824,11 +1825,12 @@ def verify_grasp_to_insertion_result(
     reference_name: str,
     exploration_seed: int,
 ) -> dict[str, Any]:
-    """Reconstruct and persist one bounded task-terminal grasp plus four actions."""
+    """Reconstruct and persist one bounded grasp plus contact insertion."""
 
     from jepa_wm.control_rollout import ControlRolloutReport, ControlStepSummary
     from jepa_wm.grasp_to_insertion import (
         GRASP_ACTIONS,
+        INSERTION_ACTIONS,
         GraspToInsertionReport,
     )
 
@@ -1870,7 +1872,7 @@ def verify_grasp_to_insertion_result(
     )
     insertion_roster = InsertionRolloutRoster.from_csv(
         insertion_session_roster,
-        DEMO_INSERTION_ROLLOUT.maximum_steps,
+        INSERTION_ACTIONS,
     )
     insertion = _verify_insertion_rollout_result(
         insertion_roster,
@@ -2202,8 +2204,12 @@ async def capture_insertion_transition_observation(
         raise RuntimeError("grasp-to-insertion transition pose was not refreshed")
     if synchronized.active_drive_target != lineage.active_drive_target:
         raise RuntimeError("grasp-to-insertion transition drive target changed")
-    context_index = CONTACT_INSERTION_RECORDING.start_index(
-        ContactInsertionSegment.GRASP_ATTACH
+    context_index = (
+        INTEGRATED_INSERTION_SCHEDULE.initial_context_index
+        if maximum_steps == INTEGRATED_INSERTION_SCHEDULE.action_count
+        else CONTACT_INSERTION_RECORDING.start_index(
+            ContactInsertionSegment.GRASP_ATTACH
+        )
     )
     target_policy = INSERTION_CONTROL_TARGET_POLICY.for_followup()
     selected = target_policy.select(
@@ -2423,6 +2429,11 @@ async def capture_followup_observation(
                 session_id,
                 previous_session_id,
                 proposal_name,
+                maximum_steps=(
+                    next_maximum_steps
+                    if next_maximum_steps is not None
+                    else DEMO_INSERTION_ROLLOUT.maximum_steps
+                ),
             )
         return await _capture_contact_grasp_followup(session, previous_step)
     if reference_task != INSERTION_TASK_ID:

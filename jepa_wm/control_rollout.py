@@ -22,7 +22,11 @@ from jepa_wm.contact_grasp_target import (
     ContactGraspTargetPolicy,
     ContactGraspTargetStep,
 )
-from jepa_wm.control_protocol import ControlObservation, ProposedControl
+from jepa_wm.control_protocol import (
+    CONTROL_SCHEMA,
+    ControlObservation,
+    ProposedControl,
+)
 from jepa_wm.control_policy import (
     ControlExecutionPolicy,
     is_insertion_trial_execution_policy,
@@ -35,6 +39,7 @@ from jepa_wm.grasp_task import (
 )
 from jepa_wm.grasp_contract import GRASP_TASK_ID
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
+from jepa_wm.insertion_rollout import is_insertion_rollout_policy
 from jepa_wm.insertion_task import InsertionTarget
 from jepa_wm.insertion_refresh import (
     MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
@@ -488,6 +493,8 @@ class ControlStepSummary:
                                 InsertionTrialOutcomeObservation(
                                     final_joint_error,
                                     result.post_action.tracking.passed,
+                                    result.post_action.command_realization is not None
+                                    and result.post_action.command_realization.passed,
                                     max(
                                         result.post_action.contact_force_newtons,
                                         result.execution_interlock.maximum_contact_force_newtons,
@@ -1138,11 +1145,35 @@ class ControlRolloutReport:
                 for step in complete
             )
         )
-        maximum_steps = (
-            MAXIMUM_CONTACT_GRASP_ACTIONS
-            if direct_contact_grasp
-            else STANDARD_MAX_CONTROL_ROLLOUT_STEPS
+        insertion_positions = (
+            tuple(
+                step.state.resolved_insertion_rollout_position()
+                for step in complete
+            )
+            if self.reference_task == INSERTION_TASK_ID
+            and all(
+                step.state.insertion_target_policy is not None
+                and is_insertion_rollout_policy(step.state.execution_policy)
+                for step in complete
+            )
+            else ()
         )
+        bounded_insertion_rollout = bool(insertion_positions)
+        if bounded_insertion_rollout and (
+            tuple(position.step_index for position in insertion_positions)
+            != tuple(range(1, len(insertion_positions) + 1))
+            or any(
+                position.maximum_steps != self.requested_steps
+                for position in insertion_positions
+            )
+        ):
+            raise ValueError("control rollout insertion positions are invalid")
+        if direct_contact_grasp:
+            maximum_steps = MAXIMUM_CONTACT_GRASP_ACTIONS
+        elif bounded_insertion_rollout:
+            maximum_steps = self.requested_steps
+        else:
+            maximum_steps = STANDARD_MAX_CONTROL_ROLLOUT_STEPS
         if self.requested_steps > maximum_steps:
             raise ValueError("control rollout exceeds its task-specific action cap")
         if direct_contact_grasp:
@@ -1280,8 +1311,16 @@ class ControlRolloutReport:
         return PoseError.between(final_pose, self.target_pose)
 
     @property
+    def current_wire_authenticated(self) -> bool:
+        return bool(self.complete_steps) and not any(
+            step.observation.schema != CONTROL_SCHEMA
+            or step.response.schema != CONTROL_SCHEMA
+            for step in self.complete_steps
+        )
+
+    @property
     def reach_and_grasp(self) -> ReachAndGraspDecision | None:
-        if not self.complete_steps:
+        if not self.current_wire_authenticated:
             return None
         initial_state = self.complete_steps[0].state
         if initial_state.plug_position is None:
@@ -1304,10 +1343,8 @@ class ControlRolloutReport:
                     tuple(post_action.plug_position),
                     post_action.plug_attached,
                     post_action.tracking.passed
-                    and (
-                        post_action.command_realization is None
-                        or post_action.command_realization.passed
-                    ),
+                    and post_action.command_realization is not None
+                    and post_action.command_realization.passed,
                     post_action.collision_detected,
                     post_action.contact_force_newtons,
                 )

@@ -70,6 +70,30 @@ class RealizedTargetProgressPolicyTest(unittest.TestCase):
             realization,
         )
 
+    def test_excess_motion_on_one_axis_cannot_mask_an_unrealized_axis(self) -> None:
+        commanded = DroidAction((0.0002, 0.0002, 0.0, 0.0, 0.0, 0.0, 0.0))
+        actual = DroidAction((0.0, 0.0004, 0.0, 0.0, 0.0, 0.0, 0.0))
+
+        tracking = evaluate_action_tracking(commanded, actual)
+        realization = evaluate_command_realization(commanded, actual)
+
+        self.assertTrue(tracking.passed)
+        self.assertFalse(realization.passed)
+        self.assertEqual(realization.translation_fraction, 0.0)
+        self.assertEqual(
+            realization.reasons,
+            (CommandRealizationReason.TRANSLATION_UNDERREALIZED,),
+        )
+
+    def test_numerical_cross_axis_residue_is_not_required_motion(self) -> None:
+        commanded = DroidAction((0.001, 1e-9, 0.0, 0.0, 0.0, 0.0, 0.0))
+        actual = DroidAction((0.0009, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+
+        realization = evaluate_command_realization(commanded, actual)
+
+        self.assertTrue(realization.passed)
+        self.assertAlmostEqual(realization.translation_fraction, 0.9)
+
     def test_orientation_regression_still_fails_inside_translation_deadband(self) -> None:
         decision = RealizedTargetProgressPolicy().evaluate(
             _pose(0.0),

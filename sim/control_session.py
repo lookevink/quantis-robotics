@@ -52,6 +52,7 @@ from jepa_wm.insertion_rollout import (
     InsertionRolloutPosition,
     is_insertion_rollout_policy,
 )
+from jepa_wm.integrated_insertion import INTEGRATED_INSERTION_SCHEDULE
 from jepa_wm.insertion_task import (
     InsertionTarget,
     InsertionTaskStep,
@@ -1123,8 +1124,14 @@ class GraspToInsertionLineage:
         observation: ControlObservation,
         state: ControlSessionState,
     ) -> None:
-        expected_context = CONTACT_INSERTION_RECORDING.start_index(
-            ContactInsertionSegment.GRASP_ATTACH
+        rollout_position = state.resolved_insertion_rollout_position()
+        expected_context = (
+            INTEGRATED_INSERTION_SCHEDULE.initial_context_index
+            if rollout_position.maximum_steps
+            == INTEGRATED_INSERTION_SCHEDULE.action_count
+            else CONTACT_INSERTION_RECORDING.start_index(
+                ContactInsertionSegment.GRASP_ATTACH
+            )
         )
         if (
             state.previous_session_id != self.result.session_id

@@ -35,7 +35,9 @@ from jepa_wm.control_safety import (
     contact_grasp_action_scales,
 )
 from jepa_wm.control_tracking import (
+    CommandCompletionDecision,
     CommandRealizationLimits,
+    evaluate_command_completion,
     evaluate_command_realization,
     evaluate_action_tracking,
     tracking_limits_for_policy,
@@ -421,6 +423,7 @@ async def settle_tracked_joint_command(
     policy: TrackedJointSettlementPolicy,
     *,
     observe_safety: Callable[[], ContactReading] | None = None,
+    observe_completion: Callable[[], CommandCompletionDecision] | None = None,
 ) -> JointSettlementEvidence:
     """Settle one tracked command relative to its exact live start."""
 
@@ -432,6 +435,7 @@ async def settle_tracked_joint_command(
         advance,
         policy,
         observe_safety=observe_safety,
+        observe_completion=observe_completion,
     )
 
 
@@ -444,6 +448,7 @@ async def _settle_tracked_joint_command(
     *,
     observe_safety: Callable[[], ContactReading] | None = None,
     gripper: GripperSettlementCriterion | None = None,
+    observe_completion: Callable[[], CommandCompletionDecision] | None = None,
 ) -> JointSettlementEvidence | GripperTrackedJointSettlementEvidence:
     """Own bounded consecutive tracking for forward and rollback motion."""
 
@@ -452,6 +457,11 @@ async def _settle_tracked_joint_command(
     tracking_errors: list[float] = []
     gripper_errors: list[float] | None = [] if gripper is not None else None
     passing_gripper_errors: list[float] | None = [] if gripper is not None else None
+    completion_limits = CommandRealizationLimits()
+    consecutive_completion_samples = 0
+    best_realization_progress = -1.0
+    plateau_samples = 0
+    final_completion = None
     for update_count in range(1, policy.maximum_updates + 1):
         await advance()
         if observe_safety is not None:
@@ -466,17 +476,56 @@ async def _settle_tracked_joint_command(
         )
         if gripper_errors is not None:
             gripper_errors.append(gripper_error)
+        final_completion = (
+            observe_completion() if observe_completion is not None else None
+        )
+        if final_completion is not None:
+            realization = final_completion.realization
+            if (
+                realization.active_progress_fraction
+                >= best_realization_progress
+                + completion_limits.minimum_progress_increment
+            ):
+                best_realization_progress = realization.active_progress_fraction
+                plateau_samples = 0
+            else:
+                plateau_samples += 1
+            consecutive_completion_samples = (
+                consecutive_completion_samples + 1
+                if final_completion.passed
+                else 0
+            )
+            if (
+                not realization.passed
+                and plateau_samples >= completion_limits.maximum_plateau_samples
+            ):
+                raise RuntimeError(
+                    "insertion command stopped making realizable progress: "
+                    f"progress_fraction={realization.active_progress_fraction:.6f}, "
+                    f"plateau_samples={plateau_samples}"
+                )
         if tracking_error <= required_error and (
             gripper_error is None or gripper_error <= gripper.maximum_error_meters
         ):
             passing_errors.append(tracking_error)
             if passing_gripper_errors is not None:
                 passing_gripper_errors.append(gripper_error)
+            if len(passing_errors) > policy.required_consecutive_updates:
+                passing_errors.pop(0)
+                if passing_gripper_errors is not None:
+                    passing_gripper_errors.pop(0)
         else:
             passing_errors.clear()
             if passing_gripper_errors is not None:
                 passing_gripper_errors.clear()
-        if len(passing_errors) >= policy.required_consecutive_updates:
+        completion_passed = observe_completion is None or (
+            consecutive_completion_samples
+            >= completion_limits.required_consecutive_samples
+        )
+        if (
+            len(passing_errors) >= policy.required_consecutive_updates
+            and completion_passed
+        ):
             joint_evidence = JointSettlementEvidence(
                 requested_motion_radians,
                 required_error,
@@ -497,6 +546,19 @@ async def _settle_tracked_joint_command(
                 ),
             )
     final = actuators.actual_command()
+    if (
+        observe_completion is not None
+        and len(passing_errors) >= policy.required_consecutive_updates
+        and final_completion is not None
+    ):
+        raise RuntimeError(
+            "insertion command did not satisfy task-space completion within its "
+            "bounded timeout: "
+            f"tracking_reasons="
+            f"{[reason.value for reason in final_completion.tracking.reasons]}, "
+            f"completion_reasons="
+            f"{[reason.value for reason in final_completion.realization.reasons]}"
+        )
     attempt_arguments = (
         requested_motion_radians,
         required_error,
@@ -1217,6 +1279,23 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     ),
                 )
                 if trial_policy is not None:
+                    def observe_insertion_completion() -> CommandCompletionDecision:
+                        live_command = actuators.actual_command()
+                        live_snapshot = recording_snapshot(
+                            RecordingLabel(RecordingMoment.MOTION, Phase.READY),
+                            ObservationStage.APPROACHING_CABLE,
+                            live_command,
+                            attachment,
+                        )
+                        return evaluate_command_completion(
+                            candidate.first_action,
+                            action_between(
+                                observation.pose,
+                                live_snapshot.end_effector_pose,
+                            ),
+                            persisted_state.execution_policy,
+                        )
+
                     settlement = await settle_tracked_joint_command(
                         actuators,
                         current.arm_positions,
@@ -1224,6 +1303,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                         omni.kit.app.get_app().next_update_async,
                         trial_policy.joint_settlement,
                         observe_safety=live_interlock.observe,
+                        observe_completion=observe_insertion_completion,
                     )
                 elif contact_grasp_execution and not reset_trial_candidate_execution:
                     await settle_contact_grasp_command(
@@ -1459,6 +1539,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                         InsertionTrialOutcomeObservation(
                             joint_tracking_error,
                             tracking.passed,
+                            realization.passed,
                             post_force,
                             post_collision,
                             post_snapshot.plug_attached,

@@ -228,19 +228,40 @@ def evaluate_insertion_geometry(
     *,
     eligible_seating_indices: frozenset[int] | None = None,
     require_terminal_attachment: bool = False,
+    initial_plug_attached: bool | None = None,
 ) -> InsertionDecision:
     """Require a usable grasp retained through an aligned seating event."""
 
     axis = np.asarray(target.insertion_axis, dtype=np.float64)
     socket = np.asarray(target.socket_position, dtype=np.float64)
-    acquisition_index = next(
-        (
-            index
-            for index in range(1, len(steps))
-            if not steps[index - 1].plug_attached and steps[index].plug_attached
-        ),
-        None,
-    )
+    if initial_plug_attached is not None and not isinstance(
+        initial_plug_attached,
+        bool,
+    ):
+        raise ValueError("initial insertion attachment must be boolean")
+    if initial_plug_attached is None:
+        acquisition_index = next(
+            (
+                index
+                for index in range(1, len(steps))
+                if not steps[index - 1].plug_attached and steps[index].plug_attached
+            ),
+            None,
+        )
+    else:
+        acquisition_index = next(
+            (
+                index
+                for index, step in enumerate(steps)
+                if not (
+                    initial_plug_attached
+                    if index == 0
+                    else steps[index - 1].plug_attached
+                )
+                and step.plug_attached
+            ),
+            None,
+        )
     failures = []
     grasp_clearance = 0.0
     seated_index = None
@@ -309,6 +330,7 @@ def evaluate_insertion(
     *,
     eligible_seating_indices: frozenset[int] | None = None,
     require_terminal_attachment: bool = False,
+    initial_plug_attached: bool | None = None,
 ) -> InsertionDecision:
     """Require a usable grasp retained through a safe, aligned seating event."""
 
@@ -318,6 +340,7 @@ def evaluate_insertion(
         limits,
         eligible_seating_indices=eligible_seating_indices,
         require_terminal_attachment=require_terminal_attachment,
+        initial_plug_attached=initial_plug_attached,
     )
     failures = list(geometry.failures)
     if any(not step.tracking_passed for step in steps):

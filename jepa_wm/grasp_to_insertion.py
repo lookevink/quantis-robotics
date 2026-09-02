@@ -7,18 +7,20 @@ from typing import Any
 
 from jepa_wm.control_rollout import ControlRolloutReport
 from jepa_wm.grasp_task import MAXIMUM_CONTACT_GRASP_ACTIONS
-from jepa_wm.insertion_rollout import DEMO_INSERTION_ROLLOUT
+from jepa_wm.insertion_rollout import GRASP_TO_INSERTION_ROLLOUT
 from jepa_wm.insertion_task import InsertionDecision, evaluate_insertion
 from sim.recording import validate_recording_id
 
 
-GRASP_TO_INSERTION_SCHEMA = "quantis.jepa_wm_grasp_to_insertion.v2"
+GRASP_TO_INSERTION_SCHEMA = "quantis.jepa_wm_grasp_to_insertion.v3"
 GRASP_ACTIONS = MAXIMUM_CONTACT_GRASP_ACTIONS
+INSERTION_ACTIONS = GRASP_TO_INSERTION_ROLLOUT.maximum_steps
+REQUIRED_TERMINAL_SEATED_OBSERVATIONS = 4
 
 
 @dataclass(frozen=True)
 class GraspToInsertionReport:
-    """One task-terminal bounded grasp followed by four insertion actions."""
+    """One bounded grasp followed by a complete contact-insertion rollout."""
 
     run_id: str
     grasp: ControlRolloutReport
@@ -27,15 +29,28 @@ class GraspToInsertionReport:
     def __post_init__(self) -> None:
         validate_recording_id(self.run_id)
         grasp_decision = self.grasp.reach_and_grasp
-        acquisition_evidence = tuple(
-            step.result.post_action
-            for step in self.grasp.complete_steps
-            if step.result.post_action is not None
-            and step.result.post_action.plug_attached
-            and step.result.post_action.grasp_acquisition is not None
-            and step.result.post_action.grasp_acquisition.decision.passed
-            and step.result.post_action.attachment_mechanism is not None
+        acquisition_evidence = None
+        previous_attached = (
+            self.grasp.complete_steps[0].state.plug_attached
+            if self.grasp.complete_steps
+            else False
         )
+        for step in self.grasp.complete_steps:
+            post_action = step.result.post_action
+            if (
+                post_action is not None
+                and not previous_attached
+                and post_action.plug_attached
+            ):
+                if (
+                    post_action.grasp_acquisition is not None
+                    and post_action.grasp_acquisition.decision.passed
+                    and post_action.attachment_mechanism is not None
+                ):
+                    acquisition_evidence = post_action
+                break
+            if post_action is not None:
+                previous_attached = post_action.plug_attached
         attachment_mechanisms = {
             step.result.post_action.attachment_mechanism
             for report in (self.grasp, self.insertion)
@@ -50,11 +65,13 @@ class GraspToInsertionReport:
             or self.grasp.orchestration_failure is not None
             or grasp_decision is None
             or not grasp_decision.passed
-            or not acquisition_evidence
+            or not self.grasp.current_wire_authenticated
+            or not self.insertion.current_wire_authenticated
+            or acquisition_evidence is None
             or None in attachment_mechanisms
             or len(attachment_mechanisms) != 1
             or self.insertion.requested_steps
-            != DEMO_INSERTION_ROLLOUT.maximum_steps
+            != INSERTION_ACTIONS
             or not self.insertion.all_steps_applied
             or self.grasp.reference_recording
             != self.insertion.reference_recording
@@ -67,10 +84,11 @@ class GraspToInsertionReport:
                 step.state.resolved_insertion_rollout_position().step_index
                 for step in insertion_steps
             )
-            != tuple(range(1, DEMO_INSERTION_ROLLOUT.maximum_steps + 1))
+            != tuple(range(1, INSERTION_ACTIONS + 1))
             or self.insertion_decision is None
             or not self.insertion_decision.passed
-            or len(self.insertion_decision.seated_indices) < 4
+            or len(self.insertion_decision.seated_indices)
+            < REQUIRED_TERMINAL_SEATED_OBSERVATIONS
         ):
             raise ValueError("grasp-to-insertion report is invalid")
 
@@ -93,7 +111,7 @@ class GraspToInsertionReport:
             return None
         terminal_insertion_indices = frozenset(
             range(
-                len(task_steps) - DEMO_INSERTION_ROLLOUT.maximum_steps,
+                len(task_steps) - REQUIRED_TERMINAL_SEATED_OBSERVATIONS,
                 len(task_steps),
             )
         )
@@ -102,6 +120,9 @@ class GraspToInsertionReport:
             target,
             eligible_seating_indices=terminal_insertion_indices,
             require_terminal_attachment=True,
+            initial_plug_attached=(
+                self.grasp.complete_steps[0].state.plug_attached
+            ),
         )
 
     @property

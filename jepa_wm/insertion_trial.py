@@ -73,6 +73,7 @@ class InsertionTrialRollbackReason(str, Enum):
 class InsertionTrialOutcomeObservation:
     final_joint_tracking_error_radians: float
     action_tracking_passed: bool
+    command_realization_passed: bool
     maximum_contact_force_newtons: float
     collision_detected: bool
     plug_attached: bool
@@ -94,6 +95,7 @@ class InsertionTrialOutcomeObservation:
                 isinstance(value, bool)
                 for value in (
                     self.action_tracking_passed,
+                    self.command_realization_passed,
                     self.collision_detected,
                     self.plug_attached,
                     self.expected_attachment,
@@ -220,6 +222,7 @@ class InsertionTrialPolicy:
                 observation.final_joint_tracking_error_radians
             )
             or not observation.action_tracking_passed
+            or not observation.command_realization_passed
         ):
             return InsertionTrialRollbackReason.TRACKING
         if (

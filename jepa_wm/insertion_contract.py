@@ -287,7 +287,15 @@ class InsertionControlTargetPolicy:
                     rollout.context_pose.values[:3],
                     rollout.target_pose.values[:3],
                 )
-            if translation_meters >= self.minimum_translation_meters:
+            authenticated_terminal_hold = (
+                self.target_origin is InsertionTargetOrigin.LIVE_OBSERVATION
+                and rollout.target.index
+                == CONTACT_INSERTION_RECORDING.frame_count - 1
+            )
+            if (
+                translation_meters >= self.minimum_translation_meters
+                or authenticated_terminal_hold
+            ):
                 return rollout
         raise ValueError(
             "insertion control target has no resolvable bounded-horizon goal"

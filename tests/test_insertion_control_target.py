@@ -13,12 +13,14 @@ from jepa_wm.control_safety import (
     TRACKING_BOUNDED_ORIENTATION_HOLD_ACTION_SCALES,
 )
 from jepa_wm.insertion_contract import (
+    CONTACT_INSERTION_RECORDING,
     MAXIMUM_FULL_SCALE_INSERTION_TRANSLATION_METERS,
     MINIMUM_CURRENT_FOLLOWUP_ACTION_HORIZON,
     InsertionControlTargetPolicy,
     InsertionLiveTargetMetric,
     InsertionProjectionScalePolicy,
 )
+from jepa_wm.insertion_layout import ContactInsertionSegment
 from jepa_wm.trajectory import RecordedFrame, RecordedRollout
 
 
@@ -412,6 +414,38 @@ class InsertionControlTargetPolicyTest(unittest.TestCase):
                     Path("recording"),
                     context_index=43,
                 )
+
+    def test_live_followup_can_select_the_authenticated_terminal_hold(self) -> None:
+        context_index = CONTACT_INSERTION_RECORDING.start_index(
+            ContactInsertionSegment.SEATED_HOLD
+        )
+        final_index = CONTACT_INSERTION_RECORDING.frame_count - 1
+        terminal = replace(
+            _rollout(final_index - context_index, 0.0),
+            context=(
+                RecordedFrame(
+                    context_index,
+                    Path(f"recording/wrist/frame_{context_index:06d}.png"),
+                ),
+            ),
+            target=RecordedFrame(
+                final_index,
+                Path(f"recording/wrist/frame_{final_index:06d}.png"),
+            ),
+        )
+        policy = InsertionControlTargetPolicy().for_followup()
+
+        with patch(
+            "jepa_wm.insertion_contract.load_rollout_at",
+            return_value=terminal,
+        ):
+            selected = policy.select(
+                Path("recording"),
+                context_index=context_index,
+                current_pose=terminal.context_pose,
+            )
+
+        self.assertEqual(selected.target.index, final_index)
 
 
 if __name__ == "__main__":

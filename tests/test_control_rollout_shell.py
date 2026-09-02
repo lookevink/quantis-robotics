@@ -270,7 +270,7 @@ control_rollout_shadow_session_roster standard 'direct-00,direct-01,direct-02'
                 ["grasp-00,grasp-39", "direct-00,direct-01,direct-02"],
             )
 
-    def test_grasp_to_insertion_runs_one_task_terminal_grasp_plus_four_chain(
+    def test_grasp_to_insertion_runs_one_bounded_contact_insertion_chain(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -285,8 +285,8 @@ control_rollout_shadow_session_roster standard 'direct-00,direct-01,direct-02'
 is_safe_identifier() { return 0; }
 require_nonnegative_integer() { return 0; }
 insertion_rollout_profile_field() {
-  [[ "$3" == demo && "$4" == maximum-steps ]] || return 9
-  printf '4\n'
+  [[ "$3" == grasp-to-insertion && "$4" == maximum-steps ]] || return 9
+  printf '168\n'
 }
 contact_grasp_maximum_actions() { printf '52\n'; }
 contact_grasp_initial_context() { printf '110\n'; }
@@ -306,7 +306,7 @@ validate_demo_run_spec() {
   printf 'preflight %s\n' "$*" >> "${CALLS}"
 }
 run_insertion_followup_trial() {
-  printf 'followup %s\n' "$*" >> "${CALLS}"
+  printf 'followup %s next-maximum=%s\n' "$*" "${13:-missing}" >> "${CALLS}"
 }
 """
             )
@@ -342,7 +342,7 @@ run_insertion_followup_trial() {
             calls = log.read_text().splitlines()
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(
-                [line.split()[0] for line in calls],
+                [line.split()[0] for line in calls[:11]],
                 [
                     "proposal",
                     "proposal",
@@ -354,15 +354,6 @@ run_insertion_followup_trial() {
                     "grasp",
                     "isaac",
                     "worker",
-                    "worker",
-                    "followup",
-                    "isaac",
-                    "followup",
-                    "isaac",
-                    "followup",
-                    "isaac",
-                    "followup",
-                    "isaac",
                     "worker",
                 ],
             )
@@ -390,7 +381,7 @@ run_insertion_followup_trial() {
             self.assertIn("insertion-worker.worker.json", calls[2])
             self.assertIn("contact-reference 12401", calls[2])
             self.assertIn("a" * 40, calls[2])
-            self.assertTrue(calls[2].endswith("52 4"))
+            self.assertTrue(calls[2].endswith("52 168"))
             self.assertEqual(
                 calls[3:5],
                 [
@@ -399,17 +390,24 @@ run_insertion_followup_trial() {
                 ],
             )
             followups = [line for line in calls if line.startswith("followup ")]
-            self.assertEqual(len(followups), 4)
+            self.assertEqual(len(followups), 168)
             self.assertIn(
-                "full-chain-action1 full-chain-grasp-12 contact-reference 12401 insertion-proposal full-chain-action1 4 full-chain-grasp-12",
+                "full-chain-action1 full-chain-grasp-12 contact-reference 12401 insertion-proposal full-chain-action1 168 full-chain-grasp-12",
                 followups[0],
             )
+            self.assertTrue(followups[0].endswith("next-maximum=168"))
             self.assertIn(
-                "full-chain-action1,full-chain-action2,full-chain-action3,full-chain-action4 4 full-chain-grasp-12",
+                "full-chain-action168 168 full-chain-grasp-12",
                 followups[-1],
             )
+            self.assertTrue(followups[-1].endswith("next-maximum=168"))
+            roster = ",".join(
+                f"full-chain-action{index}" for index in range(1, 169)
+            )
             self.assertIn(
-                "verify_grasp_to_insertion_result('full-chain','full-chain-grasp','full-chain-action1,full-chain-action2,full-chain-action3,full-chain-action4','contact-reference',12401)",
+                "verify_grasp_to_insertion_result("
+                f"'full-chain','full-chain-grasp','{roster}',"
+                "'contact-reference',12401)",
                 calls[-2],
             )
             self.assertEqual(calls[-1], "worker control-worker-stop")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from math import isfinite
+from math import isfinite, sqrt
 from typing import Any
 
 import numpy as np
@@ -218,11 +218,25 @@ def _cosine(left: np.ndarray, right: np.ndarray) -> float:
     return float(np.dot(left, right) / denominator) if denominator > 1e-12 else 0.0
 
 
-def _realized_fraction(commanded: np.ndarray, actual: np.ndarray) -> float:
-    commanded_squared = float(np.dot(commanded, commanded))
-    if commanded_squared <= 1e-12:
+def _minimum_realized_axis_fraction(
+    commanded: np.ndarray,
+    actual: np.ndarray,
+    activity_magnitude: float,
+) -> float:
+    """Return the least realization across physically meaningful axes.
+
+    A component smaller than the modality activity threshold divided across
+    all axes cannot make that modality active by itself. Treating smaller
+    components as mandatory motion would turn floating-point/model residue
+    into a sub-resolution drive request.
+    """
+
+    axis_activity = activity_magnitude / sqrt(float(commanded.size))
+    active = np.abs(commanded) >= axis_activity
+    if not np.any(active):
         return 1.0
-    return max(0.0, float(np.dot(commanded, actual) / commanded_squared))
+    fractions = actual[active] / commanded[active]
+    return max(0.0, float(np.min(fractions)))
 
 
 def evaluate_command_realization(
@@ -242,11 +256,16 @@ def evaluate_command_realization(
     actual_translation = np.asarray(actual.values[:3])
     commanded_rotation = np.asarray(commanded.values[3:6])
     actual_rotation = np.asarray(actual.values[3:6])
-    translation_fraction = _realized_fraction(
+    translation_fraction = _minimum_realized_axis_fraction(
         commanded_translation,
         actual_translation,
+        limits.translation_activity_meters,
     )
-    rotation_fraction = _realized_fraction(commanded_rotation, actual_rotation)
+    rotation_fraction = _minimum_realized_axis_fraction(
+        commanded_rotation,
+        actual_rotation,
+        limits.rotation_activity_radians,
+    )
     active_fractions = []
     reasons = []
     if (
@@ -314,4 +333,31 @@ def evaluate_action_tracking(
         rotation_error,
         gripper_error,
         tuple(reasons),
+    )
+
+
+@dataclass(frozen=True)
+class CommandCompletionDecision:
+    """Joint safety tracking and independent task-space completion."""
+
+    tracking: ActionTrackingDecision
+    realization: CommandRealizationDecision
+
+    @property
+    def passed(self) -> bool:
+        return self.tracking.passed and self.realization.passed
+
+
+def evaluate_command_completion(
+    commanded: DroidAction,
+    actual: DroidAction,
+    execution_policy: ControlExecutionPolicy,
+) -> CommandCompletionDecision:
+    return CommandCompletionDecision(
+        evaluate_action_tracking(
+            commanded,
+            actual,
+            tracking_limits_for_policy(execution_policy),
+        ),
+        evaluate_command_realization(commanded, actual),
     )
