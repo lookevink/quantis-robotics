@@ -347,6 +347,10 @@ class AwsLifecycleTests(unittest.TestCase):
                     "control-rollout",
                 ),
                 (
+                    isaac_data / "quantis/demo_runs/canary.binding.json",
+                    "demo-run-binding",
+                ),
+                (
                     isaac_data / "quantis/control_baselines/proof/report.json",
                     "control-baseline",
                 ),
@@ -393,6 +397,10 @@ class AwsLifecycleTests(unittest.TestCase):
             self.assertEqual(
                 (backup / "isaac/control_rollouts/rollout/report.json").read_text(),
                 "control-rollout",
+            )
+            self.assertEqual(
+                (backup / "isaac/demo_runs/canary.binding.json").read_text(),
+                "demo-run-binding",
             )
             self.assertEqual(
                 (backup / "isaac/control_baselines/proof/report.json").read_text(),
