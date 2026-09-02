@@ -66,8 +66,11 @@ class FollowupContinuityTest(unittest.TestCase):
                 selected_action_scale=object(),
                 post_action=None,
                 execution_error=(
-                    "RuntimeError: gripper did not settle within its bounded timeout: "
-                    "error_meters=0.000008149; rollback verification failed: "
+                    "RuntimeError: contact-grasp command did not satisfy its "
+                    "tracking gates within its bounded timeout: "
+                    "tracking_reasons=['translation_error'], "
+                    "translation_error_meters=0.000510000; "
+                    "rollback verification failed: "
                     "RuntimeError: rollback command did not settle: "
                     "arm_error=0.001117 rad, gripper_error=0.000007 m"
                 ),

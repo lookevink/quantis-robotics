@@ -581,8 +581,14 @@ def diagnose_contact_grasp_settlement_rollback(
     settlement_failure = (
         isinstance(execution_error, str)
         and execution_error.startswith(
-            "RuntimeError: gripper did not settle within its bounded timeout: "
-            "error_meters="
+            (
+                "RuntimeError: gripper did not settle within its bounded timeout: "
+                "error_meters=",
+                "RuntimeError: arm did not settle within its bounded timeout: "
+                "error_radians=",
+                "RuntimeError: contact-grasp command did not satisfy its "
+                "tracking gates within its bounded timeout: ",
+            )
         )
         and (
             "; rollback verification failed: RuntimeError: "

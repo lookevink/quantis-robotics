@@ -30,7 +30,8 @@ from jepa_wm.insertion_trial import (
     InsertionTrialRollbackFailureReason,
 )
 from sim.isaac_control_execution import (
-    CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS,
+    CONTACT_GRASP_MAXIMUM_JOINT_TRACKING_ERROR_RADIANS,
+    CONTACT_GRASP_ROLLBACK_SETTLEMENT,
     CONTACT_GRASP_SETTLEMENT_MAXIMUM_UPDATES,
     EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS,
     EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_GRIPPER_ERROR_METERS,
@@ -44,6 +45,7 @@ from sim.isaac_control_execution import (
     rollback_control_command,
     rollback_insertion_trial_command,
     requires_synchronized_evaluation_refresh,
+    settle_contact_grasp_command,
     settle_joint_command,
     settle_tracked_joint_command,
     synchronized_actual_command,
@@ -53,16 +55,20 @@ from sim.isaac_demo_runtime import JointCommand
 
 
 class ControlExecutionLifecycleTest(unittest.TestCase):
-    def test_contact_grasp_settles_below_the_followup_continuity_bound(
+    def test_contact_grasp_settlement_matches_task_and_continuity_gates(
         self,
     ) -> None:
-        self.assertLessEqual(
-            CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS,
-            1e-3,
+        self.assertEqual(
+            CONTACT_GRASP_MAXIMUM_JOINT_TRACKING_ERROR_RADIANS,
+            0.01,
         )
-        self.assertLess(
-            CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS,
+        self.assertEqual(
+            CONTACT_GRASP_ROLLBACK_SETTLEMENT.maximum_arm_error_radians,
             SimulatorSafetyLimits().maximum_observation_joint_drift_radians,
+        )
+        self.assertEqual(
+            CONTACT_GRASP_ROLLBACK_SETTLEMENT.maximum_gripper_error_meters,
+            2.5e-4,
         )
         self.assertEqual(CONTACT_GRASP_SETTLEMENT_MAXIMUM_UPDATES, 192)
 
@@ -608,6 +614,160 @@ class IsaacControlExecutionTest(unittest.TestCase):
             )
         )
         self.assertEqual(updates, 3)
+
+    def test_contact_grasp_settlement_accepts_task_tracking_above_one_milliradian(
+        self,
+    ) -> None:
+        actuators = FakeActuators(valid=True)
+        actuators.command = JointCommand(np.full(7, 0.001117), 0.04)
+        target = JointCommand(np.zeros(7), 0.04)
+        passed = SimpleNamespace(
+            passed=True,
+            reasons=(),
+            translation_error_meters=4.9e-4,
+            rotation_error_radians=2e-3,
+        )
+        updates = 0
+
+        async def advance() -> None:
+            nonlocal updates
+            updates += 1
+
+        with (
+            patch(
+                "sim.isaac_control_execution.recording_snapshot",
+                return_value=SimpleNamespace(end_effector_pose=object()),
+            ),
+            patch(
+                "sim.isaac_control_execution.action_between",
+                return_value=DroidAction((0.0,) * 7),
+            ),
+            patch(
+                "sim.isaac_control_execution.evaluate_action_tracking",
+                return_value=passed,
+            ) as evaluate_tracking,
+        ):
+            asyncio.run(
+                settle_contact_grasp_command(
+                    actuators,
+                    object(),
+                    target,
+                    DroidPose((0.0,) * 7),
+                    DroidAction((0.0,) * 7),
+                    advance,
+                    maximum_updates=3,
+                )
+            )
+
+        self.assertEqual(updates, 0)
+        tracking_limits = evaluate_tracking.call_args.args[2]
+        self.assertEqual(tracking_limits.maximum_translation_error_meters, 5e-4)
+        self.assertEqual(tracking_limits.minimum_direction_cosine, 0.5)
+        self.assertEqual(tracking_limits.maximum_rotation_error_radians, 3e-3)
+
+    def test_contact_grasp_settlement_waits_for_task_tracking(self) -> None:
+        actuators = FakeActuators(valid=True)
+        actuators.command = JointCommand(np.zeros(7), 0.04)
+        failed = SimpleNamespace(
+            passed=False,
+            reasons=(SimpleNamespace(value="translation_error"),),
+            translation_error_meters=5.1e-4,
+            rotation_error_radians=2e-3,
+        )
+        passed = SimpleNamespace(
+            passed=True,
+            reasons=(),
+            translation_error_meters=4.9e-4,
+            rotation_error_radians=2e-3,
+        )
+        updates = 0
+
+        async def advance() -> None:
+            nonlocal updates
+            updates += 1
+
+        with (
+            patch(
+                "sim.isaac_control_execution.recording_snapshot",
+                return_value=SimpleNamespace(end_effector_pose=object()),
+            ),
+            patch(
+                "sim.isaac_control_execution.action_between",
+                return_value=DroidAction((0.0,) * 7),
+            ),
+            patch(
+                "sim.isaac_control_execution.evaluate_action_tracking",
+                side_effect=(failed, passed),
+            ),
+        ):
+            asyncio.run(
+                settle_contact_grasp_command(
+                    actuators,
+                    object(),
+                    JointCommand(np.zeros(7), 0.04),
+                    DroidPose((0.0,) * 7),
+                    DroidAction((0.0,) * 7),
+                    advance,
+                    maximum_updates=3,
+                )
+            )
+
+        self.assertEqual(updates, 1)
+
+    def test_contact_grasp_settlement_polls_safety_and_fails_at_bound(self) -> None:
+        actuators = FakeActuators(valid=True)
+        actuators.command = JointCommand(np.zeros(7), 0.04)
+        failed = SimpleNamespace(
+            passed=False,
+            reasons=(SimpleNamespace(value="translation_error"),),
+            translation_error_meters=5.1e-4,
+            rotation_error_radians=2e-3,
+        )
+        updates = 0
+        observations = 0
+
+        async def advance() -> None:
+            nonlocal updates
+            updates += 1
+
+        def observe_safety() -> object:
+            nonlocal observations
+            observations += 1
+            return object()
+
+        with (
+            patch(
+                "sim.isaac_control_execution.recording_snapshot",
+                return_value=SimpleNamespace(end_effector_pose=object()),
+            ),
+            patch(
+                "sim.isaac_control_execution.action_between",
+                return_value=DroidAction((0.0,) * 7),
+            ),
+            patch(
+                "sim.isaac_control_execution.evaluate_action_tracking",
+                return_value=failed,
+            ),
+            self.assertRaisesRegex(
+                RuntimeError,
+                "tracking_reasons=\\['translation_error'\\]",
+            ),
+        ):
+            asyncio.run(
+                settle_contact_grasp_command(
+                    actuators,
+                    object(),
+                    JointCommand(np.zeros(7), 0.04),
+                    DroidPose((0.0,) * 7),
+                    DroidAction((0.0,) * 7),
+                    advance,
+                    observe_safety=observe_safety,
+                    maximum_updates=2,
+                )
+            )
+
+        self.assertEqual(updates, 2)
+        self.assertEqual(observations, 2)
 
     def test_insertion_settlement_requires_consecutive_command_relative_updates(
         self,

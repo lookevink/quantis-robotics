@@ -12,6 +12,7 @@ import numpy as np
 from jepa.contract import ObservationStage
 from jepa_wm.action import (
     DROID_FPS,
+    DroidAction,
     DroidActionScale,
     DroidPose,
     action_between,
@@ -102,13 +103,10 @@ from sim.isaac_demo_scene import ROBOT_PATH, world_pose
 from sim.recording import RecordingLabel, RecordingMoment, RecordingSnapshot
 
 
-# Settle below the 2 mrad follow-up continuity bound before evaluating
-# Cartesian tracking.  V28 showed that exiting near 1.1 mrad can leave a
-# 1 mm orientation-hold command on the 0.5 mm Cartesian error boundary.
-CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS = 1e-3
 CONTACT_GRASP_SETTLEMENT_MAXIMUM_UPDATES = (
     2 * MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES
 )
+CONTACT_GRASP_MAXIMUM_JOINT_TRACKING_ERROR_RADIANS = 0.01
 EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS = 1e-3
 EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_GRIPPER_ERROR_METERS = 5e-4
 
@@ -285,6 +283,66 @@ async def settle_joint_command(
     raise RuntimeError("joint command did not settle within its bounded timeout")
 
 
+async def settle_contact_grasp_command(
+    actuators: Actuators,
+    attachment: PlugAttachment,
+    target: JointCommand,
+    start_pose: DroidPose,
+    commanded_action: DroidAction,
+    advance: Callable[[], Any],
+    *,
+    observe_safety: Callable[[], ContactReading] | None = None,
+    maximum_updates: int = CONTACT_GRASP_SETTLEMENT_MAXIMUM_UPDATES,
+) -> None:
+    """Settle a grasp command against its authoritative task-space gates."""
+
+    if maximum_updates <= 0:
+        raise ValueError("contact-grasp settling update count must be positive")
+    limits = tracking_limits_for_policy(ControlExecutionPolicy.DIRECT)
+    final_tracking = None
+    joint_error = float("inf")
+    gripper_error = float("inf")
+    for update_index in range(maximum_updates + 1):
+        actual = actuators.actual_command()
+        snapshot = recording_snapshot(
+            RecordingLabel(RecordingMoment.MOTION, Phase.READY),
+            ObservationStage.APPROACHING_CABLE,
+            actual,
+            attachment,
+        )
+        final_tracking = evaluate_action_tracking(
+            commanded_action,
+            action_between(start_pose, snapshot.end_effector_pose),
+            limits,
+        )
+        joint_error = float(
+            np.max(np.abs(actual.arm_positions - target.arm_positions))
+        )
+        gripper_error = abs(actual.gripper_width_m - target.gripper_width_m)
+        if (
+            final_tracking.passed
+            and joint_error
+            <= CONTACT_GRASP_MAXIMUM_JOINT_TRACKING_ERROR_RADIANS
+            and gripper_error <= MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+        ):
+            return
+        if update_index == maximum_updates:
+            break
+        await advance()
+        if observe_safety is not None:
+            observe_safety()
+    raise RuntimeError(
+        "contact-grasp command did not satisfy its tracking gates within its "
+        "bounded timeout: "
+        f"tracking_reasons={[reason.value for reason in final_tracking.reasons]}, "
+        f"translation_error_meters="
+        f"{final_tracking.translation_error_meters:.9f}, "
+        f"rotation_error_radians={final_tracking.rotation_error_radians:.9f}, "
+        f"joint_error_radians={joint_error:.9f}, "
+        f"gripper_error_meters={gripper_error:.9f}"
+    )
+
+
 async def settle_tracked_joint_command(
     actuators: Actuators,
     start_arm_positions: np.ndarray,
@@ -437,6 +495,13 @@ UNKNOWN_START_ROLLBACK_SETTLEMENT = RollbackSettlementPolicy(
     maximum_arm_error_radians=1e-3,
     maximum_gripper_error_meters=1e-4,
     maximum_updates=MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES,
+)
+CONTACT_GRASP_ROLLBACK_SETTLEMENT = RollbackSettlementPolicy(
+    maximum_arm_error_radians=(
+        SimulatorSafetyLimits().maximum_observation_joint_drift_radians
+    ),
+    maximum_gripper_error_meters=MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
+    maximum_updates=CONTACT_GRASP_SETTLEMENT_MAXIMUM_UPDATES,
 )
 
 
@@ -1033,11 +1098,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                             UNKNOWN_START_ROLLBACK_SETTLEMENT
                             if reset_trial_candidate_execution
                             else (
-                                RollbackSettlementPolicy(
-                                    maximum_updates=(
-                                        CONTACT_GRASP_SETTLEMENT_MAXIMUM_UPDATES
-                                    )
-                                )
+                                CONTACT_GRASP_ROLLBACK_SETTLEMENT
                                 if contact_grasp_execution
                                 else RollbackSettlementPolicy()
                             )
@@ -1084,6 +1145,21 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                         trial_policy.joint_settlement,
                         observe_safety=live_interlock.observe,
                     )
+                elif contact_grasp_execution and not reset_trial_candidate_execution:
+                    await settle_contact_grasp_command(
+                        actuators,
+                        attachment,
+                        target,
+                        observation.pose,
+                        candidate.first_action,
+                        omni.kit.app.get_app().next_update_async,
+                        observe_safety=(
+                            live_interlock.observe
+                            if contact_insertion_execution
+                            else None
+                        ),
+                    )
+                    settlement = None
                 else:
                     await settle_joint_command(
                         actuators,
@@ -1095,22 +1171,14 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                             else None
                         ),
                         maximum_updates=(
-                            CONTACT_GRASP_SETTLEMENT_MAXIMUM_UPDATES
-                            if contact_grasp_execution
-                            else (
-                                MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES
-                                if reset_trial_candidate_execution
-                                else 8
-                            )
+                            MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES
+                            if reset_trial_candidate_execution
+                            else 8
                         ),
                         maximum_arm_error_radians=(
                             EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS
                             if reset_trial_candidate_execution
-                            else (
-                                CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS
-                                if contact_grasp_execution
-                                else 0.01
-                            )
+                            else 0.01
                         ),
                         gripper=(
                             GripperSettlementCriterion(
@@ -1121,8 +1189,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                                     else MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
                                 ),
                             )
-                            if contact_grasp_execution
-                            or reset_trial_candidate_execution
+                            if reset_trial_candidate_execution
                             else None
                         ),
                     )
@@ -1180,7 +1247,8 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     acquisition_passed = acquisition.passed
                 if (
                     acquisition_passed
-                    and joint_tracking_error <= 0.01
+                    and joint_tracking_error
+                    <= CONTACT_GRASP_MAXIMUM_JOINT_TRACKING_ERROR_RADIANS
                     and tracking.passed
                     and not post_collision
                     and post_force <= limits.maximum_contact_force_newtons
