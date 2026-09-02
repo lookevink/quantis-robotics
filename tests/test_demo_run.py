@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from sim.demo_behavior import current_demo_behavioral_contract
 from sim.demo_run import (
@@ -196,6 +197,24 @@ class DemoRunSpecTest(unittest.TestCase):
                     ),
                 ).fingerprint,
             )
+
+    def test_behavioral_contract_binds_ik_precision(self) -> None:
+        original = current_demo_behavioral_contract()
+
+        with patch(
+            "sim.demo_behavior.IK_ORIENTATION_TOLERANCE_RADIANS",
+            0.0005,
+        ):
+            changed = current_demo_behavioral_contract()
+
+        self.assertNotEqual(
+            original.safety_limits_fingerprint,
+            changed.safety_limits_fingerprint,
+        )
+        self.assertEqual(
+            original.control_policy_fingerprint,
+            changed.control_policy_fingerprint,
+        )
 
     def test_rejects_an_incomplete_or_overlapping_corpus_roster(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

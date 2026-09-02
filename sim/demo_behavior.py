@@ -38,6 +38,10 @@ from sim.isaac_demo_camera import (
     WRIST_CAMERA_TRANSLATION_METERS,
     WRIST_CAMERA_UP_AXIS,
 )
+from sim.isaac_demo_kinematics import (
+    IK_ORIENTATION_TOLERANCE_RADIANS,
+    IK_POSITION_TOLERANCE_METERS,
+)
 
 
 @dataclass(frozen=True)
@@ -203,6 +207,13 @@ def current_demo_behavioral_contract() -> DemoBehavioralContract:
                     tracking_limits_for_policy(insertion_policy)
                 ),
                 "command_realization": asdict(CommandRealizationLimits()),
+                "inverse_kinematics": {
+                    "position_tolerance_meters": IK_POSITION_TOLERANCE_METERS,
+                    "orientation_tolerance_radians": (
+                        IK_ORIENTATION_TOLERANCE_RADIANS
+                    ),
+                    "require_fk_command_realization": True,
+                },
                 "replay": ReplayLimits().to_dict(),
             }
         ),
