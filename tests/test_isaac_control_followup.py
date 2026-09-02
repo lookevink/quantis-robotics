@@ -45,6 +45,7 @@ from sim.isaac_control_followup import (
     BLOCKED_IK_DIAGNOSTIC_FINGERPRINTS,
     build_insertion_followup_capture,
     diagnose_contact_grasp_blocked_ik,
+    diagnose_contact_grasp_blocked_ik_tolerances,
     diagnose_contact_grasp_execution_ik,
     diagnose_contact_grasp_settlement_rollback,
     restore_grasp_transition_retry,
@@ -57,6 +58,128 @@ from sim.isaac_demo_runtime import JointCommand
 
 
 class FollowupContinuityTest(unittest.TestCase):
+    def test_blocked_ik_tolerance_diagnostic_replays_every_scale_without_motion(
+        self,
+    ) -> None:
+        pose = DroidPose((0.3, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+        joints = (0.0,) * 7
+        raw = DroidAction((0.002, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+        scales = (DroidActionScale.uniform(1.0), DroidActionScale.uniform(0.5))
+        attempts = tuple(
+            SafetyProjectionAttempt(
+                scale,
+                ControlGateDecision(
+                    7,
+                    pose.applied(scale.apply(raw)),
+                    (ControlGateReason.IK_SOLUTION_FAILED,),
+                ),
+                0.0,
+                joints,
+            )
+            for scale in scales
+        )
+        step = SimpleNamespace(
+            result=SimpleNamespace(
+                status=ControlResultStatus.BLOCKED,
+                gate=SimpleNamespace(
+                    reasons=(ControlGateReason.IK_SOLUTION_FAILED,)
+                ),
+                selected_action_scale=None,
+                post_action=None,
+                insertion_trial_refresh=InsertionEvaluationRefresh(
+                    100.0,
+                    ControlSafetySnapshot(
+                        joints,
+                        0.04,
+                        (0.0, 0.0, 1.0),
+                        0.0,
+                        False,
+                        True,
+                    ),
+                    pose,
+                ),
+                projection_attempts=attempts,
+            )
+        )
+        tolerance_result = ({"orientation_tolerance_radians": 0.001, "solved": True},)
+
+        with (
+            patch(
+                "sim.isaac_control_followup.ControlSession.at",
+                return_value=object(),
+            ),
+            patch(
+                "jepa_wm.control_rollout.ControlStepSummary.from_session",
+                return_value=step,
+            ),
+            patch(
+                "sim.isaac_control_followup.diagnose_droid_pose_orientation_tolerances",
+                return_value=tolerance_result,
+            ) as diagnose,
+        ):
+            evidence = diagnose_contact_grasp_blocked_ik_tolerances(
+                "grasp-to-insertion-run-grasp-01"
+            )
+
+        self.assertEqual(evidence["status"], "diagnosed_no_actuation")
+        self.assertFalse(evidence["simulator_action_applied"])
+        self.assertEqual(len(evidence["attempts"]), 2)
+        self.assertEqual(diagnose.call_count, 2)
+
+    def test_blocked_ik_tolerance_diagnostic_rejects_historical_fk_failure(
+        self,
+    ) -> None:
+        pose = DroidPose((0.3, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+        joints = (0.0,) * 7
+        attempt = SafetyProjectionAttempt(
+            DroidActionScale.uniform(1.0),
+            ControlGateDecision(
+                7,
+                pose,
+                (ControlGateReason.IK_SOLUTION_FAILED,),
+            ),
+            0.001,
+            (0.001, *joints[1:]),
+        )
+        step = SimpleNamespace(
+            result=SimpleNamespace(
+                status=ControlResultStatus.BLOCKED,
+                gate=SimpleNamespace(
+                    reasons=(ControlGateReason.IK_SOLUTION_FAILED,)
+                ),
+                selected_action_scale=None,
+                post_action=None,
+                insertion_trial_refresh=InsertionEvaluationRefresh(
+                    100.0,
+                    ControlSafetySnapshot(
+                        joints,
+                        0.04,
+                        (0.0, 0.0, 1.0),
+                        0.0,
+                        False,
+                        True,
+                    ),
+                    pose,
+                ),
+                projection_attempts=(attempt,),
+            )
+        )
+
+        with (
+            patch(
+                "sim.isaac_control_followup.ControlSession.at",
+                return_value=object(),
+            ),
+            patch(
+                "jepa_wm.control_rollout.ControlStepSummary.from_session",
+                return_value=step,
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, "source is invalid"):
+                diagnose_contact_grasp_blocked_ik_tolerances(
+                    "grasp-to-insertion-run-grasp-01"
+                )
+
     def test_blocked_ik_diagnostic_finds_a_local_branch_without_motion(self) -> None:
         pose = DroidPose((0.3, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
         raw = DroidAction((0.002, 0.0, 0.0, 0.0, 0.0, 0.0, 0.1))

@@ -4,7 +4,14 @@ import unittest
 
 import numpy as np
 
-from sim.isaac_demo_kinematics import _closest_inverse_kinematics
+from jepa_wm.action import DroidAction
+from sim.isaac_demo_kinematics import (
+    IK_ACTIVE_ROTATION_TOLERANCE_RADIANS,
+    IK_ORIENTATION_HOLD_TOLERANCE_RADIANS,
+    _closest_inverse_kinematics,
+    _orientation_tolerance_for_delta,
+    orientation_tolerance_for_action,
+)
 
 
 class _BranchingSolver:
@@ -138,9 +145,35 @@ class ClosestInverseKinematicsTest(unittest.TestCase):
         self.assertTrue(
             all(
                 call["position_tolerance"] == 0.0001
-                and call["orientation_tolerance"] == 0.00025
+                and call["orientation_tolerance"] == 0.001
                 for call in solver.calls
             )
+        )
+
+    def test_uses_strict_orientation_tolerance_only_for_active_rotation(self) -> None:
+        self.assertEqual(
+            _orientation_tolerance_for_delta(0.0),
+            IK_ORIENTATION_HOLD_TOLERANCE_RADIANS,
+        )
+        self.assertEqual(
+            _orientation_tolerance_for_delta(0.000999),
+            IK_ORIENTATION_HOLD_TOLERANCE_RADIANS,
+        )
+        self.assertEqual(
+            _orientation_tolerance_for_delta(0.001),
+            IK_ACTIVE_ROTATION_TOLERANCE_RADIANS,
+        )
+        self.assertEqual(
+            orientation_tolerance_for_action(
+                DroidAction((0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            ),
+            IK_ORIENTATION_HOLD_TOLERANCE_RADIANS,
+        )
+        self.assertEqual(
+            orientation_tolerance_for_action(
+                DroidAction((0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0))
+            ),
+            IK_ACTIVE_ROTATION_TOLERANCE_RADIANS,
         )
 
     def test_accepts_a_stricter_diagnostic_orientation_tolerance(self) -> None:

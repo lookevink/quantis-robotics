@@ -247,7 +247,12 @@ class ControlProjectionTest(unittest.TestCase):
             SimulatorSafetyLimits(),
         )
 
-        def solve(pose: DroidPose, warm_start: np.ndarray) -> SolvedPose:
+        def solve(
+            pose: DroidPose,
+            warm_start: np.ndarray,
+            orientation_tolerance_radians: float,
+        ) -> SolvedPose:
+            self.assertEqual(orientation_tolerance_radians, 0.001)
             return SolvedPose(
                 pose, warm_start, np.zeros(3), 0.04, 0.0, 0.0, pose
             )
@@ -322,7 +327,12 @@ class ControlProjectionTest(unittest.TestCase):
         )
         calls = 0
 
-        def solve(pose: DroidPose, warm_start: np.ndarray) -> SolvedPose:
+        def solve(
+            pose: DroidPose,
+            warm_start: np.ndarray,
+            orientation_tolerance_radians: float,
+        ) -> SolvedPose:
+            self.assertEqual(orientation_tolerance_radians, 0.001)
             nonlocal calls
             calls += 1
             if calls == 1:
@@ -390,7 +400,12 @@ class ControlProjectionTest(unittest.TestCase):
             SimulatorSafetyLimits(),
         )
 
-        def solve(pose: DroidPose, warm_start: np.ndarray) -> SolvedPose:
+        def solve(
+            pose: DroidPose,
+            warm_start: np.ndarray,
+            orientation_tolerance_radians: float,
+        ) -> SolvedPose:
+            self.assertEqual(orientation_tolerance_radians, 0.00025)
             underrealized = start.applied(
                 DroidAction((0.0, 0.0, 0.0, 0.002, 0.0, 0.0, 0.0))
             )
@@ -416,6 +431,74 @@ class ControlProjectionTest(unittest.TestCase):
         self.assertEqual(
             attempts[0].gate.reasons,
             (ControlGateReason.IK_SOLUTION_FAILED,),
+        )
+
+    def test_preserves_safety_failure_before_fk_completion_failure(self) -> None:
+        current_joints = np.asarray((0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5))
+        start = DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+        observation = ControlObservation(
+            123,
+            100.0,
+            Path("context.png"),
+            ControlTarget(Path("target.png")),
+            Path("/tmp/proposal.pth"),
+            start,
+            DroidAction((0.0,) * 7),
+            4,
+        )
+        action = DroidAction((0.0, 0.0, 0.0, 0.004, 0.0, 0.0, 0.0))
+        proposal = ProposedControl(
+            123,
+            100.1,
+            (action, DroidAction((0.0,) * 7), DroidAction((0.0,) * 7)),
+            Path("/tmp/proposal.pth"),
+        )
+        context = ExecutionSafetyContext(
+            observation,
+            JointCommand(current_joints, 0.04),
+            tuple(current_joints),
+            0.0,
+            False,
+            SimulatorSafetyLimits(),
+        )
+
+        def solve(
+            pose: DroidPose,
+            warm_start: np.ndarray,
+            orientation_tolerance_radians: float,
+        ) -> SolvedPose:
+            self.assertEqual(orientation_tolerance_radians, 0.00025)
+            unsafe_joints = warm_start.copy()
+            unsafe_joints[0] = 3.0
+            underrealized = start.applied(
+                DroidAction((0.0, 0.0, 0.0, 0.002, 0.0, 0.0, 0.0))
+            )
+            return SolvedPose(
+                pose,
+                unsafe_joints,
+                np.zeros(3),
+                0.04,
+                0.0,
+                0.0,
+                underrealized,
+            )
+
+        attempts, selected = select_safe_projection(
+            context,
+            proposal,
+            solve=solve,
+            now_unix_seconds=100.2,
+            action_scales=(DroidActionScale.uniform(1.0),),
+        )
+
+        self.assertIsNone(selected)
+        self.assertIn(
+            ControlGateReason.JOINT_LIMIT_VIOLATION,
+            attempts[0].gate.reasons,
+        )
+        self.assertNotIn(
+            ControlGateReason.IK_SOLUTION_FAILED,
+            attempts[0].gate.reasons,
         )
 
 

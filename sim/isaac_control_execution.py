@@ -97,7 +97,12 @@ from sim.isaac_control_runtime import (
 )
 from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, capture_camera_frame
 from sim.grasp_task import observe_grasp_acquisition
-from sim.isaac_demo_kinematics import SolvedPose, solve_droid_pose, solve_waypoints
+from sim.isaac_demo_kinematics import (
+    SolvedPose,
+    orientation_tolerance_for_action,
+    solve_droid_pose,
+    solve_waypoints,
+)
 from sim.isaac_demo_runtime import (
     Actuators,
     ContactReading,
@@ -802,7 +807,7 @@ def project_control_candidate(
     proposal: ProposedControl,
     scale: DroidActionScale,
     *,
-    solve: Callable[[DroidPose, np.ndarray], SolvedPose] = solve_droid_pose,
+    solve: Callable[[DroidPose, np.ndarray, float], SolvedPose] = solve_droid_pose,
     now_unix_seconds: float | None = None,
     target_progress: ProjectedTargetProgressPolicy | None = None,
 ) -> tuple[SafetyProjectionAttempt, SafeProjection | None]:
@@ -829,7 +834,11 @@ def project_control_candidate(
     if not preliminary.passed:
         return SafetyProjectionAttempt(scale, preliminary, 0.0, current_joints), None
     try:
-        solved = solve(candidate_pose, context.current.arm_positions)
+        solved = solve(
+            candidate_pose,
+            context.current.arm_positions,
+            orientation_tolerance_for_action(candidate_action),
+        )
     except (RuntimeError, ValueError):
         decision = ControlGateDecision(
             context.observation.observation_id,
@@ -837,28 +846,6 @@ def project_control_candidate(
             (ControlGateReason.IK_SOLUTION_FAILED,),
         )
         return SafetyProjectionAttempt(scale, decision, 0.0, current_joints), None
-    ik_realization = evaluate_command_realization(
-        candidate_action,
-        action_between(context.observation.pose, solved.achieved_pose),
-    )
-    if not ik_realization.passed:
-        decision = ControlGateDecision(
-            context.observation.observation_id,
-            candidate_pose,
-            (ControlGateReason.IK_SOLUTION_FAILED,),
-        )
-        maximum_joint_delta = float(
-            np.max(np.abs(solved.arm_positions - context.current.arm_positions))
-        )
-        return (
-            SafetyProjectionAttempt(
-                scale,
-                decision,
-                maximum_joint_delta,
-                tuple(solved.arm_positions),
-            ),
-            None,
-        )
     decision = context.evaluate(
         candidate,
         tuple(solved.arm_positions),
@@ -872,7 +859,27 @@ def project_control_candidate(
         decision,
         maximum_joint_delta,
         tuple(solved.arm_positions),
+        solved.achieved_pose,
     )
+    if not decision.passed:
+        return attempt, None
+    ik_realization = evaluate_command_realization(
+        candidate_action,
+        action_between(context.observation.pose, solved.achieved_pose),
+    )
+    if not ik_realization.passed:
+        decision = ControlGateDecision(
+            context.observation.observation_id,
+            candidate_pose,
+            (ControlGateReason.IK_SOLUTION_FAILED,),
+        )
+        attempt = SafetyProjectionAttempt(
+            scale,
+            decision,
+            maximum_joint_delta,
+            tuple(solved.arm_positions),
+            solved.achieved_pose,
+        )
     return attempt, (
         SafeProjection(candidate, solved, decision) if decision.passed else None
     )
@@ -882,7 +889,7 @@ def select_safe_projection(
     context: ExecutionSafetyContext,
     proposal: ProposedControl,
     *,
-    solve: Callable[[DroidPose, np.ndarray], SolvedPose] = solve_droid_pose,
+    solve: Callable[[DroidPose, np.ndarray, float], SolvedPose] = solve_droid_pose,
     now_unix_seconds: float | None = None,
     action_scales: tuple[DroidActionScale, ...] = ACTION_SCALES,
     target_progress: ProjectedTargetProgressPolicy | None = None,

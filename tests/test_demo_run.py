@@ -202,7 +202,7 @@ class DemoRunSpecTest(unittest.TestCase):
         original = current_demo_behavioral_contract()
 
         with patch(
-            "sim.demo_behavior.IK_ORIENTATION_TOLERANCE_RADIANS",
+            "sim.demo_behavior.IK_ACTIVE_ROTATION_TOLERANCE_RADIANS",
             0.0005,
         ):
             changed = current_demo_behavioral_contract()
@@ -214,6 +214,17 @@ class DemoRunSpecTest(unittest.TestCase):
         self.assertEqual(
             original.control_policy_fingerprint,
             changed.control_policy_fingerprint,
+        )
+
+        with patch(
+            "sim.demo_behavior.IK_ORIENTATION_HOLD_TOLERANCE_RADIANS",
+            0.00075,
+        ):
+            changed_hold = current_demo_behavioral_contract()
+
+        self.assertNotEqual(
+            original.safety_limits_fingerprint,
+            changed_hold.safety_limits_fingerprint,
         )
 
     def test_rejects_an_incomplete_or_overlapping_corpus_roster(self) -> None:

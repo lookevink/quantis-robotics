@@ -1,7 +1,7 @@
 from pathlib import Path
 import unittest
 
-from jepa_wm.action import DroidAction, DroidPose
+from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_protocol import (
     CONTROL_SCHEMA,
     LEGACY_CONTROL_SCHEMA,
@@ -12,7 +12,9 @@ from jepa_wm.control_protocol import (
 from jepa_wm.physical_observation import PhysicalRoutingObservation
 from jepa_wm.control_safety import (
     ControlInterlockEvidence,
+    ControlGateDecision,
     ControlGateReason,
+    SafetyProjectionAttempt,
     SimulatorControlGate,
     SimulatorSafetyState,
 )
@@ -77,6 +79,40 @@ def _state(**overrides) -> SimulatorSafetyState:
 
 
 class SimulatorControlGateTest(unittest.TestCase):
+    def test_projection_attempt_round_trips_achieved_fk_pose(self) -> None:
+        pose = DroidPose((0.4, 0.0, 0.5, 0.001, 0.0, 0.0, 0.5))
+        decision = ControlGateDecision(1, pose, ())
+        attempt = SafetyProjectionAttempt(
+            DroidActionScale.uniform(0.25),
+            decision,
+            0.001,
+            (0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5),
+            pose,
+        )
+
+        self.assertEqual(
+            SafetyProjectionAttempt.from_dict(attempt.to_dict()),
+            attempt,
+        )
+
+    def test_projection_attempt_reads_historical_payload_without_achieved_pose(
+        self,
+    ) -> None:
+        pose = DroidPose((0.4, 0.0, 0.5, 0.001, 0.0, 0.0, 0.5))
+        attempt = SafetyProjectionAttempt(
+            DroidActionScale.uniform(0.25),
+            ControlGateDecision(1, pose, (ControlGateReason.IK_SOLUTION_FAILED,)),
+            0.0,
+            (0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5),
+        )
+        historical = attempt.to_dict()
+        del historical["achieved_pose"]
+
+        decoded = SafetyProjectionAttempt.from_dict(historical)
+
+        self.assertEqual(decoded, attempt)
+        self.assertIsNone(decoded.achieved_pose)
+
     def test_interlock_evidence_round_trips_peak_contact(self) -> None:
         evidence = ControlInterlockEvidence(2.5, True)
 

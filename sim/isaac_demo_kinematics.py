@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from typing import Any
 
 import numpy as np
 
-from jepa_wm.action import DroidPose, MAX_GRIPPER_WIDTH_M
+from jepa_wm.action import DroidAction, DroidPose, MAX_GRIPPER_WIDTH_M
 from sim.demo_sequence import DemoGeometry, Waypoint, build_demo_sequence
 from sim.isaac_demo_scene import (
     ARM_JOINT_TARGETS_DEGREES,
@@ -21,10 +22,33 @@ from sim.isaac_demo_scene import (
 
 
 IK_POSITION_TOLERANCE_METERS = 0.0001
-# Tighten numerical convergence for small attached turns. The safety
-# projection independently evaluates the achieved FK action against the exact
-# per-axis completion gate before any drive command is admitted.
-IK_ORIENTATION_TOLERANCE_RADIANS = 0.00025
+IK_ORIENTATION_HOLD_TOLERANCE_RADIANS = 0.001
+IK_ACTIVE_ROTATION_TOLERANCE_RADIANS = 0.00025
+# Backward-compatible name for deterministic absolute waypoint solves.
+IK_ORIENTATION_TOLERANCE_RADIANS = IK_ORIENTATION_HOLD_TOLERANCE_RADIANS
+
+
+def _orientation_tolerance_for_delta(rotation_delta_radians: float) -> float:
+    """Use strict IK only when rotation completion will be evaluated."""
+
+    from jepa_wm.control_tracking import CommandRealizationLimits
+
+    if not isfinite(rotation_delta_radians) or rotation_delta_radians < 0.0:
+        raise ValueError("IK rotation delta is invalid")
+    return (
+        IK_ACTIVE_ROTATION_TOLERANCE_RADIANS
+        if rotation_delta_radians
+        >= CommandRealizationLimits().rotation_activity_radians
+        else IK_ORIENTATION_HOLD_TOLERANCE_RADIANS
+    )
+
+
+def orientation_tolerance_for_action(action: DroidAction) -> float:
+    """Select IK precision from the commanded rotation, not FK residual."""
+
+    return _orientation_tolerance_for_delta(
+        float(np.linalg.norm(action.values[3:6]))
+    )
 
 
 @dataclass(frozen=True)
@@ -205,6 +229,7 @@ def solve_waypoints() -> tuple[SolvedWaypoint, ...]:
 def solve_droid_pose(
     target_pose: DroidPose,
     warm_start: np.ndarray,
+    orientation_tolerance_radians: float,
 ) -> SolvedPose:
     """Solve one base-frame DROID hand pose for a bounded control step."""
 
@@ -219,18 +244,6 @@ def solve_droid_pose(
     target_position, target_orientation = target_pose.to_world_pose(
         base_position, base_orientation
     )
-    arm_positions, success = _closest_inverse_kinematics(
-        solver,
-        "panda_hand",
-        target_position,
-        target_orientation,
-        joints,
-    )
-    if not success:
-        raise RuntimeError("IK failed for proposed DROID pose")
-    achieved_position, achieved_rotation = solver.compute_forward_kinematics(
-        "panda_hand", arm_positions
-    )
     target_xyzw = np.asarray(
         (
             target_orientation[1],
@@ -238,6 +251,20 @@ def solve_droid_pose(
             target_orientation[3],
             target_orientation[0],
         )
+    )
+    target_rotation = Rotation.from_quat(target_xyzw).as_matrix()
+    arm_positions, success = _closest_inverse_kinematics(
+        solver,
+        "panda_hand",
+        target_position,
+        target_orientation,
+        joints,
+        orientation_tolerance_radians=orientation_tolerance_radians,
+    )
+    if not success:
+        raise RuntimeError("IK failed for proposed DROID pose")
+    achieved_position, achieved_rotation = solver.compute_forward_kinematics(
+        "panda_hand", arm_positions
     )
     achieved_pose = DroidPose.from_world_poses(
         base_position,
@@ -253,7 +280,7 @@ def solve_droid_pose(
         gripper_width_m=(1.0 - target_pose.values[6]) * MAX_GRIPPER_WIDTH_M,
         position_error_m=float(np.linalg.norm(achieved_position - target_position)),
         orientation_error_rad=_rotation_error(
-            achieved_rotation, Rotation.from_quat(target_xyzw).as_matrix()
+            achieved_rotation, target_rotation
         ),
         achieved_pose=achieved_pose,
     )

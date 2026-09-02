@@ -147,6 +147,7 @@ from sim.isaac_demo_scene import ROBOT_PATH
 from sim.isaac_demo_kinematics import (
     diagnose_droid_pose_orientation_tolerances,
     diagnose_joint_target_realization,
+    orientation_tolerance_for_action,
     solve_droid_pose,
 )
 from sim.recording import RecordingLabel, RecordingMoment, validate_recording_id
@@ -230,7 +231,11 @@ def diagnose_control_ik_scales(session_id: str) -> dict[str, Any]:
     for scale in scales:
         candidate = observation.pose.applied(scale.apply(response.first_action))
         try:
-            solved = solve_droid_pose(candidate, current)
+            solved = solve_droid_pose(
+                candidate,
+                current,
+                orientation_tolerance_for_action(scale.apply(response.first_action)),
+            )
             attempts.append(
                 {
                     "scale": scale.to_dict(),
@@ -344,7 +349,11 @@ def diagnose_contact_grasp_acquisition_resolution(
             )
         )
         try:
-            solved = solve_droid_pose(candidate, current)
+            solved = solve_droid_pose(
+                candidate,
+                current,
+                orientation_tolerance_for_action(scale.apply(action)),
+            )
             delta = float(np.max(np.abs(solved.arm_positions - current)))
             joint_limits_passed = all(
                 lower <= value <= upper
@@ -797,6 +806,63 @@ def diagnose_contact_grasp_execution_ik(session_id: str) -> dict[str, Any]:
     }
 
 
+def diagnose_contact_grasp_blocked_ik_tolerances(
+    session_id: str,
+) -> dict[str, Any]:
+    """Probe exact tolerance regimes for one no-motion attached IK block."""
+
+    from jepa_wm.control_rollout import ControlStepSummary
+
+    validate_recording_id(session_id)
+    step = ControlStepSummary.from_session(
+        ControlSession.at(CONTROL_ROOT, session_id)
+    )
+    refresh = step.result.insertion_trial_refresh
+    source_attempts = step.result.projection_attempts
+    if (
+        step.result.status is not ControlResultStatus.BLOCKED
+        or step.result.gate.reasons != (ControlGateReason.IK_SOLUTION_FAILED,)
+        or step.result.selected_action_scale is not None
+        or step.result.post_action is not None
+        or refresh is None
+        or not refresh.live_state.plug_attached
+        or not source_attempts
+        or any(
+            attempt.gate.reasons != (ControlGateReason.IK_SOLUTION_FAILED,)
+            or attempt.achieved_pose is not None
+            or attempt.maximum_joint_delta_rad != 0.0
+            or attempt.proposed_joint_positions
+            != tuple(refresh.live_state.joint_positions)
+            for attempt in source_attempts
+        )
+    ):
+        raise ValueError("contact-grasp blocked IK tolerance source is invalid")
+    attempts = []
+    for source in source_attempts:
+        attempts.append(
+            {
+                "scale": source.scale.to_dict(),
+                "target_pose": list(source.gate.next_pose.values),
+                "tolerances": list(
+                    diagnose_droid_pose_orientation_tolerances(
+                        refresh.live_pose,
+                        source.gate.next_pose,
+                        np.asarray(
+                            refresh.live_state.joint_positions,
+                            dtype=np.float64,
+                        ),
+                    )
+                ),
+            }
+        )
+    return {
+        "status": "diagnosed_no_actuation",
+        "session_id": session_id,
+        "attempts": attempts,
+        "simulator_action_applied": False,
+    }
+
+
 def diagnose_contact_grasp_tracking_rollback_ik(
     session_id: str,
 ) -> dict[str, Any]:
@@ -860,7 +926,12 @@ def diagnose_contact_grasp_tracking_rollback_ik(
             )
             candidate = refresh.live_pose.applied(scale.apply(raw))
             try:
-                solved = solve_droid_pose(candidate, warm_start)
+                scaled_action = scale.apply(raw)
+                solved = solve_droid_pose(
+                    candidate,
+                    warm_start,
+                    orientation_tolerance_for_action(scaled_action),
+                )
             except (RuntimeError, ValueError) as error:
                 attempts.append(
                     {

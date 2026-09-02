@@ -974,6 +974,7 @@ class SafetyProjectionAttempt:
     gate: ControlGateDecision
     maximum_joint_delta_rad: float
     proposed_joint_positions: tuple[float, ...]
+    achieved_pose: DroidPose | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -986,6 +987,10 @@ class SafetyProjectionAttempt:
             "proposed_joint_positions",
             _finite_tuple("proposed joint positions", self.proposed_joint_positions, 7),
         )
+        if self.achieved_pose is not None and not isinstance(
+            self.achieved_pose, DroidPose
+        ):
+            raise ValueError("safety projection achieved pose is invalid")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -993,6 +998,11 @@ class SafetyProjectionAttempt:
             "gate": self.gate.to_dict(),
             "maximum_joint_delta_rad": self.maximum_joint_delta_rad,
             "proposed_joint_positions": list(self.proposed_joint_positions),
+            "achieved_pose": (
+                list(self.achieved_pose.values)
+                if self.achieved_pose is not None
+                else None
+            ),
         }
 
     @classmethod
@@ -1005,6 +1015,11 @@ class SafetyProjectionAttempt:
                 ControlGateDecision.from_dict(payload["gate"]),
                 float(payload["maximum_joint_delta_rad"]),
                 tuple(payload["proposed_joint_positions"]),
+                (
+                    DroidPose(tuple(payload["achieved_pose"]))
+                    if payload.get("achieved_pose") is not None
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("safety projection attempt is incomplete") from error

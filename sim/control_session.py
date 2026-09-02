@@ -1747,10 +1747,29 @@ class ControlSession:
                     expected_pose = observation.pose.applied(scaled_action)
                 except ValueError as error:
                     raise ValueError("shadow IK failure pose is invalid") from error
-                if not expected_gate.passed or attempt.gate.next_pose != expected_pose:
+                realization = (
+                    evaluate_command_realization(
+                        scaled_action,
+                        action_between(observation.pose, attempt.achieved_pose),
+                    )
+                    if attempt.achieved_pose is not None
+                    else None
+                )
+                if (
+                    not expected_gate.passed
+                    or attempt.gate.next_pose != expected_pose
+                    or (realization is not None and realization.passed)
+                ):
                     raise ValueError("shadow IK failure evidence is inconsistent")
             elif attempt.gate != expected_gate:
                 raise ValueError("control safety gate evidence is inconsistent")
+            elif attempt.gate.passed and attempt.achieved_pose is not None:
+                realization = evaluate_command_realization(
+                    scaled_action,
+                    action_between(observation.pose, attempt.achieved_pose),
+                )
+                if not realization.passed:
+                    raise ValueError("shadow IK realization evidence is inconsistent")
 
     def write_shadow_safety(self, evidence: ShadowSafetyEvidence) -> None:
         if self.shadow_safety_path.exists():
