@@ -22,6 +22,7 @@ from jepa_wm.contact_grasp_target import (
     AXIS_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     LOADED_DRIVE_COMPENSATED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+    RETAINED_WINDOW_OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     HORIZON_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
@@ -185,6 +186,11 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
         self.assertEqual(retained, self.transport_targets[-2])
         self.assertEqual(terminal, self.transport_targets[-1])
 
+    def test_current_policy_keeps_physically_completable_retained_window(
+        self,
+    ) -> None:
+        self.assertEqual(self.transport_targets[-1], 128)
+
     def test_round_trips_only_the_current_policy(self) -> None:
         payload = CONTACT_GRASP_TARGET_POLICY.to_dict()
 
@@ -213,7 +219,7 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
         self.assertTrue(CONTACT_GRASP_TARGET_POLICY.uses_horizon_transport_action)
         self.assertEqual(
             CONTACT_GRASP_TARGET_POLICY.schema,
-            OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            RETAINED_WINDOW_OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         )
         self.assertTrue(
             CONTACT_GRASP_TARGET_POLICY.requires_axis_resolvable_transport
@@ -225,6 +231,18 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
             CONTACT_GRASP_TARGET_POLICY.uses_measured_acquisition_progress
         )
         self.assertTrue(CONTACT_GRASP_TARGET_POLICY.requires_resolvable_rotation)
+        historical_v20 = ContactGraspTargetPolicy(
+            OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+        )
+        reconstructed_v20 = ContactGraspTargetPolicy.from_dict(
+            historical_v20.to_dict()
+        )
+        self.assertEqual(reconstructed_v20, historical_v20)
+        self.assertEqual(
+            reconstructed_v20.schema,
+            OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+        )
+        self.assertEqual(reconstructed_v20.transport_target_indices[-1], 120)
         loaded_drive_v19 = ContactGraspTargetPolicy(
             LOADED_DRIVE_COMPENSATED_CONTACT_GRASP_TARGET_POLICY_SCHEMA
         )

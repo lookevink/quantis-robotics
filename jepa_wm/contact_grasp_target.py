@@ -88,6 +88,9 @@ LOADED_DRIVE_COMPENSATED_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
 OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v20"
 )
+RETAINED_WINDOW_OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+    "quantis.jepa_wm_contact_grasp_target_policy.v21"
+)
 
 
 class _TransportComposition(str, Enum):
@@ -283,6 +286,14 @@ _POLICY_CAPABILITIES[
     ],
     resolvable_rotation=True,
 )
+_POLICY_CAPABILITIES[
+    RETAINED_WINDOW_OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+] = replace(
+    _POLICY_CAPABILITIES[
+        OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+    ],
+    extended_retained_window=True,
+)
 
 
 def _frame_index(path: Path) -> int:
@@ -315,7 +326,9 @@ class ContactGraspTargetStep:
 class ContactGraspTargetPolicy:
     """Hold acquisition, then advance by measured reference-state progress."""
 
-    schema: str = OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+    schema: str = (
+        RETAINED_WINDOW_OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+    )
     scene_translation_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     def __post_init__(self) -> None:
