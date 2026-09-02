@@ -137,6 +137,48 @@ class UnknownStartE2EHandoffTest(unittest.TestCase):
                 result,
                 horizon_tracking_rollback_reasons=("translation_direction",),
             )
+
+    def test_settlement_rollback_handoff_requires_exact_execution_error(self) -> None:
+        restored_pose = object()
+        restored_safety = SimpleNamespace(
+            plug_attached=False,
+            collision_detected=False,
+            contact_force_newtons=0.0,
+        )
+        execution_error = (
+            "RuntimeError: gripper did not settle within its bounded timeout: "
+            "error_meters=0.000008149; rollback verification failed: "
+            "RuntimeError: rollback command did not settle: "
+            "arm_error=0.001117 rad, gripper_error=0.000007 m"
+        )
+        result = SimpleNamespace(
+            status=ControlResultStatus.ROLLBACK_FAILED,
+            execution_error=execution_error,
+            post_action=None,
+            insertion_trial_refresh=SimpleNamespace(
+                live_pose=restored_pose,
+                live_state=restored_safety,
+            ),
+        )
+
+        self.assertEqual(
+            _contact_grasp_rollback_handoff_state(
+                result,
+                horizon_source_endpoint_status=(
+                    ControlResultStatus.ROLLBACK_FAILED.value
+                ),
+                horizon_source_execution_error=execution_error,
+            ),
+            (restored_pose, restored_safety),
+        )
+        with self.assertRaisesRegex(ValueError, "settlement rollback"):
+            _contact_grasp_rollback_handoff_state(
+                result,
+                horizon_source_endpoint_status=(
+                    ControlResultStatus.ROLLBACK_FAILED.value
+                ),
+                horizon_source_execution_error="different failure",
+            )
         result.status = ControlResultStatus.APPLIED
         result.post_action = SimpleNamespace(
             pose=restored_pose,
