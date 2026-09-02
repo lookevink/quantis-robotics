@@ -22,6 +22,13 @@ class ActionTrackingReason(str, Enum):
     GRIPPER_ERROR = "gripper_error"
 
 
+class CommandRealizationReason(str, Enum):
+    """Why a safe command has not yet completed its requested motion."""
+
+    TRANSLATION_UNDERREALIZED = "translation_underrealized"
+    ROTATION_UNDERREALIZED = "rotation_underrealized"
+
+
 @dataclass(frozen=True)
 class ActionTrackingLimits:
     translation_activity_meters: float = 1e-4
@@ -48,6 +55,95 @@ class ActionTrackingLimits:
 EXPERIMENTAL_CANDIDATE_TRACKING_LIMITS = ActionTrackingLimits(
     rotation_activity_radians=2e-4,
 )
+
+
+@dataclass(frozen=True)
+class CommandRealizationLimits:
+    """Completion thresholds, deliberately separate from safety tracking."""
+
+    translation_activity_meters: float = 1e-4
+    rotation_activity_radians: float = 1e-3
+    minimum_translation_fraction: float = 0.75
+    minimum_rotation_fraction: float = 0.75
+    required_consecutive_samples: int = 2
+    maximum_plateau_samples: int = 32
+    minimum_progress_increment: float = 0.01
+
+    def __post_init__(self) -> None:
+        if not all(
+            isfinite(value) and value > 0.0
+            for value in (
+                self.translation_activity_meters,
+                self.rotation_activity_radians,
+                self.minimum_progress_increment,
+            )
+        ) or not all(
+            isfinite(value) and 0.0 < value <= 1.0
+            for value in (
+                self.minimum_translation_fraction,
+                self.minimum_rotation_fraction,
+            )
+        ):
+            raise ValueError("command realization limits are invalid")
+        if (
+            isinstance(self.required_consecutive_samples, bool)
+            or not isinstance(self.required_consecutive_samples, int)
+            or self.required_consecutive_samples < 1
+            or isinstance(self.maximum_plateau_samples, bool)
+            or not isinstance(self.maximum_plateau_samples, int)
+            or self.maximum_plateau_samples < 1
+        ):
+            raise ValueError("command realization sample count must be positive")
+
+
+@dataclass(frozen=True)
+class CommandRealizationDecision:
+    translation_fraction: float
+    rotation_fraction: float
+    active_progress_fraction: float
+    reasons: tuple[CommandRealizationReason, ...]
+
+    @property
+    def passed(self) -> bool:
+        return not self.reasons
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "translation_fraction": self.translation_fraction,
+            "rotation_fraction": self.rotation_fraction,
+            "active_progress_fraction": self.active_progress_fraction,
+            "reasons": [reason.value for reason in self.reasons],
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> CommandRealizationDecision:
+        if not isinstance(payload, dict):
+            raise ValueError("command realization decision must be an object")
+        try:
+            decision = cls(
+                float(payload["translation_fraction"]),
+                float(payload["rotation_fraction"]),
+                float(payload["active_progress_fraction"]),
+                tuple(
+                    CommandRealizationReason(reason) for reason in payload["reasons"]
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("command realization decision is incomplete") from error
+        if (
+            not all(
+                isfinite(value) and value >= 0.0
+                for value in (
+                    decision.translation_fraction,
+                    decision.rotation_fraction,
+                    decision.active_progress_fraction,
+                )
+            )
+            or payload.get("passed") is not decision.passed
+        ):
+            raise ValueError("command realization decision is inconsistent")
+        return decision
 
 
 def tracking_limits_for_policy(
@@ -120,6 +216,57 @@ class ActionTrackingDecision:
 def _cosine(left: np.ndarray, right: np.ndarray) -> float:
     denominator = np.linalg.norm(left) * np.linalg.norm(right)
     return float(np.dot(left, right) / denominator) if denominator > 1e-12 else 0.0
+
+
+def _realized_fraction(commanded: np.ndarray, actual: np.ndarray) -> float:
+    commanded_squared = float(np.dot(commanded, commanded))
+    if commanded_squared <= 1e-12:
+        return 1.0
+    return max(0.0, float(np.dot(commanded, actual) / commanded_squared))
+
+
+def evaluate_command_realization(
+    commanded: DroidAction,
+    actual: DroidAction,
+    limits: CommandRealizationLimits = CommandRealizationLimits(),
+) -> CommandRealizationDecision:
+    """Decide whether active Cartesian axes realized enough of a command.
+
+    Tracking answers whether observed motion is safe and acceptably close.
+    This decision answers the different question of whether the command is
+    complete, so a small command cannot pass merely by remaining inside a
+    larger absolute tracking tolerance.
+    """
+
+    commanded_translation = np.asarray(commanded.values[:3])
+    actual_translation = np.asarray(actual.values[:3])
+    commanded_rotation = np.asarray(commanded.values[3:6])
+    actual_rotation = np.asarray(actual.values[3:6])
+    translation_fraction = _realized_fraction(
+        commanded_translation,
+        actual_translation,
+    )
+    rotation_fraction = _realized_fraction(commanded_rotation, actual_rotation)
+    active_fractions = []
+    reasons = []
+    if (
+        np.linalg.norm(commanded_translation) >= limits.translation_activity_meters
+    ):
+        active_fractions.append(translation_fraction)
+        if translation_fraction < limits.minimum_translation_fraction:
+            reasons.append(CommandRealizationReason.TRANSLATION_UNDERREALIZED)
+    if (
+        np.linalg.norm(commanded_rotation) >= limits.rotation_activity_radians
+    ):
+        active_fractions.append(rotation_fraction)
+        if rotation_fraction < limits.minimum_rotation_fraction:
+            reasons.append(CommandRealizationReason.ROTATION_UNDERREALIZED)
+    return CommandRealizationDecision(
+        translation_fraction,
+        rotation_fraction,
+        min(active_fractions, default=1.0),
+        tuple(reasons),
+    )
 
 
 def evaluate_action_tracking(

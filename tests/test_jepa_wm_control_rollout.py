@@ -45,6 +45,7 @@ from jepa_wm.control_safety import (
 from jepa_wm.control_tracking import (
     ActionTrackingDecision,
     evaluate_action_tracking,
+    evaluate_command_realization,
     tracking_limits_for_policy,
 )
 from jepa_wm.joint_settlement import (
@@ -843,7 +844,11 @@ class ControlRolloutTest(unittest.TestCase):
             ),
             captured_at_unix_seconds=captured_at,
             context_frame=Path(f"control_sessions/{session_id}/context.png"),
-            target=ControlTarget(Path(target_frame), target_pose),
+            target=ControlTarget(
+                Path(target_frame),
+                target_pose
+                or DroidPose((0.43, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
+            ),
             expected_proposal=Path("/tmp/proposal.pth"),
             pose=DroidPose((pose_x, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)),
             previous_action=DroidAction((previous_action_x, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
@@ -901,6 +906,10 @@ class ControlRolloutTest(unittest.TestCase):
                 0.0,
                 False,
                 {"path": "/tmp/post.png", "shape": [512, 512, 4]},
+                command_realization=evaluate_command_realization(
+                    scale.apply(raw_action),
+                    scale.apply(raw_action),
+                ),
             ),
         )
         (session / "request.json").write_text(json.dumps(observation.to_dict()))
@@ -977,6 +986,35 @@ class ControlRolloutTest(unittest.TestCase):
                 summary["execution_error"], "RuntimeError: transient force"
             )
 
+    def test_rejects_tampered_command_realization_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._write_reference(root)
+            self._write_step(
+                root,
+                "session-1",
+                previous_session_id=None,
+                pose_x=0.4,
+                post_x=0.401,
+            )
+            session = ControlSession.at(root / "control_sessions", "session-1")
+            result = session.load_result()
+            realization = result.post_action.command_realization
+            self.assertIsNotNone(realization)
+            tampered = replace(
+                result.post_action,
+                command_realization=replace(
+                    realization,
+                    translation_fraction=realization.translation_fraction + 0.1,
+                ),
+            )
+            session.result_path.write_text(
+                json.dumps(replace(result, post_action=tampered).to_dict())
+            )
+
+            with self.assertRaisesRegex(ValueError, "realization is inconsistent"):
+                ControlStepSummary.from_session(session)
+
     def test_summarizes_a_provenance_bound_rollout_and_goal_progress(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1010,6 +1048,9 @@ class ControlRolloutTest(unittest.TestCase):
                 warmup_frames=5,
                 captured_at=101.0,
                 previous_action_x=0.01,
+                target_pose=DroidPose(
+                    (0.45, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)
+                ),
             )
 
             report = self._report(
@@ -1640,6 +1681,9 @@ class ControlRolloutTest(unittest.TestCase):
                 post_x=0.41,
                 target_frame="recordings/reference/wrist/frame_000089.png",
                 warmup_frames=86,
+                target_pose=DroidPose(
+                    (0.43, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)
+                ),
             )
             self._write_step(
                 root,
@@ -1651,6 +1695,9 @@ class ControlRolloutTest(unittest.TestCase):
                 warmup_frames=87,
                 captured_at=101.0,
                 previous_action_x=0.01,
+                target_pose=DroidPose(
+                    (0.45, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5)
+                ),
             )
 
             report = self._report(
@@ -1658,7 +1705,7 @@ class ControlRolloutTest(unittest.TestCase):
             )
 
         self.assertEqual(report["reference_task"], "reach_and_grasp")
-        self.assertAlmostEqual(report["final_goal_error"]["translation_meters"], 0.02)
+        self.assertAlmostEqual(report["final_goal_error"]["translation_meters"], 0.03)
 
     def test_rejects_a_non_monotonic_warmup_chain(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -6,7 +6,6 @@ import argparse
 from base64 import b64encode
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -28,6 +27,7 @@ from jepa_wm.contact_grasp_acquisition_continuation import (
     _validate_source,
 )
 from jepa_wm.persistence import write_json_atomic
+from jepa_wm.runtime_fingerprint import runtime_source_files, runtime_source_fingerprint
 from jepa_wm.training_artifact import artifact_fingerprint
 
 
@@ -97,19 +97,12 @@ RUNTIME_FILES = (
     "sim/isaac_demo_kinematics.py",
     "sim/runtime_loader.py",
 )
+RUNTIME_FILES = runtime_source_files(Path(__file__).resolve().parents[1])
 
 
 def runtime_fingerprint(repository: Path | None = None) -> str:
     root = repository or Path(__file__).resolve().parents[1]
-    digest = sha256()
-    for relative in RUNTIME_FILES:
-        name = relative.encode()
-        contents = (root / relative).read_bytes()
-        digest.update(len(name).to_bytes(4, "big"))
-        digest.update(name)
-        digest.update(len(contents).to_bytes(8, "big"))
-        digest.update(contents)
-    return digest.hexdigest()
+    return runtime_source_fingerprint(root)
 
 
 @dataclass(frozen=True)

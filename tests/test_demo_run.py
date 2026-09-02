@@ -174,7 +174,7 @@ class DemoRunSpecTest(unittest.TestCase):
             self.assertEqual(spec.terminal_contract.grasp_actions, 192)
             self.assertEqual(spec.terminal_contract.insertion_actions, 4)
             self.assertEqual(spec.action_cap, 196)
-            self.assertFalse(spec.terminal_contract.require_seated_hold)
+            self.assertTrue(spec.terminal_contract.require_seated_hold)
             spec_path = Path(temp_dir) / "demo-runs" / "frozen.json"
             spec.persist(spec_path)
             self.assertEqual(

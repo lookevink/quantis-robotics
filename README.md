@@ -2833,6 +2833,27 @@ not autonomous repeated control.
 Stop the worker independently with
 `./ops/aws.sh jepa-wm-control-worker-stop`.
 
+### Pre-run control reliability checkpoint
+
+The grasp-to-insertion promotion boundary now distinguishes safe tracking from
+completed motion. Every active translation/rotation command must realize at
+least 75% of the request for two consecutive samples; a 32-sample progress
+plateau aborts the step, and the final synchronized capture recomputes and
+persists the completion decision. The existing collision, 2 N contact-force,
+10 mrad arm, 3 mm gripper, velocity, workspace, attachment, and IK gates are
+unchanged.
+
+Control schema v2 persists the exact active target, raw grasp-acquisition
+inputs, a typed simulator attachment mechanism, command realization, and live
+connector/socket geometry. Reports reconstruct those derived claims rather
+than trusting booleans. A grasp-to-insertion report passes only when attachment
+is retained and the final four insertion observations are safely seated.
+Historical v1 control payloads remain readable but cannot be promoted without
+the exact v2 evidence. Runtime fingerprints discover all repository-owned
+Python and shell sources, including new runtime directories. This is an
+offline code checkpoint only; it does not authorize training, another JEPA
+action, filming, hardware, or production use.
+
 ## Validation
 
 Local checks do not require Isaac Sim:

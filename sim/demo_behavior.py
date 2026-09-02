@@ -235,6 +235,6 @@ def current_demo_behavioral_contract() -> DemoBehavioralContract:
         terminal=DemoTerminalContract(
             MAXIMUM_CONTACT_GRASP_ACTIONS,
             DEMO_INSERTION_ROLLOUT.maximum_steps,
-            False,
+            True,
         ),
     )

@@ -29,7 +29,15 @@ from jepa_wm.control_safety import (
     SimulatorSafetyLimits,
     SimulatorSafetyState,
 )
-from jepa_wm.control_tracking import ActionTrackingDecision, ActionTrackingLimits
+from jepa_wm.control_tracking import (
+    ActionTrackingDecision,
+    ActionTrackingLimits,
+    CommandRealizationLimits,
+    CommandRealizationDecision,
+    evaluate_action_tracking,
+    evaluate_command_realization,
+    tracking_limits_for_policy,
+)
 from jepa_wm.joint_settlement import JointSettlementAttempt
 from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.direct_safety import DirectInsertionSafetyEvidence
@@ -43,6 +51,11 @@ from jepa_wm.insertion_rollout import (
     TWO_STEP_INSERTION_ROLLOUT,
     InsertionRolloutPosition,
     is_insertion_rollout_policy,
+)
+from jepa_wm.insertion_task import (
+    InsertionTarget,
+    InsertionTaskStep,
+    quaternion_orientation_error,
 )
 from jepa_wm.control_policy import (
     ControlExecutionPolicy,
@@ -86,6 +99,7 @@ from jepa_wm.shadow_planning import ShadowPlanningRequest, ShadowSearchEvidence
 from jepa_wm.shadow_safety import ShadowSafetyEvidence
 from jepa_wm.trial_equivalence import ControlTrialContext, TrialResetState
 from sim.control_context import recording_task
+from sim.grasp_task import AttachmentMechanism, GraspAcquisitionEvidence
 from sim.recording import validate_recording_id
 
 
@@ -442,6 +456,14 @@ class PostActionEvidence:
     plug_position: tuple[float, ...] | None = None
     plug_attached: bool = False
     insertion_trial: InsertionTrialPostActionEvidence | None = None
+    grasp_acquisition: GraspAcquisitionEvidence | None = None
+    attachment_mechanism: AttachmentMechanism | None = None
+    insertion_task_step: InsertionTaskStep | None = None
+    insertion_target: InsertionTarget | None = None
+    command_realization: CommandRealizationDecision | None = None
+    plug_orientation_wxyz: tuple[float, ...] | None = None
+    socket_orientation_wxyz: tuple[float, ...] | None = None
+    gripper_frame_world_position: tuple[float, ...] | None = None
 
     def __post_init__(self) -> None:
         if len(self.joint_positions) != 7 or not all(
@@ -455,6 +477,36 @@ class PostActionEvidence:
             raise ValueError("post-action plug position must be three-dimensional")
         if not isinstance(self.plug_attached, bool):
             raise ValueError("post-action plug attachment evidence must be boolean")
+        if self.attachment_mechanism is not None and not isinstance(
+            self.attachment_mechanism,
+            AttachmentMechanism,
+        ):
+            raise ValueError("post-action attachment mechanism is invalid")
+        if (self.insertion_task_step is None) != (self.insertion_target is None):
+            raise ValueError("post-action insertion geometry is incomplete")
+        if (self.plug_orientation_wxyz is None) != (
+            self.socket_orientation_wxyz is None
+        ) or (self.insertion_task_step is None) != (
+            self.plug_orientation_wxyz is None
+        ):
+            raise ValueError("post-action insertion orientation is incomplete")
+        if (self.insertion_task_step is None) != (
+            self.gripper_frame_world_position is None
+        ):
+            raise ValueError("post-action gripper-frame evidence is incomplete")
+        if self.gripper_frame_world_position is not None and (
+            len(self.gripper_frame_world_position) != 3
+            or not all(isfinite(value) for value in self.gripper_frame_world_position)
+        ):
+            raise ValueError("post-action gripper-frame evidence is invalid")
+        if self.plug_orientation_wxyz is not None and any(
+            len(values) != 4 or not all(isfinite(value) for value in values)
+            for values in (
+                self.plug_orientation_wxyz,
+                self.socket_orientation_wxyz,
+            )
+        ):
+            raise ValueError("post-action insertion orientation is invalid")
         scalars = (
             self.maximum_joint_tracking_error_rad,
             self.contact_force_newtons,
@@ -501,6 +553,54 @@ class PostActionEvidence:
         ):
             raise ValueError("follow-up capture changed after its applied result")
 
+    def validate_derived_evidence(
+        self,
+        commanded: DroidAction,
+        actual: DroidAction,
+        execution_policy: ControlExecutionPolicy,
+    ) -> None:
+        """Recompute every derived motion/geometry claim from persisted inputs."""
+
+        expected_tracking = evaluate_action_tracking(
+            commanded,
+            actual,
+            tracking_limits_for_policy(execution_policy),
+        )
+        expected_realization = evaluate_command_realization(
+            commanded,
+            actual,
+            CommandRealizationLimits(),
+        )
+        if self.actual_action != actual or self.tracking != expected_tracking:
+            raise ValueError("post-action tracking evidence is inconsistent")
+        if (
+            self.command_realization is not None
+            and self.command_realization != expected_realization
+        ):
+            raise ValueError("post-action completion evidence is inconsistent")
+        if self.insertion_task_step is not None:
+            if (
+                self.command_realization is None
+                or self.plug_position is None
+                or self.plug_orientation_wxyz is None
+                or self.socket_orientation_wxyz is None
+            ):
+                raise ValueError("post-action insertion evidence is incomplete")
+            expected_step = InsertionTaskStep(
+                tuple(self.plug_position),
+                self.gripper_frame_world_position,
+                self.plug_attached,
+                quaternion_orientation_error(
+                    self.plug_orientation_wxyz,
+                    self.socket_orientation_wxyz,
+                ),
+                expected_tracking.passed and expected_realization.passed,
+                self.collision_detected,
+                self.contact_force_newtons,
+            )
+            if self.insertion_task_step != expected_step:
+                raise ValueError("post-action insertion evidence is inconsistent")
+
     def to_dict(self) -> dict[str, Any]:
         payload = {
             "raw_proposed_action": list(self.raw_proposed_action.values),
@@ -518,6 +618,26 @@ class PostActionEvidence:
             ),
             "post_action_plug_attached": self.plug_attached,
         }
+        if self.grasp_acquisition is not None:
+            payload["grasp_acquisition"] = self.grasp_acquisition.to_dict()
+        if self.attachment_mechanism is not None:
+            payload["attachment_mechanism"] = self.attachment_mechanism.value
+        if self.insertion_task_step is not None:
+            payload["insertion_task_step"] = self.insertion_task_step.to_dict()
+        if self.insertion_target is not None:
+            payload["insertion_target"] = self.insertion_target.to_dict()
+        if self.command_realization is not None:
+            payload["command_realization"] = self.command_realization.to_dict()
+        if self.plug_orientation_wxyz is not None:
+            payload["post_action_plug_orientation_wxyz"] = list(
+                self.plug_orientation_wxyz
+            )
+            payload["post_action_socket_orientation_wxyz"] = list(
+                self.socket_orientation_wxyz
+            )
+            payload["post_action_gripper_frame_world_position"] = list(
+                self.gripper_frame_world_position
+            )
         if self.insertion_trial is not None:
             payload["insertion_trial_post_action"] = self.insertion_trial.to_dict()
         return payload
@@ -553,6 +673,59 @@ class PostActionEvidence:
                     else None
                 ),
                 plug_attached=payload.get("post_action_plug_attached", False),
+                grasp_acquisition=(
+                    GraspAcquisitionEvidence.from_dict(payload["grasp_acquisition"])
+                    if "grasp_acquisition" in payload
+                    else None
+                ),
+                attachment_mechanism=(
+                    AttachmentMechanism(payload["attachment_mechanism"])
+                    if payload.get("attachment_mechanism") is not None
+                    else None
+                ),
+                insertion_task_step=(
+                    InsertionTaskStep.from_dict(payload["insertion_task_step"])
+                    if "insertion_task_step" in payload
+                    else None
+                ),
+                insertion_target=(
+                    InsertionTarget.from_dict(payload["insertion_target"])
+                    if "insertion_target" in payload
+                    else None
+                ),
+                command_realization=(
+                    CommandRealizationDecision.from_dict(
+                        payload["command_realization"]
+                    )
+                    if "command_realization" in payload
+                    else None
+                ),
+                plug_orientation_wxyz=(
+                    tuple(
+                        float(value)
+                        for value in payload["post_action_plug_orientation_wxyz"]
+                    )
+                    if "post_action_plug_orientation_wxyz" in payload
+                    else None
+                ),
+                socket_orientation_wxyz=(
+                    tuple(
+                        float(value)
+                        for value in payload["post_action_socket_orientation_wxyz"]
+                    )
+                    if "post_action_socket_orientation_wxyz" in payload
+                    else None
+                ),
+                gripper_frame_world_position=(
+                    tuple(
+                        float(value)
+                        for value in payload[
+                            "post_action_gripper_frame_world_position"
+                        ]
+                    )
+                    if "post_action_gripper_frame_world_position" in payload
+                    else None
+                ),
                 insertion_trial=(
                     InsertionTrialPostActionEvidence.from_dict(
                         payload["insertion_trial_post_action"]

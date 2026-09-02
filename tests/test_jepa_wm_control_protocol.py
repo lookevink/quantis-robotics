@@ -3,6 +3,8 @@ import unittest
 
 from jepa_wm.action import DroidAction, DroidPose
 from jepa_wm.control_protocol import (
+    CONTROL_SCHEMA,
+    LEGACY_CONTROL_SCHEMA,
     ControlObservation,
     ControlTarget,
     ProposedControl,
@@ -178,6 +180,7 @@ class SimulatorControlGateTest(unittest.TestCase):
         observation = _observation(target_pose=target_pose)
         proposal = _proposal(proposal_fingerprint="a" * 64)
 
+        self.assertEqual(CONTROL_SCHEMA, "quantis.jepa_wm_control.v2")
         self.assertEqual(ControlObservation.from_dict(observation.to_dict()), observation)
         self.assertEqual(observation.target_pose, target_pose)
         for actual, expected in zip(
@@ -186,6 +189,12 @@ class SimulatorControlGateTest(unittest.TestCase):
         ):
             self.assertAlmostEqual(actual, expected)
         self.assertEqual(ProposedControl.from_dict(proposal.to_dict()), proposal)
+        legacy_observation = observation.to_dict()
+        legacy_observation["schema"] = LEGACY_CONTROL_SCHEMA
+        self.assertEqual(
+            ControlObservation.from_dict(legacy_observation),
+            observation,
+        )
         replacement_actions = (
             DroidAction((0.001,) * 7),
             *proposal.actions[1:],

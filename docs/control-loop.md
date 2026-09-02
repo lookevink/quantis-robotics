@@ -955,3 +955,19 @@ WebRTC is only for viewing. Capture directly from Replicator and the controller 
     Multi-seed repeatability, autonomous failure recovery, real-hardware
     transfer, and production authority are explicitly deferred and must not be
     added as prerequisites without new direction.
+    Before the next run, a repository-wide reliability audit separated safe
+    tracking from command completion. Contact-grasp commands now require at
+    least 75% realized translation/rotation on every active axis for two
+    consecutive samples and abort a 32-sample progress plateau. The final
+    synchronized capture recomputes and persists that decision. Control wire
+    schema v2 requires the exact active target for promotion reports while
+    retaining read compatibility for historical v1 payloads. Grasp evidence
+    now persists its raw acquisition inputs and typed simulator attachment
+    mechanism; insertion evidence persists live socket/connector geometry and
+    is reconstructed against the reference scene translation. End-to-end
+    success requires the final four insertion observations to be seated with
+    attachment retained, safe tracking, no collision, and force within the
+    unchanged 2 N limit. Runtime authentication now discovers every repository
+    Python and shell source outside generated/data/test trees. This checkpoint
+    changes no model, threshold, corpus, or live authority and authorizes no
+    training, simulator action, filming, hardware, or production use.

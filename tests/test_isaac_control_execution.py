@@ -45,6 +45,7 @@ from sim.isaac_control_execution import (
     rollback_control_command,
     rollback_insertion_trial_command,
     requires_synchronized_evaluation_refresh,
+    is_programming_error,
     settle_contact_grasp_command,
     settle_joint_command,
     settle_tracked_joint_command,
@@ -659,7 +660,7 @@ class IsaacControlExecutionTest(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(updates, 0)
+        self.assertEqual(updates, 1)
         tracking_limits = evaluate_tracking.call_args.args[2]
         self.assertEqual(tracking_limits.maximum_translation_error_meters, 5e-4)
         self.assertEqual(tracking_limits.minimum_direction_cosine, 0.5)
@@ -697,7 +698,7 @@ class IsaacControlExecutionTest(unittest.TestCase):
             ),
             patch(
                 "sim.isaac_control_execution.evaluate_action_tracking",
-                side_effect=(failed, passed),
+                side_effect=(failed, passed, passed),
             ),
         ):
             asyncio.run(
@@ -712,7 +713,82 @@ class IsaacControlExecutionTest(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(updates, 1)
+        self.assertEqual(updates, 2)
+
+    def test_contact_grasp_settlement_rejects_safe_but_underrealized_motion(
+        self,
+    ) -> None:
+        actuators = FakeActuators(valid=True)
+        actuators.command = JointCommand(np.zeros(7), 0.04)
+
+        async def advance() -> None:
+            return None
+
+        commanded = DroidAction((0.0006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+        realized = DroidAction((0.00012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+        with (
+            patch(
+                "sim.isaac_control_execution.recording_snapshot",
+                return_value=SimpleNamespace(end_effector_pose=object()),
+            ),
+            patch(
+                "sim.isaac_control_execution.action_between",
+                return_value=realized,
+            ),
+            self.assertRaisesRegex(RuntimeError, "translation_underrealized"),
+        ):
+            asyncio.run(
+                settle_contact_grasp_command(
+                    actuators,
+                    object(),
+                    JointCommand(np.zeros(7), 0.04),
+                    DroidPose((0.0,) * 7),
+                    commanded,
+                    advance,
+                    maximum_updates=2,
+                )
+            )
+
+    def test_programming_errors_are_not_normal_rollout_failures(self) -> None:
+        self.assertTrue(is_programming_error(TypeError("bad call")))
+        self.assertTrue(is_programming_error(AssertionError("broken invariant")))
+        self.assertTrue(is_programming_error(ZeroDivisionError("bad arithmetic")))
+        self.assertTrue(is_programming_error(ImportError("missing dependency")))
+        self.assertFalse(is_programming_error(RuntimeError("physics timeout")))
+
+    def test_contact_grasp_settlement_aborts_a_stable_realization_plateau(
+        self,
+    ) -> None:
+        actuators = FakeActuators(valid=True)
+        actuators.command = JointCommand(np.zeros(7), 0.04)
+
+        async def advance() -> None:
+            return None
+
+        with (
+            patch(
+                "sim.isaac_control_execution.recording_snapshot",
+                return_value=SimpleNamespace(end_effector_pose=object()),
+            ),
+            patch(
+                "sim.isaac_control_execution.action_between",
+                return_value=DroidAction(
+                    (0.00012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+                ),
+            ),
+            self.assertRaisesRegex(RuntimeError, "stopped making realizable progress"),
+        ):
+            asyncio.run(
+                settle_contact_grasp_command(
+                    actuators,
+                    object(),
+                    JointCommand(np.zeros(7), 0.04),
+                    DroidPose((0.0,) * 7),
+                    DroidAction((0.0006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+                    advance,
+                    maximum_updates=40,
+                )
+            )
 
     def test_contact_grasp_settlement_polls_safety_and_fails_at_bound(self) -> None:
         actuators = FakeActuators(valid=True)

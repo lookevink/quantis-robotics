@@ -7,6 +7,7 @@ from jepa_wm.insertion_task import (
     InsertionTarget,
     InsertionTaskStep,
     evaluate_insertion,
+    quaternion_orientation_error,
 )
 
 
@@ -28,6 +29,27 @@ def _step(
 
 
 class InsertionTaskTest(unittest.TestCase):
+    def test_typed_geometry_round_trips_and_quaternion_sign_is_irrelevant(self) -> None:
+        target = InsertionTarget((-0.10, 0.0, 0.0), (-1.0, 0.0, 0.0))
+        step = _step(-0.10, attached=True)
+
+        self.assertEqual(InsertionTarget.from_dict(target.to_dict()), target)
+        self.assertEqual(InsertionTaskStep.from_dict(step.to_dict()), step)
+        self.assertEqual(
+            quaternion_orientation_error(
+                (1.0, 0.0, 0.0, 0.0),
+                (-1.0, 0.0, 0.0, 0.0),
+            ),
+            0.0,
+        )
+        live = InsertionTarget((-0.08, -0.01, 0.0), (-1.0, 0.0, 0.0))
+        self.assertEqual(
+            target.bind_live_target(live, (0.02, -0.01, 0.0)),
+            live,
+        )
+        with self.assertRaisesRegex(ValueError, "inconsistent"):
+            target.bind_live_target(live, (0.0, 0.0, 0.0))
+
     def test_passes_a_rearward_grasp_retained_until_the_tip_is_seated(self) -> None:
         decision = evaluate_insertion(
             (
@@ -80,6 +102,24 @@ class InsertionTaskTest(unittest.TestCase):
         self.assertFalse(decision.passed)
         self.assertIn(
             InsertionFailure.INSUFFICIENT_GRASP_CLEARANCE,
+            decision.failures,
+        )
+
+    def test_rejects_attachment_loss_after_an_earlier_seating_event(self) -> None:
+        decision = evaluate_insertion(
+            (
+                _step(0.0, attached=False),
+                _step(0.0, attached=True),
+                _step(-0.10, attached=True),
+                _step(-0.10, attached=False),
+            ),
+            InsertionTarget((-0.10, 0.0, 0.0), (-1.0, 0.0, 0.0)),
+            require_terminal_attachment=True,
+        )
+
+        self.assertFalse(decision.passed)
+        self.assertIn(
+            InsertionFailure.ATTACHMENT_LOST_BEFORE_SEATING,
             decision.failures,
         )
 

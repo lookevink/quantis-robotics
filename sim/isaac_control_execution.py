@@ -35,6 +35,8 @@ from jepa_wm.control_safety import (
     contact_grasp_action_scales,
 )
 from jepa_wm.control_tracking import (
+    CommandRealizationLimits,
+    evaluate_command_realization,
     evaluate_action_tracking,
     tracking_limits_for_policy,
 )
@@ -49,7 +51,7 @@ from jepa_wm.joint_settlement import (
     JointSettlementEvidence,
     TrackedJointSettlementPolicy,
 )
-from jepa_wm.insertion_contract import INSERTION_TASK_ID
+from jepa_wm.insertion_contract import INSERTION_AXIS, INSERTION_TASK_ID
 from jepa_wm.insertion_trial import (
     InsertionTrialDriveEvidence,
     InsertionTrialOutcomeObservation,
@@ -58,6 +60,11 @@ from jepa_wm.insertion_trial import (
     InsertionTrialRollbackFailure,
     InsertionTrialRollbackFailureReason,
     InsertionTrialRollbackOutcome,
+)
+from jepa_wm.insertion_task import (
+    InsertionTarget,
+    InsertionTaskStep,
+    quaternion_orientation_error,
 )
 from jepa_wm.insertion_refresh import (
     MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
@@ -86,7 +93,7 @@ from sim.isaac_control_runtime import (
     synchronized_insertion_execution_runtime,
 )
 from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, capture_camera_frame
-from sim.grasp_task import evaluate_grasp_acquisition
+from sim.grasp_task import observe_grasp_acquisition
 from sim.isaac_demo_kinematics import SolvedPose, solve_droid_pose, solve_waypoints
 from sim.isaac_demo_runtime import (
     Actuators,
@@ -99,7 +106,7 @@ from sim.isaac_demo_runtime import (
     recording_snapshot,
     resume_live_simulation,
 )
-from sim.isaac_demo_scene import ROBOT_PATH, world_pose
+from sim.isaac_demo_scene import ROBOT_PATH, SOCKET_PATH, world_pose
 from sim.recording import RecordingLabel, RecordingMoment, RecordingSnapshot
 
 
@@ -109,6 +116,28 @@ CONTACT_GRASP_SETTLEMENT_MAXIMUM_UPDATES = (
 CONTACT_GRASP_MAXIMUM_JOINT_TRACKING_ERROR_RADIANS = 0.01
 EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS = 1e-3
 EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_GRIPPER_ERROR_METERS = 5e-4
+
+
+def is_programming_error(error: Exception) -> bool:
+    """Classify defects that must not be converted into a normal rollout result."""
+
+    return isinstance(
+        error,
+        (
+            ArithmeticError,
+            AssertionError,
+            AttributeError,
+            ImportError,
+            LookupError,
+            MemoryError,
+            NameError,
+            NotImplementedError,
+            RecursionError,
+            SyntaxError,
+            TypeError,
+            UnboundLocalError,
+        ),
+    )
 
 
 def requires_synchronized_evaluation_refresh(
@@ -299,7 +328,12 @@ async def settle_contact_grasp_command(
     if maximum_updates <= 0:
         raise ValueError("contact-grasp settling update count must be positive")
     limits = tracking_limits_for_policy(ControlExecutionPolicy.DIRECT)
+    completion_limits = CommandRealizationLimits()
     final_tracking = None
+    final_realization = None
+    consecutive_completion_samples = 0
+    best_realization_progress = -1.0
+    plateau_samples = 0
     joint_error = float("inf")
     gripper_error = float("inf")
     for update_index in range(maximum_updates + 1):
@@ -310,22 +344,54 @@ async def settle_contact_grasp_command(
             actual,
             attachment,
         )
+        realized_action = action_between(start_pose, snapshot.end_effector_pose)
         final_tracking = evaluate_action_tracking(
             commanded_action,
-            action_between(start_pose, snapshot.end_effector_pose),
+            realized_action,
             limits,
         )
+        final_realization = evaluate_command_realization(
+            commanded_action,
+            realized_action,
+            completion_limits,
+        )
+        if (
+            final_realization.active_progress_fraction
+            >= best_realization_progress + completion_limits.minimum_progress_increment
+        ):
+            best_realization_progress = final_realization.active_progress_fraction
+            plateau_samples = 0
+        else:
+            plateau_samples += 1
         joint_error = float(
             np.max(np.abs(actual.arm_positions - target.arm_positions))
         )
         gripper_error = abs(actual.gripper_width_m - target.gripper_width_m)
-        if (
+        completion_sample = (
             final_tracking.passed
+            and final_realization.passed
             and joint_error
             <= CONTACT_GRASP_MAXIMUM_JOINT_TRACKING_ERROR_RADIANS
             and gripper_error <= MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS
+        )
+        consecutive_completion_samples = (
+            consecutive_completion_samples + 1 if completion_sample else 0
+        )
+        if (
+            consecutive_completion_samples
+            >= completion_limits.required_consecutive_samples
         ):
             return
+        if (
+            not final_realization.passed
+            and plateau_samples >= completion_limits.maximum_plateau_samples
+        ):
+            raise RuntimeError(
+                "contact-grasp command stopped making realizable progress: "
+                f"progress_fraction="
+                f"{final_realization.active_progress_fraction:.6f}, "
+                f"plateau_samples={plateau_samples}"
+            )
         if update_index == maximum_updates:
             break
         await advance()
@@ -335,6 +401,10 @@ async def settle_contact_grasp_command(
         "contact-grasp command did not satisfy its tracking gates within its "
         "bounded timeout: "
         f"tracking_reasons={[reason.value for reason in final_tracking.reasons]}, "
+        f"completion_reasons="
+        f"{[reason.value for reason in final_realization.reasons]}, "
+        f"translation_realization={final_realization.translation_fraction:.6f}, "
+        f"rotation_realization={final_realization.rotation_fraction:.6f}, "
         f"translation_error_meters="
         f"{final_tracking.translation_error_meters:.9f}, "
         f"rotation_error_radians={final_tracking.rotation_error_radians:.9f}, "
@@ -1026,6 +1096,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
         status = ControlResultStatus.BLOCKED
         post_action = None
         execution_error = None
+        programming_error = None
         execution_interlock = None
         insertion_trial_rollback = None
         insertion_trial_drive = (
@@ -1234,6 +1305,11 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     actual_action,
                     tracking_limits_for_policy(persisted_state.execution_policy),
                 )
+                realization = evaluate_command_realization(
+                    candidate.first_action,
+                    actual_action,
+                    CommandRealizationLimits(),
+                )
                 joint_tracking_error = float(
                     np.max(np.abs(actual.arm_positions - solved.arm_positions))
                 )
@@ -1246,19 +1322,21 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     if trial_policy is not None and observation.target_pose is not None
                     else None
                 )
+                acquisition = None
                 acquisition_passed = True
                 if not insertion_trial_execution:
-                    acquisition = evaluate_grasp_acquisition(
+                    acquisition = observe_grasp_acquisition(
                         world_pose(attachment.hand_prim)[0],
                         solve_waypoints()[2].hand_position,
                         actual.gripper_width_m,
                     )
-                    acquisition_passed = acquisition.passed
+                    acquisition_passed = acquisition.decision.passed
                 if (
                     acquisition_passed
                     and joint_tracking_error
                     <= CONTACT_GRASP_MAXIMUM_JOINT_TRACKING_ERROR_RADIANS
                     and tracking.passed
+                    and realization.passed
                     and not post_collision
                     and post_force <= limits.maximum_contact_force_newtons
                 ):
@@ -1270,6 +1348,11 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                             actual,
                             attachment,
                         )
+                socket_pose = (
+                    world_pose(stage.GetPrimAtPath(SOCKET_PATH))
+                    if contact_insertion_execution
+                    else None
+                )
                 post_action = PostActionEvidence(
                     raw_proposed_action=proposal.first_action,
                     commanded_action=candidate.first_action,
@@ -1285,6 +1368,59 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                         float(value) for value in post_snapshot.plug_position
                     ),
                     plug_attached=post_snapshot.plug_attached,
+                    grasp_acquisition=acquisition,
+                    attachment_mechanism=(
+                        attachment.mechanism if post_snapshot.plug_attached else None
+                    ),
+                    insertion_task_step=(
+                        InsertionTaskStep(
+                            tuple(float(value) for value in post_snapshot.plug_position),
+                            tuple(
+                                float(value)
+                                for value in post_snapshot.gripper_frame_world_position
+                            ),
+                            post_snapshot.plug_attached,
+                            quaternion_orientation_error(
+                                post_snapshot.plug_orientation_wxyz,
+                                socket_pose[1],
+                            ),
+                            tracking.passed and realization.passed,
+                            post_collision,
+                            post_force,
+                        )
+                        if contact_insertion_execution
+                        else None
+                    ),
+                    insertion_target=(
+                        InsertionTarget(
+                            tuple(float(value) for value in socket_pose[0]),
+                            INSERTION_AXIS,
+                        )
+                        if socket_pose is not None
+                        else None
+                    ),
+                    command_realization=realization,
+                    plug_orientation_wxyz=(
+                        tuple(
+                            float(value)
+                            for value in post_snapshot.plug_orientation_wxyz
+                        )
+                        if socket_pose is not None
+                        else None
+                    ),
+                    socket_orientation_wxyz=(
+                        tuple(float(value) for value in socket_pose[1])
+                        if socket_pose is not None
+                        else None
+                    ),
+                    gripper_frame_world_position=(
+                        tuple(
+                            float(value)
+                            for value in post_snapshot.gripper_frame_world_position
+                        )
+                        if socket_pose is not None
+                        else None
+                    ),
                     insertion_trial=(
                         InsertionTrialPostActionEvidence(
                             settlement,
@@ -1297,12 +1433,16 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                 status = ControlResultStatus.APPLIED
             except Exception as error:
                 execution_error = f"{type(error).__name__}: {error}"
+                if is_programming_error(error):
+                    programming_error = error
                 if isinstance(error, UnsettledJointCommand):
                     insertion_trial_settlement_failure = error.attempt
                 try:
                     insertion_trial_rollback = await rollback_current_command()
                     status = ControlResultStatus.ROLLED_BACK_EXECUTION
                 except Exception as rollback_error:
+                    if is_programming_error(rollback_error):
+                        programming_error = rollback_error
                     status = ControlResultStatus.ROLLBACK_FAILED
                     if isinstance(rollback_error, InsertionTrialRollbackFailed):
                         insertion_trial_rollback = rollback_error.evidence
@@ -1336,7 +1476,11 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                     )
                 else:
                     rollback_status = None
-                    if joint_tracking_error > 0.01 or not tracking.passed:
+                    if (
+                        joint_tracking_error > 0.01
+                        or not tracking.passed
+                        or not realization.passed
+                    ):
                         rollback_status = ControlResultStatus.ROLLED_BACK_TRACKING
                     elif (
                         post_collision
@@ -1348,6 +1492,8 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                         insertion_trial_rollback = await rollback_current_command()
                         status = rollback_status
                     except Exception as rollback_error:
+                        if is_programming_error(rollback_error):
+                            programming_error = rollback_error
                         status = ControlResultStatus.ROLLBACK_FAILED
                         if isinstance(rollback_error, InsertionTrialRollbackFailed):
                             insertion_trial_rollback = rollback_error.evidence
@@ -1381,6 +1527,8 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             insertion_trial_settlement_failure=(insertion_trial_settlement_failure),
         )
         session.write_result(result)
+        if programming_error is not None:
+            raise programming_error
         return result.to_dict()
     finally:
         await pause_control_timeline(

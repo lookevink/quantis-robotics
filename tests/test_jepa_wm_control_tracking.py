@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from jepa_wm.action import DroidPose
+from jepa_wm.action import DroidAction, DroidPose
+from jepa_wm.control_tracking import (
+    CommandRealizationReason,
+    evaluate_action_tracking,
+    evaluate_command_realization,
+)
 from jepa_wm.joint_settlement import (
     JointSettlementEvidence,
     TrackedJointSettlementPolicy,
@@ -45,6 +50,25 @@ class RealizedTargetProgressPolicyTest(unittest.TestCase):
         self.assertTrue(decision.close_enough)
         self.assertLess(decision.translation_error_reduction_fraction, 0.25)
         self.assertTrue(decision.passed)
+
+    def test_safety_tracking_does_not_imply_command_completion(self) -> None:
+        commanded = DroidAction((0.0006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+        actual = DroidAction((0.00012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+
+        tracking = evaluate_action_tracking(commanded, actual)
+        realization = evaluate_command_realization(commanded, actual)
+
+        self.assertTrue(tracking.passed)
+        self.assertFalse(realization.passed)
+        self.assertAlmostEqual(realization.translation_fraction, 0.2)
+        self.assertEqual(
+            realization.reasons,
+            (CommandRealizationReason.TRANSLATION_UNDERREALIZED,),
+        )
+        self.assertEqual(
+            type(realization).from_dict(realization.to_dict()),
+            realization,
+        )
 
     def test_orientation_regression_still_fails_inside_translation_deadband(self) -> None:
         decision = RealizedTargetProgressPolicy().evaluate(

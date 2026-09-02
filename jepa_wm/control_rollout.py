@@ -18,10 +18,6 @@ from jepa_wm.action import (
     DroidPose,
     action_between,
 )
-from jepa_wm.control_tracking import (
-    evaluate_action_tracking,
-    tracking_limits_for_policy,
-)
 from jepa_wm.contact_grasp_target import (
     ContactGraspTargetPolicy,
     ContactGraspTargetStep,
@@ -39,6 +35,7 @@ from jepa_wm.grasp_task import (
 )
 from jepa_wm.grasp_contract import GRASP_TASK_ID
 from jepa_wm.insertion_contract import INSERTION_TASK_ID
+from jepa_wm.insertion_task import InsertionTarget
 from jepa_wm.insertion_refresh import (
     MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
 )
@@ -799,11 +796,6 @@ class ControlStepSummary:
                 )
             if result.post_action is not None:
                 actual = action_between(observation.pose, result.post_action.pose)
-                tracking = evaluate_action_tracking(
-                    commanded,
-                    actual,
-                    tracking_limits_for_policy(state.execution_policy),
-                )
                 if (
                     not np.allclose(
                         actual.values,
@@ -811,11 +803,20 @@ class ControlStepSummary:
                         rtol=0.0,
                         atol=1e-10,
                     )
-                    or tracking != result.post_action.tracking
                 ):
                     raise ValueError(
                         f"post-action realization is inconsistent: {session.session_id}"
                     )
+                try:
+                    result.post_action.validate_derived_evidence(
+                        commanded,
+                        actual,
+                        state.execution_policy,
+                    )
+                except ValueError as error:
+                    raise ValueError(
+                        f"post-action realization is inconsistent: {session.session_id}"
+                    ) from error
         shadow = session.load_shadow() if session.shadow_path.is_file() else None
         shadow_safety = (
             session.load_shadow_safety()
@@ -964,7 +965,7 @@ class IncompleteControlStepSummary:
 RolloutStep = Union[ControlStepSummary, IncompleteControlStepSummary]
 
 
-def _target_pose(
+def _reference_target_pose(
     data_root: Path,
     reference_recording: str,
     observation: ControlObservation,
@@ -983,11 +984,29 @@ def _target_pose(
     except ValueError as error:
         raise ValueError("control target frame path is invalid") from error
     steps_path = data_root / "recordings" / reference_recording / "steps.jsonl"
+    reference_pose = None
     for line in steps_path.read_text().splitlines():
         payload = json.loads(line)
         if payload.get("index") == target_index:
-            return DroidPose(tuple(payload["end_effector_pose"]))
-    raise ValueError("control target pose is missing from recording telemetry")
+            reference_pose = DroidPose(tuple(payload["end_effector_pose"]))
+            break
+    if reference_pose is None:
+        raise ValueError("control target pose is missing from recording telemetry")
+    return reference_pose
+
+
+def _target_pose(
+    data_root: Path,
+    reference_recording: str,
+    observation: ControlObservation,
+) -> DroidPose:
+    # The frame authenticates the reference target selection. The pose in the
+    # observation is the exact target actually presented to the controller and
+    # may include a validated task-space offset from that reference frame.
+    _reference_target_pose(data_root, reference_recording, observation)
+    if observation.target_pose is None:
+        raise ValueError("control observation exact target pose is missing")
+    return observation.target_pose
 
 
 def _contact_grasp_target_policy(
@@ -1056,6 +1075,7 @@ class ControlRolloutReport:
     orchestration_failure: OrchestrationFailure | None = None
     reference_task: str | None = None
     predecessor_session_id: str | None = None
+    insertion_target: InsertionTarget | None = None
 
     def __post_init__(self) -> None:
         validate_recording_id(self.rollout_id)
@@ -1283,7 +1303,11 @@ class ControlRolloutReport:
                 GraspTaskStep(
                     tuple(post_action.plug_position),
                     post_action.plug_attached,
-                    post_action.tracking.passed,
+                    post_action.tracking.passed
+                    and (
+                        post_action.command_realization is None
+                        or post_action.command_realization.passed
+                    ),
                     post_action.collision_detected,
                     post_action.contact_force_newtons,
                 )
@@ -1379,6 +1403,11 @@ class ControlRolloutReport:
                 else None
             ),
             "reach_and_grasp": grasp.to_dict() if grasp is not None else None,
+            "insertion_target": (
+                self.insertion_target.to_dict()
+                if self.insertion_target is not None
+                else None
+            ),
             "steps": [step.to_dict() for step in self.steps],
         }
         if self.predecessor_session_id is not None:
@@ -1470,6 +1499,42 @@ class ControlRolloutReport:
             if target_observation is not None
             else None
         )
+        insertion_target = None
+        if reference_task == INSERTION_TASK_ID:
+            recording_path = data_root / "recordings" / reference_recording
+            manifest = json.loads((recording_path / "manifest.json").read_text())
+            target_payload = manifest.get("metadata", {}).get("insertion_target")
+            if isinstance(target_payload, dict):
+                insertion_target = InsertionTarget(
+                    tuple(float(value) for value in target_payload["socket_position"]),
+                    tuple(float(value) for value in target_payload["insertion_axis"]),
+                )
+            live_targets = tuple(
+                step.result.post_action.insertion_target
+                for step in complete
+                if step.result is not None
+                and step.result.post_action is not None
+                and step.result.post_action.insertion_target is not None
+            )
+            if live_targets:
+                if len(live_targets) != len(complete) or len(set(live_targets)) != 1:
+                    raise ValueError("live insertion target changed during rollout")
+                if insertion_target is None or target_observation is None:
+                    raise ValueError("live insertion target has no reference target")
+                reference_target_pose = _reference_target_pose(
+                    data_root,
+                    reference_recording,
+                    target_observation.observation,
+                )
+                if target is None:
+                    raise AssertionError("validated rollout has no exact target")
+                insertion_target = insertion_target.bind_live_target(
+                    live_targets[0],
+                    tuple(
+                        target.values[axis] - reference_target_pose.values[axis]
+                        for axis in range(3)
+                    ),
+                )
         return cls(
             rollout_id=rollout_id,
             reference_recording=reference_recording,
@@ -1481,4 +1546,5 @@ class ControlRolloutReport:
             orchestration_failure=orchestration_failure,
             reference_task=(reference_task if isinstance(reference_task, str) else None),
             predecessor_session_id=predecessor_session_id,
+            insertion_target=insertion_target,
         )

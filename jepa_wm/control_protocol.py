@@ -12,7 +12,9 @@ from jepa_wm.training_artifact import ArtifactIdentity
 from jepa_wm.physical_observation import PhysicalRoutingObservation
 
 
-CONTROL_SCHEMA = "quantis.jepa_wm_control.v1"
+LEGACY_CONTROL_SCHEMA = "quantis.jepa_wm_control.v1"
+CONTROL_SCHEMA = "quantis.jepa_wm_control.v2"
+SUPPORTED_CONTROL_SCHEMAS = frozenset((LEGACY_CONTROL_SCHEMA, CONTROL_SCHEMA))
 DROID_ACTION_HORIZON = 3
 
 
@@ -113,7 +115,10 @@ class ControlObservation:
 
     @classmethod
     def from_dict(cls, payload: Any) -> ControlObservation:
-        if not isinstance(payload, dict) or payload.get("schema") != CONTROL_SCHEMA:
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema") not in SUPPORTED_CONTROL_SCHEMAS
+        ):
             raise ValueError("control observation schema is unsupported")
         try:
             return cls(
@@ -194,7 +199,10 @@ class ProposedControl:
 
     @classmethod
     def from_dict(cls, payload: Any) -> ProposedControl:
-        if not isinstance(payload, dict) or payload.get("schema") != CONTROL_SCHEMA:
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema") not in SUPPORTED_CONTROL_SCHEMAS
+        ):
             raise ValueError("proposed control schema is unsupported")
         try:
             return cls(

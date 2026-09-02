@@ -19,6 +19,7 @@ from sim.isaac_demo_scene import (
     STAGE_PATH,
     world_pose,
 )
+from sim.grasp_task import AttachmentMechanism
 from sim.recording import (
     RecordingLabel,
     RecordingSafetyTelemetry,
@@ -351,6 +352,16 @@ class PlugAttachment:
     @property
     def attached(self) -> bool:
         return self.motion.attached
+
+    @property
+    def mechanism(self) -> AttachmentMechanism:
+        """Name the simulator mechanism; attachment is not inferred contact."""
+
+        return (
+            AttachmentMechanism.FIXED_JOINT
+            if isinstance(self.motion, FixedJointPlugMotion)
+            else AttachmentMechanism.KINEMATIC_FOLLOW
+        )
 
     @property
     def compliant_collision_parts(self) -> tuple[str, ...]:

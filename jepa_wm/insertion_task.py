@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from math import isfinite
-from typing import Sequence
+from math import acos, isfinite
+from typing import Any, Sequence
 
 import numpy as np
 
@@ -38,6 +38,70 @@ class InsertionTarget:
         axis_norm = float(np.linalg.norm(self.insertion_axis))
         if abs(axis_norm - 1.0) > 1e-6:
             raise ValueError("insertion axis must be a unit vector")
+
+    def to_dict(self) -> dict[str, list[float]]:
+        return {
+            "socket_position": list(self.socket_position),
+            "insertion_axis": list(self.insertion_axis),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> InsertionTarget:
+        if not isinstance(payload, dict):
+            raise ValueError("insertion target must be an object")
+        try:
+            return cls(
+                tuple(float(value) for value in payload["socket_position"]),
+                tuple(float(value) for value in payload["insertion_axis"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("insertion target is incomplete") from error
+
+    def bind_live_target(
+        self,
+        live: InsertionTarget,
+        expected_translation: Sequence[float],
+        *,
+        maximum_position_error_meters: float = 1e-4,
+    ) -> InsertionTarget:
+        """Authenticate a live socket as the reference under one translation."""
+
+        translation = np.asarray(expected_translation, dtype=np.float64)
+        expected_socket = np.asarray(self.socket_position) + translation
+        if (
+            translation.shape != (3,)
+            or not np.all(np.isfinite(translation))
+            or live.insertion_axis != self.insertion_axis
+            or not isfinite(maximum_position_error_meters)
+            or maximum_position_error_meters <= 0.0
+            or np.linalg.norm(np.asarray(live.socket_position) - expected_socket)
+            > maximum_position_error_meters
+        ):
+            raise ValueError("live insertion target is inconsistent with reference")
+        return live
+
+
+def quaternion_orientation_error(
+    left_wxyz: Sequence[float],
+    right_wxyz: Sequence[float],
+) -> float:
+    """Return the sign-invariant angular distance between two quaternions."""
+
+    left = np.asarray(left_wxyz, dtype=np.float64)
+    right = np.asarray(right_wxyz, dtype=np.float64)
+    if (
+        left.shape != (4,)
+        or right.shape != (4,)
+        or not np.all(np.isfinite(left))
+        or not np.all(np.isfinite(right))
+        or np.linalg.norm(left) <= 0.0
+        or np.linalg.norm(right) <= 0.0
+    ):
+        raise ValueError("insertion orientation evidence is invalid")
+    left = left / np.linalg.norm(left)
+    right = right / np.linalg.norm(right)
+    cosine = min(1.0, abs(float(np.dot(left, right))))
+    return 2.0 * acos(cosine)
 
 
 @dataclass(frozen=True)
@@ -101,6 +165,34 @@ class InsertionTaskStep(InsertionGeometryStep):
         ):
             raise ValueError("insertion task step is invalid")
 
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "plug_tip_position": list(self.plug_tip_position),
+            "gripper_frame_position": list(self.gripper_frame_position),
+            "plug_attached": self.plug_attached,
+            "orientation_error_rad": self.orientation_error_rad,
+            "tracking_passed": self.tracking_passed,
+            "collision_detected": self.collision_detected,
+            "contact_force_newtons": self.contact_force_newtons,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Any) -> InsertionTaskStep:
+        if not isinstance(payload, dict):
+            raise ValueError("insertion task step must be an object")
+        try:
+            return cls(
+                tuple(float(value) for value in payload["plug_tip_position"]),
+                tuple(float(value) for value in payload["gripper_frame_position"]),
+                payload["plug_attached"],
+                float(payload["orientation_error_rad"]),
+                payload["tracking_passed"],
+                payload["collision_detected"],
+                float(payload["contact_force_newtons"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("insertion task step is incomplete") from error
+
 
 @dataclass(frozen=True)
 class InsertionDecision:
@@ -135,6 +227,7 @@ def evaluate_insertion_geometry(
     limits: InsertionTaskLimits = InsertionTaskLimits(),
     *,
     eligible_seating_indices: frozenset[int] | None = None,
+    require_terminal_attachment: bool = False,
 ) -> InsertionDecision:
     """Require a usable grasp retained through an aligned seating event."""
 
@@ -166,7 +259,8 @@ def evaluate_insertion_geometry(
         if grasp_clearance < limits.minimum_grasp_clearance_meters:
             failures.append(InsertionFailure.INSUFFICIENT_GRASP_CLEARANCE)
 
-        for index, step in enumerate(steps[acquisition_index:], acquisition_index):
+        retained_steps = steps[acquisition_index:]
+        for index, step in enumerate(retained_steps, acquisition_index):
             if not step.plug_attached:
                 break
             if (
@@ -191,8 +285,10 @@ def evaluate_insertion_geometry(
                     orientation_error = step.orientation_error_rad
         if seated_index is None:
             failures.append(InsertionFailure.NOT_SEATED)
-            if any(not step.plug_attached for step in steps[acquisition_index + 1 :]):
-                failures.append(InsertionFailure.ATTACHMENT_LOST_BEFORE_SEATING)
+        if require_terminal_attachment and any(
+            not step.plug_attached for step in steps[acquisition_index + 1 :]
+        ):
+            failures.append(InsertionFailure.ATTACHMENT_LOST_BEFORE_SEATING)
 
     return InsertionDecision(
         acquisition_index,
@@ -212,6 +308,7 @@ def evaluate_insertion(
     limits: InsertionTaskLimits = InsertionTaskLimits(),
     *,
     eligible_seating_indices: frozenset[int] | None = None,
+    require_terminal_attachment: bool = False,
 ) -> InsertionDecision:
     """Require a usable grasp retained through a safe, aligned seating event."""
 
@@ -220,6 +317,7 @@ def evaluate_insertion(
         target,
         limits,
         eligible_seating_indices=eligible_seating_indices,
+        require_terminal_attachment=require_terminal_attachment,
     )
     failures = list(geometry.failures)
     if any(not step.tracking_passed for step in steps):

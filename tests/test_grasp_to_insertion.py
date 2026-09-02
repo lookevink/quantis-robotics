@@ -5,13 +5,18 @@ import unittest
 from jepa_wm.action import DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_protocol import ControlObservation, ControlTarget
 from jepa_wm.control_safety import ControlGateDecision, SafetyProjectionAttempt
-from jepa_wm.control_tracking import ActionTrackingDecision
+from jepa_wm.control_tracking import (
+    ActionTrackingDecision,
+    evaluate_action_tracking,
+    evaluate_command_realization,
+)
 from jepa_wm.insertion_contract import (
     CONTACT_INSERTION_RECORDING,
     ContactInsertionSegment,
     INSERTION_CONTROL_TARGET_POLICY,
 )
 from jepa_wm.insertion_rollout import InsertionRolloutPosition
+from jepa_wm.insertion_task import InsertionTarget, InsertionTaskStep
 from jepa_wm.joint_drive import JointDriveTarget
 from sim.control_session import (
     ControlExecutionPolicy,
@@ -151,6 +156,55 @@ class GraspToInsertionLineageTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "safe applied grasp"):
             GraspToInsertionLineage(self.observation, self.state, result)
+
+    def test_rejects_gripper_frame_claim_not_bound_to_raw_evidence(self) -> None:
+        task_step = InsertionTaskStep(
+            (0.30, -0.29, 0.48),
+            (0.26, -0.29, 0.48),
+            True,
+            0.0,
+            True,
+            False,
+            0.0,
+        )
+        post_action = replace(
+            self.result.post_action,
+            tracking=evaluate_action_tracking(
+                self.result.post_action.commanded_action,
+                self.result.post_action.actual_action,
+            ),
+            insertion_task_step=task_step,
+            insertion_target=InsertionTarget(
+                (0.20, -0.29, 0.48),
+                (-1.0, 0.0, 0.0),
+            ),
+            command_realization=evaluate_command_realization(
+                self.result.post_action.commanded_action,
+                self.result.post_action.actual_action,
+            ),
+            plug_orientation_wxyz=(1.0, 0.0, 0.0, 0.0),
+            socket_orientation_wxyz=(1.0, 0.0, 0.0, 0.0),
+            gripper_frame_world_position=(0.26, -0.29, 0.48),
+        )
+        post_action.validate_derived_evidence(
+            post_action.commanded_action,
+            post_action.actual_action,
+            ControlExecutionPolicy.DIRECT,
+        )
+        tampered = replace(
+            post_action,
+            insertion_task_step=replace(
+                task_step,
+                gripper_frame_position=(0.28, -0.29, 0.48),
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "insertion evidence"):
+            tampered.validate_derived_evidence(
+                tampered.commanded_action,
+                tampered.actual_action,
+                ControlExecutionPolicy.DIRECT,
+            )
 
 
 if __name__ == "__main__":
