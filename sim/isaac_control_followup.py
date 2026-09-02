@@ -103,6 +103,7 @@ from jepa_wm.trajectory import load_rollout_at
 from jepa_wm.training_artifact import artifact_fingerprint
 from sim.control_context import recording_task
 from jepa_wm.control_safety import (
+    MINIMUM_DIRECTION_OBSERVABLE_ROTATION_RADIANS,
     ControlGateReason,
     SimulatorSafetyLimits,
     contact_grasp_action_scales,
@@ -111,7 +112,11 @@ from jepa_wm.insertion_refresh import (
     MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
     ControlSafetySnapshot,
 )
-from jepa_wm.control_tracking import ActionTrackingLimits, CommandRealizationLimits
+from jepa_wm.control_tracking import (
+    ActionTrackingLimits,
+    CommandRealizationLimits,
+    evaluate_command_realization,
+)
 from sim.control_session import (
     CONTROL_ROOT,
     QUANTIS_DATA_ROOT,
@@ -858,6 +863,160 @@ def diagnose_contact_grasp_blocked_ik_tolerances(
     return {
         "status": "diagnosed_no_actuation",
         "session_id": session_id,
+        "attempts": attempts,
+        "simulator_action_applied": False,
+    }
+
+
+def diagnose_contact_grasp_active_rotation_ik(
+    session_id: str,
+) -> dict[str, Any]:
+    """Probe rotation scale and IK tolerance for an attached no-motion block."""
+
+    from math import sqrt
+
+    from jepa_wm.control_rollout import ControlStepSummary
+    from sim.isaac_control_execution import (
+        ExecutionSafetyContext,
+        project_control_candidate,
+    )
+
+    validate_recording_id(session_id)
+    step = ControlStepSummary.from_session(
+        ControlSession.at(CONTROL_ROOT, session_id)
+    )
+    refresh = step.result.insertion_trial_refresh
+    source_attempts = step.result.projection_attempts
+    if (
+        step.result.status is not ControlResultStatus.BLOCKED
+        or step.result.gate.reasons
+        != (ControlGateReason.JOINT_VELOCITY_VIOLATION,)
+        or step.result.selected_action_scale is not None
+        or step.result.post_action is not None
+        or refresh is None
+        or not refresh.live_state.plug_attached
+        or refresh.live_state.collision_detected
+        or refresh.live_state.contact_force_newtons
+        > SimulatorSafetyLimits().maximum_contact_force_newtons
+        or not source_attempts
+        or not any(
+            attempt.gate.reasons == (ControlGateReason.IK_SOLUTION_FAILED,)
+            for attempt in source_attempts
+        )
+        or not any(
+            attempt.gate.reasons == (ControlGateReason.JOINT_VELOCITY_VIOLATION,)
+            for attempt in source_attempts
+        )
+    ):
+        raise ValueError("contact-grasp active rotation IK source is invalid")
+    policy = step.state.require_current_contact_grasp_policy()
+    raw = policy.action_for_execution(
+        step.response.actions,
+        plug_attached=step.state.plug_attached,
+    )
+    raw_rotation_norm = sqrt(sum(value * value for value in raw.values[3:6]))
+    if (
+        not policy.requires_resolvable_rotation
+        or raw_rotation_norm < MINIMUM_DIRECTION_OBSERVABLE_ROTATION_RADIANS
+        or step.state.active_drive_target is None
+    ):
+        raise ValueError("contact-grasp active rotation IK source is invalid")
+    proposal = step.response.with_actions((raw, *step.response.actions[1:]))
+    observation, proposal = refresh.authorize_target_relative(
+        step.observation,
+        proposal,
+        step.state.require_safety_snapshot(),
+        step.state.active_drive_target,
+        MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
+    )
+    warm_start = np.asarray(refresh.live_state.joint_positions, dtype=np.float64)
+    safety = ExecutionSafetyContext(
+        observation,
+        JointCommand(warm_start, refresh.live_state.gripper_width_m),
+        tuple(step.state.current_joint_positions),
+        refresh.live_state.contact_force_newtons,
+        refresh.live_state.collision_detected,
+        SimulatorSafetyLimits(),
+    )
+    translation_scales = tuple(
+        dict.fromkeys(attempt.scale.translation for attempt in source_attempts)
+    )
+    completion_activity = CommandRealizationLimits().rotation_activity_radians
+    attempts = []
+    for translation_scale in translation_scales:
+        for rotation_scale in (1.0, 0.75, 0.5, 0.25, 0.0):
+            scale = DroidActionScale(translation_scale, rotation_scale, 0.0)
+            attempt, selected = project_control_candidate(
+                safety,
+                proposal,
+                scale,
+                now_unix_seconds=refresh.refreshed_at_unix_seconds,
+            )
+            commanded_action = scale.apply(proposal.first_action)
+            realization = (
+                evaluate_command_realization(
+                    commanded_action,
+                    action_between(observation.pose, attempt.achieved_pose),
+                )
+                if attempt.achieved_pose is not None
+                else None
+            )
+            commanded_rotation_norm = raw_rotation_norm * rotation_scale
+            attempts.append(
+                {
+                    "scale": scale.to_dict(),
+                    "ik_orientation_tolerance_radians": (
+                        attempt.ik_orientation_tolerance_radians
+                    ),
+                    "commanded_rotation_norm_radians": commanded_rotation_norm,
+                    "completion_active": (
+                        commanded_rotation_norm >= completion_activity
+                    ),
+                    "direction_observable": (
+                        commanded_rotation_norm
+                        >= MINIMUM_DIRECTION_OBSERVABLE_ROTATION_RADIANS
+                    ),
+                    "maximum_joint_delta_radians": (
+                        attempt.maximum_joint_delta_rad
+                    ),
+                    "gate_passed": attempt.gate.passed,
+                    "gate_reasons": [
+                        reason.value for reason in attempt.gate.reasons
+                    ],
+                    "achieved_pose": (
+                        list(attempt.achieved_pose.values)
+                        if attempt.achieved_pose is not None
+                        else None
+                    ),
+                    "ik_position_error_meters": (
+                        selected.solved_pose.position_error_m
+                        if selected is not None
+                        else None
+                    ),
+                    "ik_orientation_error_radians": (
+                        selected.solved_pose.orientation_error_rad
+                        if selected is not None
+                        else None
+                    ),
+                    "command_realization": (
+                        realization.to_dict() if realization is not None else None
+                    ),
+                }
+            )
+    return {
+        "status": "diagnosed_no_actuation",
+        "session_id": session_id,
+        "raw_rotation_norm_radians": raw_rotation_norm,
+        "minimum_direction_observable_rotation_radians": (
+            MINIMUM_DIRECTION_OBSERVABLE_ROTATION_RADIANS
+        ),
+        "exact_full_rotation_tolerances": list(
+            diagnose_droid_pose_orientation_tolerances(
+                refresh.live_pose,
+                source_attempts[0].gate.next_pose,
+                warm_start,
+            )
+        ),
         "attempts": attempts,
         "simulator_action_applied": False,
     }

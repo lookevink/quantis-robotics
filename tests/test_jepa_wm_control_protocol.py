@@ -88,6 +88,7 @@ class SimulatorControlGateTest(unittest.TestCase):
             0.001,
             (0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5),
             pose,
+            0.00075,
         )
 
         self.assertEqual(
@@ -107,6 +108,7 @@ class SimulatorControlGateTest(unittest.TestCase):
         )
         historical = attempt.to_dict()
         del historical["achieved_pose"]
+        del historical["ik_orientation_tolerance_radians"]
 
         decoded = SafetyProjectionAttempt.from_dict(historical)
 

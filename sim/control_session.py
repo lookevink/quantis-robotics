@@ -1703,6 +1703,23 @@ class ControlSession:
         )
         for attempt in attempts:
             scaled_action = attempt.scale.apply(actions[0])
+            if attempt.ik_orientation_tolerance_radians is not None:
+                from sim.isaac_demo_kinematics import (
+                    orientation_tolerances_for_action,
+                )
+
+                if not any(
+                    isclose(
+                        attempt.ik_orientation_tolerance_radians,
+                        expected_tolerance,
+                        rel_tol=0.0,
+                        abs_tol=1e-15,
+                    )
+                    for expected_tolerance in orientation_tolerances_for_action(
+                        scaled_action
+                    )
+                ):
+                    raise ValueError("shadow IK tolerance evidence is inconsistent")
             candidate = response.with_actions(
                 (scaled_action, *actions[1:])
             )

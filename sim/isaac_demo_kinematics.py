@@ -23,7 +23,17 @@ from sim.isaac_demo_scene import (
 
 IK_POSITION_TOLERANCE_METERS = 0.0001
 IK_ORIENTATION_HOLD_TOLERANCE_RADIANS = 0.001
-IK_ACTIVE_ROTATION_TOLERANCE_RADIANS = 0.00025
+IK_ACTIVE_ROTATION_TOLERANCES_RADIANS = (0.00025, 0.0005, 0.00075, 0.001)
+if (
+    tuple(sorted(set(IK_ACTIVE_ROTATION_TOLERANCES_RADIANS)))
+    != IK_ACTIVE_ROTATION_TOLERANCES_RADIANS
+    or IK_ACTIVE_ROTATION_TOLERANCES_RADIANS[-1]
+    != IK_ORIENTATION_HOLD_TOLERANCE_RADIANS
+):
+    raise RuntimeError("active-rotation IK tolerances must be ordered and bounded")
+IK_ACTIVE_ROTATION_TOLERANCE_RADIANS = (
+    IK_ACTIVE_ROTATION_TOLERANCES_RADIANS[0]
+)
 # Backward-compatible name for deterministic absolute waypoint solves.
 IK_ORIENTATION_TOLERANCE_RADIANS = IK_ORIENTATION_HOLD_TOLERANCE_RADIANS
 
@@ -48,6 +58,17 @@ def orientation_tolerance_for_action(action: DroidAction) -> float:
 
     return _orientation_tolerance_for_delta(
         float(np.linalg.norm(action.values[3:6]))
+    )
+
+
+def orientation_tolerances_for_action(action: DroidAction) -> tuple[float, ...]:
+    """Return the bounded IK search roster for one commanded action."""
+
+    first = orientation_tolerance_for_action(action)
+    return (
+        IK_ACTIVE_ROTATION_TOLERANCES_RADIANS
+        if first == IK_ACTIVE_ROTATION_TOLERANCE_RADIANS
+        else (first,)
     )
 
 

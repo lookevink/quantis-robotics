@@ -7,10 +7,12 @@ import numpy as np
 from jepa_wm.action import DroidAction
 from sim.isaac_demo_kinematics import (
     IK_ACTIVE_ROTATION_TOLERANCE_RADIANS,
+    IK_ACTIVE_ROTATION_TOLERANCES_RADIANS,
     IK_ORIENTATION_HOLD_TOLERANCE_RADIANS,
     _closest_inverse_kinematics,
     _orientation_tolerance_for_delta,
     orientation_tolerance_for_action,
+    orientation_tolerances_for_action,
 )
 
 
@@ -174,6 +176,18 @@ class ClosestInverseKinematicsTest(unittest.TestCase):
                 DroidAction((0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0))
             ),
             IK_ACTIVE_ROTATION_TOLERANCE_RADIANS,
+        )
+        self.assertEqual(
+            orientation_tolerances_for_action(
+                DroidAction((0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0))
+            ),
+            IK_ACTIVE_ROTATION_TOLERANCES_RADIANS,
+        )
+        self.assertEqual(
+            orientation_tolerances_for_action(
+                DroidAction((0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            ),
+            (IK_ORIENTATION_HOLD_TOLERANCE_RADIANS,),
         )
 
     def test_accepts_a_stricter_diagnostic_orientation_tolerance(self) -> None:

@@ -1728,6 +1728,17 @@ class AwsLifecycleTests(unittest.TestCase):
         self.assertNotIn("backup_state.sh", calls)
         self.assertNotIn("run_control_step.sh", calls)
 
+    def test_contact_grasp_active_rotation_ik_diagnostic_is_no_actuation(self):
+        result, calls = self.run_command(
+            "jepa-wm-contact-grasp-active-rotation-ik-diagnostic",
+            arguments=("grasp-to-insertion-run-grasp-15",),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("diagnose_contact_grasp_active_rotation_ik", calls)
+        self.assertNotIn("backup_state.sh", calls)
+        self.assertNotIn("run_control_step.sh", calls)
+
 
     def test_sync_does_not_deploy_local_log_artifacts(self):
         result, calls = self.run_command("sync")

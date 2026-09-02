@@ -35,6 +35,7 @@ from sim.isaac_control_bridge import (
     diagnose_contact_grasp_settlement_rollback,
     diagnose_contact_grasp_execution_ik,
     diagnose_contact_grasp_blocked_ik_tolerances,
+    diagnose_contact_grasp_active_rotation_ik,
     diagnose_contact_grasp_tracking_rollback_ik,
     diagnose_contact_grasp_blocked_ik,
     diagnose_contact_grasp_rollback_drive_target,

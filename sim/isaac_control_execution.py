@@ -99,7 +99,7 @@ from sim.isaac_demo_camera import JEPA_WM_CAMERA_SPECS, capture_camera_frame
 from sim.grasp_task import observe_grasp_acquisition
 from sim.isaac_demo_kinematics import (
     SolvedPose,
-    orientation_tolerance_for_action,
+    orientation_tolerances_for_action,
     solve_droid_pose,
     solve_waypoints,
 )
@@ -833,45 +833,27 @@ def project_control_candidate(
         )
     if not preliminary.passed:
         return SafetyProjectionAttempt(scale, preliminary, 0.0, current_joints), None
-    try:
-        solved = solve(
-            candidate_pose,
-            context.current.arm_positions,
-            orientation_tolerance_for_action(candidate_action),
+    best_safety_failure = None
+    best_realization_failure = None
+    best_realization_progress = -1.0
+    for orientation_tolerance in orientation_tolerances_for_action(
+        candidate_action
+    ):
+        try:
+            solved = solve(
+                candidate_pose,
+                context.current.arm_positions,
+                orientation_tolerance,
+            )
+        except (RuntimeError, ValueError):
+            continue
+        decision = context.evaluate(
+            candidate,
+            tuple(solved.arm_positions),
+            now_unix_seconds=now_unix_seconds,
         )
-    except (RuntimeError, ValueError):
-        decision = ControlGateDecision(
-            context.observation.observation_id,
-            candidate_pose,
-            (ControlGateReason.IK_SOLUTION_FAILED,),
-        )
-        return SafetyProjectionAttempt(scale, decision, 0.0, current_joints), None
-    decision = context.evaluate(
-        candidate,
-        tuple(solved.arm_positions),
-        now_unix_seconds=now_unix_seconds,
-    )
-    maximum_joint_delta = float(
-        np.max(np.abs(solved.arm_positions - context.current.arm_positions))
-    )
-    attempt = SafetyProjectionAttempt(
-        scale,
-        decision,
-        maximum_joint_delta,
-        tuple(solved.arm_positions),
-        solved.achieved_pose,
-    )
-    if not decision.passed:
-        return attempt, None
-    ik_realization = evaluate_command_realization(
-        candidate_action,
-        action_between(context.observation.pose, solved.achieved_pose),
-    )
-    if not ik_realization.passed:
-        decision = ControlGateDecision(
-            context.observation.observation_id,
-            candidate_pose,
-            (ControlGateReason.IK_SOLUTION_FAILED,),
+        maximum_joint_delta = float(
+            np.max(np.abs(solved.arm_positions - context.current.arm_positions))
         )
         attempt = SafetyProjectionAttempt(
             scale,
@@ -879,10 +861,48 @@ def project_control_candidate(
             maximum_joint_delta,
             tuple(solved.arm_positions),
             solved.achieved_pose,
+            orientation_tolerance,
         )
-    return attempt, (
-        SafeProjection(candidate, solved, decision) if decision.passed else None
+        if not decision.passed:
+            if (
+                best_safety_failure is None
+                or maximum_joint_delta
+                < best_safety_failure.maximum_joint_delta_rad
+            ):
+                best_safety_failure = attempt
+            continue
+        ik_realization = evaluate_command_realization(
+            candidate_action,
+            action_between(context.observation.pose, solved.achieved_pose),
+        )
+        if ik_realization.passed:
+            return attempt, SafeProjection(candidate, solved, decision)
+        decision = ControlGateDecision(
+            context.observation.observation_id,
+            candidate_pose,
+            (ControlGateReason.IK_SOLUTION_FAILED,),
+        )
+        failed_attempt = SafetyProjectionAttempt(
+            scale,
+            decision,
+            maximum_joint_delta,
+            tuple(solved.arm_positions),
+            solved.achieved_pose,
+            orientation_tolerance,
+        )
+        if ik_realization.active_progress_fraction > best_realization_progress:
+            best_realization_failure = failed_attempt
+            best_realization_progress = ik_realization.active_progress_fraction
+    if best_realization_failure is not None:
+        return best_realization_failure, None
+    if best_safety_failure is not None:
+        return best_safety_failure, None
+    decision = ControlGateDecision(
+        context.observation.observation_id,
+        candidate_pose,
+        (ControlGateReason.IK_SOLUTION_FAILED,),
     )
+    return SafetyProjectionAttempt(scale, decision, 0.0, current_joints), None
 
 
 def select_safe_projection(

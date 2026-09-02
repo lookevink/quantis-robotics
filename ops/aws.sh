@@ -598,6 +598,8 @@ Commands:
                                         Probe stricter IK for an execution plateau without motion
   jepa-wm-contact-grasp-blocked-ik-tolerance-diagnostic SESSION
                                         Probe tolerance regimes for a no-motion IK block
+  jepa-wm-contact-grasp-active-rotation-ik-diagnostic SESSION
+                                        Probe rotation scales for a no-motion attached block
   jepa-wm-contact-grasp-tracking-rollback-ik-diagnostic SESSION
                                         Compare rollback IK branches without motion
   jepa-wm-contact-grasp-blocked-ik-diagnostic SESSION
@@ -1535,6 +1537,13 @@ case "${command}" in
     demo_python \
       "demo.diagnose_contact_grasp_blocked_ik_tolerances('${session_id}')" \
       180
+    ;;
+  jepa-wm-contact-grasp-active-rotation-ik-diagnostic)
+    session_id="${2:-}"
+    is_safe_identifier "${session_id}" || die "invalid control session name"
+    demo_python \
+      "demo.diagnose_contact_grasp_active_rotation_ik('${session_id}')" \
+      240
     ;;
   jepa-wm-contact-grasp-tracking-rollback-ik-diagnostic)
     session_id="${2:-}"

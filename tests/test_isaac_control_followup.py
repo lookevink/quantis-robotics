@@ -44,6 +44,7 @@ from sim.control_session import (
 from sim.isaac_control_followup import (
     BLOCKED_IK_DIAGNOSTIC_FINGERPRINTS,
     build_insertion_followup_capture,
+    diagnose_contact_grasp_active_rotation_ik,
     diagnose_contact_grasp_blocked_ik,
     diagnose_contact_grasp_blocked_ik_tolerances,
     diagnose_contact_grasp_execution_ik,
@@ -103,13 +104,16 @@ class FollowupContinuityTest(unittest.TestCase):
         )
         tolerance_result = ({"orientation_tolerance_radians": 0.001, "solved": True},)
 
+        from jepa_wm.control_rollout import ControlStepSummary
+
         with (
             patch(
                 "sim.isaac_control_followup.ControlSession.at",
                 return_value=object(),
             ),
-            patch(
-                "jepa_wm.control_rollout.ControlStepSummary.from_session",
+            patch.object(
+                ControlStepSummary,
+                "from_session",
                 return_value=step,
             ),
             patch(
@@ -165,13 +169,16 @@ class FollowupContinuityTest(unittest.TestCase):
             )
         )
 
+        from jepa_wm.control_rollout import ControlStepSummary
+
         with (
             patch(
                 "sim.isaac_control_followup.ControlSession.at",
                 return_value=object(),
             ),
-            patch(
-                "jepa_wm.control_rollout.ControlStepSummary.from_session",
+            patch.object(
+                ControlStepSummary,
+                "from_session",
                 return_value=step,
             ),
         ):
@@ -179,6 +186,140 @@ class FollowupContinuityTest(unittest.TestCase):
                 diagnose_contact_grasp_blocked_ik_tolerances(
                     "grasp-to-insertion-run-grasp-01"
                 )
+
+    def test_active_rotation_ik_diagnostic_probes_scale_grid_without_motion(
+        self,
+    ) -> None:
+        from jepa_wm.control_rollout import ControlStepSummary
+
+        pose = DroidPose((0.3, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+        joints = (0.0,) * 7
+        raw = DroidAction((0.001, 0.0, 0.0, 0.004, 0.0, 0.0, 0.0))
+        observation = ControlObservation(
+            7,
+            99.0,
+            Path("context.png"),
+            ControlTarget(Path("target.png")),
+            Path("/tmp/proposal.pth"),
+            pose,
+            DroidAction((0.0,) * 7),
+            4,
+        )
+        response = ProposedControl(
+            7,
+            99.5,
+            (raw, DroidAction((0.0,) * 7), DroidAction((0.0,) * 7)),
+            Path("/tmp/proposal.pth"),
+        )
+        source_attempts = (
+            SafetyProjectionAttempt(
+                DroidActionScale(0.5, 1.0, 0.0),
+                ControlGateDecision(
+                    7,
+                    pose.applied(DroidActionScale(0.5, 1.0, 0.0).apply(raw)),
+                    (ControlGateReason.IK_SOLUTION_FAILED,),
+                ),
+                0.0,
+                joints,
+            ),
+            SafetyProjectionAttempt(
+                DroidActionScale(0.25, 1.0, 0.0),
+                ControlGateDecision(
+                    7,
+                    pose.applied(DroidActionScale(0.25, 1.0, 0.0).apply(raw)),
+                    (ControlGateReason.JOINT_VELOCITY_VIOLATION,),
+                ),
+                2.0,
+                (2.0, *joints[1:]),
+                pose,
+            ),
+        )
+        refresh = SimpleNamespace(
+            refreshed_at_unix_seconds=100.0,
+            live_pose=pose,
+            live_state=SimpleNamespace(
+                joint_positions=joints,
+                gripper_width_m=0.02,
+                plug_attached=True,
+                collision_detected=False,
+                contact_force_newtons=0.0,
+            ),
+            authorize_target_relative=Mock(return_value=(observation, response)),
+        )
+        policy = Mock(
+            requires_resolvable_rotation=True,
+        )
+        policy.action_for_execution.return_value = raw
+        step = SimpleNamespace(
+            observation=observation,
+            response=response,
+            state=SimpleNamespace(
+                plug_attached=True,
+                current_joint_positions=joints,
+                active_drive_target=object(),
+                require_current_contact_grasp_policy=Mock(return_value=policy),
+                require_safety_snapshot=Mock(return_value=object()),
+            ),
+            result=SimpleNamespace(
+                status=ControlResultStatus.BLOCKED,
+                gate=SimpleNamespace(
+                    reasons=(ControlGateReason.JOINT_VELOCITY_VIOLATION,)
+                ),
+                selected_action_scale=None,
+                post_action=None,
+                insertion_trial_refresh=refresh,
+                projection_attempts=source_attempts,
+            ),
+        )
+
+        def project(_safety, _proposal, scale, **_kwargs):
+            next_pose = pose.applied(scale.apply(raw))
+            decision = ControlGateDecision(7, next_pose, ())
+            attempt = SafetyProjectionAttempt(
+                scale,
+                decision,
+                0.001,
+                joints,
+                next_pose,
+                0.00075,
+            )
+            selected = SimpleNamespace(
+                solved_pose=SimpleNamespace(
+                    position_error_m=1e-6,
+                    orientation_error_rad=1e-4,
+                )
+            )
+            return attempt, selected
+
+        with (
+            patch(
+                "sim.isaac_control_followup.ControlSession.at",
+                return_value=object(),
+            ),
+            patch.object(ControlStepSummary, "from_session", return_value=step),
+            patch(
+                "sim.isaac_control_execution.project_control_candidate",
+                side_effect=project,
+            ) as project_candidate,
+            patch(
+                "sim.isaac_control_followup.diagnose_droid_pose_orientation_tolerances",
+                return_value=({"solved": True},),
+            ),
+        ):
+            evidence = diagnose_contact_grasp_active_rotation_ik(
+                "grasp-to-insertion-run-grasp-15"
+            )
+
+        self.assertFalse(evidence["simulator_action_applied"])
+        self.assertEqual(len(evidence["attempts"]), 10)
+        self.assertEqual(project_candidate.call_count, 10)
+        self.assertTrue(evidence["attempts"][0]["direction_observable"])
+        self.assertFalse(evidence["attempts"][1]["direction_observable"])
+        self.assertEqual(
+            evidence["attempts"][0]["ik_orientation_tolerance_radians"],
+            0.00075,
+        )
+        self.assertTrue(evidence["attempts"][0]["command_realization"]["passed"])
 
     def test_blocked_ik_diagnostic_finds_a_local_branch_without_motion(self) -> None:
         pose = DroidPose((0.3, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))

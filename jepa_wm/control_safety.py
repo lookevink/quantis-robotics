@@ -975,6 +975,7 @@ class SafetyProjectionAttempt:
     maximum_joint_delta_rad: float
     proposed_joint_positions: tuple[float, ...]
     achieved_pose: DroidPose | None = None
+    ik_orientation_tolerance_radians: float | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -991,6 +992,11 @@ class SafetyProjectionAttempt:
             self.achieved_pose, DroidPose
         ):
             raise ValueError("safety projection achieved pose is invalid")
+        if self.ik_orientation_tolerance_radians is not None and (
+            not isfinite(self.ik_orientation_tolerance_radians)
+            or self.ik_orientation_tolerance_radians <= 0.0
+        ):
+            raise ValueError("safety projection IK tolerance is invalid")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1002,6 +1008,9 @@ class SafetyProjectionAttempt:
                 list(self.achieved_pose.values)
                 if self.achieved_pose is not None
                 else None
+            ),
+            "ik_orientation_tolerance_radians": (
+                self.ik_orientation_tolerance_radians
             ),
         }
 
@@ -1018,6 +1027,11 @@ class SafetyProjectionAttempt:
                 (
                     DroidPose(tuple(payload["achieved_pose"]))
                     if payload.get("achieved_pose") is not None
+                    else None
+                ),
+                (
+                    float(payload["ik_orientation_tolerance_radians"])
+                    if payload.get("ik_orientation_tolerance_radians") is not None
                     else None
                 ),
             )
