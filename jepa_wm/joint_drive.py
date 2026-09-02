@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isclose, isfinite
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Protocol, Sequence
 
 import numpy as np
 
@@ -41,7 +41,7 @@ class JointDriveTarget:
     @classmethod
     def for_command(
         cls,
-        joint_positions: tuple[float, ...],
+        joint_positions: Sequence[float],
         gripper_width_m: float,
     ) -> JointDriveTarget:
         """Canonicalize one command to Isaac's USD float drive attributes."""
@@ -89,6 +89,19 @@ class JointDriveTarget:
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("joint drive target is incomplete") from error
+
+
+class ForwardDriveTargetPolicy(Protocol):
+    """Structural contract for reconstructible compensated drive targets."""
+
+    def forward_drive_target(
+        self,
+        desired_joint_positions: Sequence[float],
+        desired_gripper_width_meters: float,
+        active_drive_target: JointDriveTarget,
+        stable_joint_positions: Sequence[float],
+        safety_limits: SimulatorSafetyLimits,
+    ) -> JointDriveTarget: ...
 
 
 @dataclass(frozen=True)

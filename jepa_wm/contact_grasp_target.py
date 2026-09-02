@@ -82,6 +82,9 @@ TRACKING_SETTLEMENT_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
 AXIS_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v18"
 )
+LOADED_DRIVE_COMPENSATED_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+    "quantis.jepa_wm_contact_grasp_target_policy.v19"
+)
 
 
 class _TransportComposition(str, Enum):
@@ -105,6 +108,7 @@ class _PolicyCapabilities:
     full_acquisition_resolution_floor: bool = False
     fine_acquisition_maximum_translation_meters: float | None = None
     axis_resolvable_transport: bool = False
+    attached_drive_bias_compensation: bool = False
 
 
 _POLICY_CAPABILITIES = {
@@ -261,6 +265,12 @@ _POLICY_CAPABILITIES = {
         _TransportComposition.TRANSLATION_HORIZON,
         axis_resolvable_transport=True,
     ),
+    LOADED_DRIVE_COMPENSATED_CONTACT_GRASP_TARGET_POLICY_SCHEMA: _PolicyCapabilities(
+        True,
+        _TransportComposition.TRANSLATION_HORIZON,
+        axis_resolvable_transport=True,
+        attached_drive_bias_compensation=True,
+    ),
 }
 
 
@@ -294,7 +304,7 @@ class ContactGraspTargetStep:
 class ContactGraspTargetPolicy:
     """Hold acquisition, then advance by measured reference-state progress."""
 
-    schema: str = AXIS_RESOLVABLE_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+    schema: str = LOADED_DRIVE_COMPENSATED_CONTACT_GRASP_TARGET_POLICY_SCHEMA
     scene_translation_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     def __post_init__(self) -> None:
@@ -359,6 +369,12 @@ class ContactGraspTargetPolicy:
     @property
     def requires_axis_resolvable_transport(self) -> bool:
         return _POLICY_CAPABILITIES[self.schema].axis_resolvable_transport
+
+    @property
+    def uses_attached_drive_bias_compensation(self) -> bool:
+        return _POLICY_CAPABILITIES[
+            self.schema
+        ].attached_drive_bias_compensation
 
     def action_for_execution(
         self,

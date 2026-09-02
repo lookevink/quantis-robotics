@@ -7,6 +7,7 @@ from typing import Any
 
 from jepa_wm.action import ACTION_RECORDING_CONTRACT
 from jepa_wm.contact_grasp_target import CONTACT_GRASP_TARGET_POLICY
+from jepa_wm.contact_grasp_drive import CONTACT_GRASP_DRIVE_POLICY
 from jepa_wm.control_policy import ControlExecutionPolicy
 from jepa_wm.control_safety import SimulatorSafetyLimits
 from jepa_wm.control_tracking import (
@@ -185,6 +186,7 @@ def current_demo_behavioral_contract() -> DemoBehavioralContract:
             {
                 "grasp_execution_policy": grasp_policy.value,
                 "grasp_target_policy": CONTACT_GRASP_TARGET_POLICY.to_dict(),
+                "grasp_drive_policy": CONTACT_GRASP_DRIVE_POLICY.to_dict(),
                 "insertion_execution_policy": insertion_policy.value,
                 "insertion_target_policy": insertion_target.to_dict(),
                 "insertion_trial_policy": InsertionTrialPolicy().to_dict(),

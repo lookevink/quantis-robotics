@@ -7,7 +7,7 @@ from enum import Enum
 from math import isclose, isfinite
 from pathlib import Path
 from time import time
-from typing import Any, Mapping, Union
+from typing import Any, Mapping, Sequence, Union
 
 from jepa_wm.action import DROID_FPS, DroidAction, DroidActionScale, DroidPose
 from jepa_wm.control_policy import ControlExecutionPolicy
@@ -29,7 +29,11 @@ from jepa_wm.joint_settlement import (
     JointSettlementEvidence,
     TrackedJointSettlementPolicy,
 )
-from jepa_wm.joint_drive import JointDriveBiasCompensation, JointDriveTarget
+from jepa_wm.joint_drive import (
+    ForwardDriveTargetPolicy,
+    JointDriveBiasCompensation,
+    JointDriveTarget,
+)
 from jepa_wm.training_artifact import ArtifactIdentity
 from jepa_wm.trial_equivalence import ControlTrialContext, validate_reset_equivalence
 from sim.recording import validate_recording_id
@@ -175,10 +179,10 @@ class InsertionTrialPolicy:
 
     def forward_drive_target(
         self,
-        desired_joint_positions: tuple[float, ...],
+        desired_joint_positions: Sequence[float],
         desired_gripper_width_meters: float,
         active_drive_target: JointDriveTarget,
-        stable_joint_positions: tuple[float, ...],
+        stable_joint_positions: Sequence[float],
         safety_limits: SimulatorSafetyLimits,
     ) -> JointDriveTarget:
         if self.drive_bias_compensation is None:
@@ -290,6 +294,8 @@ class InsertionTrialPolicy:
 
 @dataclass(frozen=True)
 class InsertionTrialDriveEvidence:
+    """Exact active and forward targets for any compensated drive command."""
+
     active_target: JointDriveTarget
     forward_target: JointDriveTarget
 
@@ -302,7 +308,7 @@ class InsertionTrialDriveEvidence:
 
     def validate(
         self,
-        policy: InsertionTrialPolicy,
+        policy: ForwardDriveTargetPolicy,
         *,
         desired_joint_positions: tuple[float, ...],
         desired_gripper_width_meters: float,

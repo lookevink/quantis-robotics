@@ -55,6 +55,7 @@ from jepa_wm.insertion_trial import (
     InsertionTrialRollbackFailure,
 )
 from jepa_wm.joint_drive import JointDriveTarget
+from jepa_wm.contact_grasp_drive import CONTACT_GRASP_DRIVE_POLICY
 from jepa_wm.shadow_planning import ShadowSearchEvidence
 from sim.control_session import (
     ControlResult,
@@ -730,8 +731,7 @@ class ControlStepSummary:
                     )
                 )
             if (
-                result.insertion_trial_drive is not None
-                or result.insertion_trial_rollback is not None
+                result.insertion_trial_rollback is not None
                 or result.insertion_trial_settlement_failure is not None
                 or (
                     result.post_action is not None
@@ -740,6 +740,103 @@ class ControlStepSummary:
             ):
                 raise ValueError(
                     f"contact grasp has insertion-trial evidence: {session.session_id}"
+                )
+            selected_attempt = next(
+                (
+                    attempt
+                    for attempt in result.projection_attempts
+                    if attempt.scale == result.selected_action_scale
+                    and attempt.gate.passed
+                ),
+                None,
+            )
+            compensated_attached_drive = (
+                state.plug_attached
+                and contact_grasp_policy.uses_attached_drive_bias_compensation
+            )
+            drive_rejected = result.gate.reasons == (
+                ControlGateReason.DRIVE_TARGET_INVALID,
+            )
+            if (
+                ControlGateReason.DRIVE_TARGET_INVALID in result.gate.reasons
+                and not drive_rejected
+            ):
+                raise ValueError(
+                    f"contact grasp drive rejection is inconsistent: {session.session_id}"
+                )
+            if drive_rejected:
+                rejected_attempt = next(
+                    (
+                        attempt
+                        for attempt in reversed(result.projection_attempts)
+                        if attempt.gate.passed
+                    ),
+                    None,
+                )
+                if (
+                    result.status is not ControlResultStatus.BLOCKED
+                    or not compensated_attached_drive
+                    or result.insertion_trial_drive is not None
+                    or rejected_attempt is None
+                ):
+                    raise ValueError(
+                        f"contact grasp drive rejection is incomplete: {session.session_id}"
+                    )
+                try:
+                    CONTACT_GRASP_DRIVE_POLICY.forward_drive_target(
+                        rejected_attempt.proposed_joint_positions,
+                        state.active_drive_target.gripper_width_m,
+                        state.active_drive_target,
+                        tuple(
+                            result.insertion_trial_refresh.live_state.joint_positions
+                        ),
+                        limits,
+                    )
+                except ValueError:
+                    pass
+                else:
+                    raise ValueError(
+                        f"contact grasp drive rejection is inconsistent: {session.session_id}"
+                    )
+            if compensated_attached_drive:
+                if result.status is ControlResultStatus.BLOCKED and (
+                    not drive_rejected
+                    and result.insertion_trial_drive is not None
+                ):
+                    raise ValueError(
+                        f"blocked contact grasp has drive evidence: {session.session_id}"
+                    )
+                if result.status is not ControlResultStatus.BLOCKED and (
+                    result.insertion_trial_drive is None
+                    or selected_attempt is None
+                ):
+                    raise ValueError(
+                        f"contact grasp drive evidence is missing: {session.session_id}"
+                    )
+                if result.insertion_trial_drive is not None:
+                    if (
+                        result.insertion_trial_drive.active_target
+                        != state.active_drive_target
+                    ):
+                        raise ValueError(
+                            f"contact grasp active drive target is inconsistent: {session.session_id}"
+                        )
+                    result.insertion_trial_drive.validate(
+                        CONTACT_GRASP_DRIVE_POLICY,
+                        desired_joint_positions=(
+                            selected_attempt.proposed_joint_positions
+                        ),
+                        desired_gripper_width_meters=(
+                            state.active_drive_target.gripper_width_m
+                        ),
+                        stable_joint_positions=tuple(
+                            result.insertion_trial_refresh.live_state.joint_positions
+                        ),
+                        safety_limits=limits,
+                    )
+            elif result.insertion_trial_drive is not None:
+                raise ValueError(
+                    f"legacy contact grasp has unexpected drive evidence: {session.session_id}"
                 )
         elif (
             result.insertion_trial_refresh is not None

@@ -16,7 +16,12 @@ from jepa_wm.insertion_contract import (
     INSERTION_CONTROL_TARGET_POLICY,
 )
 from jepa_wm.insertion_rollout import InsertionRolloutPosition
+from jepa_wm.insertion_refresh import (
+    ControlSafetySnapshot,
+    InsertionEvaluationRefresh,
+)
 from jepa_wm.integrated_insertion import INTEGRATED_INSERTION_SCHEDULE
+from jepa_wm.insertion_trial import InsertionTrialDriveEvidence
 from jepa_wm.insertion_task import InsertionTarget, InsertionTaskStep
 from jepa_wm.joint_drive import JointDriveTarget
 from sim.control_session import (
@@ -132,6 +137,44 @@ class GraspToInsertionLineageTest(unittest.TestCase):
             self.result.applied_drive_target(held_gripper_width_m=0.0179),
         )
         self.assertEqual(lineage.active_drive_target.gripper_width_m, 0.0179)
+
+    def test_compensated_grasp_target_becomes_the_insertion_active_target(
+        self,
+    ) -> None:
+        forward_target = JointDriveTarget(
+            (0.001, *self.joints[1:]),
+            0.0179,
+        )
+        self.result = replace(
+            self.result,
+            insertion_trial_drive=InsertionTrialDriveEvidence(
+                self.state.active_drive_target,
+                forward_target,
+            ),
+            insertion_trial_refresh=InsertionEvaluationRefresh(
+                100.1,
+                ControlSafetySnapshot(
+                    self.joints,
+                    0.018,
+                    (0.30, -0.29, 0.48),
+                    0.0,
+                    False,
+                    True,
+                ),
+                self.pose,
+            ),
+        )
+
+        observation, state = self.transition()
+        lineage = GraspToInsertionLineage(
+            self.observation,
+            self.state,
+            self.result,
+        )
+
+        lineage.validate_source(observation, state)
+        self.assertEqual(lineage.active_drive_target, forward_target)
+        self.assertEqual(state.active_drive_target, forward_target)
 
     def test_binds_the_integrated_transition_to_its_reachable_context(self) -> None:
         lineage = GraspToInsertionLineage(

@@ -43,6 +43,7 @@ from jepa_wm.control_tracking import (
     tracking_limits_for_policy,
 )
 from jepa_wm.joint_drive import JointDriveTarget
+from jepa_wm.contact_grasp_drive import CONTACT_GRASP_DRIVE_POLICY
 from jepa_wm.joint_settlement import (
     GripperSettlementCriterion,
     GripperSettlementMeasurement,
@@ -1164,16 +1165,28 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                 selected_scale = None
 
         insertion_drive_target = None
+        contact_grasp_drive_policy = (
+            CONTACT_GRASP_DRIVE_POLICY
+            if contact_grasp_execution
+            and persisted_state.plug_attached
+            and contact_grasp_policy.uses_attached_drive_bias_compensation
+            else None
+        )
         if (
             candidate is not None
             and decision.passed
-            and trial_policy is not None
+            and (trial_policy is not None or contact_grasp_drive_policy is not None)
             and insertion_trial_active_drive_target is not None
         ):
             try:
-                insertion_drive_target = trial_policy.forward_drive_target(
+                drive_policy = trial_policy or contact_grasp_drive_policy
+                insertion_drive_target = drive_policy.forward_drive_target(
                     tuple(float(value) for value in solved.arm_positions),
-                    solved.gripper_width_m,
+                    (
+                        insertion_trial_active_drive_target.gripper_width_m
+                        if contact_grasp_drive_policy is not None
+                        else solved.gripper_width_m
+                    ),
                     insertion_trial_active_drive_target,
                     tuple(float(value) for value in current.arm_positions),
                     limits,

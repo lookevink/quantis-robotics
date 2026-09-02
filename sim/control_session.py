@@ -989,6 +989,8 @@ class ControlResult:
             self.projection_attempts[-1].proposed_joint_positions,
             (1.0 - self.gate.next_pose.values[6]) * MAX_GRIPPER_WIDTH_M,
         )
+        if self.insertion_trial_drive is not None:
+            target = self.insertion_trial_drive.forward_target
         if held_gripper_width_m is None:
             return target
         return JointDriveTarget(

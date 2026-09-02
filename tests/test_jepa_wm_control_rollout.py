@@ -39,12 +39,14 @@ from jepa_wm.contact_grasp_target import (
     LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     ContactGraspTargetPolicy,
 )
+from jepa_wm.contact_grasp_drive import CONTACT_GRASP_DRIVE_POLICY
 from jepa_wm.control_safety import (
     ACTION_SCALES,
     ControlGateDecision,
     ControlGateReason,
     ControlInterlockEvidence,
     SafetyProjectionAttempt,
+    SimulatorSafetyLimits,
     contact_grasp_action_scales,
 )
 from jepa_wm.control_tracking import (
@@ -201,6 +203,18 @@ class ControlRolloutTest(unittest.TestCase):
 
         self.assertEqual(summary.result.status, ControlResultStatus.APPLIED)
         session.load_candidate_binding.assert_called_once_with(response)
+        session.load_result.return_value = replace(
+            result,
+            insertion_trial_drive=InsertionTrialDriveEvidence(
+                state.active_drive_target,
+                JointDriveTarget((0.001, *joints[1:]), 0.04),
+            ),
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "reset candidate has insertion-trial evidence",
+        ):
+            ControlStepSummary.from_session(session)
 
     def test_current_contact_grasp_derives_reference_transport_direction(self) -> None:
         acquisition = SimpleNamespace(
@@ -440,6 +454,213 @@ class ControlRolloutTest(unittest.TestCase):
             ],
             policy.fine_acquisition_maximum_translation_meters,
         )
+
+    def test_attached_contact_grasp_reconstructs_compensated_drive(self) -> None:
+        session_id = "attached-contact-grasp"
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        root = Path(temp_dir.name)
+        reference = root / "recordings" / "reference"
+        reference.mkdir(parents=True)
+        (reference / "manifest.json").write_text(
+            json.dumps({"metadata": {"task": "reach_and_insert"}})
+        )
+        policy = CONTACT_GRASP_TARGET_POLICY
+        pose = DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.75))
+        target = DroidPose((0.395, 0.0, 0.502, 0.0, 0.0, 0.0, 0.75))
+        action = DroidAction((-0.0006, 0.0, 0.0002, 0.0, 0.0, 0.0, 0.0))
+        actions = (action,) * 3
+        observation = ControlObservation(
+            101,
+            100.0,
+            Path("context.png"),
+            ControlTarget(
+                Path("recordings/reference/wrist/frame_000116.png"),
+                target,
+            ),
+            Path("/tmp/proposal.pth"),
+            pose,
+            DroidAction((0.0,) * 7),
+            116,
+        )
+        response = ProposedControl(
+            101,
+            100.2,
+            actions,
+            Path("/tmp/proposal.pth"),
+        )
+        stable_joints = (0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5)
+        active_target = JointDriveTarget(
+            (0.0008, *stable_joints[1:]),
+            0.02,
+        )
+        state = ControlSessionState(
+            session_id,
+            "reference",
+            12601,
+            "control-recording",
+            stable_joints,
+            False,
+            0.0,
+            "previous-contact-grasp",
+            plug_position=(0.0, 0.0, 1.0),
+            plug_attached=True,
+            current_gripper_width_m=0.02,
+            active_drive_target=active_target,
+            contact_grasp_target_policy=policy,
+        )
+        refresh = InsertionEvaluationRefresh(
+            100.3,
+            ControlSafetySnapshot(
+                stable_joints,
+                0.02,
+                (0.0, 0.0, 1.0),
+                0.0,
+                False,
+                True,
+            ),
+            pose,
+        )
+        raw = policy.action_for_execution(actions, plug_attached=True)
+        scales = contact_grasp_action_scales(
+            raw,
+            attachment_acquired=True,
+            require_directional_transport_progress=(
+                policy.requires_directional_transport_progress
+            ),
+            require_resolvable_transport=policy.uses_horizon_transport_action,
+            require_axis_resolvable_transport=(
+                policy.requires_axis_resolvable_transport
+            ),
+            coarse_acquisition=False,
+            maximum_coarse_translation_command_meters=(
+                policy.coarse_acquisition_maximum_translation_meters
+            ),
+            require_resolvable_rotation=policy.requires_resolvable_rotation,
+            exact_coarse_translation_projection=(
+                policy.uses_exact_coarse_translation_projection
+            ),
+            coarse_orientation_hold_fallback=(
+                policy.uses_coarse_orientation_hold_fallback
+            ),
+            minimum_coarse_translation_command_meters=(
+                policy.minimum_coarse_translation_command_meters
+            ),
+            resolution_floored_acquisition=False,
+            maximum_resolution_floored_translation_command_meters=(
+                policy.fine_acquisition_maximum_translation_meters
+            ),
+        )
+        scale = scales[0]
+        commanded = scale.apply(raw)
+        post_pose = pose.applied(commanded)
+        gate = ControlGateDecision(101, post_pose, ())
+        desired_joints = (-0.002, *stable_joints[1:])
+        drive = InsertionTrialDriveEvidence(
+            active_target,
+            CONTACT_GRASP_DRIVE_POLICY.forward_drive_target(
+                desired_joints,
+                active_target.gripper_width_m,
+                active_target,
+                stable_joints,
+                SimulatorSafetyLimits(),
+            ),
+        )
+        actual = action_between(pose, post_pose)
+        result = ControlResult(
+            ControlResultStatus.APPLIED,
+            session_id,
+            gate,
+            (SafetyProjectionAttempt(scale, gate, 0.002, desired_joints),),
+            scale,
+            0.01,
+            0.0,
+            0.0,
+            0.0,
+            PostActionEvidence(
+                raw,
+                commanded,
+                actual,
+                evaluate_action_tracking(commanded, actual),
+                post_pose,
+                desired_joints,
+                0.0,
+                0.0,
+                False,
+                {"path": "/tmp/post.png", "shape": [512, 512, 4]},
+                (0.0, 0.0, 1.0),
+                True,
+                command_realization=evaluate_command_realization(
+                    commanded,
+                    actual,
+                ),
+            ),
+            execution_interlock=ControlInterlockEvidence(0.0, False),
+            insertion_trial_refresh=refresh,
+            insertion_trial_drive=drive,
+        )
+        session = Mock(session_id=session_id)
+        session.load_capture.return_value = (observation, state)
+        session.load_response.return_value = response
+        session.load_result.return_value = result
+        session.data_root = root
+        session.shadow_path = Path("/tmp/no-shadow")
+        session.shadow_safety_path = Path("/tmp/no-shadow-safety")
+
+        summary = ControlStepSummary.from_session(session)
+
+        self.assertEqual(summary.result.insertion_trial_drive, drive)
+        self.assertNotEqual(drive.forward_target, active_target)
+        session.load_result.return_value = replace(
+            result,
+            insertion_trial_drive=None,
+        )
+        with self.assertRaisesRegex(ValueError, "drive evidence is missing"):
+            ControlStepSummary.from_session(session)
+        session.load_result.return_value = replace(
+            result,
+            insertion_trial_drive=replace(drive, forward_target=active_target),
+        )
+        with self.assertRaisesRegex(ValueError, "forward drive target is inconsistent"):
+            ControlStepSummary.from_session(session)
+
+        rejected_gate = ControlGateDecision(
+            gate.observation_id,
+            gate.next_pose,
+            (ControlGateReason.DRIVE_TARGET_INVALID,),
+        )
+        velocity_rejected_joints = (0.1248, *stable_joints[1:])
+        genuinely_rejected = replace(
+            result,
+            status=ControlResultStatus.BLOCKED,
+            gate=rejected_gate,
+            projection_attempts=(
+                SafetyProjectionAttempt(
+                    scale,
+                    gate,
+                    0.1248,
+                    velocity_rejected_joints,
+                ),
+            ),
+            selected_action_scale=None,
+            post_action=None,
+            execution_interlock=None,
+            insertion_trial_drive=None,
+        )
+        session.load_result.return_value = genuinely_rejected
+        self.assertEqual(
+            ControlStepSummary.from_session(session).result.gate.reasons,
+            (ControlGateReason.DRIVE_TARGET_INVALID,),
+        )
+
+        session.load_result.return_value = replace(
+            genuinely_rejected,
+            projection_attempts=(
+                SafetyProjectionAttempt(scale, gate, 0.002, desired_joints),
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "drive rejection is inconsistent"):
+            ControlStepSummary.from_session(session)
 
     def test_parses_reset_trial_preflight_failure(self) -> None:
         failure = OrchestrationFailure.parse(
