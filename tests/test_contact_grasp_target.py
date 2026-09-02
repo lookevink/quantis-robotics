@@ -23,6 +23,7 @@ from jepa_wm.contact_grasp_target import (
     LOADED_DRIVE_COMPENSATED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     RETAINED_WINDOW_OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+    ROBUST_ROTATION_RETAINED_WINDOW_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     HORIZON_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     LEGACY_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
     RESOLUTION_AWARE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
@@ -219,7 +220,7 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
         self.assertTrue(CONTACT_GRASP_TARGET_POLICY.uses_horizon_transport_action)
         self.assertEqual(
             CONTACT_GRASP_TARGET_POLICY.schema,
-            RETAINED_WINDOW_OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            ROBUST_ROTATION_RETAINED_WINDOW_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         )
         self.assertTrue(
             CONTACT_GRASP_TARGET_POLICY.requires_axis_resolvable_transport
@@ -231,6 +232,24 @@ class ContactGraspTargetPolicyTest(unittest.TestCase):
             CONTACT_GRASP_TARGET_POLICY.uses_measured_acquisition_progress
         )
         self.assertTrue(CONTACT_GRASP_TARGET_POLICY.requires_resolvable_rotation)
+        self.assertAlmostEqual(
+            CONTACT_GRASP_TARGET_POLICY.minimum_ik_active_rotation_progress_fraction,
+            0.8,
+        )
+        self.assertTrue(
+            CONTACT_GRASP_TARGET_POLICY.uses_active_rotation_hold_fallback
+        )
+        historical_v21 = ContactGraspTargetPolicy(
+            RETAINED_WINDOW_OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+        )
+        self.assertIsNone(
+            historical_v21.minimum_ik_active_rotation_progress_fraction
+        )
+        self.assertFalse(historical_v21.uses_active_rotation_hold_fallback)
+        self.assertEqual(
+            ContactGraspTargetPolicy.from_dict(historical_v21.to_dict()),
+            historical_v21,
+        )
         historical_v20 = ContactGraspTargetPolicy(
             OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA
         )

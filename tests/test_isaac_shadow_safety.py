@@ -103,6 +103,34 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
         self.assertTrue(all(scale.rotation == 0.0 for scale in current))
         self.assertEqual(historical[0].rotation, 0.125)
 
+    def test_robust_rotation_policy_retains_ordered_hold_fallbacks(self) -> None:
+        action = DroidAction(
+            (-0.008, 0.0, 0.0, -0.000869, 0.002821, 0.001887, 0.0)
+        )
+
+        scales = contact_grasp_action_scales(
+            action,
+            attachment_acquired=True,
+            require_directional_transport_progress=True,
+            require_resolvable_transport=True,
+            require_axis_resolvable_transport=True,
+            require_resolvable_rotation=True,
+            active_rotation_hold_fallback=True,
+        )
+
+        active = tuple(scale for scale in scales if scale.rotation > 0.0)
+        holds = tuple(scale for scale in scales if scale.rotation == 0.0)
+        self.assertTrue(active)
+        self.assertEqual(len(active), len(holds))
+        self.assertEqual(
+            tuple(scale.translation for scale in holds),
+            tuple(scale.translation for scale in active),
+        )
+        self.assertEqual(
+            tuple(scale.gripper for scale in holds),
+            tuple(scale.gripper for scale in active),
+        )
+
     def test_coarse_acquisition_decouples_opening_from_arm_scale(self) -> None:
         action = DroidAction(
             (0.0015, 0.0002, -0.0005, 0.0, 0.0, 0.0, -0.02)

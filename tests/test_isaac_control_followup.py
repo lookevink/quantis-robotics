@@ -33,7 +33,10 @@ from jepa_wm.insertion_trial import (
 from jepa_wm.joint_drive import JointDriveTarget
 from jepa_wm.joint_settlement import JointSettlementEvidence
 from jepa_wm.target_progress import RealizedTargetProgressDecision
-from jepa_wm.control_tracking import ActionTrackingDecision
+from jepa_wm.control_tracking import (
+    ActionTrackingDecision,
+    CommandRealizationReason,
+)
 from sim.control_session import (
     ControlResult,
     ControlResultStatus,
@@ -625,6 +628,87 @@ class FollowupContinuityTest(unittest.TestCase):
         diagnose_drive.assert_called_once()
         self.assertIn("compensated_drive_target", evidence["attempts"][0])
         self.assertAlmostEqual(evidence["commanded_rotation_norm_radians"], 0.004)
+        self.assertFalse(evidence["simulator_action_applied"])
+
+    def test_execution_ik_diagnostic_accepts_tracking_completion_rollback(
+        self,
+    ) -> None:
+        start = DroidPose((0.3, -0.2, 0.5, 0.0, 0.0, 0.0, 0.7))
+        target = start.applied(
+            DroidAction((0.0005, 0.0, 0.0, 0.004, 0.0, 0.0, 0.0))
+        )
+        joints = (0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5)
+        step = SimpleNamespace(
+            result=SimpleNamespace(
+                status=ControlResultStatus.ROLLED_BACK_TRACKING,
+                gate=SimpleNamespace(passed=True, next_pose=target),
+                selected_action_scale=object(),
+                post_action=SimpleNamespace(
+                    tracking=SimpleNamespace(passed=True),
+                    command_realization=SimpleNamespace(
+                        reasons=(
+                            CommandRealizationReason.ROTATION_UNDERREALIZED,
+                        )
+                    )
+                ),
+                insertion_trial_drive=InsertionTrialDriveEvidence(
+                    JointDriveTarget(joints, 0.04),
+                    JointDriveTarget(joints, 0.04),
+                ),
+                execution_error=None,
+                insertion_trial_refresh=SimpleNamespace(
+                    live_pose=start,
+                    live_state=SimpleNamespace(
+                        joint_positions=joints,
+                        plug_attached=True,
+                    ),
+                ),
+            )
+        )
+        attempts = (
+            {
+                "orientation_tolerance_radians": 0.0005,
+                "solved": True,
+                "arm_positions": list(joints),
+            },
+        )
+        hold_attempts = (
+            {
+                "orientation_tolerance_radians": 0.001,
+                "solved": True,
+                "arm_positions": list(joints),
+            },
+        )
+        with (
+            patch("sim.isaac_control_followup.ControlSession.at"),
+            patch(
+                "jepa_wm.control_rollout.ControlStepSummary.from_session",
+                return_value=step,
+            ),
+            patch(
+                "sim.isaac_control_followup.diagnose_droid_pose_orientation_tolerances",
+                side_effect=(attempts, hold_attempts),
+            ),
+            patch(
+                "sim.isaac_control_followup.diagnose_joint_target_realization",
+                return_value={"command_realization": {"passed": True}},
+            ),
+        ):
+            evidence = diagnose_contact_grasp_execution_ik(
+                "session-tracking-rotation"
+            )
+
+        self.assertAlmostEqual(evidence["commanded_rotation_norm_radians"], 0.004)
+        self.assertEqual(
+            evidence["minimum_ik_active_rotation_progress_fraction"],
+            0.8,
+        )
+        self.assertEqual(
+            evidence["orientation_hold_attempts"][0][
+                "orientation_tolerance_radians"
+            ],
+            0.001,
+        )
         self.assertFalse(evidence["simulator_action_applied"])
 
     def test_execution_ik_diagnostic_rejects_translation_only_plateau(self) -> None:

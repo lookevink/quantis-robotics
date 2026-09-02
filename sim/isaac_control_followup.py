@@ -16,6 +16,7 @@ from jepa.contract import ObservationStage
 from jepa_wm.action import (
     ActionSelectionBounds,
     DROID_FPS,
+    DroidAction,
     DroidActionScale,
     DroidPose,
     action_between,
@@ -75,7 +76,10 @@ from jepa_wm.control_policy import (
     ControlExecutionPolicy,
     is_insertion_trial_execution_policy,
 )
-from jepa_wm.contact_grasp_target import ContactGraspTargetPolicy
+from jepa_wm.contact_grasp_target import (
+    CONTACT_GRASP_TARGET_POLICY,
+    ContactGraspTargetPolicy,
+)
 from jepa_wm.contact_grasp_drive import CONTACT_GRASP_DRIVE_POLICY
 from jepa_wm.insertion_contract import (
     CONTACT_INSERTION_RECORDING,
@@ -115,6 +119,7 @@ from jepa_wm.insertion_refresh import (
 from jepa_wm.control_tracking import (
     ActionTrackingLimits,
     CommandRealizationLimits,
+    CommandRealizationReason,
     evaluate_command_realization,
 )
 from sim.control_session import (
@@ -739,9 +744,30 @@ def diagnose_contact_grasp_execution_ik(session_id: str) -> dict[str, Any]:
     )
     refresh = step.result.insertion_trial_refresh
     execution_error = step.result.execution_error
-    rotation_underrealized = (
+    post = step.result.post_action
+    legacy_rotation_underrealized = (
         isinstance(execution_error, str)
         and "completion_reasons=['rotation_underrealized']" in execution_error
+    )
+    measured_rotation_underrealized = (
+        post is not None
+        and post.tracking.passed
+        and post.command_realization is not None
+        and post.command_realization.reasons
+        == (CommandRealizationReason.ROTATION_UNDERREALIZED,)
+    )
+    source_is_valid_rollback = (
+        step.result.status is ControlResultStatus.ROLLED_BACK_EXECUTION
+        and post is None
+        and isinstance(execution_error, str)
+        and execution_error.startswith(
+            "RuntimeError: contact-grasp command stopped making realizable progress:"
+        )
+        and legacy_rotation_underrealized
+    ) or (
+        step.result.status is ControlResultStatus.ROLLED_BACK_TRACKING
+        and execution_error is None
+        and measured_rotation_underrealized
     )
     commanded_rotation_norm = (
         float(
@@ -756,57 +782,81 @@ def diagnose_contact_grasp_execution_ik(session_id: str) -> dict[str, Any]:
         else 0.0
     )
     if (
-        step.result.status is not ControlResultStatus.ROLLED_BACK_EXECUTION
+        not source_is_valid_rollback
         or refresh is None
         or step.result.selected_action_scale is None
         or not step.result.gate.passed
-        or step.result.post_action is not None
         or step.result.insertion_trial_drive is None
-        or not isinstance(execution_error, str)
-        or not execution_error.startswith(
-            "RuntimeError: contact-grasp command stopped making realizable progress:"
-        )
-        or not rotation_underrealized
         or commanded_rotation_norm
         < CommandRealizationLimits().rotation_activity_radians
         or not refresh.live_state.plug_attached
     ):
         raise ValueError("contact-grasp execution IK diagnostic source is invalid")
-    attempts = list(diagnose_droid_pose_orientation_tolerances(
-        refresh.live_pose,
-        step.result.gate.next_pose,
-        np.asarray(refresh.live_state.joint_positions, dtype=np.float64),
-    ))
     active_drive_target = step.result.insertion_trial_drive.active_target
     stable_joint_positions = tuple(refresh.live_state.joint_positions)
-    for attempt in attempts:
-        if not attempt["solved"]:
-            continue
-        compensated = CONTACT_GRASP_DRIVE_POLICY.forward_drive_target(
-            attempt["arm_positions"],
-            active_drive_target.gripper_width_m,
-            active_drive_target,
-            stable_joint_positions,
-            SimulatorSafetyLimits(),
-        )
-        attempt["compensated_drive_target"] = compensated.to_dict()
-        attempt["maximum_compensated_joint_delta_radians"] = max(
-            abs(target - stable)
-            for target, stable in zip(
-                compensated.joint_positions,
-                stable_joint_positions,
+    warm_start = np.asarray(refresh.live_state.joint_positions, dtype=np.float64)
+
+    def enriched_attempts(target_pose: DroidPose) -> list[dict[str, Any]]:
+        attempts = list(
+            diagnose_droid_pose_orientation_tolerances(
+                refresh.live_pose,
+                target_pose,
+                warm_start,
             )
         )
-        attempt["compensated_drive_fk"] = diagnose_joint_target_realization(
-            refresh.live_pose,
-            step.result.gate.next_pose,
-            np.asarray(compensated.joint_positions, dtype=np.float64),
+        for attempt in attempts:
+            if not attempt["solved"]:
+                continue
+            compensated = CONTACT_GRASP_DRIVE_POLICY.forward_drive_target(
+                attempt["arm_positions"],
+                active_drive_target.gripper_width_m,
+                active_drive_target,
+                stable_joint_positions,
+                SimulatorSafetyLimits(),
+            )
+            attempt["compensated_drive_target"] = compensated.to_dict()
+            attempt["maximum_compensated_joint_delta_radians"] = max(
+                abs(target - stable)
+                for target, stable in zip(
+                    compensated.joint_positions,
+                    stable_joint_positions,
+                )
+            )
+            attempt["compensated_drive_fk"] = diagnose_joint_target_realization(
+                refresh.live_pose,
+                target_pose,
+                np.asarray(compensated.joint_positions, dtype=np.float64),
+            )
+        return attempts
+
+    attempts = enriched_attempts(step.result.gate.next_pose)
+    minimum_progress = (
+        CONTACT_GRASP_TARGET_POLICY.minimum_ik_active_rotation_progress_fraction
+    )
+    reserve_passed = any(
+        attempt.get("ik_command_realization", {}).get(
+            "rotation_fraction", -1.0
+        )
+        >= minimum_progress
+        for attempt in attempts
+    ) if minimum_progress is not None else None
+    orientation_hold_attempts = None
+    if measured_rotation_underrealized:
+        commanded = action_between(refresh.live_pose, step.result.gate.next_pose)
+        hold_action = DroidAction(
+            (*commanded.values[:3], 0.0, 0.0, 0.0, commanded.values[6])
+        )
+        orientation_hold_attempts = enriched_attempts(
+            refresh.live_pose.applied(hold_action)
         )
     return {
         "status": "diagnosed_no_actuation",
         "session_id": session_id,
         "commanded_rotation_norm_radians": commanded_rotation_norm,
+        "minimum_ik_active_rotation_progress_fraction": minimum_progress,
+        "active_rotation_reserve_passed": reserve_passed,
         "attempts": attempts,
+        "orientation_hold_attempts": orientation_hold_attempts,
         "simulator_action_applied": False,
     }
 

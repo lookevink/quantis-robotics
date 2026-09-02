@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from pathlib import Path
 from time import time
 from typing import Any, Callable
@@ -811,7 +812,15 @@ def project_control_candidate(
     solve: Callable[[DroidPose, np.ndarray, float], SolvedPose] = solve_droid_pose,
     now_unix_seconds: float | None = None,
     target_progress: ProjectedTargetProgressPolicy | None = None,
+    minimum_active_rotation_progress_fraction: float | None = None,
 ) -> tuple[SafetyProjectionAttempt, SafeProjection | None]:
+    if minimum_active_rotation_progress_fraction is not None and (
+        not isfinite(minimum_active_rotation_progress_fraction)
+        or minimum_active_rotation_progress_fraction
+        < CommandRealizationLimits().minimum_rotation_fraction
+        or minimum_active_rotation_progress_fraction > 1.0
+    ):
+        raise ValueError("active-rotation IK progress reserve is invalid")
     candidate_action = scale.apply(proposal.first_action)
     candidate = proposal.with_actions((candidate_action, *proposal.actions[1:]))
     current_joints = tuple(context.current.arm_positions)
@@ -879,7 +888,17 @@ def project_control_candidate(
             candidate_action,
             action_between(context.observation.pose, solved.achieved_pose),
         )
-        if ik_realization.passed:
+        active_rotation = (
+            float(np.linalg.norm(candidate_action.values[3:6]))
+            >= CommandRealizationLimits().rotation_activity_radians
+        )
+        robust_rotation = (
+            minimum_active_rotation_progress_fraction is None
+            or not active_rotation
+            or ik_realization.rotation_fraction
+            >= minimum_active_rotation_progress_fraction
+        )
+        if ik_realization.passed and robust_rotation:
             rank = active_rotation_candidate_rank(
                 ik_realization.active_progress_fraction,
                 orientation_tolerance,
@@ -931,6 +950,7 @@ def select_safe_projection(
     now_unix_seconds: float | None = None,
     action_scales: tuple[DroidActionScale, ...] = ACTION_SCALES,
     target_progress: ProjectedTargetProgressPolicy | None = None,
+    minimum_active_rotation_progress_fraction: float | None = None,
 ) -> tuple[tuple[SafetyProjectionAttempt, ...], SafeProjection | None]:
     attempts = []
     if not action_scales:
@@ -943,6 +963,9 @@ def select_safe_projection(
             solve=solve,
             now_unix_seconds=now_unix_seconds,
             target_progress=target_progress,
+            minimum_active_rotation_progress_fraction=(
+                minimum_active_rotation_progress_fraction
+            ),
         )
         attempts.append(attempt)
         if selected is not None:
@@ -984,6 +1007,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
     binding = None
     trial_policy = None
     action_scales = ACTION_SCALES
+    minimum_active_rotation_progress_fraction = None
     target_progress = None
     control_period_seconds = 1.0 / DROID_FPS
     if insertion_trial_execution:
@@ -1057,6 +1081,12 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             maximum_resolution_floored_translation_command_meters=(
                 contact_grasp_policy.fine_acquisition_maximum_translation_meters
             ),
+            active_rotation_hold_fallback=(
+                contact_grasp_policy.uses_active_rotation_hold_fallback
+            ),
+        )
+        minimum_active_rotation_progress_fraction = (
+            contact_grasp_policy.minimum_ik_active_rotation_progress_fraction
         )
     from sim.isaac_unknown_start_shadow import (
         reauthenticate_unknown_start_shadow_session,
@@ -1207,6 +1237,9 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             proposal,
             action_scales=action_scales,
             target_progress=target_progress,
+            minimum_active_rotation_progress_fraction=(
+                minimum_active_rotation_progress_fraction
+            ),
         )
 
         candidate = None

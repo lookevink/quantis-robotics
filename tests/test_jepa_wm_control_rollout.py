@@ -33,6 +33,7 @@ from jepa_wm.control_rollout import (
     OrchestrationOperation,
     _contact_grasp_retained_direction,
     _projection_scale_policy_matches,
+    _validate_contact_grasp_projection_reserve,
 )
 from jepa_wm.contact_grasp_target import (
     CONTACT_GRASP_TARGET_POLICY,
@@ -100,6 +101,76 @@ from sim.control_session import (
 
 
 class ControlRolloutTest(unittest.TestCase):
+    def test_v22_projection_reserve_reconstructs_rotation_independently(self) -> None:
+        pose = DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+        observation = ControlObservation(
+            1,
+            100.0,
+            Path("context.png"),
+            ControlTarget(Path("target.png")),
+            Path("/tmp/proposal.pth"),
+            pose,
+            DroidAction((0.0,) * 7),
+            4,
+        )
+        action = DroidAction((0.0005, 0.0, 0.0, 0.004, 0.0, 0.0, 0.0))
+        active_scale = DroidActionScale.uniform(1.0)
+        target = pose.applied(action)
+        passing_gate = ControlGateDecision(1, target, ())
+        under_reserve_pose = pose.applied(
+            DroidAction((0.00038, 0.0, 0.0, 0.00316, 0.0, 0.0, 0.0))
+        )
+        under_reserve = SafetyProjectionAttempt(
+            active_scale,
+            passing_gate,
+            0.001,
+            (0.0,) * 7,
+            under_reserve_pose,
+            0.0005,
+        )
+
+        with self.assertRaisesRegex(ValueError, "projection reserve"):
+            _validate_contact_grasp_projection_reserve(
+                observation,
+                action,
+                (under_reserve,),
+                0.8,
+            )
+
+        reserve_rejection = replace(
+            under_reserve,
+            gate=ControlGateDecision(
+                1,
+                target,
+                (ControlGateReason.IK_SOLUTION_FAILED,),
+            ),
+        )
+        _validate_contact_grasp_projection_reserve(
+            observation,
+            action,
+            (reserve_rejection,),
+            0.8,
+        )
+
+        hold_scale = DroidActionScale(1.0, 0.0, 1.0)
+        hold_action = hold_scale.apply(action)
+        hold = SafetyProjectionAttempt(
+            hold_scale,
+            ControlGateDecision(1, pose.applied(hold_action), ()),
+            0.001,
+            (0.0,) * 7,
+            pose.applied(
+                DroidAction((0.00038, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            ),
+            0.001,
+        )
+        _validate_contact_grasp_projection_reserve(
+            observation,
+            action,
+            (hold,),
+            0.8,
+        )
+
     def test_projection_scale_reconstruction_accepts_only_roundoff(self) -> None:
         expected = (DroidActionScale(0.3492566783773001, 1.0, 0.125),)
 
@@ -571,7 +642,16 @@ class ControlRolloutTest(unittest.TestCase):
             ControlResultStatus.APPLIED,
             session_id,
             gate,
-            (SafetyProjectionAttempt(scale, gate, 0.002, desired_joints),),
+            (
+                SafetyProjectionAttempt(
+                    scale,
+                    gate,
+                    0.002,
+                    desired_joints,
+                    post_pose,
+                    0.001,
+                ),
+            ),
             scale,
             0.01,
             0.0,
@@ -640,6 +720,8 @@ class ControlRolloutTest(unittest.TestCase):
                     gate,
                     0.1248,
                     velocity_rejected_joints,
+                    post_pose,
+                    0.001,
                 ),
             ),
             selected_action_scale=None,
@@ -656,7 +738,14 @@ class ControlRolloutTest(unittest.TestCase):
         session.load_result.return_value = replace(
             genuinely_rejected,
             projection_attempts=(
-                SafetyProjectionAttempt(scale, gate, 0.002, desired_joints),
+                SafetyProjectionAttempt(
+                    scale,
+                    gate,
+                    0.002,
+                    desired_joints,
+                    post_pose,
+                    0.001,
+                ),
             ),
         )
         with self.assertRaisesRegex(ValueError, "drive rejection is inconsistent"):

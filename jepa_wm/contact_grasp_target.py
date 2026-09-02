@@ -91,6 +91,9 @@ OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
 RETAINED_WINDOW_OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v21"
 )
+ROBUST_ROTATION_RETAINED_WINDOW_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+    "quantis.jepa_wm_contact_grasp_target_policy.v22"
+)
 
 
 class _TransportComposition(str, Enum):
@@ -115,6 +118,8 @@ class _PolicyCapabilities:
     fine_acquisition_maximum_translation_meters: float | None = None
     axis_resolvable_transport: bool = False
     attached_drive_bias_compensation: bool = False
+    minimum_ik_active_rotation_progress_fraction: float | None = None
+    active_rotation_hold_fallback: bool = False
 
 
 _POLICY_CAPABILITIES = {
@@ -294,6 +299,15 @@ _POLICY_CAPABILITIES[
     ],
     extended_retained_window=True,
 )
+_POLICY_CAPABILITIES[
+    ROBUST_ROTATION_RETAINED_WINDOW_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+] = replace(
+    _POLICY_CAPABILITIES[
+        RETAINED_WINDOW_OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+    ],
+    minimum_ik_active_rotation_progress_fraction=0.8,
+    active_rotation_hold_fallback=True,
+)
 
 
 def _frame_index(path: Path) -> int:
@@ -327,7 +341,7 @@ class ContactGraspTargetPolicy:
     """Hold acquisition, then advance by measured reference-state progress."""
 
     schema: str = (
-        RETAINED_WINDOW_OBSERVABLE_ROTATION_LOADED_DRIVE_CONTACT_GRASP_TARGET_POLICY_SCHEMA
+        ROBUST_ROTATION_RETAINED_WINDOW_CONTACT_GRASP_TARGET_POLICY_SCHEMA
     )
     scene_translation_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
@@ -488,6 +502,20 @@ class ContactGraspTargetPolicy:
         """Require commanded turns to clear the measured tracking noise band."""
 
         return _POLICY_CAPABILITIES[self.schema].resolvable_rotation
+
+    @property
+    def minimum_ik_active_rotation_progress_fraction(self) -> float | None:
+        """Return the versioned nominal reserve for a physical active turn."""
+
+        return _POLICY_CAPABILITIES[
+            self.schema
+        ].minimum_ik_active_rotation_progress_fraction
+
+    @property
+    def uses_active_rotation_hold_fallback(self) -> bool:
+        """Whether an unrobust active turn may preserve translation as a hold."""
+
+        return _POLICY_CAPABILITIES[self.schema].active_rotation_hold_fallback
 
     @property
     def uses_exact_coarse_translation_projection(self) -> bool:

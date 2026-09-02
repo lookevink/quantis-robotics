@@ -661,6 +661,113 @@ class ControlProjectionTest(unittest.TestCase):
             0.00075,
         )
 
+    def test_active_rotation_reserve_falls_back_to_orientation_hold(self) -> None:
+        current_joints = np.asarray((0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5))
+        start = DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+        observation = ControlObservation(
+            123,
+            100.0,
+            Path("context.png"),
+            ControlTarget(Path("target.png")),
+            Path("/tmp/proposal.pth"),
+            start,
+            DroidAction((0.0,) * 7),
+            4,
+        )
+        action = DroidAction((0.0005, 0.0, 0.0, 0.004, 0.0, 0.0, 0.0))
+        proposal = ProposedControl(
+            123,
+            100.1,
+            (action, DroidAction((0.0,) * 7), DroidAction((0.0,) * 7)),
+            Path("/tmp/proposal.pth"),
+        )
+        context = ExecutionSafetyContext(
+            observation,
+            JointCommand(current_joints, 0.04),
+            tuple(current_joints),
+            0.0,
+            False,
+            SimulatorSafetyLimits(),
+        )
+
+        def solve(
+            pose: DroidPose,
+            warm_start: np.ndarray,
+            orientation_tolerance_radians: float,
+        ) -> SolvedPose:
+            rotation = pose.values[3]
+            achieved = start.applied(
+                DroidAction(
+                    (
+                        pose.values[0] - start.values[0],
+                        0.0,
+                        0.0,
+                        rotation * 0.79,
+                        0.0,
+                        0.0,
+                        0.0,
+                    )
+                )
+            )
+            return SolvedPose(
+                pose,
+                warm_start,
+                np.zeros(3),
+                0.04,
+                0.0,
+                orientation_tolerance_radians,
+                achieved,
+            )
+
+        attempts, selected = select_safe_projection(
+            context,
+            proposal,
+            solve=solve,
+            now_unix_seconds=100.2,
+            action_scales=(
+                DroidActionScale.uniform(1.0),
+                DroidActionScale(1.0, 0.0, 1.0),
+            ),
+            minimum_active_rotation_progress_fraction=0.8,
+        )
+
+        self.assertIsNotNone(selected)
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(
+            attempts[0].gate.reasons,
+            (ControlGateReason.IK_SOLUTION_FAILED,),
+        )
+        self.assertEqual(attempts[1].scale.rotation, 0.0)
+        self.assertEqual(selected.proposal.first_action.values[3:6], (0.0, 0.0, 0.0))
+
+        def translation_lower_than_rotation(
+            pose: DroidPose,
+            warm_start: np.ndarray,
+            orientation_tolerance_radians: float,
+        ) -> SolvedPose:
+            return SolvedPose(
+                pose,
+                warm_start,
+                np.zeros(3),
+                0.04,
+                0.0,
+                orientation_tolerance_radians,
+                start.applied(
+                    DroidAction((0.00038, 0.0, 0.0, 0.0036, 0.0, 0.0, 0.0))
+                ),
+            )
+
+        _, rotation_selected = select_safe_projection(
+            context,
+            proposal,
+            solve=translation_lower_than_rotation,
+            now_unix_seconds=100.2,
+            action_scales=(DroidActionScale.uniform(1.0),),
+            minimum_active_rotation_progress_fraction=0.8,
+        )
+
+        self.assertIsNotNone(rotation_selected)
+
 
 class FakeTimeline:
     def __init__(self, articulation: FakeArticulation | None = None) -> None:

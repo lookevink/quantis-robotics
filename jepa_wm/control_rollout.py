@@ -14,6 +14,7 @@ from scipy.spatial.transform import Rotation
 
 from jepa_wm.action import (
     MAX_GRIPPER_WIDTH_M,
+    DroidAction,
     DroidActionScale,
     DroidPose,
     action_between,
@@ -46,8 +47,13 @@ from jepa_wm.insertion_refresh import (
 )
 from jepa_wm.control_safety import (
     ControlGateReason,
+    SafetyProjectionAttempt,
     SimulatorSafetyLimits,
     contact_grasp_action_scales,
+)
+from jepa_wm.control_tracking import (
+    CommandRealizationLimits,
+    evaluate_command_realization,
 )
 from jepa_wm.insertion_trial import (
     InsertionTrialOutcomeObservation,
@@ -100,6 +106,53 @@ def _projection_scale_policy_matches(
         )
         for actual, regenerated in zip(attempted, expected)
     )
+
+
+def _validate_contact_grasp_projection_reserve(
+    observation: ControlObservation,
+    action: DroidAction,
+    attempts: Sequence[SafetyProjectionAttempt],
+    minimum_rotation_fraction: float | None,
+) -> None:
+    """Reconstruct v22 nominal turn eligibility from persisted FK evidence."""
+
+    if minimum_rotation_fraction is None:
+        return
+    limits = CommandRealizationLimits()
+    if (
+        not isfinite(minimum_rotation_fraction)
+        or minimum_rotation_fraction < limits.minimum_rotation_fraction
+        or minimum_rotation_fraction > 1.0
+    ):
+        raise ValueError("contact grasp rotation reserve is invalid")
+    for attempt in attempts:
+        scaled = attempt.scale.apply(action)
+        active_rotation = (
+            float(np.linalg.norm(scaled.values[3:6]))
+            >= limits.rotation_activity_radians
+        )
+        if attempt.achieved_pose is None:
+            if attempt.gate.passed:
+                raise ValueError("contact grasp projection FK evidence is missing")
+            continue
+        realization = evaluate_command_realization(
+            scaled,
+            action_between(observation.pose, attempt.achieved_pose),
+        )
+        reserve_passed = (
+            not active_rotation
+            or realization.rotation_fraction >= minimum_rotation_fraction
+        )
+        if attempt.gate.passed:
+            if not realization.passed or not reserve_passed:
+                raise ValueError(
+                    "contact grasp projection reserve evidence is inconsistent"
+                )
+        elif attempt.gate.reasons == (ControlGateReason.IK_SOLUTION_FAILED,):
+            if realization.passed and reserve_passed:
+                raise ValueError(
+                    "contact grasp projection reserve evidence is inconsistent"
+                )
 
 
 class IncompleteStepStatus(str, Enum):
@@ -686,6 +739,9 @@ class ControlStepSummary:
                 maximum_resolution_floored_translation_command_meters=(
                     contact_grasp_policy.fine_acquisition_maximum_translation_meters
                 ),
+                active_rotation_hold_fallback=(
+                    contact_grasp_policy.uses_active_rotation_hold_fallback
+                ),
             )
             attempted_projection_policy = tuple(
                 attempt.scale for attempt in result.projection_attempts
@@ -730,6 +786,12 @@ class ControlStepSummary:
                         MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
                     )
                 )
+            _validate_contact_grasp_projection_reserve(
+                observation,
+                execution_action,
+                result.projection_attempts,
+                contact_grasp_policy.minimum_ik_active_rotation_progress_fraction,
+            )
             if (
                 result.insertion_trial_rollback is not None
                 or result.insertion_trial_settlement_failure is not None
