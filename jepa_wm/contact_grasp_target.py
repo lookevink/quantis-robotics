@@ -76,6 +76,9 @@ TRACKING_OVERLAP_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
 TRACKING_MARGIN_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v16"
 )
+TRACKING_SETTLEMENT_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+    "quantis.jepa_wm_contact_grasp_target_policy.v17"
+)
 
 
 class _TransportComposition(str, Enum):
@@ -235,6 +238,20 @@ _POLICY_CAPABILITIES = {
         True,
         0.00065,
     ),
+    TRACKING_SETTLEMENT_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA: _PolicyCapabilities(
+        True,
+        _TransportComposition.TRANSLATION_HORIZON,
+        True,
+        True,
+        0.001,
+        True,
+        True,
+        True,
+        True,
+        0.0005,
+        True,
+        0.0006,
+    ),
 }
 
 
@@ -291,6 +308,7 @@ class ContactGraspTargetPolicy:
                     TRACKING_ROBUST_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     TRACKING_OVERLAP_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     TRACKING_MARGIN_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                    TRACKING_SETTLEMENT_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 )
                 and self.scene_translation_m != (0.0, 0.0, 0.0)
             )
@@ -303,7 +321,7 @@ class ContactGraspTargetPolicy:
         translation_m: tuple[float, float, float],
     ) -> ContactGraspTargetPolicy:
         return cls(
-            TRACKING_MARGIN_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            TRACKING_SETTLEMENT_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             translation_m,
         )
 
@@ -840,6 +858,7 @@ class ContactGraspTargetPolicy:
             TRACKING_ROBUST_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             TRACKING_OVERLAP_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             TRACKING_MARGIN_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            TRACKING_SETTLEMENT_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         ):
             payload["scene_translation_m"] = list(self.scene_translation_m)
         return payload
@@ -865,6 +884,7 @@ class ContactGraspTargetPolicy:
                 TRACKING_ROBUST_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 TRACKING_OVERLAP_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 TRACKING_MARGIN_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                TRACKING_SETTLEMENT_CLOSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             )
             else {"schema"}
         )

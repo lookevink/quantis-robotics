@@ -1,4 +1,4 @@
-"""Authenticated V36 continuation inside the measured tracking margin."""
+"""Authenticated V37 continuation above the measured direction floor."""
 
 from __future__ import annotations
 
@@ -16,24 +16,30 @@ from jepa_wm.persistence import write_json_atomic
 from jepa_wm.training_artifact import artifact_fingerprint
 
 
-HANDOFF_SCHEMA = "quantis.contact_grasp_horizon_completion.v17"
-FAILURE_SCHEMA = "quantis.contact_grasp_horizon_completion_failure.v17"
-EXPERIMENT_DIRECTORY = "unknown_start_horizon_completion_v36"
-ROLLOUT_ID = "unknown-start-e2e-v36-62605-grasp"
-SOURCE_ROLLOUT_ID = "unknown-start-e2e-v35-62605-grasp"
-SOURCE_SESSION_ID = f"{SOURCE_ROLLOUT_ID}-015"
+HANDOFF_SCHEMA = "quantis.contact_grasp_horizon_completion.v18"
+FAILURE_SCHEMA = "quantis.contact_grasp_horizon_completion_failure.v18"
+EXPERIMENT_DIRECTORY = "unknown_start_horizon_completion_v37"
+ROLLOUT_ID = "unknown-start-e2e-v37-62605-grasp"
+SOURCE_ROLLOUT_ID = "unknown-start-e2e-v36-62605-grasp"
+SOURCE_SESSION_ID = f"{SOURCE_ROLLOUT_ID}-011"
 RUNTIME_OWNER_SESSION_ID = SOURCE_SESSION_ID
-SOURCE_PREDECESSOR_SESSION_ID = "unknown-start-e2e-v34-62605-grasp-001"
+SOURCE_PREDECESSOR_SESSION_ID = "unknown-start-e2e-v35-62605-grasp-015"
 SOURCE_ENDPOINT_STATUS = "rolled_back_after_execution_failure"
 SOURCE_TRACKING_REASONS: tuple[str, ...] = ()
 SOURCE_EXECUTION_ERROR = (
+    "RuntimeError: contact-grasp command did not satisfy its tracking gates "
+    "within its bounded timeout: tracking_reasons=['translation_error'], "
+    "translation_error_meters=0.000502550, "
+    "rotation_error_radians=0.001051487, joint_error_radians=0.000978760, "
+    "gripper_error_meters=0.000146118"
+)
+SOURCE_CLAIM_EXECUTION_ERROR = (
     "RuntimeError: contact-grasp command did not satisfy its tracking gates "
     "within its bounded timeout: tracking_reasons=['translation_error'], "
     "translation_error_meters=0.000503116, "
     "rotation_error_radians=0.000642320, joint_error_radians=0.000998709, "
     "gripper_error_meters=0.000137485"
 )
-SOURCE_CLAIM_EXECUTION_ERROR = None
 REFERENCE_RECORDING = "contact-insertion-v10-drive-slow-2600-held-00"
 REFERENCE_SEED = 12600
 PROPOSAL_NAME = (
@@ -51,26 +57,26 @@ WORKER_FINGERPRINT = (
     "6e34cf0f1cd6ad3a894d18fe2f157b3a33802e4a3a19d45350e019a6b86401ed"
 )
 SOURCE_CLAIM_FINGERPRINT = (
-    "66b5590dcd376728a1ca352bd1f34fcab4ca4285f88bd675a28dc4f534e98256"
+    "34b4ddadb759816d8226b6ae32da8b9860a17a93a58ef6b73d72f217d025d837"
 )
 SOURCE_FAILURE_FINGERPRINT = (
-    "552de79e970939ccf06c789e3f1dc1cccfd45331eb73a6b87cdc4435d3239201"
+    "4c318b3011b643e93c9cdbd9611f3e3824b3730a4d189bebffb920173be27fce"
 )
 SOURCE_REPORT_FINGERPRINT = (
-    "0e1e3169c661fdcc3e7ccbe377090aaf72bc60ba2526d948ef4dfb113f3658e8"
+    "69ee4395f4ac027a1437cc0838c6dd771cc97d02a5c55d33c2cbdd4f33285aaf"
 )
 SOURCE_ROSTER_FINGERPRINT = (
-    "2f9d363e000b12b3db29d4916e73e852a9cdc7c9c048b330a6c97026e698bcc6"
+    "23e0bd6bcef09b2483d49f0e5805a85789ba07c7be12dd4c906f9d432a013fc0"
 )
 SOURCE_RUNTIME_FINGERPRINT = (
-    "bebf8cd8f4085bab037008435f2283a6f91e20336402a4d2228630c079c34b10"
+    "252881c82c4d21480398202b2af2dc990a20758e4a8643fba1f7a5b89439bc83"
 )
-SOURCE_REVISION = "1a713af844e977373802f9140d30852bfd32b877"
-SOURCE_SESSION_COUNT = 15
-SOURCE_APPLIED_ACTIONS = 14
-SOURCE_CUMULATIVE_APPLIED_ACTIONS = 202
-SOURCE_HORIZON_ACTIONS = 162
-MAXIMUM_ACTIONS = 30
+SOURCE_REVISION = "4dfc5d10dbe84a174e92d40008256065bb74014d"
+SOURCE_SESSION_COUNT = 11
+SOURCE_APPLIED_ACTIONS = 10
+SOURCE_CUMULATIVE_APPLIED_ACTIONS = 212
+SOURCE_HORIZON_ACTIONS = 173
+MAXIMUM_ACTIONS = 19
 SESSION_FILES = (
     "request.json",
     "state.json",
@@ -177,7 +183,7 @@ def rollback_drive_target(result: Any):
 
 
 def retained_drive_target(data_root: Path):
-    """Return the verified rollback target captured by terminal V35."""
+    """Return the verified rollback target captured by terminal V36."""
 
     from sim.control_session import ControlSession
 
@@ -306,7 +312,7 @@ def validate_source(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
     from jepa_wm.control_rollout import ControlRolloutReport
     from sim.control_session import ControlResultStatus
 
-    source_root = checkpoint_root / "unknown_start_horizon_completion_v35"
+    source_root = checkpoint_root / "unknown_start_horizon_completion_v36"
     report_path = data_root / "control_rollouts" / SOURCE_ROLLOUT_ID / "report.json"
     if (
         artifact_fingerprint(source_root / "CLAIM.json")
@@ -316,7 +322,7 @@ def validate_source(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
         or artifact_fingerprint(report_path) != SOURCE_REPORT_FINGERPRINT
         or source_roster_fingerprint(data_root) != SOURCE_ROSTER_FINGERPRINT
     ):
-        raise ValueError("V35 terminal evidence changed")
+        raise ValueError("V36 terminal evidence changed")
     claim = json.loads((source_root / "CLAIM.json").read_text())
     failure = json.loads((source_root / "FAILURE.json").read_text())
     report = json.loads(report_path.read_text())
@@ -331,25 +337,25 @@ def validate_source(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
             Path("/home/ubuntu/docker/jepa-wm/checkpoints")
             / f"{PROPOSAL_NAME}.pth"
         ),
-        requested_steps=45,
+        requested_steps=30,
         predecessor_session_id=SOURCE_PREDECESSOR_SESSION_ID,
     )
     step = reconstructed.complete_steps[-1]
     refresh = step.result.insertion_trial_refresh
     attempts = step.result.projection_attempts
     if (
-        claim.get("schema") != "quantis.contact_grasp_horizon_completion.v16"
+        claim.get("schema") != "quantis.contact_grasp_horizon_completion.v17"
         or claim.get("source_rollout_id")
-        != "unknown-start-e2e-v34-62605-grasp"
+        != "unknown-start-e2e-v35-62605-grasp"
         or claim.get("source_session_id") != SOURCE_PREDECESSOR_SESSION_ID
         or claim.get("runtime_owner_session_id") != SOURCE_PREDECESSOR_SESSION_ID
-        or claim.get("source_endpoint_status") != "blocked"
-        or claim.get("source_tracking_reasons")
-        != ["joint_velocity_violation"]
+        or claim.get("source_endpoint_status")
+        != "rolled_back_after_execution_failure"
+        or claim.get("source_tracking_reasons") != []
         or claim.get("source_execution_error") != SOURCE_CLAIM_EXECUTION_ERROR
         or claim.get("followup_session_id")
-        != "unknown-start-e2e-v35-62605-grasp-001"
-        or claim.get("maximum_actions") != 45
+        != "unknown-start-e2e-v36-62605-grasp-001"
+        or claim.get("maximum_actions") != 30
         or claim.get("runtime_fingerprint") != SOURCE_RUNTIME_FINGERPRINT
         or claim.get("source_revision") != SOURCE_REVISION
         or claim.get("proposal_fingerprint") != PROPOSAL_FINGERPRINT
@@ -366,22 +372,22 @@ def validate_source(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
         or reconstructed.reach_and_grasp is not None
         or step.result.status is not ControlResultStatus.ROLLED_BACK_EXECUTION
         or step.state.previous_session_id
-        != "unknown-start-e2e-v35-62605-grasp-014"
+        != "unknown-start-e2e-v36-62605-grasp-010"
         or str(step.observation.target_frame)
         != "recordings/contact-insertion-v10-drive-slow-2600-held-00/wrist/frame_000113.png"
         or step.result.post_action is not None
         or step.result.execution_error != SOURCE_EXECUTION_ERROR
         or step.result.selected_action_scale is None
         or step.result.selected_action_scale.translation
-        != 0.3766320210954037
+        != 0.34557274664166976
         or step.result.selected_action_scale.rotation != 0.0
-        or step.result.selected_action_scale.gripper != 0.125
+        or step.result.selected_action_scale.gripper != 0.25
         or tuple(reason.value for reason in step.result.gate.reasons)
         != SOURCE_TRACKING_REASONS
         or not step.result.gate.passed
         or len(attempts) != 1
         or not attempts[0].gate.passed
-        or attempts[0].maximum_joint_delta_rad != 0.001619908251015545
+        or attempts[0].maximum_joint_delta_rad != 0.0016018505904933367
         or step.result.execution_interlock is None
         or step.result.execution_interlock.maximum_contact_force_newtons != 0.0
         or step.result.execution_interlock.collision_detected
@@ -394,7 +400,7 @@ def validate_source(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
         or failure.get("claim_fingerprint") != SOURCE_CLAIM_FINGERPRINT
         or failure.get("retry_authorized") is not False
     ):
-        raise ValueError("V35 was not the exact rolled-back tracking endpoint")
+        raise ValueError("V36 was not the exact rolled-back tracking endpoint")
     validate_model(checkpoint_root)
     return {
         "source_session_id": SOURCE_SESSION_ID,
@@ -487,7 +493,7 @@ def evaluate(checkpoint_root: Path, data_root: Path) -> dict[str, Any]:
         and 1 <= report.get("applied_steps", 0) <= MAXIMUM_ACTIONS
     )
     payload = {
-        "schema": "quantis.contact_grasp_horizon_completion_evaluation.v17",
+        "schema": "quantis.contact_grasp_horizon_completion_evaluation.v18",
         "status": "evaluated_pending_recovery",
         "evaluation_passed": passed,
         "recovery_verified": False,
@@ -552,7 +558,7 @@ def finalize(
     if evaluation.get("evaluation_passed") is not True:
         raise ValueError("contact-grasp horizon evaluation failed")
     payload = {
-        "schema": "quantis.contact_grasp_horizon_completion_terminal.v17",
+        "schema": "quantis.contact_grasp_horizon_completion_terminal.v18",
         "status": "passed",
         "passed": True,
         "recovery_verified": True,
