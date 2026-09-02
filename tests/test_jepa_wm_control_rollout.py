@@ -240,7 +240,7 @@ class ControlRolloutTest(unittest.TestCase):
             _contact_grasp_retained_direction((acquisition, retained))
         )
 
-    def test_current_contact_grasp_reconstructs_an_overlapping_dynamic_scale(
+    def test_current_contact_grasp_reconstructs_a_floored_close_scale(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -283,22 +283,35 @@ class ControlRolloutTest(unittest.TestCase):
             (reference / "steps.jsonl").write_text(
                 "\n".join(json.dumps(step) for step in steps) + "\n"
             )
+            policy = ContactGraspTargetPolicy.for_scene_translation(
+                (0.0, 0.0, 0.0)
+            )
             pose = DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.75))
             observation = ControlObservation(
                 101,
                 100.0,
                 Path("control_sessions/session-1/context.png"),
                 ControlTarget(
-                    Path("recordings/reference/wrist/frame_000116.png"),
-                    DroidPose((0.4232, 0.0, 0.5, 0.0, 0.0, 0.0, 0.75)),
+                    Path("recordings/reference/wrist/frame_000097.png"),
+                    DroidPose((0.4194, 0.0, 0.5, 0.0, 0.0, 0.0, 0.75)),
                 ),
                 Path("/tmp/proposal.pth"),
                 pose,
                 DroidAction((0.0,) * 7),
-                113,
+                94,
             )
             actions = (
-                DroidAction((0.0002, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+                DroidAction(
+                    (
+                        0.0014771344,
+                        0.0003514159,
+                        0.0007743249,
+                        -0.0033661555,
+                        0.0001008337,
+                        -0.0012960136,
+                        0.0041647237,
+                    )
+                ),
             ) * 3
             response = ProposedControl(
                 101,
@@ -318,10 +331,10 @@ class ControlRolloutTest(unittest.TestCase):
                 0.0,
                 "session-0",
                 plug_position=(0.0, 0.0, 1.0),
-                plug_attached=True,
+                plug_attached=False,
                 current_gripper_width_m=0.02,
                 active_drive_target=drive_target,
-                contact_grasp_target_policy=CONTACT_GRASP_TARGET_POLICY,
+                contact_grasp_target_policy=policy,
             )
             live_state = ControlSafetySnapshot(
                 joints,
@@ -329,14 +342,25 @@ class ControlRolloutTest(unittest.TestCase):
                 (0.0, 0.0, 1.0),
                 0.0,
                 False,
-                True,
+                False,
             )
             refresh = InsertionEvaluationRefresh(100.3, live_state, pose)
-            raw = CONTACT_GRASP_TARGET_POLICY.action_for_execution(
+            raw = policy.action_for_execution(
                 actions,
-                plug_attached=True,
+                plug_attached=False,
             )
-            scale = DroidActionScale(1.0, 0.125, 0.0)
+            scale = contact_grasp_action_scales(
+                raw,
+                coarse_acquisition=False,
+                maximum_coarse_translation_command_meters=(
+                    policy.coarse_acquisition_maximum_translation_meters
+                ),
+                require_resolvable_rotation=True,
+                exact_coarse_translation_projection=True,
+                coarse_orientation_hold_fallback=True,
+                minimum_coarse_translation_command_meters=0.0005,
+                resolution_floored_acquisition=True,
+            )[0]
             commanded = scale.apply(raw)
             post_pose = pose.applied(commanded)
             gate = ControlGateDecision(101, post_pose, ())
@@ -364,7 +388,7 @@ class ControlRolloutTest(unittest.TestCase):
                     False,
                     {"path": "/tmp/post.png", "shape": [512, 512, 4]},
                     (0.0, 0.0, 1.0),
-                    True,
+                    False,
                 ),
                 execution_interlock=ControlInterlockEvidence(0.0, False),
                 insertion_trial_refresh=refresh,
@@ -384,17 +408,20 @@ class ControlRolloutTest(unittest.TestCase):
         self.assertEqual(summary.result.post_action.raw_proposed_action, raw)
         self.assertEqual(
             scale_policy.call_args.kwargs["exact_coarse_translation_projection"],
-            CONTACT_GRASP_TARGET_POLICY.uses_exact_coarse_translation_projection,
+            policy.uses_exact_coarse_translation_projection,
         )
         self.assertEqual(
             scale_policy.call_args.kwargs["coarse_orientation_hold_fallback"],
-            CONTACT_GRASP_TARGET_POLICY.uses_coarse_orientation_hold_fallback,
+            policy.uses_coarse_orientation_hold_fallback,
         )
         self.assertEqual(
             scale_policy.call_args.kwargs[
                 "minimum_coarse_translation_command_meters"
             ],
-            CONTACT_GRASP_TARGET_POLICY.minimum_coarse_translation_command_meters,
+            policy.minimum_coarse_translation_command_meters,
+        )
+        self.assertTrue(
+            scale_policy.call_args.kwargs["resolution_floored_acquisition"]
         )
 
     def test_parses_reset_trial_preflight_failure(self) -> None:

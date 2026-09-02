@@ -578,7 +578,7 @@ def diagnose_contact_grasp_settlement_rollback(
     )
     refresh = step.result.insertion_trial_refresh
     execution_error = step.result.execution_error
-    settlement_failure = (
+    settlement_prefix = (
         isinstance(execution_error, str)
         and execution_error.startswith(
             (
@@ -590,6 +590,10 @@ def diagnose_contact_grasp_settlement_rollback(
                 "tracking gates within its bounded timeout: ",
             )
         )
+    )
+    failed_rollback = (
+        step.result.status is ControlResultStatus.ROLLBACK_FAILED
+        and settlement_prefix
         and (
             "; rollback verification failed: RuntimeError: "
             "rollback command did not settle: arm_error="
@@ -597,13 +601,17 @@ def diagnose_contact_grasp_settlement_rollback(
         in execution_error
         and ", gripper_error=" in execution_error
     )
+    restored_after_execution_failure = (
+        step.result.status is ControlResultStatus.ROLLED_BACK_EXECUTION
+        and settlement_prefix
+        and "; rollback verification failed:" not in execution_error
+    )
     if (
-        step.result.status is not ControlResultStatus.ROLLBACK_FAILED
+        not (failed_rollback or restored_after_execution_failure)
         or refresh is None
         or not step.result.gate.passed
         or step.result.selected_action_scale is None
         or step.result.post_action is not None
-        or not settlement_failure
         or step.state.execution_policy is not ControlExecutionPolicy.DIRECT
         or step.state.contact_grasp_target_policy is None
     ):
@@ -827,6 +835,30 @@ def _contact_grasp_rollback_handoff_state(
             )
         return refresh.live_pose, refresh.live_state
     if (
+        horizon_source_endpoint_status
+        == ControlResultStatus.ROLLED_BACK_EXECUTION.value
+    ):
+        if (
+            source_result.status is not ControlResultStatus.ROLLED_BACK_EXECUTION
+            or source_result.execution_error != horizon_source_execution_error
+            or not isinstance(horizon_source_execution_error, str)
+            or not horizon_source_execution_error.startswith(
+                "RuntimeError: contact-grasp command did not satisfy its "
+                "tracking gates within its bounded timeout: "
+            )
+            or "; rollback verification failed:" in horizon_source_execution_error
+            or post is not None
+            or refresh is None
+            or refresh.live_state.plug_attached
+            or refresh.live_state.collision_detected
+            or refresh.live_state.contact_force_newtons
+            > SimulatorSafetyLimits().maximum_contact_force_newtons
+        ):
+            raise ValueError(
+                "contact-grasp execution rollback source is invalid"
+            )
+        return refresh.live_pose, refresh.live_state
+    if (
         post is None
         or post.plug_attached
         or post.collision_detected
@@ -972,6 +1004,7 @@ async def capture_contact_grasp_acquisition_handoff(
         ControlResultStatus.APPLIED.value,
         ControlResultStatus.ROLLED_BACK_TRACKING.value,
         ControlResultStatus.ROLLBACK_FAILED.value,
+        ControlResultStatus.ROLLED_BACK_EXECUTION.value,
     ):
         raise ValueError("contact-grasp horizon source endpoint is invalid")
     if horizon_completion_continuation and (
@@ -985,8 +1018,10 @@ async def capture_contact_grasp_acquisition_handoff(
             and not horizon_source_tracking_reasons
         )
         or (
-            horizon_source_endpoint_status
-            == ControlResultStatus.ROLLBACK_FAILED.value
+            horizon_source_endpoint_status in (
+                ControlResultStatus.ROLLBACK_FAILED.value,
+                ControlResultStatus.ROLLED_BACK_EXECUTION.value,
+            )
             and (
                 horizon_source_tracking_reasons
                 or not isinstance(horizon_source_execution_error, str)

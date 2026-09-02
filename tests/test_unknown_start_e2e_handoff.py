@@ -209,6 +209,48 @@ class UnknownStartE2EHandoffTest(unittest.TestCase):
                 horizon_tracking_rollback_reasons=("translation_direction",),
             )
 
+    def test_execution_rollback_handoff_uses_restored_refresh_state(self) -> None:
+        restored_pose = object()
+        restored_safety = SimpleNamespace(
+            plug_attached=False,
+            collision_detected=False,
+            contact_force_newtons=0.0,
+        )
+        execution_error = (
+            "RuntimeError: contact-grasp command did not satisfy its tracking "
+            "gates within its bounded timeout: "
+            "tracking_reasons=['translation_direction'], "
+            "translation_error_meters=0.000424679"
+        )
+        result = SimpleNamespace(
+            status=ControlResultStatus.ROLLED_BACK_EXECUTION,
+            execution_error=execution_error,
+            post_action=None,
+            insertion_trial_refresh=SimpleNamespace(
+                live_pose=restored_pose,
+                live_state=restored_safety,
+            ),
+        )
+
+        self.assertEqual(
+            _contact_grasp_rollback_handoff_state(
+                result,
+                horizon_source_endpoint_status=(
+                    ControlResultStatus.ROLLED_BACK_EXECUTION.value
+                ),
+                horizon_source_execution_error=execution_error,
+            ),
+            (restored_pose, restored_safety),
+        )
+        with self.assertRaisesRegex(ValueError, "execution rollback"):
+            _contact_grasp_rollback_handoff_state(
+                result,
+                horizon_source_endpoint_status=(
+                    ControlResultStatus.ROLLED_BACK_EXECUTION.value
+                ),
+                horizon_source_execution_error="different failure",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

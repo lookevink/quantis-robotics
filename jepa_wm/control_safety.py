@@ -339,6 +339,7 @@ def contact_grasp_action_scales(
     exact_coarse_translation_projection: bool = False,
     coarse_orientation_hold_fallback: bool = False,
     minimum_coarse_translation_command_meters: float | None = None,
+    resolution_floored_acquisition: bool = False,
 ) -> tuple[DroidActionScale, ...]:
     """Bound approach motion and calibrate gripper closure independently."""
 
@@ -347,6 +348,7 @@ def contact_grasp_action_scales(
         or not isinstance(require_resolvable_rotation, bool)
         or not isinstance(exact_coarse_translation_projection, bool)
         or not isinstance(coarse_orientation_hold_fallback, bool)
+        or not isinstance(resolution_floored_acquisition, bool)
     ):
         raise ValueError("contact-grasp acquisition scale phase is invalid")
     if minimum_coarse_translation_command_meters is not None and (
@@ -411,7 +413,18 @@ def contact_grasp_action_scales(
             required=require_resolvable_rotation,
         )
 
-    if coarse_acquisition:
+    # A current close-phase reopening is a gripper correction with incidental
+    # Cartesian drift, not an approach command. Preserve the exercised micro
+    # roster instead of enlarging that drift to the acquisition floor. The
+    # historical coarse policies retain their versioned behavior below.
+    if resolution_floored_acquisition and action.values[6] < 0.0:
+        return _rotation_resolved_policy(
+            CONTACT_GRASP_MICRO_ACTION_SCALES,
+            action,
+            required=require_resolvable_rotation,
+        )
+
+    if coarse_acquisition or resolution_floored_acquisition:
         coarse_limit = (
             maximum_coarse_translation_command_meters
             if maximum_coarse_translation_command_meters is not None

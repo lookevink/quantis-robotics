@@ -170,6 +170,48 @@ class ShadowSafetyEvidenceTest(unittest.TestCase):
                 minimum_coarse_translation_command_meters=0.0005,
             )
 
+    def test_resolution_floor_remains_active_during_fine_close(self) -> None:
+        action = DroidAction(
+            (0.0014771344, 0.0003514159, 0.0007743249, 0.0, 0.0, 0.0, 0.01)
+        )
+
+        scales = contact_grasp_action_scales(
+            action,
+            coarse_acquisition=False,
+            resolution_floored_acquisition=True,
+            maximum_coarse_translation_command_meters=0.001,
+            exact_coarse_translation_projection=True,
+            minimum_coarse_translation_command_meters=0.0005,
+        )
+        projected_norms = tuple(
+            sum(value * value for value in scale.apply(action).values[:3]) ** 0.5
+            for scale in scales
+        )
+
+        self.assertAlmostEqual(projected_norms[0], 0.001)
+        self.assertTrue(all(norm >= 0.0005 for norm in projected_norms))
+
+    def test_resolution_floor_does_not_reenlarge_reopening_drift(self) -> None:
+        action = DroidAction(
+            (0.0147, 0.0032, -0.0017, 0.0, 0.0, 0.0, -0.01)
+        )
+
+        historical = contact_grasp_action_scales(action)
+        current = contact_grasp_action_scales(
+            action,
+            resolution_floored_acquisition=True,
+            maximum_coarse_translation_command_meters=0.001,
+            exact_coarse_translation_projection=True,
+            minimum_coarse_translation_command_meters=0.0005,
+        )
+
+        self.assertEqual(current, historical)
+        self.assertLess(
+            sum(value * value for value in current[0].apply(action).values[:3])
+            ** 0.5,
+            0.0005,
+        )
+
     def test_reads_the_historical_positional_tracking_roster(self) -> None:
         self.assertEqual(
             insertion_projection_policy_for_attempts(

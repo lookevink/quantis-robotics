@@ -669,6 +669,12 @@ class ControlStepSummary:
                 minimum_coarse_translation_command_meters=(
                     contact_grasp_policy.minimum_coarse_translation_command_meters
                 ),
+                resolution_floored_acquisition=(
+                    contact_grasp_policy.uses_resolution_floored_acquisition_action(
+                        observation.target_frame,
+                        plug_attached=state.plug_attached,
+                    )
+                ),
             )
             attempted_projection_policy = tuple(
                 attempt.scale for attempt in result.projection_attempts

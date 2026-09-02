@@ -816,6 +816,12 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
             minimum_coarse_translation_command_meters=(
                 contact_grasp_policy.minimum_coarse_translation_command_meters
             ),
+            resolution_floored_acquisition=(
+                contact_grasp_policy.uses_resolution_floored_acquisition_action(
+                    observation.target_frame,
+                    plug_attached=persisted_state.plug_attached,
+                )
+            ),
         )
     from sim.isaac_unknown_start_shadow import (
         reauthenticate_unknown_start_shadow_session,

@@ -64,6 +64,9 @@ TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
 RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
     "quantis.jepa_wm_contact_grasp_target_policy.v12"
 )
+FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA = (
+    "quantis.jepa_wm_contact_grasp_target_policy.v13"
+)
 
 
 class _TransportComposition(str, Enum):
@@ -84,6 +87,7 @@ class _PolicyCapabilities:
     extended_retained_window: bool = False
     coarse_orientation_hold_fallback: bool = False
     minimum_coarse_translation_command_meters: float | None = None
+    full_acquisition_resolution_floor: bool = False
 
 
 _POLICY_CAPABILITIES = {
@@ -166,6 +170,19 @@ _POLICY_CAPABILITIES = {
         True,
         0.0005,
     ),
+    FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA: _PolicyCapabilities(
+        True,
+        _TransportComposition.TRANSLATION_HORIZON,
+        True,
+        True,
+        0.001,
+        True,
+        True,
+        True,
+        True,
+        0.0005,
+        True,
+    ),
 }
 
 
@@ -218,6 +235,7 @@ class ContactGraspTargetPolicy:
                     EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                     RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                    FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 )
                 and self.scene_translation_m != (0.0, 0.0, 0.0)
             )
@@ -230,7 +248,7 @@ class ContactGraspTargetPolicy:
         translation_m: tuple[float, float, float],
     ) -> ContactGraspTargetPolicy:
         return cls(
-            RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             translation_m,
         )
 
@@ -311,6 +329,24 @@ class ContactGraspTargetPolicy:
             < CONTACT_INSERTION_RECORDING.start_index(
                 ContactInsertionSegment.GRASP_CLOSE
             )
+        )
+
+    def uses_resolution_floored_acquisition_action(
+        self,
+        target: Path,
+        *,
+        plug_attached: bool,
+    ) -> bool:
+        """Keep every current unattached acquisition command resolvable."""
+
+        if not isinstance(plug_attached, bool):
+            raise ValueError("contact-grasp attachment state is invalid")
+        target_index = _frame_index(target)
+        if target_index not in self.target_indices:
+            raise ValueError("contact-grasp target is outside the trained window")
+        return (
+            _POLICY_CAPABILITIES[self.schema].full_acquisition_resolution_floor
+            and not plug_attached
         )
 
     @property
@@ -721,6 +757,7 @@ class ContactGraspTargetPolicy:
             EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+            FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
         ):
             payload["scene_translation_m"] = list(self.scene_translation_m)
         return payload
@@ -742,6 +779,7 @@ class ContactGraspTargetPolicy:
                 EXACT_COARSE_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 TRACKING_ROBUST_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
                 RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
+                FULL_ACQUISITION_RESOLUTION_FLOORED_CONTACT_GRASP_TARGET_POLICY_SCHEMA,
             )
             else {"schema"}
         )
