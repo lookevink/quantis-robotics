@@ -138,7 +138,27 @@ class ClosestInverseKinematicsTest(unittest.TestCase):
         self.assertTrue(
             all(
                 call["position_tolerance"] == 0.0001
-                and call["orientation_tolerance"] == 0.001
+                and call["orientation_tolerance"] == 0.00025
+                for call in solver.calls
+            )
+        )
+
+    def test_accepts_a_stricter_diagnostic_orientation_tolerance(self) -> None:
+        solver = _ToleranceCapturingSolver()
+
+        _closest_inverse_kinematics(
+            solver,
+            "panda_hand",
+            np.zeros(3),
+            np.asarray((1.0, 0.0, 0.0, 0.0)),
+            np.zeros(7),
+            orientation_tolerance_radians=0.0005,
+        )
+
+        self.assertEqual(len(solver.calls), 45)
+        self.assertTrue(
+            all(
+                call["orientation_tolerance"] == 0.0005
                 for call in solver.calls
             )
         )

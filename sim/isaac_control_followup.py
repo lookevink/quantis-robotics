@@ -76,6 +76,7 @@ from jepa_wm.control_policy import (
     is_insertion_trial_execution_policy,
 )
 from jepa_wm.contact_grasp_target import ContactGraspTargetPolicy
+from jepa_wm.contact_grasp_drive import CONTACT_GRASP_DRIVE_POLICY
 from jepa_wm.insertion_contract import (
     CONTACT_INSERTION_RECORDING,
     INSERTION_TASK_ID,
@@ -110,7 +111,7 @@ from jepa_wm.insertion_refresh import (
     MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
     ControlSafetySnapshot,
 )
-from jepa_wm.control_tracking import ActionTrackingLimits
+from jepa_wm.control_tracking import ActionTrackingLimits, CommandRealizationLimits
 from sim.control_session import (
     CONTROL_ROOT,
     QUANTIS_DATA_ROOT,
@@ -143,7 +144,11 @@ from sim.isaac_demo_runtime import (
     resume_live_simulation,
 )
 from sim.isaac_demo_scene import ROBOT_PATH
-from sim.isaac_demo_kinematics import solve_droid_pose
+from sim.isaac_demo_kinematics import (
+    diagnose_droid_pose_orientation_tolerances,
+    diagnose_joint_target_realization,
+    solve_droid_pose,
+)
 from sim.recording import RecordingLabel, RecordingMoment, validate_recording_id
 
 
@@ -705,6 +710,89 @@ def diagnose_contact_grasp_settlement_rollback(
         "maximum_contact_force_newtons": contact_force,
         "collision_detected": collision_detected,
         "plug_attached": runtime.attachment.attached,
+        "simulator_action_applied": False,
+    }
+
+
+def diagnose_contact_grasp_execution_ik(session_id: str) -> dict[str, Any]:
+    """Probe stricter local IK for one plateaued attached command, without motion."""
+
+    from jepa_wm.control_rollout import ControlStepSummary
+
+    validate_recording_id(session_id)
+    step = ControlStepSummary.from_session(
+        ControlSession.at(CONTROL_ROOT, session_id)
+    )
+    refresh = step.result.insertion_trial_refresh
+    execution_error = step.result.execution_error
+    rotation_underrealized = (
+        isinstance(execution_error, str)
+        and "completion_reasons=['rotation_underrealized']" in execution_error
+    )
+    commanded_rotation_norm = (
+        float(
+            np.linalg.norm(
+                action_between(
+                    refresh.live_pose,
+                    step.result.gate.next_pose,
+                ).values[3:6]
+            )
+        )
+        if refresh is not None and step.result.gate.passed
+        else 0.0
+    )
+    if (
+        step.result.status is not ControlResultStatus.ROLLED_BACK_EXECUTION
+        or refresh is None
+        or step.result.selected_action_scale is None
+        or not step.result.gate.passed
+        or step.result.post_action is not None
+        or step.result.insertion_trial_drive is None
+        or not isinstance(execution_error, str)
+        or not execution_error.startswith(
+            "RuntimeError: contact-grasp command stopped making realizable progress:"
+        )
+        or not rotation_underrealized
+        or commanded_rotation_norm
+        < CommandRealizationLimits().rotation_activity_radians
+        or not refresh.live_state.plug_attached
+    ):
+        raise ValueError("contact-grasp execution IK diagnostic source is invalid")
+    attempts = list(diagnose_droid_pose_orientation_tolerances(
+        refresh.live_pose,
+        step.result.gate.next_pose,
+        np.asarray(refresh.live_state.joint_positions, dtype=np.float64),
+    ))
+    active_drive_target = step.result.insertion_trial_drive.active_target
+    stable_joint_positions = tuple(refresh.live_state.joint_positions)
+    for attempt in attempts:
+        if not attempt["solved"]:
+            continue
+        compensated = CONTACT_GRASP_DRIVE_POLICY.forward_drive_target(
+            attempt["arm_positions"],
+            active_drive_target.gripper_width_m,
+            active_drive_target,
+            stable_joint_positions,
+            SimulatorSafetyLimits(),
+        )
+        attempt["compensated_drive_target"] = compensated.to_dict()
+        attempt["maximum_compensated_joint_delta_radians"] = max(
+            abs(target - stable)
+            for target, stable in zip(
+                compensated.joint_positions,
+                stable_joint_positions,
+            )
+        )
+        attempt["compensated_drive_fk"] = diagnose_joint_target_realization(
+            refresh.live_pose,
+            step.result.gate.next_pose,
+            np.asarray(compensated.joint_positions, dtype=np.float64),
+        )
+    return {
+        "status": "diagnosed_no_actuation",
+        "session_id": session_id,
+        "commanded_rotation_norm_radians": commanded_rotation_norm,
+        "attempts": attempts,
         "simulator_action_applied": False,
     }
 

@@ -45,6 +45,7 @@ from sim.isaac_control_followup import (
     BLOCKED_IK_DIAGNOSTIC_FINGERPRINTS,
     build_insertion_followup_capture,
     diagnose_contact_grasp_blocked_ik,
+    diagnose_contact_grasp_execution_ik,
     diagnose_contact_grasp_settlement_rollback,
     restore_grasp_transition_retry,
     restore_insertion_rollback_retry,
@@ -298,6 +299,122 @@ class FollowupContinuityTest(unittest.TestCase):
             self.assertRaisesRegex(ValueError, "settlement rollback source"),
         ):
             diagnose_contact_grasp_settlement_rollback("session-005")
+
+    def test_execution_ik_diagnostic_probes_exact_rotation_without_motion(self) -> None:
+        start = DroidPose((0.3, -0.2, 0.5, 0.0, 0.0, 0.0, 0.7))
+        target = start.applied(
+            DroidAction((0.0005, 0.0, 0.0, 0.004, 0.0, 0.0, 0.0))
+        )
+        joints = (0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5)
+        step = SimpleNamespace(
+            result=SimpleNamespace(
+                status=ControlResultStatus.ROLLED_BACK_EXECUTION,
+                gate=SimpleNamespace(passed=True, next_pose=target),
+                selected_action_scale=object(),
+                post_action=None,
+                insertion_trial_drive=InsertionTrialDriveEvidence(
+                    JointDriveTarget(joints, 0.04),
+                    JointDriveTarget(joints, 0.04),
+                ),
+                execution_error=(
+                    "RuntimeError: contact-grasp command stopped making "
+                    "realizable progress: completion_reasons="
+                    "['rotation_underrealized']"
+                ),
+                insertion_trial_refresh=SimpleNamespace(
+                    live_pose=start,
+                    live_state=SimpleNamespace(
+                        joint_positions=joints,
+                        plug_attached=True,
+                    ),
+                ),
+            )
+        )
+        attempts = (
+            {
+                "orientation_tolerance_radians": 0.0005,
+                "solved": True,
+                "arm_positions": list(joints),
+            },
+        )
+        with (
+            patch("sim.isaac_control_followup.ControlSession.at"),
+            patch(
+                "jepa_wm.control_rollout.ControlStepSummary.from_session",
+                return_value=step,
+            ),
+            patch(
+                "sim.isaac_control_followup.diagnose_droid_pose_orientation_tolerances",
+                return_value=attempts,
+            ) as diagnose,
+            patch(
+                "sim.isaac_control_followup.diagnose_joint_target_realization",
+                return_value={"command_realization": {"passed": True}},
+            ) as diagnose_drive,
+        ):
+            evidence = diagnose_contact_grasp_execution_ik("session-rotation")
+
+        diagnose.assert_called_once()
+        self.assertEqual(diagnose.call_args.args[0], start)
+        self.assertEqual(diagnose.call_args.args[1], target)
+        np.testing.assert_allclose(diagnose.call_args.args[2], joints)
+        diagnose_drive.assert_called_once()
+        self.assertIn("compensated_drive_target", evidence["attempts"][0])
+        self.assertAlmostEqual(evidence["commanded_rotation_norm_radians"], 0.004)
+        self.assertFalse(evidence["simulator_action_applied"])
+
+    def test_execution_ik_diagnostic_rejects_translation_only_plateau(self) -> None:
+        start = DroidPose((0.3, -0.2, 0.5, 0.0, 0.0, 0.0, 0.7))
+        step = SimpleNamespace(
+            result=SimpleNamespace(
+                status=ControlResultStatus.ROLLED_BACK_EXECUTION,
+                gate=SimpleNamespace(
+                    passed=True,
+                    next_pose=start.applied(
+                        DroidAction((0.0005, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+                    ),
+                ),
+                selected_action_scale=object(),
+                post_action=None,
+                insertion_trial_drive=InsertionTrialDriveEvidence(
+                    JointDriveTarget(
+                        (0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5), 0.04
+                    ),
+                    JointDriveTarget(
+                        (0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5), 0.04
+                    ),
+                ),
+                execution_error=(
+                    "RuntimeError: contact-grasp command stopped making "
+                    "realizable progress: completion_reasons="
+                    "['translation_underrealized']"
+                ),
+                insertion_trial_refresh=SimpleNamespace(
+                    live_pose=start,
+                    live_state=SimpleNamespace(
+                        joint_positions=(
+                            0.0,
+                            -0.5,
+                            0.0,
+                            -2.0,
+                            0.0,
+                            1.5,
+                            0.5,
+                        ),
+                        plug_attached=True,
+                    ),
+                ),
+            )
+        )
+        with (
+            patch("sim.isaac_control_followup.ControlSession.at"),
+            patch(
+                "jepa_wm.control_rollout.ControlStepSummary.from_session",
+                return_value=step,
+            ),
+            self.assertRaisesRegex(ValueError, "execution IK diagnostic source"),
+        ):
+            diagnose_contact_grasp_execution_ik("session-translation")
 
     def test_insertion_retry_rebinds_only_an_exact_settled_safe_rollback(
         self,

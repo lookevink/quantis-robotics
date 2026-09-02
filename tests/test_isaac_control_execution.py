@@ -248,7 +248,9 @@ class ControlProjectionTest(unittest.TestCase):
         )
 
         def solve(pose: DroidPose, warm_start: np.ndarray) -> SolvedPose:
-            return SolvedPose(pose, warm_start, np.zeros(3), 0.04, 0.0, 0.0)
+            return SolvedPose(
+                pose, warm_start, np.zeros(3), 0.04, 0.0, 0.0, pose
+            )
 
         attempts, selected = select_safe_projection(
             context,
@@ -327,7 +329,9 @@ class ControlProjectionTest(unittest.TestCase):
                 raise RuntimeError("quarter-scale IK failed")
             joints = warm_start.copy()
             joints[0] += 0.001
-            return SolvedPose(pose, joints, np.zeros(3), 0.04, 0.0, 0.0)
+            return SolvedPose(
+                pose, joints, np.zeros(3), 0.04, 0.0, 0.0, pose
+            )
 
         attempts, selected = select_safe_projection(
             context,
@@ -355,6 +359,63 @@ class ControlProjectionTest(unittest.TestCase):
         self.assertEqual(
             tuple(attempt.scale for attempt in bounded_attempts),
             (DroidActionScale(0.5, 0.125, 1.0),),
+        )
+
+    def test_fails_closed_when_ik_solution_cannot_complete_active_axis(self) -> None:
+        current_joints = np.asarray((0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.5))
+        start = DroidPose((0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5))
+        observation = ControlObservation(
+            observation_id=123,
+            captured_at_unix_seconds=100.0,
+            context_frame=Path("context.png"),
+            target=ControlTarget(Path("target.png")),
+            expected_proposal=Path("/tmp/proposal.pth"),
+            pose=start,
+            previous_action=DroidAction((0.0,) * 7),
+            warmup_frames=4,
+        )
+        action = DroidAction((0.0, 0.0, 0.0, 0.004, 0.0, 0.0, 0.0))
+        proposal = ProposedControl(
+            123,
+            100.1,
+            (action, DroidAction((0.0,) * 7), DroidAction((0.0,) * 7)),
+            Path("/tmp/proposal.pth"),
+        )
+        context = ExecutionSafetyContext(
+            observation,
+            JointCommand(current_joints, 0.04),
+            tuple(current_joints),
+            0.0,
+            False,
+            SimulatorSafetyLimits(),
+        )
+
+        def solve(pose: DroidPose, warm_start: np.ndarray) -> SolvedPose:
+            underrealized = start.applied(
+                DroidAction((0.0, 0.0, 0.0, 0.002, 0.0, 0.0, 0.0))
+            )
+            return SolvedPose(
+                pose,
+                warm_start,
+                np.zeros(3),
+                0.04,
+                0.0,
+                0.0,
+                underrealized,
+            )
+
+        attempts, selected = select_safe_projection(
+            context,
+            proposal,
+            solve=solve,
+            now_unix_seconds=100.2,
+            action_scales=(DroidActionScale.uniform(1.0),),
+        )
+
+        self.assertIsNone(selected)
+        self.assertEqual(
+            attempts[0].gate.reasons,
+            (ControlGateReason.IK_SOLUTION_FAILED,),
         )
 
 

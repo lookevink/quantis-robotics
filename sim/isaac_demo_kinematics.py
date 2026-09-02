@@ -21,7 +21,10 @@ from sim.isaac_demo_scene import (
 
 
 IK_POSITION_TOLERANCE_METERS = 0.0001
-IK_ORIENTATION_TOLERANCE_RADIANS = 0.001
+# Tighten numerical convergence for small attached turns. The safety
+# projection independently evaluates the achieved FK action against the exact
+# per-axis completion gate before any drive command is admitted.
+IK_ORIENTATION_TOLERANCE_RADIANS = 0.00025
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,7 @@ class SolvedPose:
     gripper_width_m: float
     position_error_m: float
     orientation_error_rad: float
+    achieved_pose: DroidPose
 
 
 def _rotation_error(left: np.ndarray, right: np.ndarray) -> float:
@@ -56,6 +60,8 @@ def _closest_inverse_kinematics(
     target_position: np.ndarray,
     target_orientation: np.ndarray,
     warm_start: np.ndarray,
+    *,
+    orientation_tolerance_radians: float = IK_ORIENTATION_TOLERANCE_RADIANS,
 ) -> tuple[np.ndarray, bool]:
     """Select the successful Lula branch closest to the captured articulation.
 
@@ -63,8 +69,8 @@ def _closest_inverse_kinematics(
     articulation, especially near a joint limit.  Search a small, symmetric
     neighbourhood in every joint instead of repeatedly perturbing the same
     one-dimensional diagonal.  These offsets seed the numerical solver only;
-    the returned command is still subject to the unchanged IK tolerances and
-    live joint-velocity gate.
+    the returned command is still subject to the caller-selected bounded IK
+    tolerances and the live joint-velocity gate.
     """
 
     joints = np.asarray(warm_start, dtype=np.float64)
@@ -94,7 +100,7 @@ def _closest_inverse_kinematics(
             target_orientation,
             warm_start=joints + offset,
             position_tolerance=IK_POSITION_TOLERANCE_METERS,
-            orientation_tolerance=IK_ORIENTATION_TOLERANCE_RADIANS,
+            orientation_tolerance=orientation_tolerance_radians,
         )
         if success:
             candidate = np.asarray(solution, dtype=np.float64)
@@ -105,7 +111,7 @@ def _closest_inverse_kinematics(
                 float(np.linalg.norm(achieved_position - target_position))
                 <= IK_POSITION_TOLERANCE_METERS
                 and _rotation_error(achieved_rotation, target_rotation)
-                <= IK_ORIENTATION_TOLERANCE_RADIANS
+                <= orientation_tolerance_radians
             ):
                 solutions.append(candidate)
     if not solutions:
@@ -233,6 +239,13 @@ def solve_droid_pose(
             target_orientation[0],
         )
     )
+    achieved_pose = DroidPose.from_world_poses(
+        base_position,
+        base_orientation,
+        achieved_position,
+        matrix_to_wxyz(achieved_rotation),
+        (1.0 - target_pose.values[6]) * MAX_GRIPPER_WIDTH_M,
+    )
     return SolvedPose(
         target_pose=target_pose,
         arm_positions=arm_positions,
@@ -242,7 +255,123 @@ def solve_droid_pose(
         orientation_error_rad=_rotation_error(
             achieved_rotation, Rotation.from_quat(target_xyzw).as_matrix()
         ),
+        achieved_pose=achieved_pose,
     )
+
+
+def diagnose_droid_pose_orientation_tolerances(
+    start_pose: DroidPose,
+    target_pose: DroidPose,
+    warm_start: np.ndarray,
+    tolerances: tuple[float, ...] = (0.001, 0.00075, 0.0005, 0.00025, 0.0001),
+) -> tuple[dict[str, Any], ...]:
+    """Probe exact local IK accuracy without advancing simulator physics."""
+
+    import omni.usd
+    from scipy.spatial.transform import Rotation
+    from jepa_wm.action import action_between
+    from jepa_wm.control_tracking import evaluate_command_realization
+
+    joints = np.asarray(warm_start, dtype=np.float64)
+    if joints.shape != (7,) or not np.all(np.isfinite(joints)):
+        raise ValueError("IK warm start must contain seven finite joint positions")
+    stage = omni.usd.get_context().get_stage()
+    solver, base_position, base_orientation = _solver_for_stage(stage)
+    target_position, target_orientation = target_pose.to_world_pose(
+        base_position, base_orientation
+    )
+    target_xyzw = np.asarray(
+        (
+            target_orientation[1],
+            target_orientation[2],
+            target_orientation[3],
+            target_orientation[0],
+        )
+    )
+    target_rotation = Rotation.from_quat(target_xyzw).as_matrix()
+    commanded_action = action_between(start_pose, target_pose)
+    attempts = []
+    for tolerance in tolerances:
+        arm_positions, success = _closest_inverse_kinematics(
+            solver,
+            "panda_hand",
+            target_position,
+            target_orientation,
+            joints,
+            orientation_tolerance_radians=tolerance,
+        )
+        attempt: dict[str, Any] = {
+            "orientation_tolerance_radians": tolerance,
+            "solved": success,
+        }
+        if success:
+            achieved_position, achieved_rotation = solver.compute_forward_kinematics(
+                "panda_hand", arm_positions
+            )
+            achieved_pose = DroidPose.from_world_poses(
+                base_position,
+                base_orientation,
+                achieved_position,
+                matrix_to_wxyz(achieved_rotation),
+                (1.0 - target_pose.values[6]) * MAX_GRIPPER_WIDTH_M,
+            )
+            realized_action = action_between(start_pose, achieved_pose)
+            attempt.update(
+                {
+                    "maximum_joint_delta_radians": float(
+                        np.max(np.abs(arm_positions - joints))
+                    ),
+                    "position_error_meters": float(
+                        np.linalg.norm(achieved_position - target_position)
+                    ),
+                    "orientation_error_radians": _rotation_error(
+                        achieved_rotation, target_rotation
+                    ),
+                    "arm_positions": arm_positions.tolist(),
+                    "commanded_action": list(commanded_action.values),
+                    "ik_realized_action": list(realized_action.values),
+                    "ik_command_realization": evaluate_command_realization(
+                        commanded_action,
+                        realized_action,
+                    ).to_dict(),
+                }
+            )
+        attempts.append(attempt)
+    return tuple(attempts)
+
+
+def diagnose_joint_target_realization(
+    start_pose: DroidPose,
+    target_pose: DroidPose,
+    arm_positions: np.ndarray,
+) -> dict[str, Any]:
+    """Evaluate one hypothetical joint target with FK and no simulator motion."""
+
+    from jepa_wm.action import action_between
+    from jepa_wm.control_tracking import evaluate_command_realization
+    import omni.usd
+
+    stage = omni.usd.get_context().get_stage()
+    solver, base_position, base_orientation = _solver_for_stage(stage)
+    achieved_position, achieved_rotation = solver.compute_forward_kinematics(
+        "panda_hand", np.asarray(arm_positions, dtype=np.float64)
+    )
+    achieved_pose = DroidPose.from_world_poses(
+        base_position,
+        base_orientation,
+        achieved_position,
+        matrix_to_wxyz(achieved_rotation),
+        (1.0 - target_pose.values[6]) * MAX_GRIPPER_WIDTH_M,
+    )
+    commanded_action = action_between(start_pose, target_pose)
+    realized_action = action_between(start_pose, achieved_pose)
+    return {
+        "realized_action": list(realized_action.values),
+        "command_realization": evaluate_command_realization(
+            commanded_action,
+            realized_action,
+        ).to_dict(),
+    }
 
 
 def preflight_report() -> dict[str, Any]:

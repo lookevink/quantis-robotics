@@ -837,6 +837,28 @@ def project_control_candidate(
             (ControlGateReason.IK_SOLUTION_FAILED,),
         )
         return SafetyProjectionAttempt(scale, decision, 0.0, current_joints), None
+    ik_realization = evaluate_command_realization(
+        candidate_action,
+        action_between(context.observation.pose, solved.achieved_pose),
+    )
+    if not ik_realization.passed:
+        decision = ControlGateDecision(
+            context.observation.observation_id,
+            candidate_pose,
+            (ControlGateReason.IK_SOLUTION_FAILED,),
+        )
+        maximum_joint_delta = float(
+            np.max(np.abs(solved.arm_positions - context.current.arm_positions))
+        )
+        return (
+            SafetyProjectionAttempt(
+                scale,
+                decision,
+                maximum_joint_delta,
+                tuple(solved.arm_positions),
+            ),
+            None,
+        )
     decision = context.evaluate(
         candidate,
         tuple(solved.arm_positions),
