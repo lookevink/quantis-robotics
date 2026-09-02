@@ -106,6 +106,9 @@ from sim.recording import RecordingLabel, RecordingMoment, RecordingSnapshot
 # Cartesian tracking.  V28 showed that exiting near 1.1 mrad can leave a
 # 1 mm orientation-hold command on the 0.5 mm Cartesian error boundary.
 CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS = 1e-3
+CONTACT_GRASP_SETTLEMENT_MAXIMUM_UPDATES = (
+    2 * MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES
+)
 EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS = 1e-3
 EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_GRIPPER_ERROR_METERS = 5e-4
 
@@ -255,12 +258,31 @@ async def settle_joint_command(
         await advance()
         if observe_safety is not None:
             observe_safety()
+    final = actuators.actual_command()
+    arm_error_radians = float(
+        np.max(np.abs(final.arm_positions - target_arm_positions))
+    )
+    gripper_error_meters = (
+        gripper.error(final.gripper_width_m) if gripper is not None else None
+    )
+    if arm_error_radians <= maximum_arm_error_radians and (
+        gripper_error_meters is None
+        or gripper_error_meters <= gripper.maximum_error_meters
+    ):
+        return
+    if arm_error_radians > maximum_arm_error_radians:
+        raise RuntimeError(
+            "arm did not settle within its bounded timeout: "
+            f"error_radians={arm_error_radians:.9f}, "
+            f"maximum_radians={maximum_arm_error_radians:.9f}"
+        )
     if gripper is not None:
-        error_meters = gripper.error(actuators.actual_command().gripper_width_m)
         raise RuntimeError(
             "gripper did not settle within its bounded timeout: "
-            f"error_meters={error_meters:.9f}"
+            f"error_meters={gripper_error_meters:.9f}, "
+            f"maximum_meters={gripper.maximum_error_meters:.9f}"
         )
+    raise RuntimeError("joint command did not settle within its bounded timeout")
 
 
 async def settle_tracked_joint_command(
@@ -1013,7 +1035,7 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                             else (
                                 RollbackSettlementPolicy(
                                     maximum_updates=(
-                                        MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES
+                                        CONTACT_GRASP_SETTLEMENT_MAXIMUM_UPDATES
                                     )
                                 )
                                 if contact_grasp_execution
@@ -1073,10 +1095,13 @@ async def apply_control_response(session_id: str) -> dict[str, Any]:
                             else None
                         ),
                         maximum_updates=(
-                            MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES
+                            CONTACT_GRASP_SETTLEMENT_MAXIMUM_UPDATES
                             if contact_grasp_execution
-                            or reset_trial_candidate_execution
-                            else 8
+                            else (
+                                MAXIMUM_INSERTION_GRIPPER_SETTLEMENT_UPDATES
+                                if reset_trial_candidate_execution
+                                else 8
+                            )
                         ),
                         maximum_arm_error_radians=(
                             EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS

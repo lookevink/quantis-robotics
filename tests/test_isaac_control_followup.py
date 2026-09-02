@@ -42,6 +42,7 @@ from sim.control_session import (
 )
 from sim.isaac_control_followup import (
     build_insertion_followup_capture,
+    diagnose_contact_grasp_settlement_rollback,
     restore_grasp_transition_retry,
     restore_insertion_rollback_retry,
     validate_followup_continuity,
@@ -52,6 +53,103 @@ from sim.isaac_demo_runtime import JointCommand
 
 
 class FollowupContinuityTest(unittest.TestCase):
+    def test_settlement_rollback_diagnostic_is_read_only_and_exact(self) -> None:
+        captured = JointDriveTarget((0.0,) * 7, 0.04)
+        expected = JointDriveTarget.for_command(
+            captured.joint_positions,
+            captured.gripper_width_m,
+        )
+        step = SimpleNamespace(
+            result=SimpleNamespace(
+                status=ControlResultStatus.ROLLBACK_FAILED,
+                gate=SimpleNamespace(passed=True),
+                selected_action_scale=object(),
+                post_action=None,
+                execution_error=(
+                    "RuntimeError: gripper did not settle within its bounded timeout: "
+                    "error_meters=0.000008149; rollback verification failed: "
+                    "RuntimeError: rollback command did not settle: "
+                    "arm_error=0.001117 rad, gripper_error=0.000007 m"
+                ),
+                insertion_trial_refresh=SimpleNamespace(
+                    live_state=SimpleNamespace(
+                        joint_positions=captured.joint_positions,
+                        gripper_width_m=captured.gripper_width_m,
+                        plug_attached=False,
+                    )
+                ),
+            ),
+            state=SimpleNamespace(
+                execution_policy=ControlExecutionPolicy.DIRECT,
+                contact_grasp_target_policy=object(),
+            ),
+        )
+        actual = JointCommand(np.full(7, 5e-4), 0.04001)
+        runtime = SimpleNamespace(
+            actuators=SimpleNamespace(actual_command=Mock(return_value=actual)),
+            attachment=SimpleNamespace(attached=False),
+            sensor=object(),
+        )
+        stage = object()
+        usd = ModuleType("omni.usd")
+        usd.get_context = lambda: SimpleNamespace(get_stage=lambda: stage)
+        omni = ModuleType("omni")
+        omni.usd = usd
+        with (
+            patch.dict(sys.modules, {"omni": omni, "omni.usd": usd}),
+            patch("sim.isaac_control_followup.ControlSession.at"),
+            patch(
+                "jepa_wm.control_rollout.ControlStepSummary.from_session",
+                return_value=step,
+            ),
+            patch(
+                "sim.isaac_control_followup.live_runtime_for",
+                return_value=runtime,
+            ),
+            patch(
+                "sim.isaac_control_followup.current_drive_target",
+                return_value=expected,
+            ),
+            patch(
+                "sim.isaac_control_followup.read_control_contact",
+                return_value=(False, 0.0),
+            ),
+        ):
+            evidence = diagnose_contact_grasp_settlement_rollback("session-005")
+
+        self.assertTrue(evidence["diagnostic_passed"])
+        self.assertTrue(evidence["active_target_matches"])
+        self.assertFalse(evidence["simulator_action_applied"])
+        self.assertAlmostEqual(evidence["maximum_joint_error_rad"], 5e-4)
+
+    def test_settlement_rollback_diagnostic_rejects_unrelated_failure(self) -> None:
+        step = SimpleNamespace(
+            result=SimpleNamespace(
+                status=ControlResultStatus.ROLLBACK_FAILED,
+                gate=SimpleNamespace(passed=True),
+                selected_action_scale=object(),
+                post_action=None,
+                execution_error=(
+                    "RuntimeError: contact interlock failed; rollback verification "
+                    "failed: RuntimeError: rollback command did not settle"
+                ),
+                insertion_trial_refresh=SimpleNamespace(live_state=object()),
+            ),
+            state=SimpleNamespace(
+                execution_policy=ControlExecutionPolicy.DIRECT,
+                contact_grasp_target_policy=object(),
+            ),
+        )
+        with (
+            patch("sim.isaac_control_followup.ControlSession.at"),
+            patch(
+                "jepa_wm.control_rollout.ControlStepSummary.from_session",
+                return_value=step,
+            ),
+            self.assertRaisesRegex(ValueError, "settlement rollback source"),
+        ):
+            diagnose_contact_grasp_settlement_rollback("session-005")
+
     def test_insertion_retry_rebinds_only_an_exact_settled_safe_rollback(
         self,
     ) -> None:

@@ -6,6 +6,7 @@ from sim.isaac_control_resolution import measure_insertion_control_resolution
 from sim.isaac_control_followup import (
     diagnose_contact_grasp_followup_drive_target,
     diagnose_contact_grasp_tracking_rollback,
+    diagnose_contact_grasp_settlement_rollback,
     diagnose_contact_grasp_tracking_rollback_ik,
     diagnose_contact_grasp_rollback_drive_target,
     capture_contact_grasp_acquisition_handoff,
@@ -49,6 +50,7 @@ __all__ = (
     "diagnose_contact_grasp_acquisition_resolution",
     "diagnose_contact_grasp_followup_drive_target",
     "diagnose_contact_grasp_tracking_rollback",
+    "diagnose_contact_grasp_settlement_rollback",
     "diagnose_contact_grasp_tracking_rollback_ik",
     "diagnose_contact_grasp_rollback_drive_target",
     "persist_insertion_proposal_handoff",

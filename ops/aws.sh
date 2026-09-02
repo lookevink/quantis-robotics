@@ -592,6 +592,8 @@ Commands:
                                         Read retained applied grasp settling without motion
   jepa-wm-contact-grasp-tracking-rollback-diagnostic SESSION
                                         Read live rollback continuity without motion
+  jepa-wm-contact-grasp-settlement-rollback-diagnostic SESSION
+                                        Read a failed settlement rollback without motion
   jepa-wm-contact-grasp-tracking-rollback-ik-diagnostic SESSION
                                         Compare rollback IK branches without motion
   jepa-wm-unknown-start-recovery-diagnostic SESSION
@@ -1505,6 +1507,13 @@ case "${command}" in
     is_safe_identifier "${session_id}" || die "invalid control session name"
     demo_python \
       "demo.diagnose_contact_grasp_tracking_rollback('${session_id}')" \
+      120
+    ;;
+  jepa-wm-contact-grasp-settlement-rollback-diagnostic)
+    session_id="${2:-}"
+    is_safe_identifier "${session_id}" || die "invalid control session name"
+    demo_python \
+      "demo.diagnose_contact_grasp_settlement_rollback('${session_id}')" \
       120
     ;;
   jepa-wm-contact-grasp-tracking-rollback-ik-diagnostic)

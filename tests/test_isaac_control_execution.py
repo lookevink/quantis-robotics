@@ -31,6 +31,7 @@ from jepa_wm.insertion_trial import (
 )
 from sim.isaac_control_execution import (
     CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS,
+    CONTACT_GRASP_SETTLEMENT_MAXIMUM_UPDATES,
     EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS,
     EXPERIMENTAL_CANDIDATE_SETTLEMENT_MAXIMUM_GRIPPER_ERROR_METERS,
     UNKNOWN_START_ROLLBACK_SETTLEMENT,
@@ -63,6 +64,7 @@ class ControlExecutionLifecycleTest(unittest.TestCase):
             CONTACT_GRASP_SETTLEMENT_MAXIMUM_ARM_ERROR_RADIANS,
             SimulatorSafetyLimits().maximum_observation_joint_drift_radians,
         )
+        self.assertEqual(CONTACT_GRASP_SETTLEMENT_MAXIMUM_UPDATES, 192)
 
     def test_reset_trial_candidate_reuses_synchronized_freshness_authority(
         self,
@@ -558,6 +560,53 @@ class IsaacControlExecutionTest(unittest.TestCase):
                 )
             )
 
+        self.assertEqual(updates, 3)
+
+    def test_contact_grasp_settlement_reports_arm_failure_when_gripper_passed(
+        self,
+    ) -> None:
+        actuators = FakeActuators(valid=True)
+        actuators.command = JointCommand(np.full(7, 0.001117), 0.040008149)
+
+        async def advance() -> None:
+            return None
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "arm did not settle.*error_radians=0.001117000.*maximum_radians=0.001000000",
+        ):
+            asyncio.run(
+                settle_joint_command(
+                    actuators,
+                    np.zeros(7),
+                    advance,
+                    maximum_updates=3,
+                    maximum_arm_error_radians=1e-3,
+                    gripper=GripperSettlementCriterion(0.04, 2.5e-4),
+                )
+            )
+
+    def test_contact_grasp_settlement_accepts_the_final_bounded_update(self) -> None:
+        actuators = FakeActuators(valid=True)
+        actuators.command = JointCommand(np.ones(7), 0.044)
+        updates = 0
+
+        async def advance() -> None:
+            nonlocal updates
+            updates += 1
+            if updates == 3:
+                actuators.command = JointCommand(np.zeros(7), 0.04)
+
+        asyncio.run(
+            settle_joint_command(
+                actuators,
+                np.zeros(7),
+                advance,
+                maximum_updates=3,
+                maximum_arm_error_radians=1e-3,
+                gripper=GripperSettlementCriterion(0.04, 2.5e-4),
+            )
+        )
         self.assertEqual(updates, 3)
 
     def test_insertion_settlement_requires_consecutive_command_relative_updates(

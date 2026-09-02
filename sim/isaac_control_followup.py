@@ -435,7 +435,6 @@ def diagnose_contact_grasp_followup_drive_target(
 ) -> dict[str, Any]:
     """Read one retained applied grasp target and its paused articulation state."""
 
-    import omni.usd
     from jepa_wm.control_rollout import ControlStepSummary
 
     validate_recording_id(session_id)
@@ -552,6 +551,122 @@ def diagnose_contact_grasp_tracking_rollback(
             and step.state.current_gripper_width_m
             == refresh.live_state.gripper_width_m
         ),
+        "actual_joint_positions": [
+            float(value) for value in actual.arm_positions
+        ],
+        "actual_gripper_width_m": actual.gripper_width_m,
+        "joint_errors_rad": list(joint_errors),
+        "maximum_joint_error_rad": maximum_joint_error,
+        "gripper_error_m": gripper_error,
+        "maximum_contact_force_newtons": contact_force,
+        "collision_detected": collision_detected,
+        "plug_attached": runtime.attachment.attached,
+        "simulator_action_applied": False,
+    }
+
+
+def diagnose_contact_grasp_settlement_rollback(
+    session_id: str,
+) -> dict[str, Any]:
+    """Prove a failed contact-grasp settlement rollback is safe to resume."""
+
+    from jepa_wm.control_rollout import ControlStepSummary
+
+    validate_recording_id(session_id)
+    step = ControlStepSummary.from_session(
+        ControlSession.at(CONTROL_ROOT, session_id)
+    )
+    refresh = step.result.insertion_trial_refresh
+    execution_error = step.result.execution_error
+    settlement_failure = (
+        isinstance(execution_error, str)
+        and execution_error.startswith(
+            "RuntimeError: gripper did not settle within its bounded timeout: "
+            "error_meters="
+        )
+        and (
+            "; rollback verification failed: RuntimeError: "
+            "rollback command did not settle: arm_error="
+        )
+        in execution_error
+        and ", gripper_error=" in execution_error
+    )
+    if (
+        step.result.status is not ControlResultStatus.ROLLBACK_FAILED
+        or refresh is None
+        or not step.result.gate.passed
+        or step.result.selected_action_scale is None
+        or step.result.post_action is not None
+        or not settlement_failure
+        or step.state.execution_policy is not ControlExecutionPolicy.DIRECT
+        or step.state.contact_grasp_target_policy is None
+    ):
+        raise ValueError("contact-grasp settlement rollback source is invalid")
+    import omni.usd
+
+    stage = omni.usd.get_context().get_stage()
+    runtime = live_runtime_for(session_id, stage)
+    if runtime is None:
+        raise RuntimeError("contact-grasp settlement rollback runtime was lost")
+    expected = JointDriveTarget.for_command(
+        tuple(refresh.live_state.joint_positions),
+        refresh.live_state.gripper_width_m,
+    )
+    active = current_drive_target(runtime)
+    actual = runtime.actuators.actual_command()
+    collision_detected, contact_force = read_control_contact(runtime.sensor)
+    joint_errors = tuple(
+        float(actual_value) - expected_value
+        for actual_value, expected_value in zip(
+            actual.arm_positions,
+            expected.joint_positions,
+        )
+    )
+    maximum_joint_error = max(abs(value) for value in joint_errors)
+    gripper_error = actual.gripper_width_m - expected.gripper_width_m
+    limits = SimulatorSafetyLimits()
+    failures = tuple(
+        reason
+        for reason, failed in (
+            ("active_target", active != expected),
+            (
+                "joint_drift",
+                maximum_joint_error
+                > limits.maximum_observation_joint_drift_radians,
+            ),
+            (
+                "gripper_drift",
+                abs(gripper_error)
+                > MAXIMUM_CONTACT_GRASP_GRIPPER_ERROR_METERS,
+            ),
+            ("contact_force", contact_force > limits.maximum_contact_force_newtons),
+            ("collision", collision_detected),
+            (
+                "attachment",
+                runtime.attachment.attached != refresh.live_state.plug_attached
+                or refresh.live_state.plug_attached,
+            ),
+        )
+        if failed
+    )
+    if failures:
+        raise RuntimeError(
+            "contact-grasp settlement rollback continuity is unsafe: "
+            f"failures={','.join(failures)}, "
+            f"joint_error={maximum_joint_error:.9f}, "
+            f"gripper_error={gripper_error:.9f}, "
+            f"force={contact_force:.6f}, collision={collision_detected}, "
+            f"attached={runtime.attachment.attached}, "
+            f"active_target_matches={active == expected}, "
+            f"expected={expected.to_dict()}, active={active.to_dict()}"
+        )
+    return {
+        "status": "diagnosed_no_actuation",
+        "diagnostic_passed": True,
+        "session_id": session_id,
+        "expected_rollback_target": expected.to_dict(),
+        "active_drive_target": active.to_dict(),
+        "active_target_matches": active == expected,
         "actual_joint_positions": [
             float(value) for value in actual.arm_positions
         ],
