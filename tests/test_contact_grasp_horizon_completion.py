@@ -30,7 +30,7 @@ from jepa_wm.contact_grasp_horizon_completion import (
 class ContactGraspHorizonCompletionTest(unittest.TestCase):
     def test_freezes_the_expanded_model_worker_and_action_horizon(self) -> None:
         handoff = ContactGraspHorizonCompletion(
-            "unknown-start-e2e-v35-62605-grasp-001",
+            "unknown-start-e2e-v36-62605-grasp-001",
             runtime_fingerprint(),
             "1" * 40,
         )
@@ -44,13 +44,16 @@ class ContactGraspHorizonCompletionTest(unittest.TestCase):
         self.assertEqual(payload["source_session_id"], SOURCE_SESSION_ID)
         self.assertEqual(
             payload["source_endpoint_status"],
-            "blocked",
+            "rolled_back_after_execution_failure",
         )
         self.assertEqual(
             payload["source_tracking_reasons"],
-            ["joint_velocity_violation"],
+            [],
         )
-        self.assertIsNone(payload["source_execution_error"])
+        self.assertIn(
+            "tracking_reasons=['translation_error']",
+            payload["source_execution_error"],
+        )
         self.assertEqual(payload["source_attempted_actions"], SOURCE_SESSION_COUNT)
         self.assertEqual(payload["source_applied_actions"], SOURCE_APPLIED_ACTIONS)
         self.assertEqual(
@@ -69,7 +72,7 @@ class ContactGraspHorizonCompletionTest(unittest.TestCase):
 
     def test_rejects_any_changed_frozen_field(self) -> None:
         handoff = ContactGraspHorizonCompletion(
-            "unknown-start-e2e-v35-62605-grasp-001",
+            "unknown-start-e2e-v36-62605-grasp-001",
             "2" * 64,
             "1" * 40,
         )
@@ -129,13 +132,13 @@ class ContactGraspHorizonCompletionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "rollback refresh is missing"):
             rollback_drive_target(SimpleNamespace(insertion_trial_refresh=None))
 
-    def test_aws_workflow_gates_v35_on_the_no_actuation_diagnostic(self) -> None:
+    def test_aws_workflow_gates_v36_on_the_no_actuation_diagnostic(self) -> None:
         aws = (Path(__file__).resolve().parents[1] / "ops" / "aws.sh").read_text()
         workflow = aws[aws.index("jepa-wm-contact-grasp-horizon-completion)") :]
 
         diagnostic = workflow.index(
-            "demo.diagnose_contact_grasp_blocked_ik("
-            "'unknown-start-e2e-v34-62605-grasp-001')"
+            "demo.diagnose_contact_grasp_settlement_rollback("
+            "'unknown-start-e2e-v35-62605-grasp-015')"
         )
         physical_run = workflow.index("run_unknown_start_horizon_completion.sh")
         self.assertLess(diagnostic, physical_run)
